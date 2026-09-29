@@ -66,6 +66,10 @@ pub struct DocumentTreeState {
     /// Whether search input is visible.
     search_visible: bool,
 
+    /// Set by [`Self::open_search`] until the view hands the keyboard to
+    /// the search field.
+    search_focus_requested: bool,
+
     /// Node currently being edited inline.
     editing_node: Option<NodeId>,
 
@@ -95,6 +99,7 @@ impl DocumentTreeState {
             search_matches: Vec::new(),
             current_match_index: None,
             search_visible: false,
+            search_focus_requested: false,
             editing_node: None,
             inline_edit_input: None,
             read_only: false,
@@ -374,12 +379,20 @@ impl DocumentTreeState {
 
     pub fn open_search(&mut self, cx: &mut Context<Self>) {
         self.search_visible = true;
+        self.search_focus_requested = true;
         cx.emit(DocumentTreeEvent::SearchOpened);
         cx.notify();
     }
 
+    /// Whether the search field should take the keyboard, clearing the
+    /// request so the field is focused once per [`Self::open_search`].
+    pub fn take_search_focus_request(&mut self) -> bool {
+        std::mem::take(&mut self.search_focus_requested)
+    }
+
     pub fn close_search(&mut self, cx: &mut Context<Self>) {
         self.search_visible = false;
+        self.search_focus_requested = false;
         self.search_query = None;
         self.search_matches.clear();
         self.current_match_index = None;

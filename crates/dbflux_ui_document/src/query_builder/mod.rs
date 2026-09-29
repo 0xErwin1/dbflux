@@ -1,5 +1,6 @@
 pub(crate) mod completion;
 mod events;
+mod keyboard;
 pub(crate) mod mutation_state;
 mod panel;
 mod sections;

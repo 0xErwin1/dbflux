@@ -32,9 +32,10 @@ use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput, InputEvent, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::Modal;
+use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::DbError;
 use dbflux_ui_base::keymap::modifiers_from_gpui;
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -42,7 +43,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::{Editor as GpuiEditor, EditorState};
+use gpui_component::input::EditorState;
 
 /// Diameter of the dirty indicator inside the "modified" pill.
 const DIRTY_DOT: Pixels = px(7.0);
@@ -57,6 +58,33 @@ pub(super) struct PendingTextBody {
     /// What produced this text — the object's raw bytes, or a value decoded
     /// from them. Drives whether the installed buffer is editable.
     pub(super) source: TextSource,
+}
+
+impl VimHost for ObjectBrowserDocument {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.editor
+            .as_ref()
+            .and_then(|editor| editor.vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.editor
+            .as_mut()
+            .and_then(|editor| editor.vim.for_input_mut(input))
+    }
+
+    /// A decoded view renders through `ReadOnlyEditor`, so typing never
+    /// changes it; Vim's own edits (`x`, `dd`, `c`) must not either. An
+    /// object's own text takes every Vim edit.
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        self.editor
+            .as_ref()
+            .is_none_or(|editor| !editor.is_editable())
+    }
+
+    fn vim_accepts_focus(&self, _input: EntityId) -> bool {
+        self.focus_mode == ObjectBrowserFocusMode::Editor
+    }
 }
 
 /// The editable buffer for one object.
@@ -74,6 +102,8 @@ pub(super) struct ObjectEditor {
     /// back — a decoded view never writes its re-encoded form over the
     /// object's real bytes.
     pub(super) source: TextSource,
+    /// Vim mode for this buffer; a new buffer gets a new binding.
+    pub(super) vim: VimBinding,
     _subscription: Subscription,
 }
 
@@ -96,6 +126,52 @@ impl ObjectEditor {
 
     pub(super) fn is_editable(&self) -> bool {
         self.source.is_editable()
+    }
+}
+
+/// Keyboard focus of the unsaved-edits confirmation: the dialog, which traps
+/// Tab among its buttons, and the buttons themselves. The dialog opens with
+/// Save focused, so Enter saves unless the user moved to another button.
+pub(super) struct UnsavedConfirmFocus {
+    modal: ModalFocus,
+    pub(super) save: FocusHandle,
+    pub(super) discard: FocusHandle,
+    pub(super) cancel: FocusHandle,
+    open_requested: bool,
+}
+
+impl UnsavedConfirmFocus {
+    pub(super) fn new(cx: &mut App) -> Self {
+        Self {
+            modal: ModalFocus::new(cx),
+            save: cx.focus_handle(),
+            discard: cx.focus_handle(),
+            cancel: cx.focus_handle(),
+            open_requested: false,
+        }
+    }
+
+    /// Moves focus to Save on the dialog's next render. The guard parks a
+    /// navigation without a window at hand.
+    fn request_open(&mut self) {
+        self.open_requested = true;
+    }
+
+    /// Applies [`Self::request_open`]; call it while rendering the dialog.
+    pub(super) fn apply_pending(&mut self, window: &mut Window, cx: &mut App) {
+        if std::mem::take(&mut self.open_requested) {
+            self.modal.focus(Some(&self.save), window, cx);
+        }
+    }
+
+    /// Gives focus back to what had it before the dialog opened.
+    pub(super) fn restore(&mut self, cx: &mut App) {
+        self.open_requested = false;
+        self.modal.restore(cx);
+    }
+
+    pub(super) fn modal_handle(&self) -> &FocusHandle {
+        self.modal.handle()
     }
 }
 
@@ -187,6 +263,7 @@ impl ObjectBrowserDocument {
         }
 
         let input = build_text_input(&pending.key, &pending.body.text, window, cx);
+        let vim = VimBinding::new(input.clone(), window, cx);
 
         let subscription = cx.subscribe_in(
             &input,
@@ -219,12 +296,16 @@ impl ObjectBrowserDocument {
             dirty: false,
             saving: false,
             source: pending.source,
+            vim,
             _subscription: subscription,
         });
 
         input.update(cx, |state, cx| {
             state.set_value(&pending.body.text, window, cx);
         });
+
+        let input_id = input.entity_id();
+        VimBinding::follow_setting(self, input_id, cx);
 
         self.preview_content = PreviewContentState::Text;
         cx.notify();
@@ -333,6 +414,7 @@ impl ObjectBrowserDocument {
             // never resolves. The parked navigation goes with it: the prompt it
             // waits on cannot be resolved by a save that will never start.
             self.pending_navigation = None;
+            self.unsaved_confirm_focus.restore(cx);
             self.report_save_outcome(false, cx);
             return;
         }
@@ -349,6 +431,7 @@ impl ObjectBrowserDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             self.pending_navigation = None;
+            self.unsaved_confirm_focus.restore(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -445,6 +528,7 @@ impl ObjectBrowserDocument {
             // user can retry, and any parked navigation is dropped rather than
             // silently carrying the unsaved edits away.
             self.pending_navigation = None;
+            self.unsaved_confirm_focus.restore(cx);
             self.report_save_outcome(false, cx);
             cx.notify();
             return;
@@ -476,6 +560,7 @@ impl ObjectBrowserDocument {
 
         if landed {
             self.resume_navigation = self.pending_navigation.take();
+            self.unsaved_confirm_focus.restore(cx);
         }
 
         self.report_save_outcome(landed, cx);
@@ -505,12 +590,14 @@ impl ObjectBrowserDocument {
         }
 
         self.pending_navigation = Some(navigation);
+        self.unsaved_confirm_focus.request_open();
         cx.notify();
         true
     }
 
     pub(super) fn cancel_guarded_navigation(&mut self, cx: &mut Context<Self>) {
         self.pending_navigation = None;
+        self.unsaved_confirm_focus.restore(cx);
         cx.notify();
     }
 
@@ -520,6 +607,7 @@ impl ObjectBrowserDocument {
             return;
         };
 
+        self.unsaved_confirm_focus.restore(cx);
         self.discard_object_edits(window, cx);
         self.run_navigation(navigation, window, cx);
     }
@@ -572,45 +660,49 @@ impl ObjectBrowserDocument {
         let is_editable = editor.is_editable();
 
         // The editor element re-applies its read-only flag to the buffer on
-        // every render, so the flag must follow the buffer's editability. Only
-        // a decoded view goes through `ReadOnlyEditor`, which also reports it
-        // read-only to accessibility and UI automation.
-        let buffer = if is_editable {
-            GpuiEditor::new(&editor.input)
+        // every render, so the flag must follow the buffer's editability and
+        // the Vim mode. Only a decoded view goes through `ReadOnlyEditor`,
+        // which also reports it read-only to accessibility and UI automation;
+        // it stays enabled so Vim motions and yanks still move through it.
+        let text = if is_editable {
+            editor
+                .vim
+                .editor(false)
                 .appearance(false)
-                .readonly(false)
                 .w_full()
                 .h_full()
                 .into_any_element()
         } else {
             ReadOnlyEditor::new(&editor.input)
                 .appearance(false)
-                .disabled(true)
                 .w_full()
                 .h_full()
                 .into_any_element()
         };
 
-        div()
+        let buffer = div()
             .flex_1()
-            .flex()
-            .flex_col()
             .min_h_0()
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .bg(theme.background)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.focus_editor(window, cx);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .child(buffer),
+            .overflow_hidden()
+            .bg(theme.background)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.focus_editor(window, cx);
+                    cx.stop_propagation();
+                }),
             )
+            .child(text);
+        let indicator = editor.vim.render_indicator(cx);
+        let wrapper = editor
+            .vim
+            .leader_scope(div().flex_1().flex().flex_col().min_h_0(), cx);
+
+        let input = editor.vim.input_id();
+
+        VimBinding::capture_run_command(VimBinding::wire(wrapper, input, cx), input, cx)
+            .child(buffer)
+            .children(indicator)
             .child(self.render_editor_footer(is_dirty, is_saving, is_editable, position, cx))
             .into_any_element()
     }
@@ -771,6 +863,7 @@ impl ObjectBrowserDocument {
                     dbflux_i18n::t!("document.object_browser.editor.unsaved_confirm.cancel"),
                 )
                 .ghost()
+                .focus_handle(&self.unsaved_confirm_focus.cancel)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.cancel_guarded_navigation(cx);
                 })),
@@ -781,6 +874,7 @@ impl ObjectBrowserDocument {
                     dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
                 )
                 .icon(AppIcon::RotateCcw)
+                .focus_handle(&self.unsaved_confirm_focus.discard)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.discard_and_navigate(window, cx);
                 })),
@@ -792,6 +886,7 @@ impl ObjectBrowserDocument {
                 )
                 .primary()
                 .icon(AppIcon::Save)
+                .focus_handle(&self.unsaved_confirm_focus.save)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.save_and_navigate(cx);
                 })),
@@ -810,6 +905,8 @@ impl ObjectBrowserDocument {
             action = navigation.description().as_str()
         )))
         .footer(footer)
+        .focus_handle(self.unsaved_confirm_focus.modal_handle())
+        .defer_keys_to_owner()
     }
 }
 

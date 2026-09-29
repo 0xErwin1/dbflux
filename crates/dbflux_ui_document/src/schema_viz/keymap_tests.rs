@@ -236,3 +236,39 @@ fn context_menu_keys_navigate_and_close_the_menu(cx: &mut TestAppContext) {
         "menu keys must not also pan the diagram",
     );
 }
+
+/// The toolbar's Reset, Fit, Arrange, Types and Indexes controls are also
+/// entries of the `m` menu, so the keyboard reaches them.
+#[gpui::test]
+fn the_context_menu_lists_the_toolbar_view_controls(cx: &mut TestAppContext) {
+    let (document, window) = focused_diagram(cx);
+
+    window.simulate_keystrokes("= l");
+    assert_ne!(zoom(window, &document), 1.0);
+
+    // Zoom in, Zoom out, then Reset view.
+    window.simulate_keystrokes("m j j enter");
+    assert_eq!(zoom(window, &document), 1.0, "Reset view restores 100%");
+    assert_eq!(
+        pan_offset(window, &document),
+        Point::default(),
+        "Reset view recenters the camera"
+    );
+
+    let show_types = window.update(|_, cx| document.read(cx).show_types);
+    // Zoom in, Zoom out, Reset view, Fit, Layout, Arrange, Copy as, then
+    // Show column types (separators are skipped).
+    window.simulate_keystrokes("m j j j j j j j enter");
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).show_types),
+        !show_types,
+        "Show column types flips the Types toggle"
+    );
+
+    window.simulate_keystrokes("m j j j j j j j j enter");
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).show_indexes),
+        true,
+        "Show indexes flips the Indexes toggle"
+    );
+}

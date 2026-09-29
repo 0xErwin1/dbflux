@@ -9,8 +9,10 @@ use dbflux_components::tokens::{
     ApprovalsMetrics, ChamferCut, ChromeColors, DocumentMetrics, SyntaxColors, TreeMetrics,
 };
 use dbflux_components::typography::AppFonts;
+use dbflux_core::keymap_types::{Command, ContextId};
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
 use dbflux_policy::ExecutionClassification;
+use dbflux_ui_base::keymap::shortcut_label;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use gpui::prelude::*;
 use gpui::*;
@@ -87,10 +89,101 @@ impl McpApprovalsView {
         }
     }
 
-    /// Reloads the pending list and takes keyboard focus for the j/k/a/r keys.
+    /// Reloads the pending list and takes keyboard focus for the list keys.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.refresh(cx);
         self.focus_handle.focus(window, cx);
+    }
+
+    /// The approvals keys apply across the view. Their default predicate
+    /// leaves the letters to the reason field while it has focus.
+    pub fn active_context(&self) -> ContextId {
+        ContextId::McpApprovals
+    }
+
+    /// Runs a keymap command on the pending list or the decision.
+    pub fn dispatch_command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match command {
+            Command::SelectNext => self.move_selection(1, cx),
+            Command::SelectPrev => self.move_selection(-1, cx),
+            Command::SelectFirst => self.move_selection(isize::MIN, cx),
+            Command::SelectLast => self.move_selection(isize::MAX, cx),
+            Command::ApproveExecution => self.approve_selected(window, cx),
+            Command::RejectExecution => self.reject_selected(window, cx),
+            Command::Execute => self.focus_reject_reason(window, cx),
+            Command::RefreshSchema => self.refresh(cx),
+            Command::Cancel => {
+                if !self.reason_has_focus(window, cx) {
+                    return false;
+                }
+                self.focus_handle.focus(window, cx);
+            }
+            _ => return false,
+        }
+
+        true
+    }
+
+    /// The decision buttons and the reason field, for the pane actions menu.
+    pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+
+        let context = ContextId::McpApprovals;
+        let has_selection = self.selected_id.is_some();
+        let reason_target = this.downgrade();
+
+        vec![
+            PaneAction::command(
+                "approval-approve",
+                dbflux_i18n::t!("document.governance.approve"),
+                Command::ApproveExecution,
+                context,
+            )
+            .icon(AppIcon::Check)
+            .enabled(has_selection),
+            PaneAction::command(
+                "approval-reject",
+                dbflux_i18n::t!("document.governance.reject"),
+                Command::RejectExecution,
+                context,
+            )
+            .icon(AppIcon::CircleX)
+            .enabled(has_selection),
+            PaneAction::callback(
+                "approval-reason",
+                dbflux_i18n::t!("document.governance.pane_actions.reason"),
+                move |window, cx| {
+                    if let Some(view) = reason_target.upgrade() {
+                        view.update(cx, |view, cx| view.focus_reject_reason(window, cx));
+                    }
+                },
+            )
+            .icon(AppIcon::Pencil),
+            PaneAction::command(
+                "approval-refresh",
+                dbflux_i18n::t!("document.governance.refresh"),
+                Command::RefreshSchema,
+                context,
+            )
+            .icon(AppIcon::RefreshCcw),
+        ]
+    }
+
+    fn focus_reject_reason(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.reject_reason.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+    }
+
+    fn reason_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.reject_reason
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
     }
 
     /// Reloads the pending list. A call another view asked to show (a
@@ -321,39 +414,6 @@ impl McpApprovalsView {
 
         self.clear_reject_reason(window, cx);
         self.refresh(cx);
-    }
-
-    fn handle_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keystroke = &event.keystroke;
-
-        if keystroke.modifiers.modified() {
-            return;
-        }
-
-        // Letters typed into the reason field are text, not shortcuts.
-        if self
-            .reject_reason
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
-        {
-            return;
-        }
-
-        match keystroke.key.as_str() {
-            "j" | "down" => self.move_selection(1, cx),
-            "k" | "up" => self.move_selection(-1, cx),
-            "a" => self.approve_selected(window, cx),
-            "r" => self.reject_selected(window, cx),
-            _ => return,
-        }
-
-        cx.stop_propagation();
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -756,7 +816,10 @@ impl McpApprovalsView {
                         )
                         .danger()
                         .icon(AppIcon::CircleX)
-                        .kbd("r")
+                        .when_some(
+                            shortcut_label(ContextId::McpApprovals, Command::RejectExecution),
+                            |button, keys| button.kbd(keys),
+                        )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reject_selected(window, cx);
                         })),
@@ -768,7 +831,10 @@ impl McpApprovalsView {
                         )
                         .variant(ButtonVariant::Primary)
                         .icon(AppIcon::Check)
-                        .kbd("a")
+                        .when_some(
+                            shortcut_label(ContextId::McpApprovals, Command::ApproveExecution),
+                            |button, keys| button.kbd(keys),
+                        )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.approve_selected(window, cx);
                         })),
@@ -813,7 +879,6 @@ impl Render for McpApprovalsView {
         div()
             .id("mcp-approvals")
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::handle_key_down))
             .size_full()
             .flex()
             .flex_col()
@@ -902,8 +967,7 @@ mod tests {
     ) {
         use gpui::AppContext as _;
 
-        cx.update(gpui_component::init);
-        cx.update(dbflux_components::theme::init);
+        crate::keyboard_test_support::init_keyboard_runtime(cx);
 
         let app_state = cx.update(|cx| {
             cx.new(|_| {
@@ -926,13 +990,59 @@ mod tests {
                 .expect("queue a pending execution")
         });
 
-        let (view, window) = cx.add_window_view({
-            let app_state = app_state.clone();
-            move |window, cx| McpApprovalsView::new(app_state, window, cx)
-        });
-        window.run_until_parked();
+        let (host, window) = crate::keyboard_test_support::host_document(
+            cx,
+            {
+                let app_state = app_state.clone();
+                move |window, cx| cx.new(|cx| McpApprovalsView::new(app_state, window, cx))
+            },
+            |view, _cx| view.active_context(),
+            |view, command, window, cx| view.dispatch_command(command, window, cx),
+        );
+        let view = window.update(|_, cx| host.read(cx).document.clone());
 
         (view, app_state, pending.id, window)
+    }
+
+    /// Two pending calls, the first selected. `keymap_keys_move_over_the_pending_calls`
+    /// proves the keys, and the workspace test `the_approvals_keys_reach_the_approvals_tab`
+    /// the way in.
+    #[gpui::test]
+    fn the_approvals_tab_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::MCP_APPROVALS;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let (view, app_state, _pending_id, window) = approvals_view_with_one_pending_call(cx);
+        app_state.update(window, |state, _| {
+            state
+                .request_mcp_execution(
+                    "agent-b".to_string(),
+                    "conn-b".to_string(),
+                    "update_records".to_string(),
+                    ExecutionClassification::Write,
+                    serde_json::json!({ "table": "items" }),
+                )
+                .expect("queue a second pending execution")
+        });
+        window.update(|_, cx| view.update(cx, |view, cx| view.refresh(cx)));
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            view.read(cx)
+                .pane_actions(&view)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(MCP_APPROVALS)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "mcp-approval-approve"),
+            "{checked:?}"
+        );
     }
 
     #[gpui::test]
@@ -1046,6 +1156,166 @@ mod tests {
         assert_eq!(rejections[0].error_message.as_deref(), Some("wrong table"));
     }
 
+    /// Two pending calls in a view hosted like the workspace hosts it, with
+    /// the app keymap and the view's key context.
+    fn keyboard_approvals_view(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<McpApprovalsView>,
+        gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        Vec<String>,
+        &mut gpui::VisualTestContext,
+    ) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let mut ids: Vec<String> = ["delete_records", "update_records"]
+            .into_iter()
+            .map(|tool| {
+                app_state.update(cx, |state, _| {
+                    state
+                        .request_mcp_execution(
+                            "agent-a".to_string(),
+                            "conn-a".to_string(),
+                            tool.to_string(),
+                            ExecutionClassification::Write,
+                            serde_json::json!({ "table": "items" }),
+                        )
+                        .expect("queue a pending execution")
+                        .id
+                })
+            })
+            .collect();
+        ids.sort();
+
+        let (host, window) = host_document(
+            cx,
+            {
+                let app_state = app_state.clone();
+                move |window, cx| cx.new(|cx| McpApprovalsView::new(app_state, window, cx))
+            },
+            |view, _cx| view.active_context(),
+            |view, command, window, cx| view.dispatch_command(command, window, cx),
+        );
+
+        let view = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| view.update(cx, |view, cx| view.focus(window, cx)));
+        window.run_until_parked();
+
+        (view, app_state, ids, window)
+    }
+
+    #[gpui::test]
+    fn keymap_keys_move_over_the_pending_calls(cx: &mut gpui::TestAppContext) {
+        let (view, _app_state, ids, window) = keyboard_approvals_view(cx);
+        let selected = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| view.read(cx).selected_id.clone())
+        };
+
+        assert_eq!(selected(window).as_ref(), Some(&ids[0]));
+
+        window.simulate_keystrokes("j");
+        assert_eq!(
+            selected(window).as_ref(),
+            Some(&ids[1]),
+            "j selects the next call"
+        );
+
+        window.simulate_keystrokes("k");
+        assert_eq!(
+            selected(window).as_ref(),
+            Some(&ids[0]),
+            "k selects the previous call"
+        );
+
+        window.simulate_keystrokes("shift-g");
+        assert_eq!(
+            selected(window).as_ref(),
+            Some(&ids[1]),
+            "Shift+G selects the last call"
+        );
+
+        window.simulate_keystrokes("g");
+        assert_eq!(
+            selected(window).as_ref(),
+            Some(&ids[0]),
+            "g selects the first call"
+        );
+    }
+
+    #[gpui::test]
+    fn keymap_keys_type_the_reason_reject_and_approve(cx: &mut gpui::TestAppContext) {
+        let (view, app_state, ids, window) = keyboard_approvals_view(cx);
+        let pending = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                app_state
+                    .read(cx)
+                    .list_mcp_pending_executions()
+                    .expect("list pending executions")
+                    .into_iter()
+                    .map(|entry| entry.id)
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        window.simulate_keystrokes("enter");
+        window.simulate_keystrokes("r a");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).reject_reason.read(cx).value().to_string()),
+            "ra",
+            "Enter hands the keyboard to the reason field, which types r and a"
+        );
+        assert_eq!(pending(window).len(), 2, "typing decides nothing");
+
+        window.simulate_keystrokes("escape");
+        window.simulate_keystrokes("r");
+        window.run_until_parked();
+        assert_eq!(
+            pending(window),
+            vec![ids[1].clone()],
+            "r rejects the selected call"
+        );
+
+        window.simulate_keystrokes("a");
+        window.run_until_parked();
+        assert!(pending(window).is_empty(), "a approves the selected call");
+    }
+
+    #[gpui::test]
+    fn the_pane_actions_list_the_decisions(cx: &mut gpui::TestAppContext) {
+        let (view, _app_state, _ids, window) = keyboard_approvals_view(cx);
+
+        let ids: Vec<String> = window.update(|_, cx| {
+            view.read(cx)
+                .pane_actions(&view)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        assert_eq!(
+            ids,
+            [
+                "approval-approve",
+                "approval-reject",
+                "approval-reason",
+                "approval-refresh"
+            ]
+        );
+    }
+
     #[test]
     fn approvals_keys_resolve_in_every_locale() {
         for key in [
@@ -1055,6 +1325,7 @@ mod tests {
             "document.governance.requested_by",
             "document.governance.classification.admin_destructive",
             "document.governance.waiting.just_now",
+            "document.governance.pane_actions.reason",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);

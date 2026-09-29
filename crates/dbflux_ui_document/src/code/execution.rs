@@ -212,7 +212,7 @@ impl CodeDocument {
     /// Shows the dangerous query confirmation and moves focus into it, off
     /// the editor input, so Enter and Escape resolve it instead of editing the
     /// buffer behind it.
-    fn ask_dangerous_query_confirm(
+    pub(super) fn ask_dangerous_query_confirm(
         &mut self,
         pending: PendingDangerousQuery,
         window: &mut Window,
@@ -1703,8 +1703,10 @@ impl CodeDocument {
         cx.notify();
     }
 
+    /// Maximizes the results over the editor, or restores the split when
+    /// they already fill the document. Hidden results come back maximized.
     pub fn toggle_maximize_results(&mut self, cx: &mut Context<Self>) {
-        if self.results_maximized {
+        if self.layout == SqlQueryLayout::ResultsOnly {
             self.layout = SqlQueryLayout::Split;
             self.results_maximized = false;
         } else {
@@ -1790,6 +1792,87 @@ impl CodeDocument {
             self.result_tabs.active_result_index = Some(index);
             cx.notify();
         }
+    }
+
+    /// Shows the next result tab (`forward`) or the previous one, wrapping
+    /// at either end, and keeps the keyboard on the results when they had
+    /// it. Returns false when there is no result tab.
+    pub(super) fn step_result_tab(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let count = self.result_tabs.result_tabs.len();
+        if count == 0 {
+            return false;
+        }
+
+        let current = self.result_tabs.active_result_index.unwrap_or(0);
+        let next = if forward {
+            (current + 1) % count
+        } else {
+            (current + count - 1) % count
+        };
+
+        self.activate_result_tab(next, cx);
+        self.focus_results_if_they_had_it(window, cx);
+        true
+    }
+
+    /// Closes the result tab shown, as its close button does, and moves the
+    /// keyboard to the tab shown next, or to the editor when none is left.
+    /// Returns false when there is no result tab.
+    pub(super) fn close_active_result_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab_id) = self
+            .result_tabs
+            .active_result_index
+            .and_then(|index| self.result_tabs.result_tabs.get(index))
+            .map(|tab| tab.id)
+        else {
+            return false;
+        };
+
+        self.close_result_tab(tab_id, cx);
+
+        if self.result_tabs.result_tabs.is_empty() {
+            self.focus_editor_input(window, cx);
+        } else {
+            self.focus_results_if_they_had_it(window, cx);
+        }
+
+        true
+    }
+
+    /// Hides the results, as the header's hide button does, and gives the
+    /// keyboard to the editor, since the results it may have had are gone.
+    pub(super) fn hide_results_from_keyboard(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.hide_results(cx);
+        self.focus_editor_input(window, cx);
+    }
+
+    fn focus_results_if_they_had_it(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_mode == SqlQueryFocus::Results
+            && let Some(grid) = self.active_result_grid()
+        {
+            grid.update(cx, |grid, cx| grid.focus_active_view(window, cx));
+        }
+    }
+
+    fn focus_editor_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_mode = SqlQueryFocus::Editor;
+        self.editor
+            .input_state
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
     }
 
     pub(super) fn active_result_grid(&self) -> Option<Entity<DataGridPanel>> {
@@ -3212,5 +3295,312 @@ mod confirm_keyboard_tests {
         assert!(!is_open(window, &document));
         assert!(!ran_the_query(window, &toasts));
         assert_repainted_without(&redraws, "script-confirm-cancel-btn");
+    }
+}
+
+#[cfg(test)]
+mod result_tab_keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::code::{CodeDocument, SqlQueryLayout};
+    use crate::pane::PaneActionRun;
+    use dbflux_app::keymap::Command;
+    use dbflux_components::theme;
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryLanguage, QueryResult, Value};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn one_row_result() -> Arc<QueryResult> {
+        let columns = vec![ColumnMeta {
+            name: "id".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        }];
+        let rows = vec![vec![Value::Text("v".to_string())]];
+
+        Arc::new(QueryResult::table(columns, rows, None, Duration::ZERO))
+    }
+
+    /// A SQL document with `tab_count` result tabs, the last one shown, and
+    /// the editor and results split, as after running a query that many
+    /// times with Run in new tab.
+    fn document_with_result_tabs(
+        cx: &mut TestAppContext,
+        tab_count: usize,
+    ) -> (Entity<CodeDocument>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let window = cx.add_empty_window();
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            })
+        });
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                for _ in 0..tab_count {
+                    document.result_tabs.run_in_new_tab = true;
+                    document.setup_data_grid(one_row_result(), "SELECT 1".to_string(), window, cx);
+                }
+                document.layout = SqlQueryLayout::Split;
+            });
+        });
+        window.run_until_parked();
+
+        (document, window)
+    }
+
+    fn dispatch(window: &mut VisualTestContext, document: &Entity<CodeDocument>, command: Command) {
+        let handled = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(command, window, cx)
+            })
+        });
+        assert!(handled, "{command:?} must be handled");
+        window.run_until_parked();
+    }
+
+    fn shown_tab(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> Option<usize> {
+        window.update(|_, cx| document.read(cx).result_tabs.active_result_index)
+    }
+
+    /// From the results, the result view command switches the shown result
+    /// between the views of the results' mode bar (Data, then JSON).
+    #[gpui::test]
+    fn the_result_view_command_switches_the_shown_result(cx: &mut TestAppContext) {
+        use crate::code::SqlQueryFocus;
+        use crate::result_view::ResultViewMode;
+
+        let (document, window) = document_with_result_tabs(cx, 1);
+        window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                document.focus_mode = SqlQueryFocus::Results
+            })
+        });
+
+        let mode = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .active_result_grid()
+                    .map(|grid| grid.read(cx).result_view_mode())
+            })
+        };
+        assert_eq!(mode(window), Some(ResultViewMode::Table));
+
+        dispatch(window, &document, Command::CycleResultView);
+        assert_eq!(mode(window), Some(ResultViewMode::Json));
+
+        dispatch(window, &document, Command::CycleResultView);
+        assert_eq!(mode(window), Some(ResultViewMode::Table));
+    }
+
+    #[gpui::test]
+    fn result_tab_commands_switch_and_close_the_shown_tab(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 3);
+        assert_eq!(shown_tab(window, &document), Some(2));
+
+        dispatch(window, &document, Command::NextResultTab);
+        assert_eq!(
+            shown_tab(window, &document),
+            Some(0),
+            "next wraps to the first"
+        );
+
+        dispatch(window, &document, Command::PrevResultTab);
+        assert_eq!(
+            shown_tab(window, &document),
+            Some(2),
+            "previous wraps to the last"
+        );
+
+        dispatch(window, &document, Command::PrevResultTab);
+        assert_eq!(shown_tab(window, &document), Some(1));
+
+        let closed_id = window.update(|_, cx| document.read(cx).result_tabs.result_tabs[1].id);
+        dispatch(window, &document, Command::CloseResultTab);
+
+        let ids: Vec<_> = window.update(|_, cx| {
+            document
+                .read(cx)
+                .result_tabs
+                .result_tabs
+                .iter()
+                .map(|tab| tab.id)
+                .collect()
+        });
+        assert_eq!(ids.len(), 2);
+        assert!(!ids.contains(&closed_id), "the shown tab is the one closed");
+        assert_eq!(shown_tab(window, &document), Some(1));
+    }
+
+    #[gpui::test]
+    fn closing_the_last_result_tab_returns_the_keyboard_to_the_editor(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 1);
+
+        dispatch(window, &document, Command::FocusDown);
+        dispatch(window, &document, Command::CloseResultTab);
+
+        let editor_focused = window.update(|window, cx| {
+            let document = document.read(cx);
+            document
+                .editor
+                .input_state
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        });
+        assert!(
+            editor_focused,
+            "with no result left, the editor has the keys"
+        );
+    }
+
+    #[gpui::test]
+    fn toggle_results_maximizes_and_restores_like_the_header_button(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 1);
+        let state = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                let document = document.read(cx);
+                (document.layout, document.results_maximized)
+            })
+        };
+
+        dispatch(window, &document, Command::ToggleResults);
+        assert!(state(window) == (SqlQueryLayout::ResultsOnly, true));
+
+        dispatch(window, &document, Command::TogglePanel);
+        assert!(state(window) == (SqlQueryLayout::Split, false));
+
+        dispatch(window, &document, Command::ToggleEditor);
+        assert!(
+            state(window) == (SqlQueryLayout::EditorOnly, false),
+            "Toggle editor hides the results"
+        );
+
+        dispatch(window, &document, Command::ToggleEditor);
+        assert!(state(window) == (SqlQueryLayout::Split, false));
+    }
+
+    #[gpui::test]
+    fn the_pane_actions_list_the_result_tabs_and_the_results_area(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 2);
+        let actions = window.update(|_, cx| document.read(cx).pane_actions(&document));
+
+        let entries: Vec<(&str, Option<Command>)> = actions
+            .iter()
+            .map(|action| {
+                let command = match action.run {
+                    PaneActionRun::Command(command) => Some(command),
+                    PaneActionRun::Callback(_) => None,
+                };
+                (action.id.as_ref(), command)
+            })
+            .skip_while(|(id, _)| *id != "next-result-tab")
+            .collect();
+
+        assert_eq!(
+            entries,
+            [
+                ("next-result-tab", Some(Command::NextResultTab)),
+                ("previous-result-tab", Some(Command::PrevResultTab)),
+                ("close-result-tab", Some(Command::CloseResultTab)),
+                ("maximize-results", Some(Command::ToggleResults)),
+                ("hide-results", Some(Command::ToggleEditor)),
+            ]
+        );
+
+        let next = actions.iter().find(|action| action.id == "next-result-tab");
+        assert!(
+            next.is_some_and(|action| action.shortcut.is_some()),
+            "the result tab entries show their Results keys"
+        );
+    }
+
+    /// The results area of the editor: its result tabs and the header
+    /// buttons. The grid inside is covered by the data grid's own test.
+    #[gpui::test]
+    fn the_results_chrome_is_covered(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::{CODE_EDITOR_CHROME, DATA_GRID};
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        init_keyboard_runtime(cx);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+                });
+                document.update(cx, |document, cx| {
+                    for _ in 0..2 {
+                        document.result_tabs.run_in_new_tab = true;
+                        document.setup_data_grid(
+                            one_row_result(),
+                            "SELECT 1".to_string(),
+                            window,
+                            cx,
+                        );
+                    }
+                    document.layout = SqlQueryLayout::Split;
+                });
+                document
+            },
+            |document, cx| document.active_context(cx),
+            |document, command, window, cx| document.dispatch_command(command, window, cx),
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+        let menu: Vec<String> = window.update(|_, cx| {
+            document
+                .read(cx)
+                .pane_actions(&document)
+                .iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+
+        let checked = Coverage::new(CODE_EDITOR_CHROME)
+            .with_menu_entries(menu)
+            .with_surface(DATA_GRID)
+            .assert_covered(&frame);
+        assert!(
+            checked.iter().any(|id| id.starts_with("result-tab-")),
+            "{checked:?}"
+        );
     }
 }

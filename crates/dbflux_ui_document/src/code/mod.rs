@@ -125,6 +125,9 @@ enum ContextBarSlot {
     SourceTargets,
     SourceStart,
     SourceEnd,
+    /// The pane-actions button of a script editor, whose bar has no
+    /// connection controls: the bar's only stop, so Ctrl+K still lands there.
+    PaneActions,
 }
 
 /// Counts lines added and removed between two text strings using a set-based
@@ -486,9 +489,7 @@ pub struct CodeDocument {
     close_after_save: bool,
 
     /// Opt-in modal editing state for the editor.
-    vim: vim::VimState,
-    _vim_editor_focus_subscription: Option<Subscription>,
-    _vim_keystroke_interceptor: Option<Subscription>,
+    vim: dbflux_components::vim::VimBinding,
 }
 
 struct PendingQueryResult {
@@ -994,6 +995,8 @@ impl CodeDocument {
 
         let refresh_policy = default_refresh;
 
+        let vim = dbflux_components::vim::VimBinding::new(input_state.clone(), window, cx);
+
         let mut document = Self {
             id: doc_id,
             title: "Query 1".to_string(),
@@ -1105,18 +1108,9 @@ impl CodeDocument {
             },
             pending: PendingActions::default(),
             close_after_save: false,
-            vim: vim::VimState::default(),
-            _vim_editor_focus_subscription: None,
-            _vim_keystroke_interceptor: None,
+            vim,
         };
 
-        let editor_focus = document.editor.input_state.read(cx).focus_handle(cx);
-        document._vim_editor_focus_subscription = Some(cx.on_focus_out(
-            &editor_focus,
-            window,
-            |document, _, _, cx| document.close_change_group_on_blur(cx),
-        ));
-        document._vim_keystroke_interceptor = Some(vim::intercept_vim_keystrokes(cx));
         document.sync_context_dropdowns(cx);
         document.sync_vim_setting(cx);
         document
@@ -1695,6 +1689,12 @@ impl CodeDocument {
                     .update(cx, |panel, cx| panel.save_selected_history(window, cx));
                 true
             }
+            Command::NextPanelTab | Command::PrevPanelTab => {
+                self.history
+                    .history_panel
+                    .update(cx, |panel, cx| panel.step_tab(cx));
+                true
+            }
             // Other commands are not handled by the modal
             _ => false,
         }
@@ -1779,6 +1779,10 @@ impl CodeDocument {
                 self.run_query_in_new_tab(window, cx);
                 true
             }
+            Command::ExplainQuery => {
+                self.run_explain(window, cx);
+                true
+            }
             Command::ToggleComment => self.toggle_comment(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);
@@ -1804,23 +1808,24 @@ impl CodeDocument {
             }
             Command::FocusDown => false,
 
-            // Layout toggles
+            // Layout toggles: the header's hide and maximize buttons.
             Command::ToggleEditor => {
-                self.layout = match self.layout {
-                    SqlQueryLayout::EditorOnly => SqlQueryLayout::Split,
-                    _ => SqlQueryLayout::EditorOnly,
-                };
-                cx.notify();
+                if self.layout == SqlQueryLayout::EditorOnly {
+                    self.layout = SqlQueryLayout::Split;
+                    cx.notify();
+                } else {
+                    self.hide_results_from_keyboard(window, cx);
+                }
                 true
             }
             Command::ToggleResults | Command::TogglePanel => {
-                self.layout = match self.layout {
-                    SqlQueryLayout::ResultsOnly => SqlQueryLayout::Split,
-                    _ => SqlQueryLayout::ResultsOnly,
-                };
-                cx.notify();
+                self.toggle_maximize_results(cx);
                 true
             }
+
+            Command::NextResultTab => self.step_result_tab(true, window, cx),
+            Command::PrevResultTab => self.step_result_tab(false, window, cx),
+            Command::CloseResultTab => self.close_active_result_tab(window, cx),
 
             // History panel commands
             Command::ToggleHistoryDropdown => {

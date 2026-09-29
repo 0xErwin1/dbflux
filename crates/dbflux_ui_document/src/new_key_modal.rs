@@ -891,6 +891,7 @@ impl Render for NewKeyModal {
                     FocusShape::Rect,
                     Some(ring_color),
                     div()
+                        .id(("new-key-remove-row", index))
                         .w(Heights::ICON_MD)
                         .h(Heights::ICON_MD)
                         .flex()
@@ -899,12 +900,9 @@ impl Render for NewKeyModal {
                         .rounded(Radii::SM)
                         .cursor_pointer()
                         .hover(|d| d.bg(theme.danger.opacity(0.15)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                this.remove_value_row(index, cx);
-                            }),
-                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.remove_value_row(index, cx);
+                        }))
                         .child(Icon::new(AppIcon::Delete).size(Heights::ICON_SM).muted()),
                     cx,
                 ));
@@ -920,6 +918,7 @@ impl Render for NewKeyModal {
                     FocusShape::Rect,
                     Some(ring_color),
                     div()
+                        .id("new-key-add-row")
                         .w(Heights::ICON_LG)
                         .h(Heights::ICON_LG)
                         .flex()
@@ -929,12 +928,9 @@ impl Render for NewKeyModal {
                         .cursor_pointer()
                         .bg(theme.primary)
                         .hover(|d| d.opacity(0.8))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
-                                this.add_value_row(window, cx);
-                            }),
-                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.add_value_row(window, cx);
+                        }))
                         .child(
                             Icon::new(AppIcon::Plus)
                                 .size(Heights::ICON_SM)

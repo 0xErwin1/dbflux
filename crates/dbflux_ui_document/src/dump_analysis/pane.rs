@@ -12,7 +12,7 @@ impl DumpAnalysisDocument {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::DumpAnalysis,
             // render
@@ -103,6 +103,13 @@ impl DumpAnalysisDocument {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
+        });
+
+        pane
     }
 }

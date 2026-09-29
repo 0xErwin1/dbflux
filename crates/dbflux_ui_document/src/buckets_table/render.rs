@@ -390,13 +390,10 @@ impl BucketsTableDocument {
             .border_b_1()
             .border_color(theme.table_row_border)
             .text_size(ObjectStoreMetrics::NAME_FONT)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.select_bucket(select_name.clone(), cx);
-                    cx.emit(DocumentEvent::RequestFocus);
-                }),
-            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select_bucket(select_name.clone(), cx);
+                cx.emit(DocumentEvent::RequestFocus);
+            }))
             .child(
                 div()
                     .flex()

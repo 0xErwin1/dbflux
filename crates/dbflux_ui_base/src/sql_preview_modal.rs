@@ -1,9 +1,12 @@
 use crate::app_state_entity::AppStateEntity;
+use dbflux_components::actions as component_actions;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::{VimBinding, VimHost};
+use dbflux_core::LogErr;
 use dbflux_core::keymap_types::ContextId;
 // SqlGenerationType and SqlPreviewContext now live in dbflux_components;
 // re-export here so existing call-sites via this module path are unchanged.
@@ -17,8 +20,25 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Editor, EditorState};
+use gpui_component::input::EditorState;
 use uuid::Uuid;
+
+actions!(
+    sql_preview_modal,
+    [
+        /// Copies the previewed query text to the clipboard and closes the preview.
+        CopyPreview
+    ]
+);
+
+/// How far one scroll key moves the previewed query.
+#[derive(Clone, Copy)]
+enum ScrollStep {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+}
 
 /// Settings for SQL generation.
 #[derive(Clone)]
@@ -45,11 +65,29 @@ pub struct SqlPreviewModal {
     generation_type: SqlGenerationType,
     settings: SqlPreviewSettings,
     sql_display: Entity<EditorState>,
+    /// Vim motions in the query; replaced with `sql_display`.
+    sql_display_vim: VimBinding,
     generated_sql: String,
     focus_handle: FocusHandle,
 
     query_language: Option<QueryLanguage>,
     badge_label: Option<String>,
+}
+
+/// The query is generated text, copied as generated: Vim moves, selects and
+/// yanks in it.
+impl VimHost for SqlPreviewModal {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.sql_display_vim.for_input(input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.sql_display_vim.for_input_mut(input)
+    }
+
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        true
+    }
 }
 
 impl SqlPreviewModal {
@@ -64,18 +102,48 @@ impl SqlPreviewModal {
                 .language("sql")
                 .line_number(true)
         });
+        let sql_display_vim = VimBinding::new(sql_display.clone(), window, cx);
+        let input = sql_display_vim.input_id();
 
-        Self {
+        let mut modal = Self {
             app_state,
             visible: false,
             context: None,
             generation_type: SqlGenerationType::SelectWhere,
             settings: SqlPreviewSettings::default(),
             sql_display,
+            sql_display_vim,
             generated_sql: String::new(),
             focus_handle: cx.focus_handle(),
             query_language: None,
             badge_label: None,
+        };
+
+        VimBinding::follow_setting(&mut modal, input, cx);
+        modal
+    }
+
+    /// Shows `display` as the query, with a fresh Vim binding for it.
+    fn install_display(
+        &mut self,
+        display: Entity<EditorState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sql_display_vim = VimBinding::new(display.clone(), window, cx);
+        self.sql_display = display;
+        let input = self.sql_display_vim.input_id();
+        VimBinding::follow_setting(self, input, cx);
+    }
+
+    /// Gives the keyboard to the dialog, or to the query itself while Vim mode
+    /// is on, where j / k and the other Vim keys move through it.
+    fn focus_on_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sql_display_vim.enabled() {
+            let display = self.sql_display.clone();
+            display.update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            self.focus_handle.focus(window, cx);
         }
     }
 
@@ -94,18 +162,19 @@ impl SqlPreviewModal {
         if self.query_language.is_some() {
             self.query_language = None;
             self.badge_label = None;
-            self.sql_display = cx.new(|cx| {
+            let display = cx.new(|cx| {
                 EditorState::new(window, cx)
                     .language("sql")
                     .line_number(true)
             });
+            self.install_display(display, window, cx);
         }
 
         self.context = Some(context);
         self.generation_type = generation_type;
         self.visible = true;
         self.regenerate_sql(window, cx);
-        self.focus_handle.focus(window, cx);
+        self.focus_on_open(window, cx);
         cx.notify();
     }
 
@@ -126,15 +195,16 @@ impl SqlPreviewModal {
 
         self.generated_sql = query.clone();
 
-        self.sql_display = cx.new(|cx| {
+        let display = cx.new(|cx| {
             let mut state = EditorState::new(window, cx)
                 .language(editor_mode)
                 .line_number(true);
             state.set_value(&query, window, cx);
             state
         });
+        self.install_display(display, window, cx);
 
-        self.focus_handle.focus(window, cx);
+        self.focus_on_open(window, cx);
         cx.notify();
     }
 
@@ -471,6 +541,35 @@ impl SqlPreviewModal {
         }
     }
 
+    fn copy_and_close(&mut self, cx: &mut Context<Self>) {
+        self.copy_to_clipboard(cx);
+        self.close(cx);
+    }
+
+    /// Scrolls the previewed query by a line or a page. The editor clamps the
+    /// offset to its content when it lays out.
+    fn scroll_display(&mut self, step: ScrollStep, cx: &mut Context<Self>) {
+        self.sql_display.update(cx, |state, cx| {
+            let Some(line_height) = state.line_height() else {
+                return;
+            };
+
+            let viewport = state.input_bounds().size.height;
+            let page = (viewport - line_height).max(line_height);
+
+            let delta = match step {
+                ScrollStep::LineUp => line_height,
+                ScrollStep::LineDown => -line_height,
+                ScrollStep::PageUp => page,
+                ScrollStep::PageDown => -page,
+            };
+
+            let offset = state.scroll_offset();
+            let target = (offset.y + delta).min(Pixels::ZERO);
+            state.set_scroll_offset(point(offset.x, target), cx);
+        });
+    }
+
     fn toggle_fully_qualified(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.use_fully_qualified_names = !self.settings.use_fully_qualified_names;
         self.regenerate_sql(window, cx);
@@ -488,13 +587,38 @@ impl Render for SqlPreviewModal {
             return div().into_any_element();
         }
 
-        let theme = cx.theme();
-        let sql_display = self.sql_display.clone();
         let is_generic = self.query_language.is_some();
 
+        // Vim's listeners on the query. In Insert mode the dialog's Escape
+        // leaves Insert mode instead of closing, and in Normal mode Enter
+        // moves down instead of copying.
+        let vim_input = self.sql_display_vim.input_id();
+        let query_container =
+            VimBinding::wire(self.sql_display_vim.leader_scope(div(), cx), vim_input, cx);
+        let query_container = VimBinding::capture_action::<component_actions::Cancel, _>(
+            query_container,
+            vim_input,
+            cx,
+        );
+        let query_container = VimBinding::capture_action::<component_actions::Execute, _>(
+            query_container,
+            vim_input,
+            cx,
+        );
+        let vim_indicator = self.sql_display_vim.render_indicator(cx);
+        let theme = cx.theme();
+
         let entity = cx.entity().downgrade();
-        let close = move |_window: &mut Window, cx: &mut App| {
-            entity.update(cx, |this, cx| this.close(cx)).ok();
+        let close = {
+            let entity = entity.clone();
+            move |_window: &mut Window, cx: &mut App| {
+                entity.update(cx, |this, cx| this.close(cx)).log_err();
+            }
+        };
+        let copy = move |_window: &mut Window, cx: &mut App| {
+            entity
+                .update(cx, |this, cx| this.copy_and_close(cx))
+                .log_err();
         };
 
         // -- Title & badge --
@@ -522,20 +646,22 @@ impl Render for SqlPreviewModal {
             .id("sql-preview-modal")
             .focus_handle(&self.focus_handle)
             .on_close(close)
+            .on_confirm(copy)
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Code)
             .width(px(1000.0))
             .max_height(px(800.0))
             .header_extra(type_badge)
             .child(
-                div()
+                query_container
                     .flex_1()
                     .p(Spacing::MD)
                     .min_h(px(200.0))
                     .max_h(px(300.0))
                     .overflow_hidden()
                     .child(
-                        Editor::new(&sql_display)
+                        self.sql_display_vim
+                            .editor(false)
                             .w_full()
                             .h_full()
                             .font_family(AppFonts::MONO)
@@ -544,6 +670,10 @@ impl Render for SqlPreviewModal {
                     ),
             )
             .top_offset(px(80.0));
+
+        if let Some(indicator) = vim_indicator {
+            frame = frame.child(indicator);
+        }
 
         // -- Options (SQL mode, DML only) --
 
@@ -659,8 +789,7 @@ impl Render for SqlPreviewModal {
                     .hover(|d| d.opacity(0.9))
                     .text_size(FontSizes::SM)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.copy_to_clipboard(cx);
-                        this.close(cx);
+                        this.copy_and_close(cx);
                     }))
                     .child(
                         Icon::new(AppIcon::Layers)
@@ -695,7 +824,34 @@ impl Render for SqlPreviewModal {
 
         frame = frame.child(footer);
 
-        frame.into_any_element()
+        // The modal propagates its scroll actions when it has no scroll
+        // region of its own; the query scrolls inside its editor instead.
+        div()
+            .absolute()
+            .inset_0()
+            .on_action(cx.listener(|this, _: &component_actions::ScrollUp, _, cx| {
+                this.scroll_display(ScrollStep::LineUp, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &component_actions::ScrollDown, _, cx| {
+                    this.scroll_display(ScrollStep::LineDown, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &component_actions::ScrollPageUp, _, cx| {
+                    this.scroll_display(ScrollStep::PageUp, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &component_actions::ScrollPageDown, _, cx| {
+                    this.scroll_display(ScrollStep::PageDown, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &CopyPreview, _, cx| {
+                this.copy_and_close(cx);
+            }))
+            .child(frame)
+            .into_any_element()
     }
 }
 
@@ -733,5 +889,171 @@ mod tests {
         let spanish = dbflux_i18n::t!("sql_preview.title.sql", locale = "es");
 
         assert_ne!(english, spanish);
+    }
+
+    mod keyboard {
+        // Explicit imports rather than the parent glob: combining `use
+        // super::*` with `#[gpui::test]` sends the gpui_macros expansion into
+        // unbounded recursion.
+        use crate::sql_preview_modal::SqlPreviewModal;
+        use dbflux_core::QueryLanguage;
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+            TestAppContext, VisualTestContext, Window, div,
+        };
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Harness {
+            preview: Entity<SqlPreviewModal>,
+        }
+
+        impl Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(self.preview.clone())
+            }
+        }
+
+        fn long_query() -> String {
+            (0..200)
+                .map(|line| format!("SELECT {line} AS value;"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        fn open_preview(
+            cx: &mut TestAppContext,
+        ) -> (Entity<SqlPreviewModal>, &mut VisualTestContext) {
+            cx.update(gpui_component::init);
+            cx.update(dbflux_components::theme::init);
+            cx.update(crate::keymap::init_keymap);
+            let app_state = crate::object_tree::test_support::test_app_state(cx);
+
+            let slot: Rc<RefCell<Option<Entity<SqlPreviewModal>>>> = Rc::default();
+            let (_, window) = cx.add_window_view({
+                let slot = slot.clone();
+                move |window, cx| {
+                    let preview = cx.new(|cx| SqlPreviewModal::new(app_state, window, cx));
+                    slot.replace(Some(preview.clone()));
+                    let harness = cx.new(|_| Harness { preview });
+                    gpui_component::Root::new(harness, window, cx)
+                }
+            });
+            let preview = slot.borrow().clone().expect("preview entity");
+
+            window.update(|window, cx| {
+                preview.update(cx, |preview, cx| {
+                    preview.open_query_preview(QueryLanguage::Sql, "SQL", long_query(), window, cx);
+                });
+            });
+            window.run_until_parked();
+
+            (preview, window)
+        }
+
+        fn scroll_top(window: &mut VisualTestContext, preview: &Entity<SqlPreviewModal>) -> f32 {
+            window.run_until_parked();
+            window
+                .update(|_, cx| f32::from(preview.read(cx).sql_display.read(cx).scroll_offset().y))
+        }
+
+        fn visible(window: &mut VisualTestContext, preview: &Entity<SqlPreviewModal>) -> bool {
+            window.update(|_, cx| preview.read(cx).is_visible())
+        }
+
+        #[gpui::test]
+        fn j_k_and_the_paging_keys_scroll_the_preview(cx: &mut TestAppContext) {
+            let (preview, window) = open_preview(cx);
+            assert_eq!(scroll_top(window, &preview), 0.0);
+
+            window.simulate_keystrokes("j");
+            let one_line = scroll_top(window, &preview);
+            assert!(one_line < 0.0, "j scrolls down, got {one_line}");
+
+            window.simulate_keystrokes("pagedown");
+            let one_page = scroll_top(window, &preview);
+            assert!(
+                one_page < one_line,
+                "Page Down scrolls further, got {one_page}"
+            );
+
+            window.simulate_keystrokes("pageup k");
+            assert_eq!(
+                scroll_top(window, &preview),
+                0.0,
+                "k and Page Up scroll back"
+            );
+            assert!(visible(window, &preview));
+        }
+
+        #[gpui::test]
+        fn the_copy_shortcut_copies_the_query_and_closes(cx: &mut TestAppContext) {
+            let (preview, window) = open_preview(cx);
+
+            #[cfg(target_os = "macos")]
+            window.simulate_keystrokes("cmd-c");
+            #[cfg(not(target_os = "macos"))]
+            window.simulate_keystrokes("ctrl-c");
+
+            let copied =
+                window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            assert_eq!(copied, Some(long_query()));
+            assert!(!visible(window, &preview));
+        }
+
+        #[gpui::test]
+        fn enter_runs_the_copy_action(cx: &mut TestAppContext) {
+            let (preview, window) = open_preview(cx);
+
+            window.simulate_keystrokes("enter");
+
+            let copied =
+                window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            assert_eq!(copied, Some(long_query()));
+            assert!(!visible(window, &preview));
+        }
+
+        /// With Vim mode on, the query takes the keyboard: `j` moves the
+        /// cursor a line instead of scrolling the dialog, Enter in Normal
+        /// mode moves too instead of copying, and Escape still closes.
+        #[gpui::test]
+        fn vim_mode_moves_in_the_query_and_enter_does_not_copy(cx: &mut TestAppContext) {
+            cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, true));
+            let (preview, window) = open_preview(cx);
+            let cursor = |window: &mut VisualTestContext| {
+                window.update(|_, cx| preview.read(cx).sql_display.read(cx).cursor())
+            };
+
+            window.simulate_keystrokes("j");
+            window.run_until_parked();
+            assert_eq!(cursor(window), "SELECT 0 AS value;\n".len());
+
+            window.simulate_keystrokes("enter");
+            window.run_until_parked();
+            assert_eq!(cursor(window), 2 * "SELECT 0 AS value;\n".len());
+            assert!(visible(window, &preview), "Enter in Normal mode copied");
+            let copied =
+                window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            assert_eq!(copied, None);
+
+            window.simulate_keystrokes("escape");
+            assert!(!visible(window, &preview));
+        }
+
+        #[gpui::test]
+        fn escape_closes_without_copying(cx: &mut TestAppContext) {
+            let (preview, window) = open_preview(cx);
+
+            window.simulate_keystrokes("escape");
+
+            let copied =
+                window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            assert_eq!(copied, None);
+            assert!(!visible(window, &preview));
+        }
     }
 }

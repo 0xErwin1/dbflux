@@ -1420,10 +1420,17 @@ impl Sidebar {
         self.pending_tunnel_auth_profile_id
     }
 
+    /// Records whether the sidebar holds keyboard focus. Gaining it, including
+    /// a return from the filter while the sidebar was already focused, gives
+    /// the active tree a cursor when it has none.
     pub fn set_connections_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
         if self.connections_focused != focused {
             self.connections_focused = focused;
             cx.notify();
+        }
+
+        if focused {
+            self.ensure_tree_cursor(cx);
         }
     }
 
@@ -1431,14 +1438,24 @@ impl Sidebar {
         self.active_tab
     }
 
-    pub fn search_input_is_focused(&self, window: &Window, cx: &App) -> bool {
-        let input = match self.active_tab {
+    fn active_search_input(&self) -> &Entity<InputState> {
+        match self.active_tab {
             SidebarTab::Connections => &self.connections_search_input,
             SidebarTab::Scripts => &self.scripts_search_input,
             SidebarTab::Dashboards => &self.dashboards_search_input,
-        };
+        }
+    }
 
-        input.read(cx).focus_handle(cx).is_focused(window)
+    pub fn search_input_is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.active_search_input()
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
+    /// The filter typed into the active view's search field.
+    pub fn active_search_query(&self, cx: &App) -> String {
+        self.active_search_input().read(cx).value().to_string()
     }
 
     pub fn search_input_has_focus_state(&self) -> bool {
@@ -1470,6 +1487,10 @@ impl Sidebar {
 
             if tab == SidebarTab::Dashboards {
                 self.refresh_dashboards_tree(cx);
+            }
+
+            if self.connections_focused {
+                self.ensure_tree_cursor(cx);
             }
 
             cx.notify();
@@ -1902,17 +1923,8 @@ impl Sidebar {
     }
 
     fn handle_chevron_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
-            let is_connected = self
-                .app_state
-                .read(cx)
-                .connections()
-                .contains_key(&profile_id);
-
-            if !is_connected {
-                self.connect_to_profile(profile_id, cx);
-                return;
-            }
+        if self.connect_if_disconnected_profile(item_id, cx) {
+            return;
         }
 
         self.toggle_item_expansion(item_id, cx);

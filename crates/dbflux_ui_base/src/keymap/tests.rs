@@ -301,23 +301,38 @@ fn results_layer_binds_f5_to_refresh() {
     );
 }
 
-/// No other layer binds `F5`, so the Results binding cannot shadow or be
-/// shadowed by another command.
+/// `F5` refreshes the focused document: only the Results, chart and
+/// dashboard layers bind it, and always to `RefreshSchema`, so it cannot
+/// shadow or be shadowed by another command.
 #[test]
-fn f5_is_bound_only_in_the_results_layer() {
+fn f5_is_bound_only_in_the_document_refresh_layers() {
     let keymap = default_keymap();
     let f5 = KeyChord::new("f5", Modifiers::none());
+    let refresh_layers = [
+        ContextId::Results,
+        ContextId::Chart,
+        ContextId::Dashboard,
+        ContextId::McpApprovals,
+    ];
 
     for context in ContextId::all_variants() {
-        let bound_here = keymap
+        let bindings: Vec<Command> = keymap
             .bindings_for_context(*context)
             .into_iter()
-            .any(|(keys, _, owner)| keys == KeySequence::from(f5.clone()) && owner == *context);
+            .filter(|(keys, _, owner)| *keys == KeySequence::from(f5.clone()) && owner == context)
+            .map(|(_, command, _)| command)
+            .collect();
 
         assert_eq!(
-            bound_here,
-            *context == ContextId::Results,
+            !bindings.is_empty(),
+            refresh_layers.contains(context),
             "unexpected F5 binding ownership in {context:?}"
+        );
+        assert!(
+            bindings
+                .iter()
+                .all(|command| *command == Command::RefreshSchema),
+            "F5 must refresh in {context:?}"
         );
     }
 }
@@ -613,6 +628,29 @@ fn runs_command(action: &dyn Action, command: Command) -> bool {
         .is_some_and(|run| run.command.as_ref() == command.action_id())
 }
 
+/// The key contexts a window root reports for `context`. The settings
+/// window adds the active section and whether the section or its navigation
+/// has the keyboard, which the section keys of the Settings layer match on.
+fn roots_reported_for(context: ContextId) -> Vec<KeyContext> {
+    if context != ContextId::Settings {
+        return vec![root_key_context(WORKSPACE_KEY_CONTEXT, context, &[])];
+    }
+
+    ["proxies", "keybindings"]
+        .into_iter()
+        .map(|section| {
+            root_key_context(
+                WORKSPACE_KEY_CONTEXT,
+                context,
+                &[
+                    ("section".into(), section.into()),
+                    ("focus".into(), "section".into()),
+                ],
+            )
+        })
+        .collect()
+}
+
 /// Every default binding of a context a window root reports resolves, in
 /// that root's key context, to the command the keymap stack resolves for it
 /// (the context's own binding first, then the inherited one), so moving key
@@ -626,17 +664,28 @@ fn every_root_default_resolves_to_the_same_command_natively() {
             continue;
         }
 
-        let root = root_key_context(WORKSPACE_KEY_CONTEXT, *context, &[]);
+        let roots = roots_reported_for(*context);
 
         for (keys, command, _) in default_keymap().bindings_for_context(*context) {
             let typed = gpui_keystrokes(&keys);
-            let action = top_action(&keymap, &typed, std::slice::from_ref(&root))
-                .unwrap_or_else(|| panic!("`{typed}` must be bound in {context:?}"));
+            let actions: Vec<Box<dyn Action>> = roots
+                .iter()
+                .filter_map(|root| top_action(&keymap, &typed, std::slice::from_ref(root)))
+                .collect();
 
             assert!(
-                runs_command(action.as_ref(), command),
-                "`{typed}` in {context:?} must run {command:?}, got {}",
-                action.name()
+                !actions.is_empty(),
+                "`{typed}` must be bound in {context:?}"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| runs_command(action.as_ref(), command)),
+                "`{typed}` in {context:?} must run {command:?}, got {:?}",
+                actions
+                    .iter()
+                    .map(|action| action.name())
+                    .collect::<Vec<_>>()
             );
         }
     }
@@ -667,6 +716,302 @@ fn global_bindings_stop_at_capturing_contexts_and_modals() {
         top_action(&keymap, &palette, &inside_modal).is_none(),
         "the panels behind an open modal do not see the keys"
     );
+}
+
+/// The workspace commands that used to run only from the command palette,
+/// and the keyboard shell commands, with the global keys they have.
+fn workspace_command_chords() -> Vec<(Command, KeyChord)> {
+    #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+    let mut chords = vec![
+        (
+            Command::OpenSettings,
+            KeyChord::new(",", Modifiers::primary()),
+        ),
+        (
+            Command::ToggleEditor,
+            KeyChord::new("e", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ToggleResults,
+            KeyChord::new("r", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ToggleTasks,
+            KeyChord::new("t", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ToggleNotifications,
+            KeyChord::new("b", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenLastErrorInAudit,
+            KeyChord::new("x", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenToastActions,
+            KeyChord::new("y", Modifiers::primary_shift()),
+        ),
+        (
+            Command::MoveTabLeft,
+            KeyChord::new("pageup", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::MoveTabRight,
+            KeyChord::new("pagedown", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::OpenLoginModal,
+            KeyChord::new("l", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenSsoWizard,
+            KeyChord::new("o", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenSavedChart,
+            KeyChord::new("c", Modifiers::primary_shift()),
+        ),
+        (
+            Command::NewDashboard,
+            KeyChord::new("d", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ShowConnectionsView,
+            KeyChord::new("5", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::ShowScriptsView,
+            KeyChord::new("6", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::ShowDashboardsView,
+            KeyChord::new("7", Modifiers::ctrl_shift()),
+        ),
+    ];
+
+    #[cfg(feature = "mcp")]
+    chords.extend([
+        (
+            Command::OpenMcpApprovals,
+            KeyChord::new("m", Modifiers::primary_shift()),
+        ),
+        (
+            Command::RefreshMcpGovernance,
+            KeyChord::new("g", Modifiers::primary_shift()),
+        ),
+    ]);
+
+    chords
+}
+
+#[test]
+fn workspace_commands_have_global_chords() {
+    let keymap = effective_keymap();
+
+    for (command, chord) in workspace_command_chords() {
+        assert_eq!(
+            keymap.keys_for_command(ContextId::Global, command),
+            Some(&KeySequence::from(chord.clone())),
+            "{command:?} must be bound to {chord} in the global layer"
+        );
+
+        for context in [
+            ContextId::Sidebar,
+            ContextId::Editor,
+            ContextId::Results,
+            ContextId::TextInput,
+        ] {
+            assert_eq!(
+                keymap.resolve(context, &chord),
+                Some(command),
+                "{chord} must run {command:?} in {context:?}"
+            );
+        }
+    }
+}
+
+/// The new global chords take no key another layer already binds, so no
+/// panel shadows them and they shadow no panel. A layer without the global
+/// parent may bind the chord to the same command (the notifications popover
+/// closes with the shortcut that opened it).
+#[test]
+fn workspace_command_chords_are_bound_nowhere_else() {
+    let keymap = default_keymap();
+
+    for (command, chord) in workspace_command_chords() {
+        let keys = KeySequence::from(chord.clone());
+
+        for context in ContextId::all_variants() {
+            let Some(layer) = keymap.layer(*context) else {
+                continue;
+            };
+
+            if let Some(bound) = layer.get_sequence(&keys) {
+                assert!(
+                    bound == command,
+                    "{chord} is also bound to {bound:?} in {context:?}"
+                );
+            }
+        }
+    }
+}
+
+/// While text is typed in a field or the context bar, the global chords
+/// still reach the workspace, inside the field's own `Input` element too.
+#[test]
+fn global_chords_reach_text_entry_roots() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::TextInput, ContextId::ContextBar] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let inside_input = element_stack(root.clone(), &["Input"]);
+
+        for (keys, command) in [
+            ("ctrl-shift-p", Command::ToggleCommandPalette),
+            ("ctrl-tab", Command::NextTab),
+            ("ctrl-shift-tab", Command::PrevTab),
+            ("ctrl-w", Command::CloseCurrentTab),
+            ("ctrl-3", Command::SwitchToTab(3)),
+            ("ctrl-shift-2", Command::FocusEditor),
+        ] {
+            for stack in [std::slice::from_ref(&root), inside_input.as_slice()] {
+                let action = top_action(&keymap, keys, stack)
+                    .unwrap_or_else(|| panic!("`{keys}` must be bound in {context:?}"));
+
+                assert!(
+                    runs_command(action.as_ref(), command),
+                    "`{keys}` in {context:?} must run {command:?}, got {}",
+                    action.name()
+                );
+            }
+        }
+    }
+}
+
+/// Unmodified keys in a text root stay with the field: the global layer's
+/// Tab cycle and Escape never take them from the text being typed.
+#[test]
+fn text_entry_roots_keep_unmodified_keys_from_the_global_layer() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let inside_input = element_stack(root.clone(), &["Input"]);
+
+    for keys in ["j", "tab", "shift-tab", "enter", "down"] {
+        let action = top_action(&keymap, keys, &inside_input);
+
+        assert!(
+            !action.as_ref().is_some_and(|action| {
+                [
+                    Command::CycleFocusForward,
+                    Command::CycleFocusBackward,
+                    Command::SelectNext,
+                    Command::Execute,
+                ]
+                .into_iter()
+                .any(|command| runs_command(action.as_ref(), command))
+            }),
+            "`{keys}` in a text field must not run a workspace command"
+        );
+    }
+
+    let escape = top_action(&keymap, "escape", std::slice::from_ref(&root)).expect("bound");
+    assert!(runs_command(escape.as_ref(), Command::Cancel));
+}
+
+/// Dialogs, menus, dropdowns and pickers own the keyboard until they close:
+/// the global chords do not fire through them.
+#[test]
+fn global_chords_stop_at_dialogs_menus_and_pickers() {
+    let keymap = native_keymap();
+
+    for context in [
+        ContextId::HistoryModal,
+        ContextId::ConfirmModal,
+        ContextId::Dropdown,
+        ContextId::EventStreamsPicker,
+        ContextId::SqlPreviewModal,
+        ContextId::FormNavigation,
+        ContextId::ContextMenu,
+        ContextId::CommandPalette,
+    ] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+
+        for keys in ["ctrl-tab", "ctrl-shift-p", "ctrl-1"] {
+            assert!(
+                top_action(&keymap, keys, std::slice::from_ref(&root)).is_none(),
+                "`{keys}` must not fire while {context:?} owns the keyboard"
+            );
+        }
+    }
+
+    let text_root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let text_in_modal = element_stack(text_root, &["Modal", "Input"]);
+    assert!(
+        top_action(&keymap, "ctrl-tab", &text_in_modal).is_none(),
+        "a text field inside a modal keeps the chords out"
+    );
+}
+
+/// While an overlay owns the keyboard, the root drops the global chords even
+/// for a text root, whether or not focus reached the overlay's `Modal`.
+#[test]
+fn overlay_roots_do_not_keep_the_global_chords() {
+    let keymap = native_keymap();
+    let overlay = overlay_root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+
+    assert!(overlay.contains("TextInput"));
+    assert!(!overlay.contains(ContextId::GLOBAL_CHORDS_IDENTIFIER));
+    assert!(top_action(&keymap, "ctrl-tab", &[overlay]).is_none());
+}
+
+/// The copies of the global chords follow the user's overrides: a rebound
+/// chord moves, a shortcut moved to a bare key or to a predicate of the
+/// user's own stays out of the text roots.
+#[test]
+fn global_chords_in_text_roots_follow_the_overrides() {
+    let next_tab = BindingSlot::new(
+        ContextId::Global,
+        Command::NextTab,
+        KeyChord::new("tab", Modifiers::ctrl()),
+    );
+    let close_tab = BindingSlot::new(
+        ContextId::Global,
+        Command::CloseCurrentTab,
+        KeyChord::new("w", Modifiers::primary()),
+    );
+    let palette = BindingSlot::new(
+        ContextId::Global,
+        Command::ToggleCommandPalette,
+        KeyChord::new("p", Modifiers::primary_shift()),
+    );
+
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        next_tab,
+        Some(KeySequence::from(KeyChord::new(
+            "j",
+            Modifiers::ctrl_shift(),
+        ))),
+    );
+    overrides.set(
+        close_tab,
+        Some(KeySequence::from(KeyChord::new("f4", Modifiers::none()))),
+    );
+    overrides.set_predicate(palette, Some("Editor && !Modal".to_string()));
+
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(native_bindings(
+        &overrides.effective_bindings(default_keymap()),
+    ));
+
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let stack = std::slice::from_ref(&root);
+
+    let rebound = top_action(&keymap, "ctrl-shift-j", stack).expect("the rebound chord");
+    assert!(runs_command(rebound.as_ref(), Command::NextTab));
+    assert!(top_action(&keymap, "ctrl-tab", stack).is_none());
+    assert!(top_action(&keymap, "f4", stack).is_none());
+    assert!(top_action(&keymap, "ctrl-shift-p", stack).is_none());
 }
 
 /// GPUI normalizes Ctrl+Shift+digit at the platform layer (GitHub #65); as
@@ -799,6 +1144,7 @@ fn assert_element_bindings(
 /// with the tree focused under the Results panel, and so does `d d`.
 #[test]
 fn document_tree_bindings_run_the_same_actions_as_before() {
+    let _keymap_state = keymap_state_test_guard();
     let stack = element_stack(
         root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]),
         &[document_tree::CONTEXT],
@@ -992,6 +1338,45 @@ fn modal_editors_cancel_and_save() {
     }
 }
 
+/// The SQL preview and the dialogs that share its context: Escape, Enter,
+/// j / k and the paging keys run the modal actions, and the primary modifier
+/// + C copies the preview. The letter keys stay with a focused text field.
+#[test]
+fn sql_preview_modal_keys_run_the_modal_actions() {
+    #[cfg(target_os = "macos")]
+    let copy = "cmd-c";
+    #[cfg(not(target_os = "macos"))]
+    let copy = "ctrl-c";
+
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::SqlPreviewModal, &[]);
+    let stack = element_stack(root.clone(), &["Modal SqlPreviewModal"]);
+
+    assert_element_bindings(
+        &stack,
+        vec![
+            ("escape", Box::new(component_actions::Cancel)),
+            ("enter", Box::new(component_actions::Execute)),
+            ("j", Box::new(component_actions::ScrollDown)),
+            ("down", Box::new(component_actions::ScrollDown)),
+            ("k", Box::new(component_actions::ScrollUp)),
+            ("up", Box::new(component_actions::ScrollUp)),
+            ("pagedown", Box::new(component_actions::ScrollPageDown)),
+            ("pageup", Box::new(component_actions::ScrollPageUp)),
+            (copy, Box::new(crate::sql_preview_modal::CopyPreview)),
+        ],
+        "SQL preview",
+    );
+
+    let keymap = native_keymap();
+    let text_field = element_stack(root, &["Modal SqlPreviewModal", "Input"]);
+    for keys in ["j", "k"] {
+        assert!(
+            top_action(&keymap, keys, &text_field).is_none(),
+            "`{keys}` must stay with a text field inside the SQL preview"
+        );
+    }
+}
+
 #[test]
 fn command_palette_navigates_with_arrows_and_ctrl_j_k() {
     let keymap = native_keymap();
@@ -1037,6 +1422,11 @@ fn root_key_context_adds_global_only_to_inheriting_contexts() {
 
     let palette = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::CommandPalette, &[]);
     assert!(!palette.contains("Global"));
+    assert!(!palette.contains(ContextId::GLOBAL_CHORDS_IDENTIFIER));
+
+    let text = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    assert!(!text.contains("Global"));
+    assert!(text.contains(ContextId::GLOBAL_CHORDS_IDENTIFIER));
 }
 
 #[test]
@@ -1263,13 +1653,104 @@ fn document_tree_key_presses_run_the_tree_actions(cx: &mut gpui::TestAppContext)
     );
 }
 
+/// The search field types the letters the tree binds, Enter hands the
+/// keyboard back to the tree with the matches kept, and Escape closes the
+/// search from the field.
+#[gpui::test]
+fn document_tree_search_field_types_the_tree_letters(cx: &mut gpui::TestAppContext) {
+    use dbflux_components::components::document_tree::{DocumentTree, DocumentTreeState, NodeId};
+    use dbflux_core::Value;
+    use gpui::{AppContext as _, VisualTestContext};
+
+    cx.update(gpui_component::init);
+    cx.update(dbflux_components::theme::init);
+    cx.update(init_keymap);
+
+    let state = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut state = DocumentTreeState::new(cx);
+            state.load_from_values(
+                vec![
+                    ("jgt".to_string(), Value::Int(1)),
+                    ("other".to_string(), Value::Int(2)),
+                    ("third".to_string(), Value::Int(3)),
+                ],
+                cx,
+            );
+            state
+        })
+    });
+    let (_tree, window) = cx.add_window_view({
+        let state = state.clone();
+        move |_, cx| DocumentTree::new("test-document-tree-search", state, cx)
+    });
+
+    window.update(|window, cx| state.update(cx, |state, cx| state.focus(window, cx)));
+    window.run_until_parked();
+
+    let cursor =
+        |window: &mut VisualTestContext| window.update(|_, cx| state.read(cx).cursor().cloned());
+    let query = |window: &mut VisualTestContext| {
+        window.update(|_, cx| state.read(cx).search_query().map(str::to_string))
+    };
+
+    window.simulate_keystrokes("/");
+    window.run_until_parked();
+
+    window.simulate_keystrokes("j g t");
+    window.run_until_parked();
+    assert_eq!(
+        query(window).as_deref(),
+        Some("jgt"),
+        "letters type in the search"
+    );
+    assert_eq!(
+        cursor(window),
+        Some(NodeId::root(0)),
+        "typing leaves the cursor on the match"
+    );
+
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| state.read(cx).is_search_visible()),
+        "Enter keeps the search open",
+    );
+
+    window.simulate_keystrokes("j");
+    window.run_until_parked();
+    assert_eq!(
+        cursor(window),
+        Some(NodeId::root(1)),
+        "after Enter, j moves the tree cursor"
+    );
+    assert_eq!(query(window).as_deref(), Some("jgt"), "the query is kept");
+
+    window.simulate_keystrokes("n");
+    window.run_until_parked();
+    assert_eq!(
+        cursor(window),
+        Some(NodeId::root(0)),
+        "n jumps to the match"
+    );
+
+    window.simulate_keystrokes("/");
+    window.run_until_parked();
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(
+        !window.update(|_, cx| state.read(cx).is_search_visible()),
+        "Escape in the search field closes the search",
+    );
+}
+
 /// A rebinding reaches the effective keymap and the generated native
 /// bindings at once, a key sequence works, and resetting it restores the
-/// default key. This is the only test that changes the process-wide
-/// overrides; it touches a binding no other test relies on and restores the
-/// defaults at the end.
+/// default key. It changes the process-wide overrides, so it holds the
+/// keymap state guard and restores the defaults at the end.
 #[gpui::test]
 fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
     use dbflux_components::components::document_tree::{
         DocumentTree, DocumentTreeEvent, DocumentTreeState,
     };
@@ -1306,11 +1787,14 @@ fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext
     });
     window.run_until_parked();
 
+    // The tree's letters stay out of its text fields, so the slot carries
+    // that predicate rather than the context's own.
     let slot = BindingSlot::new(
         ContextId::DocumentTree,
         Command::CycleDocumentView,
         KeyChord::new("t", Modifiers::none()),
-    );
+    )
+    .with_predicate("DocumentTree && !Input");
     let rebound = KeyChord::new("t", Modifiers::alt());
 
     let mut overrides = KeymapOverrides::new();
@@ -1348,4 +1832,728 @@ fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext
 
     window.simulate_keystrokes("t");
     assert_eq!(*cycles.borrow(), 3, "the reset restores the default key");
+}
+
+/// A dropdown or multi-select focused from the keyboard carries the
+/// `Dropdown` key context itself, so its keys win over the pane around it
+/// (here the code editor's context bar, which binds the same letters) and
+/// reach the control as keymap commands.
+#[test]
+fn a_focused_dropdown_takes_its_keys_before_the_pane() {
+    let keymap = native_keymap();
+    let stack = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::ContextBar, &[]),
+        &["Dropdown"],
+    );
+
+    for (keys, command) in [
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("enter", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("escape", Command::Cancel),
+    ] {
+        let action = top_action(&keymap, keys, &stack).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` in a focused dropdown must run {command:?}"
+        );
+    }
+}
+
+/// `m` opens the pane-actions menu in the code editor's chrome (its context
+/// bar), while the data table keeps `m` for its own context menu, which is
+/// that pane's actions menu. The text area keeps `m` for typing.
+#[test]
+fn m_opens_the_pane_actions_in_the_editor_chrome_and_the_grid_menu_in_results() {
+    let keymap = native_keymap();
+
+    let context_bar = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::ContextBar, &[]);
+    for keys in ["m", "shift-f10"] {
+        let action = top_action(&keymap, keys, std::slice::from_ref(&context_bar)).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), Command::OpenPaneActions),
+            "{keys}"
+        );
+    }
+
+    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let action = top_action(&keymap, "m", std::slice::from_ref(&results)).expect("bound");
+    assert!(runs_command(action.as_ref(), Command::OpenContextMenu));
+
+    let typing = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),
+        &[CODE_EDITOR_KEY_CONTEXT, "Input"],
+    );
+    assert!(top_action(&keymap, "m", &typing).is_none());
+}
+
+/// Shift+F10 opens the pane-actions menu from the code editor's text, in
+/// every Vim mode and without Vim, so the toolbar menu does not require
+/// leaving the editor. It types nothing, so it takes no text away.
+#[test]
+fn shift_f10_opens_the_pane_actions_from_the_code_editor_text() {
+    let keymap = native_keymap();
+
+    let mut roots = vec![root_key_context(
+        WORKSPACE_KEY_CONTEXT,
+        ContextId::Editor,
+        &[],
+    )];
+    for mode in [
+        "normal",
+        "insert",
+        "replace",
+        "visual",
+        "visual_line",
+        "visual_block",
+    ] {
+        roots.push(root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Editor,
+            &[(VIM_MODE_KEY.into(), mode.into())],
+        ));
+    }
+
+    for root in roots {
+        let typing = element_stack(root.clone(), &[CODE_EDITOR_KEY_CONTEXT, "Input"]);
+        let action = top_action(&keymap, "shift-f10", &typing).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), Command::OpenPaneActions),
+            "{root:?}"
+        );
+    }
+}
+
+/// A query's result tabs are switched and closed from the results area, on
+/// the grid itself too: `Alt+l` / `Alt+h` move to the next / previous tab and
+/// `Alt+w` closes the one shown.
+#[test]
+fn alt_keys_switch_and_close_result_tabs_from_the_results() {
+    let keymap = native_keymap();
+    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(results.clone(), &[data_table::CONTEXT]);
+
+    for stack in [vec![results], grid] {
+        for (keys, command) in [
+            ("alt-l", Command::NextResultTab),
+            ("alt-h", Command::PrevResultTab),
+            ("alt-w", Command::CloseResultTab),
+        ] {
+            let action = top_action(&keymap, keys, &stack).expect("bound");
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` must run {command:?} in {stack:?}"
+            );
+        }
+    }
+}
+
+/// `/` focuses the query history's search from its list, but stays a typed
+/// character in the history's own fields (search, rename, save name), which
+/// sit inside the history element.
+#[test]
+fn slash_in_the_query_history_fields_is_typed_text() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::HistoryModal, &[]);
+    let list = element_stack(root, &["HistoryModal"]);
+
+    let action = top_action(&keymap, "/", &list).expect("bound");
+    assert!(runs_command(action.as_ref(), Command::FocusSearch));
+
+    let mut field = list.clone();
+    field.push(KeyContext::parse("Input").expect("valid key context"));
+    assert!(top_action(&keymap, "/", &field).is_none());
+}
+
+/// Alt+L and Alt+H show the next and previous tab of the query history
+/// (Recent, Saved) from its list. In its search, rename and save fields they
+/// do too, except on macOS, where Option+letter types a character.
+#[test]
+fn alt_keys_switch_the_query_history_tabs() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::HistoryModal, &[]);
+    let list = element_stack(root, &["HistoryModal"]);
+    let mut field = list.clone();
+    field.push(KeyContext::parse("Input").expect("valid key context"));
+
+    for (keys, command) in [
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+    ] {
+        let action = top_action(&keymap, keys, &list).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the history list"
+        );
+
+        let in_field = top_action(&keymap, keys, &field);
+        if cfg!(target_os = "macos") {
+            assert!(in_field.is_none(), "`{keys}` types a character on macOS");
+        } else {
+            let action = in_field.expect("bound in the history fields");
+            assert!(runs_command(action.as_ref(), command));
+        }
+    }
+}
+
+/// Inside either query builder rail the in-pane keys move the cursor and act
+/// on its row, while a text field or a dropdown inside the rail keeps its
+/// letters; Escape, Ctrl+H, the run and save chords and the mode keys still
+/// reach the rail from a text field.
+#[test]
+fn builder_rail_keys_drive_the_rail_and_leave_its_fields_their_letters() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::QueryBuilder, ContextId::DocumentBuilder] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let rail = element_stack(root.clone(), &[]);
+        let field = element_stack(root.clone(), &["Input"]);
+        let dropdown = element_stack(root, &["Dropdown"]);
+
+        for (keys, command) in [
+            ("j", Command::SelectNext),
+            ("k", Command::SelectPrev),
+            ("g", Command::SelectFirst),
+            ("shift-g", Command::SelectLast),
+            ("h", Command::ColumnLeft),
+            ("l", Command::ColumnRight),
+            ("enter", Command::Execute),
+            ("i", Command::Execute),
+            ("space", Command::ExpandCollapse),
+            ("a", Command::AddItem),
+            ("shift-a", Command::AddGroup),
+            ("x", Command::Delete),
+            ("d", Command::Delete),
+            ("shift-k", Command::MoveSelectedUp),
+            ("shift-j", Command::MoveSelectedDown),
+            ("m", Command::OpenPaneActions),
+            ("shift-f10", Command::OpenPaneActions),
+            ("alt-l", Command::NextPanelTab),
+            ("alt-h", Command::PrevPanelTab),
+            ("escape", Command::Cancel),
+            ("ctrl-h", Command::FocusLeft),
+        ] {
+            let action = top_action(&keymap, keys, &rail)
+                .unwrap_or_else(|| panic!("`{keys}` bound in {context:?}"));
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` must run {command:?} in {context:?}"
+            );
+        }
+
+        for keys in ["j", "a", "x", "l", "i", "m", "space"] {
+            let in_field = top_action(&keymap, keys, &field);
+            assert!(
+                in_field
+                    .as_ref()
+                    .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+                "`{keys}` is typed text in a {context:?} field"
+            );
+            let in_dropdown = top_action(&keymap, keys, &dropdown);
+            assert!(
+                in_dropdown.as_ref().is_none_or(|action| {
+                    !runs_command(action.as_ref(), Command::AddItem)
+                        && !runs_command(action.as_ref(), Command::Delete)
+                        && !runs_command(action.as_ref(), Command::ColumnRight)
+                        && !runs_command(action.as_ref(), Command::OpenPaneActions)
+                }),
+                "`{keys}` does not act on the rail row from a focused dropdown"
+            );
+        }
+    }
+}
+
+/// A chart document moves its highlighted point with H and L, the series
+/// with J and K, switches the chart kind with Alt+H / Alt+L and the time
+/// range with [ and ], and lists its toolbar on M. A focused dropdown in the
+/// chart (refresh interval, custom range) keeps those letters.
+#[test]
+fn chart_keys_move_the_point_and_reach_the_toolbar() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Chart, &[]);
+    let chart = element_stack(root.clone(), &[]);
+    let dropdown = element_stack(root, &["Dropdown"]);
+
+    for (keys, command) in [
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("enter", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+        ("]", Command::NextTimeRange),
+        ("[", Command::PrevTimeRange),
+        ("f5", Command::RefreshSchema),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+        ("escape", Command::Cancel),
+        ("ctrl-h", Command::FocusLeft),
+        ("ctrl-l", Command::FocusRight),
+    ] {
+        let action = top_action(&keymap, keys, &chart)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the chart"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the chart"
+        );
+    }
+
+    for keys in ["h", "l", "m", "]"] {
+        let in_dropdown = top_action(&keymap, keys, &dropdown);
+        assert!(
+            in_dropdown.as_ref().is_none_or(|action| {
+                !runs_command(action.as_ref(), Command::ColumnLeft)
+                    && !runs_command(action.as_ref(), Command::ColumnRight)
+                    && !runs_command(action.as_ref(), Command::OpenPaneActions)
+                    && !runs_command(action.as_ref(), Command::NextTimeRange)
+            }),
+            "`{keys}` stays with a focused dropdown in the chart"
+        );
+    }
+}
+
+/// A dashboard selects panels with hjkl and the arrows, acts on the selected
+/// one (open, configure, rename, remove, fold), moves it with Shift and
+/// resizes it with Alt+Shift, and switches between View and Edit with
+/// Alt+H / Alt+L.
+#[test]
+fn dashboard_keys_select_and_act_on_panels() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Dashboard, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    for (keys, command) in [
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("c", Command::ConfigurePanel),
+        ("r", Command::Rename),
+        ("f2", Command::Rename),
+        ("x", Command::Delete),
+        ("delete", Command::Delete),
+        ("a", Command::AddItem),
+        ("space", Command::ExpandCollapse),
+        ("shift-h", Command::MovePanelLeft),
+        ("shift-l", Command::MovePanelRight),
+        ("shift-k", Command::MovePanelUp),
+        ("shift-j", Command::MovePanelDown),
+        ("alt-shift-h", Command::ResizePanelNarrower),
+        ("alt-shift-l", Command::ResizePanelWider),
+        ("alt-shift-k", Command::ResizePanelShorter),
+        ("alt-shift-j", Command::ResizePanelTaller),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+        ("]", Command::NextTimeRange),
+        ("[", Command::PrevTimeRange),
+        ("f5", Command::RefreshSchema),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+        ("escape", Command::Cancel),
+        ("ctrl-h", Command::FocusLeft),
+    ] {
+        let action = top_action(&keymap, keys, &grid)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the dashboard"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the dashboard"
+        );
+    }
+
+    for keys in ["h", "x", "r", "a", "c"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in a dashboard title field"
+        );
+    }
+}
+
+/// The MCP approvals keys run as commands in the view and leave the reason
+/// field its letters, while Escape brings the keyboard back from the field.
+#[test]
+fn mcp_approvals_keys_move_and_decide() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::McpApprovals, &[]);
+    let list = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+    let mut expected = vec![
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("escape", Command::Cancel),
+        ("f5", Command::RefreshSchema),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+        ("ctrl-h", Command::FocusLeft),
+    ];
+    #[cfg(feature = "mcp")]
+    expected.extend([
+        ("a", Command::ApproveExecution),
+        ("r", Command::RejectExecution),
+    ]);
+
+    for (keys, command) in expected {
+        let action = top_action(&keymap, keys, &list)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the approvals"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the approvals"
+        );
+    }
+
+    for keys in ["j", "k", "a", "r", "i", "g"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in the reason field"
+        );
+    }
+
+    for (keys, command) in [("escape", Command::Cancel), ("ctrl-h", Command::FocusLeft)] {
+        let action = top_action(&keymap, keys, &field)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the reason field"));
+        assert!(runs_command(action.as_ref(), command));
+    }
+}
+
+/// A dashboard panel's Configure popover carries the Chart context on its
+/// dialog, so the chart keys drive its axis pickers and chart type there,
+/// while the dashboard's own panel keys and the pane focus chords do not
+/// reach behind the dialog. Enter and Escape stay the dialog's own keys; the
+/// popover hands them to an open picker first.
+#[test]
+fn the_configure_popover_takes_the_chart_keys() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Dashboard, &[]);
+    let popover = element_stack(root, &["Modal Chart"]);
+
+    for (keys, command) in [
+        ("h", Command::ColumnLeft),
+        ("j", Command::SelectNext),
+        ("alt-l", Command::NextPanelTab),
+        ("space", Command::ExpandCollapse),
+    ] {
+        let action = top_action(&keymap, keys, &popover)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the popover"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the popover"
+        );
+    }
+
+    for (keys, command) in [
+        ("shift-j", Command::MovePanelDown),
+        ("x", Command::Delete),
+        ("ctrl-h", Command::FocusLeft),
+    ] {
+        let action = top_action(&keymap, keys, &popover);
+        assert!(
+            action
+                .as_ref()
+                .is_none_or(|action| !runs_command(action.as_ref(), command)),
+            "`{keys}` does not reach behind the popover"
+        );
+    }
+}
+
+/// The Add Panel dialog carries its own context: Alt+H / Alt+L switch its
+/// tabs from anywhere in it (the text fields too, except on macOS), and the
+/// list letters work outside its text fields.
+#[test]
+fn add_panel_picker_keys_switch_tabs_and_move_the_lists() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let list = element_stack(root.clone(), &["Modal AddPanelPicker"]);
+    let field = element_stack(root, &["Modal AddPanelPicker", "Input"]);
+
+    for (keys, command) in [
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("h", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("space", Command::ExpandCollapse),
+        ("/", Command::FocusSearch),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+    ] {
+        let action = top_action(&keymap, keys, &list)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the Add Panel dialog"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the Add Panel dialog"
+        );
+    }
+
+    for keys in ["j", "space", "/"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in the dialog's fields"
+        );
+    }
+
+    if !cfg!(target_os = "macos") {
+        let action = top_action(&keymap, "alt-l", &field).expect("bound in the fields");
+        assert!(runs_command(action.as_ref(), Command::NextPanelTab));
+    }
+}
+
+/// The migrate wizard keys run as commands on every step: the lists and
+/// fields move with j / k and h / l, Alt+L / Alt+H step the wizard, Ctrl+Enter
+/// continues or starts the run, and a text field keeps its letters while the
+/// step keys and Escape still reach the wizard from it.
+#[test]
+fn migrate_wizard_keys_step_the_wizard_and_drive_each_step() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::MigrateWizard, &[]);
+    let step = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    let expected = [
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("shift-k", Command::MoveSelectedUp),
+        ("shift-j", Command::MoveSelectedDown),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+        ("escape", Command::Cancel),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+    ];
+
+    for (keys, command) in expected {
+        let action = top_action(&keymap, keys, &step)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the migrate wizard"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the migrate wizard"
+        );
+    }
+
+    let primary_enter = if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    };
+    let action = top_action(&keymap, primary_enter, &step).expect("Ctrl+Enter bound");
+    assert!(runs_command(action.as_ref(), Command::RunQuery));
+
+    for keys in ["j", "k", "h", "l", "i", "m"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` stays text in a wizard field"
+        );
+    }
+
+    let escape = top_action(&keymap, "escape", &field).expect("Escape bound in a field");
+    assert!(
+        runs_command(escape.as_ref(), Command::Cancel),
+        "Escape brings the keyboard back from a wizard field"
+    );
+}
+
+// ============================================================================
+// Vim leader
+// ============================================================================
+
+fn leader_then(key: &str) -> KeySequence {
+    KeySequence::new(vec![
+        KeyChord::leader(),
+        KeyChord::new(key, Modifiers::none()),
+    ])
+    .expect("two chords")
+}
+
+/// The key context stack of an editor's text while the leader is active:
+/// the workspace root for the editor, the editor's container with the
+/// `VimNormal` identifier, and the input.
+fn leader_stack() -> Vec<KeyContext> {
+    element_stack(
+        root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Editor,
+            &[(VIM_MODE_KEY.into(), "normal".into())],
+        ),
+        &[
+            &format!(
+                "{CODE_EDITOR_KEY_CONTEXT} {}",
+                ContextId::VimNormal.as_gpui_context()
+            ),
+            "Input",
+        ],
+    )
+}
+
+/// Whether `action` is the leader action of `command`, which the Vim wrapper
+/// runs so that the sequence's last key never reaches Vim.
+fn runs_ahead_of_vim(action: &dyn Action, command: Command) -> bool {
+    action
+        .as_any()
+        .downcast_ref::<dbflux_components::vim::LeaderCommand>()
+        .is_some_and(|leader| leader.command.as_ref() == command.action_id())
+}
+
+/// With the default leader, Space waits for its second key where the
+/// leader is active, each default sequence runs its command ahead of Vim, an
+/// editor without the context does not see them, and a dialog's editor gets
+/// the same leader action, which its Vim wrapper hands to the dialog.
+#[test]
+fn default_leader_sequences_run_their_commands_where_the_leader_is_active() {
+    let _keymap_state = keymap_state_test_guard();
+    let keymap = native_keymap();
+    let stack = leader_stack();
+
+    let (_, pending) = keymap.bindings_for_input(&parse_keys("space"), &stack);
+    assert!(pending, "Space waits for the key after the leader");
+
+    for (key, command) in [
+        ("a", Command::OpenPaneActions),
+        ("r", Command::RunQuery),
+        ("e", Command::ExplainQuery),
+        ("s", Command::SaveQuery),
+        ("f", Command::FocusSearch),
+        ("h", Command::PrevPanelTab),
+        ("l", Command::NextPanelTab),
+        ("p", Command::ToggleCommandPalette),
+    ] {
+        let action = top_action(&keymap, &format!("space {key}"), &stack)
+            .unwrap_or_else(|| panic!("`space {key}` is bound"));
+        assert!(
+            runs_ahead_of_vim(action.as_ref(), command),
+            "`space {key}` must run {command:?} ahead of Vim, got {}",
+            action.name()
+        );
+    }
+
+    let insert = element_stack(
+        root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Editor,
+            &[(VIM_MODE_KEY.into(), "insert".into())],
+        ),
+        &[CODE_EDITOR_KEY_CONTEXT, "Input"],
+    );
+    assert!(top_action(&keymap, "space a", &insert).is_none());
+
+    let in_dialog = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]),
+        &[
+            "Modal CellEditorModal",
+            ContextId::VimNormal.as_gpui_context(),
+            "Input",
+        ],
+    );
+    let action = top_action(&keymap, "space s", &in_dialog)
+        .unwrap_or_else(|| panic!("`space s` is bound in a dialog's editor"));
+    assert!(
+        runs_ahead_of_vim(action.as_ref(), Command::SaveQuery),
+        "a dialog's editor takes the leader action, never a workspace RunCommand, got {}",
+        action.name()
+    );
+}
+
+/// The leader shows as its own keycap in the key bindings list.
+#[test]
+fn the_leader_placeholder_reads_leader() {
+    assert_eq!(key_sequence_label(&leader_then("a")), "Leader  a");
+}
+
+/// Changing the leader moves every leader sequence to the new key at once,
+/// and a user's leader binding follows it, because the override is keyed by
+/// the default keys and stores the leader placeholder.
+#[gpui::test]
+fn changing_the_leader_moves_default_and_user_leader_bindings(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
+    cx.update(init_keymap);
+
+    let comma = KeyChord::new(",", Modifiers::none());
+    let slot = BindingSlot::new(
+        ContextId::VimNormal,
+        Command::OpenPaneActions,
+        leader_then("a"),
+    );
+
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(slot.clone(), Some(leader_then("x")));
+    let stored = overrides.to_dtos();
+    assert_eq!(stored[0].default_keys, "<leader> a");
+    assert_eq!(stored[0].keys.as_deref(), Some("<leader> x"));
+
+    cx.update(|cx| {
+        apply_keymap_overrides(overrides.clone(), cx);
+        set_vim_leader(comma.clone(), cx);
+    });
+
+    let reloaded = KeymapOverrides::from_dtos(default_keymap(), &stored);
+    assert_eq!(reloaded, overrides, "the override matches its default slot");
+
+    let keymap = native_keymap();
+    let stack = leader_stack();
+
+    let action = top_action(&keymap, ", x", &stack).expect("the user binding follows the leader");
+    assert!(runs_ahead_of_vim(action.as_ref(), Command::OpenPaneActions));
+    let action = top_action(&keymap, ", r", &stack).expect("a default follows the leader");
+    assert!(runs_ahead_of_vim(action.as_ref(), Command::RunQuery));
+    assert!(top_action(&keymap, "space r", &stack).is_none());
+    assert!(top_action(&keymap, ", a", &stack).is_none());
+
+    assert_eq!(
+        effective_keymap()
+            .keys_for_command(ContextId::VimNormal, Command::RunQuery)
+            .map(KeySequence::to_storage_string)
+            .as_deref(),
+        Some(", r"),
+        "labels show the configured leader"
+    );
+
+    cx.update(|cx| {
+        set_vim_leader(default_vim_leader(), cx);
+        apply_keymap_overrides(KeymapOverrides::new(), cx);
+    });
 }

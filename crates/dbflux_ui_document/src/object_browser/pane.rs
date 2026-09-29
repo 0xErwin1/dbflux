@@ -154,6 +154,16 @@ impl ObjectBrowserDocument {
             },
         );
 
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e))
+        });
+
+        pane.key_context_entries = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).key_context_entries(cx))
+        });
+
         pane.status_segments = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).status_segments(cx))

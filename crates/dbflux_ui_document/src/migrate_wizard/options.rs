@@ -8,8 +8,9 @@
 //! lives in the Tables Mapping grid (`mapping.rs`), not here.
 
 use dbflux_components::controls::{Checkbox, GpuiInput as Input, InputEvent, InputState};
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Spacing;
+use dbflux_components::primitives::{FocusShape, Text, focus_ring};
+use dbflux_components::tokens::{ChamferCut, Spacing};
+use dbflux_core::keymap_types::Command;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::Sizable;
@@ -39,6 +40,13 @@ pub fn resolved_disable_referential_integrity(
     requested && target_supports_disable_fk_checks
 }
 
+/// The control of the step the keyboard cursor is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionsField {
+    SegmentSize,
+    DisableReferentialIntegrity,
+}
+
 /// Emitted whenever the segment size or the disable-RI request changes, so
 /// the host can re-evaluate any downstream state that depends on this
 /// phase's values.
@@ -52,6 +60,7 @@ pub struct OptionsPhase {
     segment_size_invalid: bool,
     supports_disable_ri: bool,
     disable_referential_integrity_requested: bool,
+    cursor: OptionsField,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,16 +86,17 @@ impl OptionsPhase {
             segment_size_invalid: false,
             supports_disable_ri,
             disable_referential_integrity_requested: false,
+            cursor: OptionsField::SegmentSize,
             _subscriptions: Vec::new(),
         };
 
         let subscription = cx.subscribe_in(
             &phase.segment_size_input,
             window,
-            |this, _entity, event: &InputEvent, window, cx| {
-                if let InputEvent::Change = event {
-                    this.on_segment_size_changed(window, cx);
-                }
+            |this, _entity, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => this.on_segment_size_changed(window, cx),
+                InputEvent::PressEnter { .. } => this.focus_handle.focus(window, cx),
+                _ => {}
             },
         );
         phase._subscriptions.push(subscription);
@@ -131,6 +141,69 @@ impl OptionsPhase {
         cx.notify();
     }
 
+    /// Runs a keymap command on the step: J / K move between the segment
+    /// size and the referential-integrity switch, Enter or I types in the
+    /// size (Enter or Escape hand the keyboard back), and Enter or Space
+    /// flips the switch. Returns whether the command applied.
+    pub fn handle_command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let input_focused = self
+            .segment_size_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+
+        if input_focused {
+            if command == Command::Cancel {
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+                return true;
+            }
+            return false;
+        }
+
+        match command {
+            Command::SelectNext if self.supports_disable_ri => {
+                self.cursor = OptionsField::DisableReferentialIntegrity;
+                cx.notify();
+                true
+            }
+            Command::SelectPrev => {
+                self.cursor = OptionsField::SegmentSize;
+                cx.notify();
+                true
+            }
+            Command::Execute | Command::ExpandCollapse => {
+                match self.cursor {
+                    OptionsField::SegmentSize if command == Command::Execute => {
+                        self.segment_size_input
+                            .update(cx, |state, cx| state.focus(window, cx));
+                    }
+                    OptionsField::SegmentSize => {}
+                    OptionsField::DisableReferentialIntegrity => {
+                        let requested = !self.disable_referential_integrity_requested;
+                        self.on_disable_ri_toggled(requested, cx);
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the segment size field has the keyboard, for keyboard tests.
+    #[cfg(test)]
+    pub(crate) fn segment_size_focused(&self, window: &Window, cx: &App) -> bool {
+        self.segment_size_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
     fn on_disable_ri_toggled(&mut self, checked: bool, cx: &mut Context<Self>) {
         self.disable_referential_integrity_requested = checked;
         cx.emit(OptionsChanged);
@@ -139,7 +212,11 @@ impl OptionsPhase {
 }
 
 impl Render for OptionsPhase {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let keyboard = self.focus_handle.is_focused(window);
+        let segment_cursor = keyboard && self.cursor == OptionsField::SegmentSize;
+        let ri_cursor = keyboard && self.cursor == OptionsField::DisableReferentialIntegrity;
+
         div()
             .track_focus(&self.focus_handle)
             .key_context("MigrateOptions")
@@ -148,15 +225,15 @@ impl Render for OptionsPhase {
             .gap(Spacing::MD)
             .p(Spacing::MD)
             .size_full()
-            .child(self.render_segment_size())
+            .child(self.render_segment_size(segment_cursor, cx))
             .when(self.supports_disable_ri, |parent| {
-                parent.child(self.render_disable_ri(cx))
+                parent.child(self.render_disable_ri(ri_cursor, cx))
             })
     }
 }
 
 impl OptionsPhase {
-    fn render_segment_size(&self) -> impl IntoElement {
+    fn render_segment_size(&self, cursor: bool, cx: &App) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -165,9 +242,14 @@ impl OptionsPhase {
                 "document.migrate_wizard.options.segment_size_label"
             )))
             .child(
-                div()
-                    .w(SEGMENT_SIZE_INPUT_WIDTH)
-                    .child(Input::new(&self.segment_size_input).small().w_full()),
+                focus_ring(
+                    cursor,
+                    FocusShape::Chamfer(ChamferCut::CONTROL),
+                    None,
+                    Input::new(&self.segment_size_input).small().w_full(),
+                    cx,
+                )
+                .w(SEGMENT_SIZE_INPUT_WIDTH),
             )
             .when(self.segment_size_invalid, |parent| {
                 parent.child(
@@ -179,15 +261,23 @@ impl OptionsPhase {
             })
     }
 
-    fn render_disable_ri(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Checkbox::new("migrate-options-disable-ri")
+    fn render_disable_ri(&self, cursor: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let checkbox = Checkbox::new("migrate-options-disable-ri")
             .checked(self.disable_referential_integrity_requested)
             .label(dbflux_i18n::t!(
                 "document.migrate_wizard.options.disable_referential_integrity"
             ))
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.on_disable_ri_toggled(*checked, cx);
-            }))
+            }));
+
+        focus_ring(
+            cursor,
+            FocusShape::Chamfer(ChamferCut::CONTROL),
+            None,
+            checkbox,
+            cx,
+        )
     }
 }
 

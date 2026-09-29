@@ -40,6 +40,7 @@ impl GeneralSection {
             current.dangerous_requires_where != saved.dangerous_requires_where,
             current.dangerous_requires_preview != saved.dangerous_requires_preview,
             current.vim_mode != saved.vim_mode,
+            current.vim_leader != saved.vim_leader,
         ];
 
         let input_changes = [
@@ -97,6 +98,7 @@ impl GeneralSection {
             GeneralFormRow::Style,
             GeneralFormRow::Language,
             GeneralFormRow::VimMode,
+            GeneralFormRow::VimLeader,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -232,6 +234,11 @@ impl GeneralSection {
                 self.gen_settings.vim_mode = !self.gen_settings.vim_mode;
                 cx.notify();
             }
+            Some(GeneralFormRow::VimLeader) => {
+                self.dropdown_vim_leader
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
             Some(GeneralFormRow::RestoreSession) => {
                 self.gen_settings.restore_session_on_startup =
                     !self.gen_settings.restore_session_on_startup;
@@ -350,6 +357,7 @@ impl GeneralSection {
         match self.gen_current_row() {
             Some(GeneralFormRow::Language) => Some(&self.dropdown_language),
             Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
+            Some(GeneralFormRow::VimLeader) => Some(&self.dropdown_vim_leader),
             _ => None,
         }
     }
@@ -687,6 +695,13 @@ impl GeneralSection {
                 self.gen_settings.vim_mode,
                 GeneralFormRow::VimMode,
                 |this, value, _cx| this.gen_settings.vim_mode = value,
+                cx,
+            ))
+            .child(self.render_gen_dropdown(
+                dbflux_i18n::t!("settings.general.vim_leader.label"),
+                Some(dbflux_i18n::t!("settings.general.vim_leader.hint")),
+                &self.dropdown_vim_leader,
+                GeneralFormRow::VimLeader,
                 cx,
             ));
 

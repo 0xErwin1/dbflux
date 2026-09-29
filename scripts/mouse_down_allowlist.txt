@@ -1,0 +1,150 @@
+# Left-button `on_mouse_down` handlers that need press semantics.
+#
+# Checked by `python3 scripts/lint.py mouse-down`. Activations (open, toggle,
+# select, run) use `on_click`, which fires on release and gives the element an
+# accessibility click action. A handler listed here must act on the press.
+#
+# Format: `path:function: reason`, one line per handler. `function` is the
+# innermost `fn` around the handler, so a function with two press handlers is
+# listed twice. Reasons:
+#   propagation guard      - only stops the press from reaching an ancestor's press handler
+#   focus guard            - prevents the default so the press does not move focus
+#   outside-press dismiss  - a scrim or backdrop that closes its overlay on press
+#   resize grip            - starts a resize drag
+#   drag start             - starts a drag or move
+#   selection start        - starts a cell, text, or range selection
+#   focus on press         - moves keyboard focus on press, before a text input blurs
+#   cursor sync            - moves a form's keyboard cursor to the pressed control before the control handles the press
+#   edit commit            - commits an open inline edit before its editor blurs
+#   unverified             - not yet proven safe to move to release
+
+crates/dbflux_components/src/components/data_table/record.rs:render_fields: propagation guard
+crates/dbflux_components/src/components/data_table/record.rs:render_record: edit commit
+crates/dbflux_components/src/components/data_table/table.rs:render: focus on press
+crates/dbflux_components/src/components/data_table/table.rs:render_document_header: resize grip
+crates/dbflux_components/src/components/data_table/table.rs:render_header: resize grip
+crates/dbflux_components/src/components/document_tree/tree.rs:render_chevron: propagation guard
+crates/dbflux_components/src/components/document_tree/tree.rs:render_value_preview_with_expand: propagation guard
+crates/dbflux_components/src/composites/menu_item.rs:menu_frame: propagation guard
+crates/dbflux_components/src/composites/menu_popup.rs:render_menu_overlay: outside-press dismiss
+crates/dbflux_components/src/composites/notification_center.rs:render: propagation guard
+crates/dbflux_components/src/composites/shell_bar.rs:render: focus guard
+crates/dbflux_components/src/controls/button.rs:render: focus guard
+crates/dbflux_components/src/controls/checkbox.rs:render: focus guard
+crates/dbflux_components/src/modals/modal.rs:render: propagation guard
+crates/dbflux_components/src/modals/modal.rs:render: outside-press dismiss
+crates/dbflux_ui/src/ui/dock/sidebar_dock.rs:render_grip: resize grip
+crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: propagation guard
+crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: outside-press dismiss
+crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: propagation guard
+crates/dbflux_ui/src/ui/views/workspace/inspector.rs:render: resize grip
+crates/dbflux_ui/src/ui/views/workspace/notifications.rs:render_notifications_popover: outside-press dismiss
+crates/dbflux_ui/src/ui/views/workspace/render.rs:document_side_island: focus on press
+crates/dbflux_ui/src/ui/views/workspace/render.rs:render: focus on press
+crates/dbflux_ui/src/ui/views/workspace/render.rs:render: focus on press
+crates/dbflux_ui/src/ui/views/workspace/render.rs:render_tasks_panel: focus on press
+crates/dbflux_ui_base/src/platform.rs:csd_drag_area: drag start
+crates/dbflux_ui_sidebar/src/render_overlays.rs:render_add_menu: outside-press dismiss
+crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: selection start
+crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
+crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
+crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
+crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
+crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssh_auth_inputs: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssh_auth_inputs: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssh_auth_inputs: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssm_access_section: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssm_access_section: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssm_access_section: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssm_access_section: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssm_value_field: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssm_value_field: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs:render_hook_extra_row: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render.rs:cm_control_frame: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render.rs:render: focus on press
+crates/dbflux_ui_windows/src/connection_manager/render.rs:render_form_field: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render.rs:render_form_field: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render.rs:render_form_header: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render.rs:render_password_field: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render.rs:render_password_field: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render_tabs.rs:render_mcp_tab: cursor sync
+crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_dropdown: cursor sync
+crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_input_field: cursor sync
+crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_unsupported_checkbox: cursor sync
+crates/dbflux_ui_windows/src/settings/auth_profiles_section.rs:render_input_row_disabled: cursor sync
+crates/dbflux_ui_windows/src/settings/auth_profiles_section.rs:render_profile_list: cursor sync
+crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
+crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
+crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
+crates/dbflux_ui_windows/src/settings/general.rs:render_gen_checkbox: cursor sync
+crates/dbflux_ui_windows/src/settings/general.rs:render_gen_dropdown: cursor sync
+crates/dbflux_ui_windows/src/settings/general.rs:render_gen_input_field: cursor sync
+crates/dbflux_ui_windows/src/settings/hooks.rs:hook_field_frame: cursor sync
+crates/dbflux_ui_windows/src/settings/hooks.rs:hook_input_row: cursor sync
+crates/dbflux_ui_windows/src/settings/hooks.rs:render_hook_form: cursor sync
+crates/dbflux_ui_windows/src/settings/hooks.rs:render_hook_form: cursor sync
+crates/dbflux_ui_windows/src/settings/mcp_section.rs:render_mcp_input_field: cursor sync
+crates/dbflux_ui_windows/src/settings/proxies_section.rs:render_proxy_input: cursor sync
+crates/dbflux_ui_windows/src/settings/render.rs:render_sidebar_grip: resize grip
+crates/dbflux_ui_windows/src/settings/rpc_services.rs:render_svc_args_section: cursor sync
+crates/dbflux_ui_windows/src/settings/rpc_services.rs:render_svc_env_section: cursor sync
+crates/dbflux_ui_windows/src/settings/rpc_services.rs:render_svc_env_section: cursor sync
+crates/dbflux_ui_windows/src/settings/rpc_services.rs:render_svc_input_field: cursor sync
+crates/dbflux_ui_windows/src/settings/ssh_tunnels_section.rs:render_ssh_input: cursor sync
+crates/dbflux_ui_windows/src/settings/updates_section.rs:render_checkbox: cursor sync
+crates/dbflux_ui_document/src/add_member_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/add_member_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/audit/render.rs:render_timeline: drag start
+crates/dbflux_ui_document/src/buckets_table/render.rs:render: focus on press
+crates/dbflux_ui_document/src/buckets_table/render.rs:render_toolbar: cursor sync
+crates/dbflux_ui_document/src/code/render.rs:render_editor: focus on press
+crates/dbflux_ui_document/src/dashboard/builder.rs:panel_header: drag start
+crates/dbflux_ui_document/src/dashboard/builder.rs:panel_header: propagation guard
+crates/dbflux_ui_document/src/dashboard/builder.rs:panel_resize_bottom: resize grip
+crates/dbflux_ui_document/src/dashboard/builder.rs:panel_resize_corner: resize grip
+crates/dbflux_ui_document/src/dashboard/builder.rs:panel_resize_right: resize grip
+crates/dbflux_ui_document/src/dashboard/render.rs:render: selection start
+crates/dbflux_ui_document/src/dashboard/render.rs:render: selection start
+crates/dbflux_ui_document/src/dashboard/render.rs:render: selection start
+crates/dbflux_ui_document/src/data_grid_panel/context_menu/sections.rs:render_context_menu_overlay: outside-press dismiss
+crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_content_body: focus on press
+crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_content_body: focus on press
+crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_export_backdrop: outside-press dismiss
+crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_filter_row: cursor sync
+crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_filter_row: cursor sync
+crates/dbflux_ui_document/src/history_panel.rs:render: focus on press
+crates/dbflux_ui_document/src/key_value/console.rs:render_console: cursor sync
+crates/dbflux_ui_document/src/key_value/render.rs:render: focus on press
+crates/dbflux_ui_document/src/key_value/render.rs:render_filter_row: cursor sync
+crates/dbflux_ui_document/src/key_value/render_list.rs:render_folder_row: propagation guard
+crates/dbflux_ui_document/src/key_value/render_list.rs:render_key_entry_row: propagation guard
+crates/dbflux_ui_document/src/key_value/render_value.rs:render_expiry_popover: propagation guard
+crates/dbflux_ui_document/src/key_value/render_value.rs:render_member_delete_cell: propagation guard
+crates/dbflux_ui_document/src/key_value/render_value.rs:render_member_filter: cursor sync
+crates/dbflux_ui_document/src/key_value/render_value.rs:render_member_row: propagation guard
+crates/dbflux_ui_document/src/key_value/render_value.rs:render_stream_row: propagation guard
+crates/dbflux_ui_document/src/key_value/render_value.rs:render_zset_row: propagation guard
+crates/dbflux_ui_document/src/key_value/view.rs:render_kv_context_menu: outside-press dismiss
+crates/dbflux_ui_document/src/key_value/view.rs:render_kv_context_menu: propagation guard
+crates/dbflux_ui_document/src/new_key_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/new_key_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/new_key_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/new_key_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/new_key_modal.rs:render: cursor sync
+crates/dbflux_ui_document/src/object_browser/context_menu.rs:render_context_menu: outside-press dismiss
+crates/dbflux_ui_document/src/object_browser/context_menu.rs:render_context_menu: propagation guard
+crates/dbflux_ui_document/src/object_browser/editor.rs:render_text_editor: focus on press
+crates/dbflux_ui_document/src/object_browser/preview.rs:render_preview_pane: focus on press
+crates/dbflux_ui_document/src/object_browser/preview.rs:render_preview_pane: resize grip
+crates/dbflux_ui_document/src/object_browser/render.rs:render: focus on press
+crates/dbflux_ui_document/src/object_browser/render.rs:render_toolbar: cursor sync
+crates/dbflux_ui_document/src/object_browser/render.rs:render_tree_chevron: propagation guard
+crates/dbflux_ui_document/src/object_editor/render.rs:render: focus on press
+crates/dbflux_ui_document/src/schema_viz/mod.rs:render_diagram: drag start
+crates/dbflux_ui_document/src/schema_viz/mod.rs:render_node: drag start
+crates/dbflux_ui_document/src/tab_bar.rs:render_tab_action: propagation guard

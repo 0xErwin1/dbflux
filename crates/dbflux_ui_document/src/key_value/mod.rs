@@ -18,6 +18,9 @@ mod render_list;
 mod render_value;
 pub(super) mod view;
 
+#[cfg(test)]
+mod keyboard_tests;
+
 // Re-export sibling `document/` modules so submodules can use `super::*_modal`.
 use super::add_member_modal;
 use super::handle::DocumentEvent;

@@ -91,7 +91,7 @@ pub struct ChartToolbarHandlers {
 }
 
 /// Chart kinds offered by the kind switch, in display order.
-const CHART_KINDS: [ChartKind; 7] = [
+pub(crate) const CHART_KINDS: [ChartKind; 7] = [
     ChartKind::Line,
     ChartKind::Bar,
     ChartKind::Area,

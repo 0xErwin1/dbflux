@@ -2,7 +2,8 @@ use crate::actions::SaveEdit;
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::icons::AppIcon;
 use crate::modals::Modal;
-use dbflux_core::keymap_types::ContextId;
+use crate::vim::{VimBinding, VimHost};
+use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::*;
 use gpui_component::input::EditorState;
 
@@ -32,6 +33,7 @@ pub struct CellEditorModal {
     input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
+    vim: VimBinding,
     /// Re-renders on every edit so the JSON status line follows the text.
     _input_observation: Subscription,
 }
@@ -45,8 +47,9 @@ impl CellEditorModal {
                 .line_number(true)
         });
         let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
+        let vim = VimBinding::new(input.clone(), window, cx);
 
-        Self {
+        let mut modal = Self {
             visible: false,
             row: 0,
             col: 0,
@@ -55,8 +58,13 @@ impl CellEditorModal {
             input,
             focus_handle: cx.focus_handle(),
             validation_error: None,
+            vim,
             _input_observation: input_observation,
-        }
+        };
+
+        let input = modal.vim.input_id();
+        VimBinding::follow_setting(&mut modal, input, cx);
+        modal
     }
 
     pub fn is_visible(&self) -> bool {
@@ -150,8 +158,40 @@ impl CellEditorModal {
     }
 }
 
+impl VimHost for CellEditorModal {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.vim.for_input(input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.vim.for_input_mut(input)
+    }
+
+    /// `<leader> s` runs the dialog's own save, as its primary button does.
+    fn vim_dialog_command(
+        &mut self,
+        _input: EntityId,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if command == Command::SaveQuery {
+            self.save(window, cx);
+        }
+    }
+}
+
 impl EventEmitter<CellEditorSaveEvent> for CellEditorModal {}
 impl EventEmitter<CellEditorClosedEvent> for CellEditorModal {}
+
+/// Vim's listeners on the editor's container. In Insert mode the modal's
+/// Escape (`Cancel`) leaves Insert mode instead of closing, and in Normal
+/// mode Enter (`Execute`) moves down instead of reaching the modal.
+fn vim_wrapper(element: Div, input: EntityId, cx: &mut Context<CellEditorModal>) -> Div {
+    let element = VimBinding::wire(element, input, cx);
+    let element = VimBinding::capture_action::<crate::actions::Cancel, _>(element, input, cx);
+    VimBinding::capture_action::<crate::actions::Execute, _>(element, input, cx)
+}
 
 impl Render for CellEditorModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -173,6 +213,8 @@ impl Render for CellEditorModal {
             cx.listener(|this, _, _, cx| this.close(cx)),
         )
         .validation_error(self.validation_error.clone())
+        .readonly(self.vim.locked(false))
+        .below_editor(self.vim.render_indicator(cx))
         .min_editor_height(px(300.0));
 
         if is_json {
@@ -200,15 +242,20 @@ impl Render for CellEditorModal {
             .icon(AppIcon::Pencil)
             .width(CELL_EDITOR_WIDTH)
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
-                        this.save(window, cx);
-                    }))
-                    .child(editor.render(cx)),
+                vim_wrapper(
+                    self.vim
+                        .leader_scope(div(), cx)
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
+                            this.save(window, cx);
+                        })),
+                    self.vim.input_id(),
+                    cx,
+                )
+                .child(editor.render(cx)),
             )
             .into_any_element()
     }
@@ -245,19 +292,43 @@ mod keyboard_tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use super::CellEditorModal;
+    use super::{CellEditorModal, CellEditorSaveEvent};
+    use crate::actions::RunCommand;
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, Window, div,
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, SharedString, Styled as _, TestAppContext, Window, div,
     };
 
+    /// Stands in for the document behind the dialog: records every keymap
+    /// command that bubbles out of it.
     struct Host {
         modal: Entity<CellEditorModal>,
+        commands: Vec<SharedString>,
+        saves: usize,
     }
 
     impl Render for Host {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(self.modal.clone())
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, action: &RunCommand, _, _| {
+                    this.commands.push(action.command.clone());
+                }))
+                .child(self.modal.clone())
+        }
+    }
+
+    fn host(window: &mut Window, cx: &mut Context<Host>) -> Host {
+        let modal = cx.new(|cx| CellEditorModal::new(window, cx));
+        cx.subscribe(&modal, |host, _, _: &CellEditorSaveEvent, _| {
+            host.saves += 1
+        })
+        .detach();
+
+        Host {
+            modal,
+            commands: Vec::new(),
+            saves: 0,
         }
     }
 
@@ -274,9 +345,7 @@ mod keyboard_tests {
             )]);
         });
 
-        let (host, window) = cx.add_window_view(|window, cx| Host {
-            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
-        });
+        let (host, window) = cx.add_window_view(host);
         let modal = window.update(|_, cx| host.read(cx).modal.clone());
 
         window.update(|window, cx| {
@@ -309,9 +378,7 @@ mod keyboard_tests {
             )]);
         });
 
-        let (host, window) = cx.add_window_view(|window, cx| Host {
-            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
-        });
+        let (host, window) = cx.add_window_view(host);
         let modal = window.update(|_, cx| host.read(cx).modal.clone());
 
         window.update(|window, cx| {
@@ -348,9 +415,7 @@ mod keyboard_tests {
             )]);
         });
 
-        let (host, window) = cx.add_window_view(|window, cx| Host {
-            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
-        });
+        let (host, window) = cx.add_window_view(host);
         let modal = window.update(|_, cx| host.read(cx).modal.clone());
 
         let saved = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
@@ -375,5 +440,137 @@ mod keyboard_tests {
 
         assert_eq!(saved.borrow().as_deref(), Some("typed"));
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// Opens the cell editor with the app's modal bindings for Escape and
+    /// Enter and the leader sequences `space s` (Save) and `space r` (Run
+    /// query), Vim mode set to `vim`, and the keyboard in the editor.
+    fn open_with_vim<'a>(
+        cx: &'a mut TestAppContext,
+        vim: bool,
+        value: &str,
+    ) -> (
+        Entity<Host>,
+        Entity<CellEditorModal>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::actions::record_last_keystroke(cx);
+            crate::vim::set_vim_enabled(cx, vim);
+            let context = dbflux_core::keymap_types::ContextId::CellEditorModal.as_gpui_context();
+            let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();
+            cx.bind_keys([
+                gpui::KeyBinding::new("escape", crate::actions::Cancel, Some(context)),
+                gpui::KeyBinding::new("enter", crate::actions::Execute, Some("Modal")),
+                gpui::KeyBinding::new(
+                    "space s",
+                    crate::vim::LeaderCommand::new("save_query"),
+                    Some(leader),
+                ),
+                gpui::KeyBinding::new(
+                    "space r",
+                    crate::vim::LeaderCommand::new("run_query"),
+                    Some(leader),
+                ),
+            ]);
+        });
+
+        let (host, window) = cx.add_window_view(host);
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+        let value = value.to_string();
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, value, false, None, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        (host, modal, window)
+    }
+
+    fn text_and_cursor(
+        modal: &Entity<CellEditorModal>,
+        window: &mut gpui::VisualTestContext,
+    ) -> (String, usize) {
+        window.update(|_, cx| {
+            let state = modal.read(cx).input.read(cx);
+            (state.value().to_string(), state.cursor())
+        })
+    }
+
+    /// With Vim mode on, the first Escape leaves Insert mode and keeps the
+    /// editor open, the second closes it; Enter in Normal mode moves down.
+    #[gpui::test]
+    fn vim_mode_edits_the_cell_and_escape_steps_out(cx: &mut TestAppContext) {
+        let (_host, modal, window) = open_with_vim(cx, true, "ab\ncd");
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&modal, window), ("ab\ncd".into(), 3));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&modal, window).0, "ab\nXcd");
+        assert!(
+            window.update(|_, cx| modal.read(cx).is_visible()),
+            "the first Escape only leaves Insert mode"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// With Vim mode off, keys type and one Escape closes, as before.
+    #[gpui::test]
+    fn without_vim_mode_escape_closes_at_once(cx: &mut TestAppContext) {
+        let (_host, modal, window) = open_with_vim(cx, false, "ab");
+
+        window.simulate_input("j");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(text_and_cursor(&modal, window).0, "jab");
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// `<leader> s` in Normal mode saves through the dialog's own save and
+    /// closes it; nothing reaches the document behind the dialog.
+    #[gpui::test]
+    fn leader_s_saves_the_cell_through_the_dialog(cx: &mut TestAppContext) {
+        let (host, modal, window) = open_with_vim(cx, true, "ab");
+
+        window.simulate_keystrokes("space s");
+        window.run_until_parked();
+
+        assert_eq!(window.update(|_, cx| host.read(cx).saves), 1);
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(
+            window.update(|_, cx| host.read(cx).commands.is_empty()),
+            "Save never reaches the document behind the dialog"
+        );
+    }
+
+    /// A leader command with no meaning in the dialog (run the query) does
+    /// nothing: the dialog stays open with its text, no key reaches Vim, and
+    /// nothing reaches the document behind it.
+    #[gpui::test]
+    fn leader_r_does_nothing_in_the_dialog(cx: &mut TestAppContext) {
+        let (host, modal, window) = open_with_vim(cx, true, "ab");
+
+        window.simulate_keystrokes("space r");
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+        assert_eq!(text_and_cursor(&modal, window), ("ab".into(), 0));
+        assert_eq!(window.update(|_, cx| host.read(cx).saves), 0);
+        assert!(
+            window.update(|_, cx| host.read(cx).commands.is_empty()),
+            "Run query never reaches the document behind the dialog"
+        );
     }
 }

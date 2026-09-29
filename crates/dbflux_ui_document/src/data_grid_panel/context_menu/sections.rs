@@ -26,7 +26,7 @@ const COPY_QUERY_SUBMENU_WIDTH: Pixels = px(160.0);
 /// panel's right edge, and `anchored` slides it back into the window when
 /// it would run past the bottom or a side: a long filter list opened from a
 /// row near the bottom of the window is shifted up rather than cut off.
-fn submenu_frame(open_left: bool, flyout: Div) -> Div {
+pub(super) fn submenu_frame(open_left: bool, flyout: Div) -> Div {
     let (frame, corner) = if open_left {
         (div().absolute().right(SUBMENU_OFFSET), Anchor::TopRight)
     } else {
@@ -47,7 +47,7 @@ fn submenu_frame(open_left: bool, flyout: Div) -> Div {
 }
 
 /// The flyout surface of a submenu: the shared menu frame at a fixed width.
-fn submenu_flyout(width: Pixels, cx: &App) -> Div {
+pub(super) fn submenu_flyout(width: Pixels, cx: &App) -> Div {
     menu_frame(cx).w(width).occlude()
 }
 
@@ -338,10 +338,9 @@ impl DataGridPanel {
             }))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(ref mut menu) = this.context_menu {
-                    menu.filter_submenu_open = !menu.filter_submenu_open;
-                    menu.order_submenu_open = false;
-                    menu.sql_submenu_open = false;
-                    menu.copy_query_submenu_open = false;
+                    let open = !menu.filter_submenu_open;
+                    menu.close_submenus();
+                    menu.filter_submenu_open = open;
                     menu.submenu_selected_index = 0;
                     cx.notify();
                 }
@@ -507,10 +506,9 @@ impl DataGridPanel {
             }))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(ref mut menu) = this.context_menu {
-                    menu.order_submenu_open = !menu.order_submenu_open;
-                    menu.filter_submenu_open = false;
-                    menu.sql_submenu_open = false;
-                    menu.copy_query_submenu_open = false;
+                    let open = !menu.order_submenu_open;
+                    menu.close_submenus();
+                    menu.order_submenu_open = open;
                     menu.submenu_selected_index = 0;
                     cx.notify();
                 }
@@ -646,8 +644,9 @@ impl DataGridPanel {
             }))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(ref mut menu) = this.context_menu {
-                    menu.sql_submenu_open = !menu.sql_submenu_open;
-                    menu.copy_query_submenu_open = false;
+                    let open = !menu.sql_submenu_open;
+                    menu.close_submenus();
+                    menu.sql_submenu_open = open;
                     menu.submenu_selected_index = 0;
                     cx.notify();
                 }
@@ -750,8 +749,9 @@ impl DataGridPanel {
             }))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(ref mut menu) = this.context_menu {
-                    menu.copy_query_submenu_open = !menu.copy_query_submenu_open;
-                    menu.sql_submenu_open = false;
+                    let open = !menu.copy_query_submenu_open;
+                    menu.close_submenus();
+                    menu.copy_query_submenu_open = open;
                     menu.submenu_selected_index = 0;
                     cx.notify();
                 }

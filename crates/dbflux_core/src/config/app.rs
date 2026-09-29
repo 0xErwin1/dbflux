@@ -384,9 +384,19 @@ pub struct GeneralSettings {
     pub key_value_size_limit_mib: u64,
 
     // -- Editor --
-    /// Modal (Vim) editing in code editors. Off by default.
+    /// Modal (Vim) editing in multi-line editors. Off by default.
     #[serde(default)]
     pub vim_mode: bool,
+
+    /// The key that starts Vim leader sequences, in the keymap's stored key
+    /// form (`space`, `,`, `\`). Space by default.
+    #[serde(default = "default_vim_leader")]
+    pub vim_leader: String,
+}
+
+/// The Vim leader key of a new installation.
+pub fn default_vim_leader() -> String {
+    "space".to_string()
 }
 
 fn default_editor_row_limit() -> usize {
@@ -433,6 +443,7 @@ impl Default for GeneralSettings {
             object_preview_size_limit_mib: default_object_preview_size_limit_mib(),
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
             vim_mode: false,
+            vim_leader: default_vim_leader(),
         }
     }
 }

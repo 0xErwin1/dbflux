@@ -41,6 +41,8 @@ use gpui_component::date_picker::DatePickerState;
 use gpui_component::input::{EditorState as GpuiEditorState, TextareaState};
 use uuid::Uuid;
 
+use dbflux_components::vim::{VimBinding, VimHost};
+
 use super::handle::DocumentEvent;
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 
@@ -50,7 +52,9 @@ use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 pub enum AuditContextMenuAction {
     CopyRowAsCsv,
     CopySummary,
+    CopyJson,
     FilterByCorrelation,
+    OpenApproval,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +144,8 @@ pub struct AuditDocument {
     expanded_event_ids: HashSet<i64>,
     external_message_inputs: HashMap<i64, Entity<TextareaState>>,
     external_details_inputs: HashMap<i64, Entity<GpuiEditorState>>,
+    /// Vim motions in the external details editors, by input.
+    external_details_vims: HashMap<EntityId, VimBinding>,
     pagination: Pagination,
     status_message: Option<String>,
     is_loading: bool,
@@ -148,6 +154,8 @@ pub struct AuditDocument {
     pending_initial_load: bool,
     pending_toast: Option<PendingToast>,
     export_menu_open: bool,
+    /// Highlighted format of the open export menu, for the keyboard.
+    export_menu_selected: usize,
     search_input: Entity<InputState>,
     /// Owns the time-range dropdown, date picker, and hour/minute dropdowns.
     /// The audit document reads sub-entities from it for rendering and
@@ -551,6 +559,7 @@ impl AuditDocument {
             expanded_event_ids: HashSet::new(),
             external_message_inputs: HashMap::new(),
             external_details_inputs: HashMap::new(),
+            external_details_vims: HashMap::new(),
             pagination: Pagination::Offset {
                 limit: DEFAULT_PAGE_SIZE,
                 offset: 0,
@@ -562,6 +571,7 @@ impl AuditDocument {
             pending_initial_load: true,
             pending_toast: None,
             export_menu_open: false,
+            export_menu_selected: 0,
             search_input,
             time_range_panel,
             custom_date_range_picker,
@@ -1446,6 +1456,19 @@ impl AuditDocument {
     fn retain_external_inline_inputs(&mut self, visible_ids: &HashSet<i64>) {
         Self::retain_event_input_cache(&mut self.external_message_inputs, visible_ids);
         Self::retain_event_input_cache(&mut self.external_details_inputs, visible_ids);
+        self.retain_external_details_vims();
+    }
+
+    /// Drops the Vim bindings of details editors no longer cached.
+    fn retain_external_details_vims(&mut self) {
+        let live: HashSet<EntityId> = self
+            .external_details_inputs
+            .values()
+            .map(|input| input.entity_id())
+            .collect();
+
+        self.external_details_vims
+            .retain(|input, _| live.contains(input));
     }
 
     fn retain_event_input_cache<T>(cache: &mut HashMap<i64, T>, visible_ids: &HashSet<i64>) {
@@ -1455,6 +1478,7 @@ impl AuditDocument {
     fn clear_external_inline_inputs(&mut self) {
         self.external_message_inputs.clear();
         self.external_details_inputs.clear();
+        self.external_details_vims.clear();
     }
 
     fn go_to_prev_page(&mut self, cx: &mut Context<Self>) {
@@ -1477,6 +1501,7 @@ impl AuditDocument {
 
     fn toggle_export_menu(&mut self, cx: &mut Context<Self>) {
         self.export_menu_open = !self.export_menu_open;
+        self.export_menu_selected = 0;
         cx.notify();
     }
 
@@ -1484,6 +1509,9 @@ impl AuditDocument {
         self.export_menu_open = false;
         self.do_export(format.to_string(), cx);
     }
+
+    /// The export menu's formats, in the order it lists them.
+    const EXPORT_FORMATS: [&'static str; 2] = ["csv", "json"];
 
     fn time_range_for_index(index: usize) -> Option<TimeRange> {
         match index {
@@ -1847,6 +1875,22 @@ fn write_export_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()
 }
 
 impl EventEmitter<DocumentEvent> for AuditDocument {}
+
+/// An external event's details are shown read-only: Vim moves, selects and
+/// yanks in them.
+impl VimHost for AuditDocument {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.external_details_vims.get(&input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.external_details_vims.get_mut(&input)
+    }
+
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        true
+    }
+}
 
 impl Render for AuditDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2300,6 +2344,43 @@ mod tests {
         (document, app_state, window)
     }
 
+    /// An external event's details editor gets a Vim binding that follows
+    /// the setting, and loses it when the editor leaves the cache.
+    #[gpui::test]
+    fn external_details_editors_follow_the_vim_setting(cx: &mut gpui::TestAppContext) {
+        use dbflux_components::vim::VimMode;
+
+        let (document, _app_state, window) = new_audit_document(cx, None);
+        window.update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+
+        let input = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.ensure_external_details_input(7, "{}", window, cx)
+            })
+        });
+        let mode = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .external_details_vims
+                    .get(&input.entity_id())
+                    .and_then(|vim| vim.mode())
+            })
+        };
+        assert_eq!(mode(window), Some(VimMode::Normal));
+
+        window.update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, false));
+        window.run_until_parked();
+        assert_eq!(mode(window), None);
+
+        window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                document.retain_external_inline_inputs(&HashSet::new())
+            })
+        });
+        assert!(window.update(|_, cx| document.read(cx).external_details_vims.is_empty()));
+    }
+
     /// With the toolbar ring on the time presets, Right and Left move the
     /// selected preset instead of the ring, and Right on the last preset
     /// moves the ring on to the next toolbar item.
@@ -2372,6 +2453,93 @@ mod tests {
         assert!(
             !ring_on_time(window),
             "Right on the last preset moves the ring on"
+        );
+    }
+
+    /// Ctrl+E opens the export menu with the menu keys in it, and Alt+L /
+    /// Alt+H switch the internal log between the table and the chart.
+    #[gpui::test]
+    fn export_menu_and_view_switch_keys(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_app::keymap::ContextId;
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let audit_repo = app_state
+                    .read(cx)
+                    .storage_runtime()
+                    .audit()
+                    .expect("audit repo should open in test");
+                cx.new(|cx| AuditDocument::new(audit_repo, app_state, window, cx))
+            },
+            |document, _| document.active_context(),
+            AuditDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            let focus_handle = document.read(cx).focus_handle.clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        let export_menu = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                let document = document.read(cx);
+                document
+                    .export_menu_open
+                    .then_some(document.export_menu_selected)
+            })
+        };
+
+        window.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-e"
+        } else {
+            "ctrl-e"
+        });
+        assert_eq!(export_menu(window), Some(0), "Ctrl+E opens the export menu");
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).active_context()),
+            ContextId::ContextMenu
+        );
+
+        window.simulate_keystrokes("j");
+        assert_eq!(export_menu(window), Some(1), "j highlights JSON");
+
+        window.simulate_keystrokes("j");
+        assert_eq!(export_menu(window), Some(0), "the highlight wraps");
+
+        window.simulate_keystrokes("escape");
+        assert_eq!(export_menu(window), None, "Escape closes the export menu");
+
+        window.simulate_keystrokes("alt-l");
+        assert!(
+            window.update(|_, cx| matches!(
+                document.read(cx).view_mode,
+                super::chart_view::AuditViewMode::Chart
+            )),
+            "Alt+L shows the chart"
+        );
+
+        window.simulate_keystrokes("alt-h");
+        assert!(
+            window.update(|_, cx| matches!(
+                document.read(cx).view_mode,
+                super::chart_view::AuditViewMode::Table
+            )),
+            "Alt+H shows the table again"
         );
     }
 
@@ -2512,5 +2680,43 @@ mod tests {
             .filter(|(_, node)| node.path().ends_with("audit-detail-copy-json"))
             .count();
         assert_eq!(copy_buttons, 2, "each expanded row reports its own action");
+    }
+
+    /// Two events, one expanded, under the audit keymap. The keyboard tests
+    /// above prove the toolbar ring, the export menu and the row menu.
+    #[gpui::test]
+    fn the_audit_viewer_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::AUDIT;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let (document, _app_state, window) = new_audit_document(cx, None);
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.events = vec![detailed_event(1), detailed_event(2)];
+                document.expanded_event_ids = [1].into_iter().collect();
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            document
+                .read(cx)
+                .menu_items_for_row(0)
+                .into_iter()
+                .filter_map(|item| item.action)
+                .map(|action| format!("{action:?}"))
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(AUDIT)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "audit-detail-copy-json"),
+            "{checked:?}"
+        );
     }
 }

@@ -681,6 +681,25 @@ en tabs con cinco capas:
    cuando `available_modes.len() >= 2`) con los segmentos provistos por la view,
    los ordena por `(position, index)` y los renderiza en una fila `flex_wrap`.
 
+**Acciones del panel**
+
+Un document lista las acciones que de otro modo solo ofrece al puntero (los
+botones de su toolbar y controles similares) llenando el closure opcional
+`PaneHandle::pane_actions` con entradas `PaneAction`: una etiqueta, un icono
+opcional, el atajo que el keymap efectivo le da al mismo comando, un indicador
+de habilitado y lo que hace al ejecutarse (`PaneActionRun::Command`, que se
+ejecuta a través del workspace igual que su key binding, o
+`PaneActionRun::Callback` para una acción sin comando). `Command::OpenPaneActions`
+va primero al document activo, así que un panel con un menú propio puede
+responderlo; si no, el workspace (`views/workspace/pane_actions.rs`) copia las
+entradas en un menú dibujado sobre el área de documents. Mientras está abierto,
+el workspace reporta `ContextId::ContextMenu`, así que las teclas del menú
+contextual lo manejan. El workspace nunca conoce el tipo de document, y un
+document se suma desde su propio `pane.rs` sin cambios en `workspace/mod.rs`,
+`tab_manager.rs` ni `tab_bar.rs`. `CodeDocument` lista toda su toolbar; la tabla
+de datos conserva `m` para su propio menú contextual, que funciona como su menú
+de acciones.
+
 **Los tipos de document**
 
 - `DataDocument` (`crates/dbflux_ui_document/src/data_document/`) — shell
@@ -1669,6 +1688,17 @@ IA con una capa completa de gobernanza:
   `CodeEditor`, `ResultPanel`, …) solo para predicados del usuario. El GPUI
   vendorizado trae los cambios de dispatch que necesita el motor
   (`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
+- Modo Vim: `crates/dbflux_components/src/vim/` contiene la máquina de teclas
+  (`machine.rs`) y `VimBinding`, el estado y los listeners que la aplican a un
+  `EditorState`. Una vista que aloja editores implementa `VimHost`, nombrando
+  cada editor por el entity id de su input, y construye el elemento del editor
+  con `VimBinding::editor`, para que el bloqueo del modo Normal sobreviva a que
+  el elemento vuelva a aplicar su flag de solo lectura en cada frame. Una action
+  del host atada a una tecla que Vim también usa (el Cancel o Execute de un
+  diálogo, un `RunCommand`) se captura con `VimBinding::capture_action` /
+  `capture_run_command`, que le pasan antes la última tecla a Vim. El setting
+  llega a los crates sin app state a través de `VimSettingGlobal`, que cada
+  workspace publica desde los settings generales.
 - Dispatch de comandos: `Workspace` implementa el trait `CommandDispatcher`;
   `dispatch()` en `views/workspace/dispatch.rs` enruta comandos según
   `focus_target` (Document, Sidebar, BackgroundTasks). Un document dueño de

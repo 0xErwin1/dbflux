@@ -252,6 +252,23 @@ flowchart TD
     SC -->|Open chart...| CD
 ```
 
+## Point inspector
+
+In the chart of a table or collection tab (the Chart and Both views), the point
+inspector docks to the right of the chart while the pointer is over a point, or
+while a point is highlighted from the keyboard (see
+[Charts](KEYBOARD.md#charts) in the keyboard reference). It shows the series,
+the point's X and Y values, the fields of the row the point comes from, and a
+**Show in tree** button.
+
+**Show in tree** selects that row in the table and moves the keyboard to it. From
+the Chart view it switches to the table; Both keeps the chart above the table.
+The result's table menu lists the same action under **Toolbar** while a point is
+highlighted.
+
+Charts of query editor results and chart tabs do not keep the row behind each
+point, so they show no point inspector.
+
 ## Limitations
 
 These limitations are grounded in the current code, not assumptions:

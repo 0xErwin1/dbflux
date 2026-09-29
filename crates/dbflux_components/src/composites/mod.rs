@@ -10,6 +10,7 @@ mod master_detail_list;
 mod menu_item;
 mod menu_popup;
 mod notification_center;
+mod rail_nav;
 mod refresh_split_button;
 mod shell_bar;
 mod split_button;
@@ -46,6 +47,10 @@ pub use menu_popup::{render_menu_items, render_menu_overlay};
 pub use notification_center::{
     NotificationFilterChip, NotificationGroupSection, NotificationIconTone, NotificationPopover,
     NotificationRow,
+};
+pub use rail_nav::{
+    RailHandler, RailMark, RailMenuEntry, RailMoveHandler, RailNav, RailOutcome, RailOwner,
+    RailRow, RailTarget, rail_command, rail_scroll_area, render_rail_menu,
 };
 pub use refresh_split_button::{refresh_policy_label, refresh_split_button};
 pub use shell_bar::{BellUrgency, CommandSearch, NotificationBell};

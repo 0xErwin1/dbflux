@@ -6,6 +6,7 @@ use gpui::prelude::*;
 use gpui::{Context, ElementId, FontWeight, Hsla, IntoElement, SharedString, Stateful, div};
 use gpui_component::ActiveTheme;
 
+use crate::query_builder::keyboard::row_id;
 use crate::query_builder::panel::{ProjectionMode, QueryBuilderPanel};
 
 /// A 20 px chip on a 4 px chamfer, as the Columns card draws its column
@@ -51,16 +52,22 @@ pub fn render_columns(
     let all_active = panel.projection_mode == ProjectionMode::All;
     let source_alias = panel.current_spec.source.alias.clone();
     let available_columns = panel.available_columns.clone();
+    let mark = panel.rail_mark.clone();
 
     let mut container = div().flex().flex_col().gap(BuilderMetrics::ROW_GAP).child(
-        Checkbox::new("qb-all-columns")
-            .checked(all_active)
-            .label(dbflux_i18n::t!(
-                "document.query_builder.columns.all_columns"
-            ))
-            .on_click(cx.listener(|this, checked, _window, cx| {
-                this.set_all_columns(*checked, cx);
-            })),
+        mark.row(
+            &row_id::all_columns(),
+            div().child(
+                Checkbox::new("qb-all-columns")
+                    .checked(all_active)
+                    .label(dbflux_i18n::t!(
+                        "document.query_builder.columns.all_columns"
+                    ))
+                    .on_click(cx.listener(|this, checked, _window, cx| {
+                        this.set_all_columns(*checked, cx);
+                    })),
+            ),
+        ),
     );
 
     if all_active {
@@ -84,8 +91,9 @@ pub fn render_columns(
             };
             let alias_for_listener = row.source_alias.clone();
             let column_for_listener = row.column.clone();
+            let chip_row = row_id::picked_column(&row.source_alias, &row.column);
 
-            column_chip(
+            let chip = column_chip(
                 ("qb-col-chip", index),
                 label,
                 theme.secondary,
@@ -94,8 +102,10 @@ pub fn render_columns(
             )
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.toggle_column(&alias_for_listener, &column_for_listener, cx);
-            }))
-            .into_any_element()
+            }));
+
+            mark.row(&chip_row, mark.ring(&chip_row, "chip", chip))
+                .into_any_element()
         })
         .collect::<Vec<_>>();
 
@@ -110,6 +120,8 @@ pub fn render_columns(
         this.column_picker_open = !this.column_picker_open;
         cx.notify();
     }));
+    let entry_row = row_id::column_entry();
+    let add_chip = mark.row(&entry_row, mark.ring(&entry_row, "add-chip", add_chip));
 
     container = container.child(
         div()
@@ -135,7 +147,11 @@ pub fn render_columns(
                 let checked = panel.is_column_selected(&source_alias, col_name);
 
                 row = row.child(
-                    div().flex_1().min_w(gpui::px(0.0)).child(
+                    mark.row(
+                        &row_id::column_choice(col_name),
+                        div().flex_1().min_w(gpui::px(0.0)),
+                    )
+                    .child(
                         Checkbox::new(("qb-col-toggle", i))
                             .checked(checked)
                             .label(col_name.clone())
@@ -156,36 +172,28 @@ pub fn render_columns(
 
     if let Some(add_state) = panel.add_column_input_state.as_ref() {
         container = container.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(BuilderMetrics::ROW_GAP)
-                .items_center()
-                .child(
-                    crate::completion_support::single_line_completion_editor(add_state)
-                        .flex_1()
-                        .w_full(),
-                )
-                .child(
+            mark.row(
+                &entry_row,
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(BuilderMetrics::ROW_GAP)
+                    .items_center(),
+            )
+            .child(mark.ring(&entry_row, "input", div().flex_1()).child(
+                crate::completion_support::single_line_completion_editor(add_state).w_full(),
+            ))
+            .child(
+                mark.ring_element(
+                    &entry_row,
+                    "add",
                     Button::new("qb-add-col", dbflux_i18n::t!("document.shared.add"))
                         .icon(AppIcon::Plus)
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            if let Some(state) = this.add_column_input_state.clone() {
-                                let text = state.read(cx).value().trim().to_string();
-                                if text.is_empty() {
-                                    return;
-                                }
-                                let (alias, column) = match text.split_once('.') {
-                                    Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
-                                    None => (this.current_spec.source.alias.clone(), text.clone()),
-                                };
-                                this.add_column(&alias, &column, cx);
-                                state.update(cx, |s, cx| {
-                                    s.set_value("", _window, cx);
-                                });
-                            }
+                        .on_click(cx.listener(|this, _event, window, cx| {
+                            this.add_column_from_entry(window, cx);
                         })),
                 ),
+            ),
         );
     }
 

@@ -25,7 +25,7 @@ mod tests;
 
 use dbflux_app::keymap::{
     BindingSlot, Command, ContextId, EffectiveBinding, KeyChord, KeySequence, KeymapOverrides,
-    KeymapStack, Modifiers, PredicateOverlap,
+    KeymapStack, LEADER_KEY, Modifiers, PredicateOverlap,
 };
 use dbflux_components::actions as component_actions;
 use dbflux_components::components::{data_table, document_tree};
@@ -36,7 +36,7 @@ use gpui::{
     KeyBindingMetaIndex, KeyContext, Keystroke, SharedString,
 };
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock};
 
 pub use dbflux_components::actions::RunCommand;
 
@@ -153,6 +153,7 @@ fn display_key(key: &str) -> String {
         "end" => "End".to_string(),
         "pageup" => "PgUp".to_string(),
         "pagedown" => "PgDn".to_string(),
+        LEADER_KEY => "Leader".to_string(),
         _ => key.to_uppercase(),
     }
 }
@@ -207,17 +208,28 @@ pub fn default_keymap() -> &'static KeymapStack {
 
 struct EffectiveKeymap {
     overrides: KeymapOverrides,
+    /// The key the leader placeholder of Vim leader bindings stands for.
+    leader: KeyChord,
     keymap: Arc<KeymapStack>,
 }
 
+/// The leader key until the settings say otherwise.
+pub fn default_vim_leader() -> KeyChord {
+    KeyChord::new("space", Modifiers::none())
+}
+
 static EFFECTIVE_KEYMAP: LazyLock<RwLock<EffectiveKeymap>> = LazyLock::new(|| {
+    let leader = default_vim_leader();
+
     RwLock::new(EffectiveKeymap {
         overrides: KeymapOverrides::new(),
-        keymap: Arc::new(default_keymap().clone()),
+        keymap: Arc::new(default_keymap().with_leader(&leader)),
+        leader,
     })
 });
 
-/// The keymap in force: the defaults with the user's overrides applied.
+/// The keymap in force: the defaults with the user's overrides applied and
+/// the leader placeholder resolved to the configured leader key.
 ///
 /// Every shortcut label reads this, so a change made in the settings shows
 /// on the next render.
@@ -238,16 +250,66 @@ pub fn keymap_overrides() -> KeymapOverrides {
         .clone()
 }
 
+/// The leader key the stored setting `text` names (`space`, `,`), or the
+/// default leader when it does not name exactly one key.
+pub fn vim_leader_from_setting(text: &str) -> KeyChord {
+    match KeySequence::from_storage_string(text.trim()) {
+        Ok(keys) if keys.is_single() && !keys.first().is_leader() => keys.first().clone(),
+        _ => {
+            log::warn!("Ignoring Vim leader setting `{text}`: it is not one key");
+            default_vim_leader()
+        }
+    }
+}
+
+/// The key Vim leader bindings start with.
+pub fn vim_leader() -> KeyChord {
+    EFFECTIVE_KEYMAP
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .leader
+        .clone()
+}
+
 /// Rebuilds the effective keymap from `overrides` without touching the GPUI
 /// bindings. [`apply_keymap_overrides`] is the entry point for the app.
 fn install_keymap_overrides(overrides: KeymapOverrides) {
-    let keymap = Arc::new(overrides.apply(default_keymap()));
-
     let mut effective = EFFECTIVE_KEYMAP
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    effective.keymap = Arc::new(
+        overrides
+            .apply(default_keymap())
+            .with_leader(&effective.leader),
+    );
     effective.overrides = overrides;
-    effective.keymap = keymap;
+}
+
+/// Makes `leader` the key Vim leader bindings start with, and regenerates the
+/// native GPUI bindings when it changed, so every window follows at once.
+///
+/// Overrides are stored with the leader placeholder rather than the key, so a
+/// binding the user moved keeps following the leader.
+pub fn set_vim_leader(leader: KeyChord, cx: &mut App) {
+    {
+        let mut effective = EFFECTIVE_KEYMAP
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if effective.leader == leader {
+            return;
+        }
+
+        effective.keymap = Arc::new(
+            effective
+                .overrides
+                .apply(default_keymap())
+                .with_leader(&leader),
+        );
+        effective.leader = leader;
+    }
+
+    refresh_derived_keybindings(cx);
 }
 
 /// Makes `overrides` the user's keymap customization: rebuilds the effective
@@ -256,6 +318,47 @@ fn install_keymap_overrides(overrides: KeymapOverrides) {
 pub fn apply_keymap_overrides(overrides: KeymapOverrides, cx: &mut App) {
     install_keymap_overrides(overrides);
     refresh_derived_keybindings(cx);
+}
+
+/// Serializes the tests that share the process-wide keymap state.
+static KEYMAP_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Test support, never used by the app: exclusive access to the process-wide
+/// keymap state (the leader and the overrides) for one test.
+///
+/// `cargo test` runs the tests of one binary on threads of the same process,
+/// so a test that changes the leader or the overrides, or asserts on bindings
+/// that depend on them, holds this guard for its whole body. Dropping the
+/// guard, also while a failed assertion unwinds, restores the default leader
+/// and no overrides. It does not regenerate a test app's native GPUI
+/// bindings, which end with that app.
+#[doc(hidden)]
+pub fn keymap_state_test_guard() -> KeymapStateTestGuard {
+    KeymapStateTestGuard {
+        _lock: KEYMAP_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    }
+}
+
+/// See [`keymap_state_test_guard`].
+#[doc(hidden)]
+#[must_use = "the keymap state is shared again as soon as the guard drops"]
+pub struct KeymapStateTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for KeymapStateTestGuard {
+    fn drop(&mut self) {
+        let mut effective = EFFECTIVE_KEYMAP
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let leader = default_vim_leader();
+
+        effective.keymap = Arc::new(default_keymap().with_leader(&leader));
+        effective.overrides = KeymapOverrides::new();
+        effective.leader = leader;
+    }
 }
 
 // ============================================================================
@@ -298,10 +401,7 @@ pub fn init_keymap(cx: &mut App) {
         },
     )));
 
-    let recorder = cx.intercept_keystrokes(|event, _window, cx| {
-        cx.default_global::<LastKeystroke>().0 = Some(event.keystroke.clone());
-    });
-    cx.default_global::<LastKeystroke>().1 = Some(recorder);
+    dbflux_components::actions::record_last_keystroke(cx);
 }
 
 /// Keys that open the code editor's replace panel on Linux and Windows,
@@ -314,19 +414,7 @@ const CODE_EDITOR_REPLACE_KEYS: &str = "ctrl-shift-h";
 #[cfg(not(target_os = "macos"))]
 const CODE_EDITOR_INPUT_PREDICATE: &str = "CodeEditor > Input";
 
-/// The last key pressed in any window, and the interceptor that records it.
-#[derive(Default)]
-struct LastKeystroke(Option<Keystroke>, Option<gpui::Subscription>);
-
-impl Global for LastKeystroke {}
-
-/// The key whose binding is being dispatched: interceptors run before key
-/// bindings, so while a binding's action runs this is the keystroke that
-/// matched it (the last one of a key sequence).
-pub fn last_keystroke(cx: &App) -> Option<Keystroke> {
-    cx.try_global::<LastKeystroke>()
-        .and_then(|recorded| recorded.0.clone())
-}
+pub use dbflux_components::actions::last_keystroke;
 
 /// Registers `source` as a producer of native GPUI bindings generated from
 /// the effective keymap, and binds what it produces now. Every registered
@@ -375,11 +463,49 @@ fn refresh_derived_keybindings(cx: &mut App) {
 /// error in the log: predicates are validated before they are saved, so this
 /// only happens to rows edited outside the app.
 pub fn keymap_keybindings() -> Vec<KeyBinding> {
-    keymap_overrides()
+    let leader = vim_leader();
+    let bindings: Vec<EffectiveBinding> = keymap_overrides()
         .effective_bindings(default_keymap())
+        .into_iter()
+        .map(|binding| EffectiveBinding {
+            keys: binding.keys.with_leader(&leader),
+            ..binding
+        })
+        .collect();
+
+    native_bindings(&bindings)
+}
+
+/// `bindings` as native GPUI bindings, preceded by the copies of the global
+/// chords the text entry roots keep (see [`global_chord_binding`]). The
+/// copies come first so that a root context's own binding on the same keys
+/// wins over them.
+fn native_bindings(bindings: &[EffectiveBinding]) -> Vec<KeyBinding> {
+    let chords: Vec<EffectiveBinding> = bindings.iter().filter_map(global_chord_binding).collect();
+
+    chords
         .iter()
+        .chain(bindings)
         .filter_map(native_binding)
         .collect()
+}
+
+/// The copy of a global binding that applies in the roots keeping the
+/// global chords ([`ContextId::inherits_global_chords`]), or `None` when the
+/// binding is not a global chord.
+///
+/// It follows the binding's effective keys, so a rebound or removed global
+/// shortcut changes there too. A binding the user moved to a predicate of
+/// their own applies only where they put it.
+fn global_chord_binding(binding: &EffectiveBinding) -> Option<EffectiveBinding> {
+    let is_global_chord = binding.slot.context == ContextId::Global
+        && binding.predicate == binding.slot.default_predicate
+        && binding.keys.is_global_chord();
+
+    is_global_chord.then(|| EffectiveBinding {
+        predicate: ContextId::global_chords_predicate().to_string(),
+        ..binding.clone()
+    })
 }
 
 fn native_binding(binding: &EffectiveBinding) -> Option<KeyBinding> {
@@ -441,9 +567,15 @@ fn element_action(context: ContextId, command: Command) -> Option<Box<dyn Action
         ContextId::DataTable => data_table_action(command),
         ContextId::Input => input_action(command),
         ContextId::Modal => modal_action(command),
+        ContextId::SqlPreviewModal => sql_preview_modal_action(command),
         ContextId::CellEditorModal | ContextId::DocumentPreviewModal => {
             modal_editor_action(command)
         }
+        // The Vim wrapper runs every leader command itself (see
+        // `dbflux_components::vim::LeaderCommand`).
+        ContextId::VimNormal => Some(Box::new(dbflux_components::vim::LeaderCommand::new(
+            command.action_id(),
+        ))),
         _ => None,
     }
 }
@@ -547,6 +679,24 @@ fn modal_action(command: Command) -> Option<Box<dyn Action>> {
     Some(action)
 }
 
+/// The modal actions, which every dialog built on the `Modal` primitive
+/// answers, plus the SQL preview's own copy action.
+fn sql_preview_modal_action(command: Command) -> Option<Box<dyn Action>> {
+    if command == Command::CopyPreview {
+        return Some(Box::new(crate::sql_preview_modal::CopyPreview));
+    }
+
+    match command {
+        Command::Cancel
+        | Command::Execute
+        | Command::SelectPrev
+        | Command::SelectNext
+        | Command::PageUp
+        | Command::PageDown => modal_action(command),
+        _ => None,
+    }
+}
+
 fn modal_editor_action(command: Command) -> Option<Box<dyn Action>> {
     let action: Box<dyn Action> = match command {
         Command::Cancel => Box::new(component_actions::Cancel),
@@ -582,19 +732,41 @@ pub const SETTINGS_WINDOW_KEY_CONTEXT: &str = "SettingsWindow";
 /// Identifier the connection manager window root always carries.
 pub const CONNECTION_MANAGER_WINDOW_KEY_CONTEXT: &str = "ConnectionManagerWindow";
 
-/// Key under which the code editor reports its Vim mode.
-pub const VIM_MODE_KEY: &str = "vim_mode";
+/// Key under which an editor reports its Vim mode.
+pub use dbflux_components::vim::VIM_MODE_KEY;
 
 /// Key under which the code editor reports its query language.
 pub const LANGUAGE_KEY: &str = "language";
 
 /// The key context of a window root whose keyboard belongs to `context`:
 /// `root`, the context's identifier, `Global` when the context inherits the
-/// global bindings, and the extra key=value `entries` (`vim_mode=normal`).
+/// global bindings, `GlobalChords` when it keeps only the global chords, and
+/// the extra key=value `entries` (`vim_mode=normal`).
 pub fn root_key_context(
     root: &'static str,
     context: ContextId,
     entries: &[(SharedString, SharedString)],
+) -> KeyContext {
+    build_root_key_context(root, context, entries, context.inherits_global_chords())
+}
+
+/// The key context of a window root while an overlay it draws (a dialog, a
+/// picker, a menu) owns the keyboard: [`root_key_context`] without the
+/// global chords, so a text field inside the overlay does not let Ctrl+W or
+/// Ctrl+Tab act on the workspace behind it.
+pub fn overlay_root_key_context(
+    root: &'static str,
+    context: ContextId,
+    entries: &[(SharedString, SharedString)],
+) -> KeyContext {
+    build_root_key_context(root, context, entries, false)
+}
+
+fn build_root_key_context(
+    root: &'static str,
+    context: ContextId,
+    entries: &[(SharedString, SharedString)],
+    global_chords: bool,
 ) -> KeyContext {
     let mut key_context = KeyContext::default();
     key_context.add(root);
@@ -602,6 +774,10 @@ pub fn root_key_context(
 
     if inherits_global(context) {
         key_context.add(ContextId::Global.as_gpui_context());
+    }
+
+    if global_chords {
+        key_context.add(ContextId::GLOBAL_CHORDS_IDENTIFIER);
     }
 
     for (key, value) in entries {
@@ -637,6 +813,7 @@ pub fn known_context_names() -> Vec<&'static str> {
         .collect();
 
     names.extend([
+        ContextId::GLOBAL_CHORDS_IDENTIFIER,
         WORKSPACE_KEY_CONTEXT,
         SETTINGS_WINDOW_KEY_CONTEXT,
         CONNECTION_MANAGER_WINDOW_KEY_CONTEXT,
@@ -832,13 +1009,23 @@ fn overlap_stacks() -> Vec<Vec<KeyContext>> {
         "visual_line",
         "visual_block",
     ] {
+        let leader_context = matches!(mode, "normal" | "visual" | "visual_line" | "visual_block");
+        let editor = if leader_context {
+            format!(
+                "{CODE_EDITOR_KEY_CONTEXT} {}",
+                ContextId::VimNormal.as_gpui_context()
+            )
+        } else {
+            CODE_EDITOR_KEY_CONTEXT.to_string()
+        };
+
         stacks.push(vec![
             root_key_context(
                 WORKSPACE_KEY_CONTEXT,
                 ContextId::Editor,
                 &[(VIM_MODE_KEY.into(), mode.into())],
             ),
-            element(CODE_EDITOR_KEY_CONTEXT),
+            element(&editor),
             element("Input"),
         ]);
     }

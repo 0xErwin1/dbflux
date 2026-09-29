@@ -208,6 +208,7 @@ pub struct Button {
     selected: bool,
     focused: bool,
     tab_stop: bool,
+    focus_handle: Option<FocusHandle>,
     w_full: bool,
     corners: ChamferCorners,
     padding_left: Option<Pixels>,
@@ -232,6 +233,7 @@ impl Button {
             selected: false,
             focused: false,
             tab_stop: true,
+            focus_handle: None,
             w_full: false,
             corners: ChamferCorners::default(),
             padding_left: None,
@@ -344,6 +346,15 @@ impl Button {
         self
     }
 
+    /// Uses `handle` as the button's focus handle instead of one kept in
+    /// element state, so the owner can move focus to the button (for example
+    /// the default action of a dialog when it opens) and ask whether it holds
+    /// focus.
+    pub fn focus_handle(mut self, handle: &FocusHandle) -> Self {
+        self.focus_handle = Some(handle.clone());
+        self
+    }
+
     pub fn w_full(mut self) -> Self {
         self.w_full = true;
         self
@@ -393,10 +404,10 @@ impl RenderOnce for Button {
             focus_handle: cx.focus_handle(),
             key_held: false,
         });
-        let focus_handle = state
-            .read(cx)
+        let focus_handle = self
             .focus_handle
             .clone()
+            .unwrap_or_else(|| state.read(cx).focus_handle.clone())
             .tab_stop(self.tab_stop && !self.disabled);
         let has_focus = focus_handle.is_focused(window);
         let held = has_focus && state.read(cx).key_held;

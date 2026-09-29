@@ -219,7 +219,7 @@ impl RenderOnce for SegmentedControl {
                 })
                 .child(item.label)
                 .when(is_focused, |this| this.child(focus_underline(tint)))
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     on_select(&clicked_id, window, cx);
                 })
                 .into_any_element()

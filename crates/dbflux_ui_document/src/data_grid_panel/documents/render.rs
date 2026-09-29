@@ -11,6 +11,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::VimBinding;
 use dbflux_core::{FieldSchemaStats, FieldValueSummary, NULL_TYPE_NAME, Value};
 use gpui::prelude::*;
 use gpui::*;
@@ -229,9 +230,12 @@ impl DataGridPanel {
                         .selected(history_open)
                         .disabled(self.collection.history.is_empty())
                         .tab_stop(false)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.collection.history_open = !this.collection.history_open;
-                            cx.notify();
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.collection.history_open {
+                                this.close_query_history(window, cx);
+                            } else {
+                                this.open_query_history(window, cx);
+                            }
                         })),
                     )
                     .when_some(history_menu, |anchor, menu| anchor.child(menu)),
@@ -250,9 +254,15 @@ impl DataGridPanel {
                 menu_row(
                     SharedString::from(format!("collection-history-{index}")),
                     &item,
-                    false,
+                    index == self.collection.history_selected,
                     cx,
                 )
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if this.collection.history_selected != index {
+                        this.collection.history_selected = index;
+                        cx.notify();
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.run_history_entry(index, window, cx);
                 }))
@@ -268,6 +278,21 @@ impl DataGridPanel {
                 .mt(Spacing::XS)
                 .w(px(480.0)) // guardrail-allow: history menu width, fits a long query
                 .occlude()
+                .track_focus(&self.focus.history_menu_focus)
+                // The grid reports the ContextMenu context while the menu is
+                // open, so the menu keys arrive here first.
+                .on_action(cx.listener(
+                    |this, action: &dbflux_ui_base::keymap::RunCommand, window, cx| {
+                        let handled =
+                            dbflux_ui_base::keymap::run_command(action).is_some_and(|command| {
+                                this.dispatch_history_menu_command(command, window, cx)
+                            });
+
+                        if !handled {
+                            cx.propagate();
+                        }
+                    },
+                ))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.collection.history_open = false;
                     cx.notify();
@@ -591,19 +616,32 @@ impl DataGridPanel {
         &self,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let editable = self.commits_document_patches(cx);
+        let vim = &self.collection.json_vim;
+        let input = vim.input_id();
+        let container = VimBinding::capture_run_command(
+            VimBinding::wire(vim.leader_scope(div(), cx), input, cx),
+            input,
+            cx,
+        );
         let theme = cx.theme();
 
-        div()
+        container
             .id("collection-json-view")
             .size_full()
+            .flex()
+            .flex_col()
             .bg(theme.background)
             .font_family(AppFonts::MONO)
             .child(
-                Editor::new(&self.collection.json_editor)
-                    .bordered(false)
-                    .size_full()
-                    .disabled(!self.commits_document_patches(cx)),
+                div().flex_1().min_h_0().child(
+                    vim.editor(!editable)
+                        .bordered(false)
+                        .size_full()
+                        .disabled(!editable),
+                ),
             )
+            .children(vim.render_indicator(cx))
     }
 
     /// Schema view (P1DocSchema): sample controls and one row per field.

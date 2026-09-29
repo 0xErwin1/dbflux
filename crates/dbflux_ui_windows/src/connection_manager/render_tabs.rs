@@ -318,6 +318,10 @@ impl ConnectionManagerWindow {
             .collect();
 
         let entity = cx.entity().clone();
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
+        let ssl_mode_focused =
+            show_focus && self.main_extra_focus_for_ssl_mode() == Some(self.form_focus);
 
         let ssl_control = SegmentedControl::new(
             ssl_items,
@@ -330,7 +334,8 @@ impl ConnectionManagerWindow {
                 });
             },
         )
-        .group("ssl-mode");
+        .group("ssl-mode")
+        .focused(ssl_mode_focused);
 
         // Wrap the segmented control in a content-width row with a trailing flex filler so
         // its segments hug their labels instead of stretching to fill the field column.
@@ -447,11 +452,15 @@ impl ConnectionManagerWindow {
             });
         });
 
+        let picker_focused = self.edit_state == EditState::Navigating
+            && self.active_tab == ActiveTab::Main
+            && self.main_extra_focus_for_ssl_cert(slot) == Some(self.form_focus);
+
         let control = div()
             .flex()
             .items_center()
             .gap_2()
-            .child(picker)
+            .child(layout::cursor_ring(picker_focused, picker, cx))
             .child(div().flex_1());
 
         Self::field_row_cm(label, false, control, None::<&str>, cx).into_any_element()
@@ -895,12 +904,20 @@ impl ConnectionManagerWindow {
         sections
     }
 
+    /// Whether the form's cursor is on the MCP tab stop `focus`.
+    fn mcp_cursor_on(&self, focus: FormFocus) -> bool {
+        self.edit_state == EditState::Navigating
+            && self.active_tab == ActiveTab::Mcp
+            && self.form_focus == focus
+    }
+
     fn render_mcp_enabled_checkbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .items_center()
             .gap_2()
-            .child(
+            .child(layout::cursor_ring(
+                self.mcp_cursor_on(FormFocus::McpEnabled),
                 Checkbox::new("conn-mcp-enabled")
                     .checked(self.mcp_tab.conn_mcp_enabled)
                     .aria_label(dbflux_i18n::t!("connection_manager.enable_mcp"))
@@ -908,7 +925,8 @@ impl ConnectionManagerWindow {
                         this.mcp_tab.conn_mcp_enabled = *checked;
                         cx.notify();
                     })),
-            )
+                cx,
+            ))
             .child(
                 div()
                     .text_size(dbflux_components::tokens::FontSizes::BASE)
@@ -951,7 +969,8 @@ impl ConnectionManagerWindow {
         let ids: Vec<String> = filtered_clients.iter().map(|c| c.id.clone()).collect();
         let items: Vec<dbflux_components::composites::MasterDetailItem> = filtered_clients
             .iter()
-            .map(|client| {
+            .enumerate()
+            .map(|(index, client)| {
                 let has_binding = bindings.iter().any(|b| b.actor_id == client.id);
                 let is_selected = selected_actor_id.as_deref() == Some(client.id.as_str());
 
@@ -976,7 +995,7 @@ impl ConnectionManagerWindow {
                         )
                     }),
                     selected: is_selected,
-                    focused: false,
+                    focused: self.mcp_cursor_on(FormFocus::McpClient(index as u8)),
                 }
             })
             .collect();
@@ -1023,10 +1042,12 @@ impl ConnectionManagerWindow {
                                 .update(cx, |state, cx| state.focus(window, cx));
                         }),
                     )
-                    .child(
+                    .child(layout::cursor_ring(
+                        self.mcp_cursor_on(FormFocus::McpClientFilter),
                         Input::new(&self.mcp_tab.conn_mcp_client_filter_input)
                             .id("cm-mcp-client-filter"),
-                    ),
+                        cx,
+                    )),
             )
             .child(div().flex_1().min_h_0().child(list));
 
@@ -1112,7 +1133,8 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
+                    .child(layout::cursor_ring(
+                        self.mcp_cursor_on(FormFocus::McpClientAllowed),
                         Checkbox::new("conn-mcp-client-allowed")
                             .checked(has_binding)
                             .aria_label(dbflux_i18n::t!("connection_manager.mcp_allow_client"))
@@ -1124,7 +1146,8 @@ impl ConnectionManagerWindow {
                                     cx,
                                 );
                             })),
-                    )
+                        cx,
+                    ))
                     .child(
                         div()
                             .text_size(dbflux_components::tokens::FontSizes::BASE)
@@ -1155,11 +1178,19 @@ impl ConnectionManagerWindow {
                         .child(Text::caption(dbflux_i18n::t!(
                             "connection_manager.mcp_role_hint"
                         )))
-                        .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
+                        .child(layout::cursor_ring(
+                            self.mcp_cursor_on(FormFocus::McpRole),
+                            self.mcp_tab.conn_mcp_role_dropdown.clone(),
+                            cx,
+                        ))
                         .child(Text::caption(dbflux_i18n::t!(
                             "connection_manager.additional_roles_optional"
                         )))
-                        .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
+                        .child(layout::cursor_ring(
+                            self.mcp_cursor_on(FormFocus::McpExtraRoles),
+                            self.mcp_tab.conn_mcp_role_multi_select.clone(),
+                            cx,
+                        )),
                 )
                 .child(
                     div()
@@ -1172,11 +1203,19 @@ impl ConnectionManagerWindow {
                         .child(Text::caption(dbflux_i18n::t!(
                             "connection_manager.mcp_policy_hint"
                         )))
-                        .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
+                        .child(layout::cursor_ring(
+                            self.mcp_cursor_on(FormFocus::McpPolicy),
+                            self.mcp_tab.conn_mcp_policy_dropdown.clone(),
+                            cx,
+                        ))
                         .child(Text::caption(dbflux_i18n::t!(
                             "connection_manager.additional_policies_optional"
                         )))
-                        .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
+                        .child(layout::cursor_ring(
+                            self.mcp_cursor_on(FormFocus::McpExtraPolicies),
+                            self.mcp_tab.conn_mcp_policy_multi_select.clone(),
+                            cx,
+                        )),
                 )
                 .child(Text::caption(crate::labels::mcp_effective_tools_line(
                     &tools_text,

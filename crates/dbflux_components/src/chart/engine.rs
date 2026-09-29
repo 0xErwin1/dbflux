@@ -141,6 +141,11 @@ pub struct ChartView {
     /// Series indices that are hidden. Hidden series are skipped when painting
     /// polylines, hover dots, and the readout overlay.
     hidden: HashSet<usize>,
+    /// Point highlighted from the keyboard: an index into the decimated
+    /// points of the focused series. While set, it stands in for the pointer
+    /// position, so the crosshair, the readout and the host's point inspector
+    /// show that point. Moving the pointer over the plot clears it.
+    keyboard_point: Option<usize>,
 }
 
 impl ChartView {
@@ -169,6 +174,8 @@ impl ChartView {
         // --- Extract and filter data ---
 
         let mut raw_x: Vec<f64> = Vec::with_capacity(result.rows.len());
+        // The `QueryResult.rows` index each retained X came from.
+        let mut raw_rows: Vec<usize> = Vec::with_capacity(result.rows.len());
         let mut raw_series: Vec<Vec<f64>> = spec
             .series
             .iter()
@@ -191,7 +198,7 @@ impl ChartView {
         // (e.g. a CloudWatch metric that returned no datapoints in the
         // selected window) coexist with populated siblings instead of forcing
         // the whole chart to fail with `NoUsableData`.
-        for row in &result.rows {
+        for (row_idx, row) in result.rows.iter().enumerate() {
             let x_val = extract_f64(&row[x_col], x_is_time);
             let Some(x) = x_val else { continue };
 
@@ -224,6 +231,7 @@ impl ChartView {
 
             if any_valid {
                 raw_x.push(x);
+                raw_rows.push(row_idx);
                 for (i, y) in y_vals.into_iter().enumerate() {
                     raw_series[i].push(y);
                 }
@@ -268,28 +276,15 @@ impl ChartView {
         // --- LTTB decimation per series ---
 
         let threshold = spec.decimation_threshold;
-        let n = raw_x_sorted.len();
         let track_indices = spec.track_source_indices;
 
-        // When tracking is enabled, build a mapping from sorted position back to
-        // the original QueryResult row index. The sort step above reorders via
-        // `indices` (which maps sorted_pos -> raw_pos); `raw_original_indices`
-        // maps raw_pos (after filtering) back to the QueryResult row. Because we
-        // filter on the fly we cannot track this precisely without re-running the
-        // filter with index recording — instead we approximate by recording the
-        // position after filtering. This is acceptable: `source_for_point` only
-        // needs an approximate row hint for the inspector, not an exact key.
-        //
-        // Precise tracking: we record the sorted position as the "source index"
-        // because each sorted position corresponds 1:1 to a row that passed the
-        // NaN/null filter. The `DataGridPanel::source_for_point` implementation
-        // maps this position back to the underlying sorted-result row.
+        // Maps each sorted position back to its `QueryResult.rows` index: the
+        // sort reorders through `indices` (sorted_pos -> raw_pos), and
+        // `raw_rows` maps raw_pos past the rows the extraction skipped.
         let sorted_source_indices: Vec<usize> = if swapped {
-            // After sort: sorted_pos i came from original (filtered) position
-            // indices[i]. We use `indices[i]` as the source row hint.
-            indices.clone()
+            indices.iter().map(|&raw_pos| raw_rows[raw_pos]).collect()
         } else {
-            (0..n).collect()
+            raw_rows
         };
 
         // Collect decimated points. When track_indices is true, also collect
@@ -413,6 +408,7 @@ impl ChartView {
             focused_series_idx: 0,
             plot_bounds: Rc::new(RefCell::new(None)),
             hidden: HashSet::new(),
+            keyboard_point: None,
         })
     }
 
@@ -573,6 +569,10 @@ impl ChartView {
     /// been recorded yet. Requires `plot_bounds` to have been written by a
     /// previous paint.
     pub fn hover_data_x(&self) -> Option<f64> {
+        if let Some((x, _)) = self.keyboard_point_value() {
+            return Some(x);
+        }
+
         let hover_x = self.hover_x_screen?;
         let bounds = self.plot_bounds.borrow();
         let b = (*bounds)?;
@@ -584,6 +584,145 @@ impl ChartView {
         }
         let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
         Some(self.render_model.x_min + (rel_x as f64 / plot_w as f64) * x_range)
+    }
+
+    /// The point highlighted from the keyboard, if any.
+    pub fn keyboard_point(&self) -> Option<crate::chart::DataPointRef> {
+        let point_idx_in_series = self.keyboard_point?;
+
+        Some(crate::chart::DataPointRef {
+            series_idx: self.focused_series_idx,
+            point_idx_in_series,
+        })
+    }
+
+    /// The `(x, y)` data value of the keyboard point, when it still names a
+    /// point of the focused series.
+    fn keyboard_point_value(&self) -> Option<(f64, f64)> {
+        let index = self.keyboard_point?;
+
+        self.render_model
+            .decimated
+            .get(self.focused_series_idx)?
+            .get(index)
+            .copied()
+    }
+
+    /// Moves the keyboard point `delta` points along the focused series,
+    /// stopping at either end. Without a keyboard point it starts at the
+    /// first point (or the last, for a negative `delta`). Returns whether a
+    /// point is highlighted afterwards.
+    pub fn step_keyboard_point(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(count) = self.focused_series_len() else {
+            return false;
+        };
+
+        let next = match self.keyboard_point {
+            Some(current) => current.saturating_add_signed(delta).min(count - 1),
+            None if delta < 0 => count - 1,
+            None => 0,
+        };
+
+        self.set_keyboard_point(next, cx);
+        true
+    }
+
+    /// Moves the keyboard point to the first or the last point of the
+    /// focused series. Returns whether a point is highlighted afterwards.
+    pub fn jump_keyboard_point(&mut self, to_last: bool, cx: &mut Context<Self>) -> bool {
+        let Some(count) = self.focused_series_len() else {
+            return false;
+        };
+
+        self.set_keyboard_point(if to_last { count - 1 } else { 0 }, cx);
+        true
+    }
+
+    /// Moves the keyboard point to the next (or previous, for a negative
+    /// `delta`) visible series, on the point nearest to the X it had, and
+    /// makes that series the focused one. Without a keyboard point it starts
+    /// at the first point of the series it lands on. Returns whether the
+    /// focused series changed.
+    pub fn step_keyboard_series(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let series_count = self.spec.series.len();
+        let visible: Vec<usize> = (0..series_count)
+            .filter(|index| !self.hidden.contains(index))
+            .collect();
+
+        if visible.len() < 2 {
+            return false;
+        }
+
+        let current = visible
+            .iter()
+            .position(|index| *index == self.focused_series_idx)
+            .unwrap_or(0);
+        let next = visible[(current as isize + delta).rem_euclid(visible.len() as isize) as usize];
+
+        let anchor_x = self.keyboard_point_value().map(|(x, _)| x);
+
+        self.focused_series_idx = next;
+        self.keyboard_point = match anchor_x {
+            Some(x) => self.nearest_point_idx(next, x),
+            None => self
+                .render_model
+                .decimated
+                .get(next)
+                .filter(|points| !points.is_empty())
+                .map(|_| 0),
+        };
+
+        cx.notify();
+        true
+    }
+
+    /// Clears the keyboard point. Returns whether one was highlighted.
+    pub fn clear_keyboard_point(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.keyboard_point.take().is_none() {
+            return false;
+        }
+
+        cx.notify();
+        true
+    }
+
+    /// Number of points of the focused series, when it is visible and has
+    /// any. Moves the focus off a hidden series first.
+    fn focused_series_len(&mut self) -> Option<usize> {
+        if self.hidden.contains(&self.focused_series_idx) {
+            self.focused_series_idx =
+                (0..self.spec.series.len()).find(|index| !self.hidden.contains(index))?;
+            self.keyboard_point = None;
+        }
+
+        self.render_model
+            .decimated
+            .get(self.focused_series_idx)
+            .map(Vec::len)
+            .filter(|count| *count > 0)
+    }
+
+    fn set_keyboard_point(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.keyboard_point = Some(index);
+        self.hover_x_screen = None;
+        self.hover_y_screen = None;
+        cx.notify();
+    }
+
+    /// The window-space X the crosshair is drawn at: the pointer, or the
+    /// keyboard point once a paint has recorded the plot bounds.
+    fn crosshair_x_screen(&self) -> Option<Pixels> {
+        let Some((x, _)) = self.keyboard_point_value() else {
+            return self.hover_x_screen;
+        };
+
+        let bounds = (*self.plot_bounds.borrow())?;
+        let plot_x0 = f32::from(bounds.origin.x);
+        let plot_w = (f32::from(bounds.size.width) - MARGIN_RIGHT).max(1.0);
+        let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
+        let fraction = ((x - self.render_model.x_min) / x_range) as f32;
+
+        Some(gpui::px(plot_x0 + fraction * plot_w))
     }
 
     /// Replace the set of hidden series indices.
@@ -1117,7 +1256,7 @@ impl Render for ChartView {
 
         let model = &self.render_model;
         let spec = &self.spec;
-        let hover_x = self.hover_x_screen;
+        let hover_x = self.crosshair_x_screen();
         let focused_idx = self.focused_series_idx;
 
         let x_min = model.x_min;
@@ -1221,6 +1360,7 @@ impl Render for ChartView {
                                 .unwrap_or(false);
                             let had_hover = this.hover_x_screen.is_some();
                             if inside {
+                                this.keyboard_point = None;
                                 this.hover_x_screen = Some(ev.position.x);
                                 this.hover_y_screen = Some(ev.position.y);
                                 this.update_focused_from_hover();
@@ -3287,6 +3427,66 @@ mod tests {
         )
     }
 
+    /// H and L walk the keyboard point along the focused series, J and K
+    /// move it to the other series at the nearest X, and the point stands in
+    /// for the pointer: `hover_data_x` reports it, so the point inspector a
+    /// host draws from the hovered point shows it.
+    #[gpui::test]
+    fn keyboard_point_walks_points_and_series(cx: &mut gpui::TestAppContext) {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+
+        let view = cx.new(|_| {
+            ChartView::build(&partially_overlapping_hosts(), spec).expect("build should succeed")
+        });
+
+        let state = |cx: &mut gpui::TestAppContext| {
+            view.read_with(cx, |view, _| {
+                (
+                    view.keyboard_point(),
+                    view.hover_data_x(),
+                    view.focused_series_idx(),
+                )
+            })
+        };
+
+        assert_eq!(state(cx), (None, None, 0), "no point before a key");
+
+        view.update(cx, |view, cx| assert!(view.step_keyboard_point(1, cx)));
+        assert_eq!(
+            state(cx).1,
+            Some(1_000.0),
+            "the first key lands on the first point"
+        );
+
+        view.update(cx, |view, cx| view.step_keyboard_point(5, cx));
+        assert_eq!(
+            state(cx).1,
+            Some(3_000.0),
+            "the point stops at the last one"
+        );
+
+        view.update(cx, |view, cx| assert!(view.step_keyboard_series(1, cx)));
+        let (point, x, series) = state(cx);
+        assert_eq!(series, 1, "the other series takes the focus");
+        assert_eq!(x, Some(3_000.0), "at the point nearest to the same X");
+        assert_eq!(point.map(|point| point.point_idx_in_series), Some(1));
+
+        view.update(cx, |view, cx| view.jump_keyboard_point(false, cx));
+        assert_eq!(state(cx).1, Some(2_000.0), "the first point of series b");
+
+        view.update(cx, |view, cx| assert!(view.clear_keyboard_point(cx)));
+        assert_eq!(state(cx), (None, None, 1));
+
+        view.update(cx, |view, cx| {
+            view.set_hidden_series(HashSet::from([0]), cx);
+            assert!(
+                !view.step_keyboard_series(1, cx),
+                "one visible series has nowhere to move"
+            );
+        });
+    }
+
     fn grouped_stacked_view() -> ChartView {
         let mut spec = simple_spec(0, &[1]);
         spec.binding.group_by = Some(2);
@@ -3785,6 +3985,36 @@ mod tests {
             n - 1,
             "last source index must be n-1"
         );
+    }
+
+    /// A row the chart skips (no X, or no Y in any series) still counts in
+    /// the result, so the recorded index of every later point is its row in
+    /// `QueryResult.rows`, also when the rows arrive out of X order.
+    #[test]
+    fn source_indices_are_result_rows_when_rows_are_skipped_or_unsorted() {
+        let rows = vec![
+            vec![Value::Int(2000), Value::Float(3.0)],
+            vec![Value::Null, Value::Float(9.0)],
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(500), Value::Null],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.track_source_indices = true;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        let src = view.source_indices().expect("source_indices must be Some");
+
+        assert_eq!(src[0], vec![2usize, 4, 0]);
     }
 
     /// Regression baseline: captures the deterministic RenderModel snapshot for a

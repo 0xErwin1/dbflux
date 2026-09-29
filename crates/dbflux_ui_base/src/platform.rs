@@ -17,7 +17,7 @@ use gpui::{
 // Only the CSD title bar uses these, and it is compiled on Linux alone.
 use gpui::InteractiveElement;
 #[cfg(target_os = "linux")]
-use gpui::{ClickEvent, Decorations, ParentElement, Styled};
+use gpui::{ClickEvent, Decorations, ParentElement, StatefulInteractiveElement, Styled};
 #[cfg(target_os = "linux")]
 use gpui_component::ActiveTheme;
 #[cfg(target_os = "linux")]
@@ -270,7 +270,7 @@ pub fn render_csd_window_controls(
                 .h_full()
                 .cursor_pointer()
                 .hover(move |d| d.bg(hover))
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     handler(window, cx);
                 })
                 .child(Icon::new(icon).size(Heights::ICON_SM).muted())

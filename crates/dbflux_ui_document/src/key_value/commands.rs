@@ -11,10 +11,18 @@ impl super::KeyValueDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Tab and Shift+Tab move through a dialog's form like J and K, and
+        // never reach the workspace, which would move focus behind it.
+        let (form_cmd, owns_tab) = match cmd {
+            Command::CycleFocusForward => (Command::SelectNext, true),
+            Command::CycleFocusBackward => (Command::SelectPrev, true),
+            other => (other, false),
+        };
+
         if self.new_key_modal.read(cx).is_visible() {
             let handled = self
                 .new_key_modal
-                .update(cx, |modal, cx| modal.dispatch_command(cmd, window, cx));
+                .update(cx, |modal, cx| modal.dispatch_command(form_cmd, window, cx));
 
             if !self.new_key_modal.read(cx).is_visible() {
                 self.focus_mode = KeyValueFocusMode::List;
@@ -22,13 +30,13 @@ impl super::KeyValueDocument {
                 cx.notify();
             }
 
-            return handled;
+            return handled || owns_tab;
         }
 
         if self.add_member_modal.read(cx).is_visible() {
             let handled = self
                 .add_member_modal
-                .update(cx, |modal, cx| modal.dispatch_command(cmd, window, cx));
+                .update(cx, |modal, cx| modal.dispatch_command(form_cmd, window, cx));
 
             if !self.add_member_modal.read(cx).is_visible() {
                 self.focus_mode = KeyValueFocusMode::ValuePanel;
@@ -36,7 +44,7 @@ impl super::KeyValueDocument {
                 cx.notify();
             }
 
-            return handled;
+            return handled || owns_tab;
         }
 
         if self.context_menu.is_some() {

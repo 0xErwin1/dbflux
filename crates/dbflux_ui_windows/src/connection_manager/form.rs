@@ -2196,6 +2196,456 @@ mod tests {
             .log_err();
     }
 
+    /// Opens a keymap-driven PostgreSQL form with the keyboard in the form.
+    fn open_postgres_form(cx: &mut TestAppContext) -> WindowHandle<ConnectionManagerWindow> {
+        open_postgres_form_with(cx, |_| {})
+    }
+
+    /// [`open_postgres_form`] after `seed` prepares the app state.
+    fn open_postgres_form_with(
+        cx: &mut TestAppContext,
+        seed: impl FnOnce(&mut AppStateEntity),
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        init_form_test_runtime(cx);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        app_state.update(cx, |state, _| seed(state));
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager.edit_state = EditState::Navigating;
+                manager.form_focus = FormFocus::Name;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("the form focuses");
+        cx.run_until_parked();
+
+        window
+    }
+
+    fn form_state(
+        window: WindowHandle<ConnectionManagerWindow>,
+        cx: &mut TestAppContext,
+    ) -> (FormFocus, EditState, super::super::ActiveTab) {
+        window
+            .update(cx, |manager, _, _| {
+                (manager.form_focus, manager.edit_state, manager.active_tab)
+            })
+            .expect("window is open")
+    }
+
+    /// Down and Up move the form cursor like j and k, and while a field is
+    /// edited they, Ctrl+L and Ctrl+H leave it: Down and Up for the next or
+    /// previous field, Ctrl+L and Ctrl+H for the next or previous tab.
+    #[::core::prelude::v1::test]
+    fn arrows_and_tab_chords_move_on_from_the_form_and_its_fields() {
+        use super::super::ActiveTab;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "down");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::Environment);
+
+        cx.simulate_keystrokes(window.into(), "up");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::Name);
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_eq!(form_state(window, &mut cx).1, EditState::Editing);
+
+        cx.simulate_keystrokes(window.into(), "down");
+        assert_eq!(
+            form_state(window, &mut cx),
+            (
+                FormFocus::Environment,
+                EditState::Navigating,
+                ActiveTab::Main
+            ),
+            "Down leaves the name field for the next one"
+        );
+
+        cx.simulate_keystrokes(window.into(), "up enter");
+        assert_eq!(form_state(window, &mut cx).1, EditState::Editing);
+
+        cx.simulate_keystrokes(window.into(), "up");
+        assert_eq!(
+            form_state(window, &mut cx).1,
+            EditState::Navigating,
+            "Up leaves the field"
+        );
+
+        cx.simulate_keystrokes(window.into(), "down up enter ctrl-l");
+        let (_, edit_state, tab) = form_state(window, &mut cx);
+        assert_eq!(
+            (edit_state, tab),
+            (EditState::Navigating, ActiveTab::Access),
+            "Ctrl+L leaves the field for the next tab"
+        );
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Main;
+                manager.form_focus = FormFocus::Name;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter ctrl-h");
+        let (_, edit_state, tab) = form_state(window, &mut cx);
+        assert_eq!(
+            (edit_state, tab),
+            (EditState::Navigating, ActiveTab::Mcp),
+            "Ctrl+H leaves the field for the previous tab"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The ring reaches the transport section after the password: the SSL
+    /// mode is a stop whose choice Left and Right change.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_reaches_the_ssl_mode() {
+        use super::super::MainExtraStop;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        let ssl_stop = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form_focus = FormFocus::TestConnection;
+                window.focus(&manager.focus_handle, cx);
+                manager.main_extra_focus_for_ssl_mode()
+            })
+            .expect("window is open")
+            .expect("PostgreSQL offers SSL modes");
+
+        cx.simulate_keystrokes(window.into(), "k");
+        let stops = window
+            .update(&mut cx, |manager, _, _| manager.main_extra_stops())
+            .expect("window is open");
+        assert_eq!(
+            form_state(window, &mut cx).0,
+            FormFocus::MainExtra((stops.len() - 1) as u8),
+            "k from Test connection lands on the last extra stop"
+        );
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = ssl_stop)
+            .expect("window is open");
+        assert!(matches!(
+            stops.get(match ssl_stop {
+                FormFocus::MainExtra(index) => index as usize,
+                _ => usize::MAX,
+            }),
+            Some(MainExtraStop::SslMode)
+        ));
+
+        let ssl_mode = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.form.selected_ssl_mode.clone())
+                .expect("window is open")
+        };
+        let before = ssl_mode(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "right");
+        assert_ne!(ssl_mode(&mut cx), before, "Right picks the next SSL mode");
+        assert_eq!(form_state(window, &mut cx).0, ssl_stop, "the cursor stays");
+
+        cx.simulate_keystrokes(window.into(), "left");
+        assert_eq!(ssl_mode(&mut cx), before, "Left picks it back");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// A driver field without a ring stop of its own, such as the auth
+    /// profile picker of an AWS driver, is an extra stop: Enter opens it and
+    /// the dropdown keys drive it.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_reaches_the_auth_profile_picker() {
+        use super::super::MainExtraStop;
+        use dbflux_core::FormFieldKind;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        let picker_stop = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.select_driver("dynamodb", window, cx);
+                manager.edit_state = EditState::Navigating;
+                window.focus(&manager.focus_handle, cx);
+
+                manager
+                    .main_extra_stops()
+                    .iter()
+                    .position(|stop| {
+                        matches!(
+                            stop,
+                            MainExtraStop::DriverField(field)
+                                if matches!(field.kind, FormFieldKind::AuthProfileRef { .. })
+                        )
+                    })
+                    .map(|index| FormFocus::MainExtra(index as u8))
+            })
+            .expect("window is open")
+            .expect("the DynamoDB form has an auth profile picker");
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = picker_stop)
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter");
+
+        let open = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .auth_profile
+                    .auth_profile_dropdown
+                    .read(cx)
+                    .is_open()
+            })
+            .expect("window is open");
+        assert!(open, "Enter opens the auth profile picker");
+
+        cx.simulate_keystrokes(window.into(), "escape");
+        let open = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .auth_profile
+                    .auth_profile_dropdown
+                    .read(cx)
+                    .is_open()
+            })
+            .expect("window is open");
+        assert!(!open, "Escape closes it");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// After a failed test, the banner's Copy button sits between Test
+    /// connection and Save: Right reaches it and Enter copies the error.
+    #[::core::prelude::v1::test]
+    fn the_failed_test_copy_button_is_on_the_test_row() {
+        use super::super::TestStatus;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_status = TestStatus::Failed;
+                manager.test_error = Some("connection refused".to_string());
+                manager.form_focus = FormFocus::TestConnection;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+
+        cx.simulate_keystrokes(window.into(), "l");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::CopyTestError);
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("connection refused")
+        );
+
+        cx.simulate_keystrokes(window.into(), "l");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::Save);
+
+        cx.simulate_keystrokes(window.into(), "h h");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::TestConnection);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The Settings tab ring stops on each phase's hook dropdown before its
+    /// extra hooks input; Enter hands the dropdown the keyboard and Escape
+    /// gives it back to the form.
+    #[::core::prelude::v1::test]
+    fn the_settings_ring_opens_the_hook_dropdowns() {
+        use super::super::ActiveTab;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Settings;
+                manager.form_focus = FormFocus::SettingsRequiresPreview;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes(window.into(), "j");
+        assert_eq!(
+            form_state(window, &mut cx).0,
+            FormFocus::SettingsPreConnectHook
+        );
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        let (focused, open) = window
+            .update(&mut cx, |manager, window, cx| {
+                let dropdown = manager.settings_tab.conn_pre_hook_dropdown.read(cx);
+                (dropdown.is_focused(window), dropdown.is_open())
+            })
+            .expect("window is open");
+        assert!(focused && open, "Enter opens the pre-connect hook dropdown");
+
+        cx.simulate_keystrokes(window.into(), "escape");
+        let root_focused = window
+            .update(&mut cx, |manager, window, _| {
+                manager.focus_handle.is_focused(window)
+            })
+            .expect("window is open");
+        assert!(root_focused, "Escape gives the keyboard back to the form");
+        assert_eq!(
+            form_state(window, &mut cx).0,
+            FormFocus::SettingsPreConnectHook
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The MCP tab has a ring: the MCP switch, the client filter, each
+    /// client, the selected client's access switch and its role picker.
+    #[cfg(feature = "mcp")]
+    #[::core::prelude::v1::test]
+    fn the_mcp_tab_is_driven_by_the_form_ring() {
+        use super::super::ActiveTab;
+        use dbflux_mcp::TrustedClientDto;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form_with(&mut cx, |state| {
+            state
+                .upsert_mcp_trusted_client(TrustedClientDto {
+                    id: "agent-a".to_string(),
+                    name: "Agent A".to_string(),
+                    issuer: None,
+                    active: true,
+                })
+                .expect("the client is stored");
+        });
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Mcp;
+                manager.form_focus = FormFocus::Name;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        let enabled = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.mcp_tab.conn_mcp_enabled)
+                .expect("window is open")
+        };
+        let before = enabled(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "j");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::McpEnabled);
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_ne!(enabled(&mut cx), before, "Enter toggles MCP access");
+
+        cx.simulate_keystrokes(window.into(), "j j");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::McpClient(0));
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_eq!(
+            window
+                .update(&mut cx, |manager, _, _| manager
+                    .mcp_tab
+                    .selected_actor_id
+                    .clone())
+                .expect("window is open")
+                .as_deref(),
+            Some("agent-a"),
+            "Enter selects the client"
+        );
+
+        cx.simulate_keystrokes(window.into(), "j enter");
+        let allowed = window
+            .update(&mut cx, |manager, _, _| {
+                manager
+                    .mcp_tab
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.actor_id == "agent-a")
+            })
+            .expect("window is open");
+        assert!(allowed, "Enter on the access switch allows the client");
+
+        cx.simulate_keystrokes(window.into(), "j enter");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::McpRole);
+        let role_focused = window
+            .update(&mut cx, |manager, window, cx| {
+                manager
+                    .mcp_tab
+                    .conn_mcp_role_dropdown
+                    .read(cx)
+                    .is_focused(window)
+            })
+            .expect("window is open");
+        assert!(role_focused, "Enter hands the role picker the keyboard");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// Page Down moves an open dropdown's highlight a page at a time.
+    #[::core::prelude::v1::test]
+    fn page_down_moves_an_open_dropdown() {
+        use super::super::ActiveTab;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Access;
+                manager.form_focus = FormFocus::AccessMethod;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        let access_mode = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.access.access_tab_mode)
+                .expect("window is open")
+        };
+        let initial = access_mode(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "enter pagedown enter");
+        assert_ne!(
+            access_mode(&mut cx),
+            initial,
+            "Page Down moved the highlight to another access method"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
     #[::core::prelude::v1::test]
     fn new_profile_password_save_success_persists_and_closes_the_real_window() {
         let mut cx = TestAppContext::single();

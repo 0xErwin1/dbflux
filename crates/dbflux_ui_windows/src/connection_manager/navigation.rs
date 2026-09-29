@@ -7,7 +7,7 @@ use gpui::*;
 
 use super::{
     AccessTabMode, ActiveTab, ConnectionManagerWindow, DismissEvent, DriverFocus, EditState,
-    FormFocus, View,
+    FormFocus, MainExtraStop, TestStatus, View,
 };
 
 /// The environment chips of the Main tab, in display order; `None` is the
@@ -49,6 +49,35 @@ fn next_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
         ActiveTab::Settings => ActiveTab::Mcp,
         ActiveTab::Mcp => ActiveTab::Main,
     }
+}
+
+/// Moves keyboard focus to a multi-select and opens its list.
+fn focus_and_open_multi_select(
+    select: &mut dbflux_components::components::multi_select::MultiSelect,
+    window: &mut Window,
+    cx: &mut Context<dbflux_components::components::multi_select::MultiSelect>,
+) {
+    select.focus(window, cx);
+
+    if !select.is_open() {
+        select.toggle_open(cx);
+    }
+}
+
+/// The value next to `current` in `values`, wrapping at either end, or the
+/// first value when `current` is not listed.
+fn step_choice(values: &[String], current: &str, forward: bool) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let next = match values.iter().position(|value| value == current) {
+        Some(index) if forward => (index + 1) % values.len(),
+        Some(index) => (index + values.len() - 1) % values.len(),
+        None => 0,
+    };
+
+    values.get(next).cloned()
 }
 
 fn prev_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
@@ -115,12 +144,42 @@ pub(super) struct MainNavState {
     pub(super) password_source_is_literal: bool,
     /// True when save-password action is visible.
     pub(super) can_save_password: bool,
+    /// Number of [`FormFocus::MainExtra`] stops between the named fields and
+    /// Test connection.
+    pub(super) extra_count: u8,
 }
 
 impl FormFocus {
     // === Main Tab: Vertical Navigation (j/k) ===
 
+    /// The next Main-tab stop: the named fields, then the extra stops, then
+    /// Test connection and Save.
     pub(super) fn down_main(self, state: MainNavState) -> Self {
+        use FormFocus::*;
+
+        match self {
+            MainExtra(index) if index + 1 < state.extra_count => MainExtra(index + 1),
+            MainExtra(_) => TestConnection,
+            _ => match self.down_main_standard(state) {
+                TestConnection if state.extra_count > 0 => MainExtra(0),
+                next => next,
+            },
+        }
+    }
+
+    /// The previous Main-tab stop (see [`Self::down_main`]).
+    pub(super) fn up_main(self, state: MainNavState) -> Self {
+        use FormFocus::*;
+
+        match self {
+            MainExtra(0) => TestConnection.up_main_standard(state),
+            MainExtra(index) => MainExtra(index - 1),
+            TestConnection if state.extra_count > 0 => MainExtra(state.extra_count - 1),
+            _ => self.up_main_standard(state),
+        }
+    }
+
+    fn down_main_standard(self, state: MainNavState) -> Self {
         use FormFocus::*;
 
         if state.uses_file_form {
@@ -176,7 +235,7 @@ impl FormFocus {
         }
     }
 
-    pub(super) fn up_main(self, state: MainNavState) -> Self {
+    fn up_main_standard(self, state: MainNavState) -> Self {
         use FormFocus::*;
 
         if state.uses_file_form {
@@ -768,10 +827,14 @@ impl FormFocus {
             SettingsRefreshInterval => SettingsConfirmDangerous,
             SettingsConfirmDangerous => SettingsRequiresWhere,
             SettingsRequiresWhere => SettingsRequiresPreview,
-            SettingsRequiresPreview => SettingsPreConnectHookExtra,
-            SettingsPreConnectHookExtra => SettingsPostConnectHookExtra,
-            SettingsPostConnectHookExtra => SettingsPreDisconnectHookExtra,
-            SettingsPreDisconnectHookExtra => SettingsPostDisconnectHookExtra,
+            SettingsRequiresPreview => SettingsPreConnectHook,
+            SettingsPreConnectHook => SettingsPreConnectHookExtra,
+            SettingsPreConnectHookExtra => SettingsPostConnectHook,
+            SettingsPostConnectHook => SettingsPostConnectHookExtra,
+            SettingsPostConnectHookExtra => SettingsPreDisconnectHook,
+            SettingsPreDisconnectHook => SettingsPreDisconnectHookExtra,
+            SettingsPreDisconnectHookExtra => SettingsPostDisconnectHook,
+            SettingsPostDisconnectHook => SettingsPostDisconnectHookExtra,
             SettingsPostDisconnectHookExtra => {
                 if driver_field_count > 0 {
                     SettingsDriverField(0)
@@ -802,10 +865,14 @@ impl FormFocus {
             SettingsConfirmDangerous => SettingsRefreshInterval,
             SettingsRequiresWhere => SettingsConfirmDangerous,
             SettingsRequiresPreview => SettingsRequiresWhere,
-            SettingsPreConnectHookExtra => SettingsRequiresPreview,
-            SettingsPostConnectHookExtra => SettingsPreConnectHookExtra,
-            SettingsPreDisconnectHookExtra => SettingsPostConnectHookExtra,
-            SettingsPostDisconnectHookExtra => SettingsPreDisconnectHookExtra,
+            SettingsPreConnectHook => SettingsRequiresPreview,
+            SettingsPreConnectHookExtra => SettingsPreConnectHook,
+            SettingsPostConnectHook => SettingsPreConnectHookExtra,
+            SettingsPostConnectHookExtra => SettingsPostConnectHook,
+            SettingsPreDisconnectHook => SettingsPostConnectHookExtra,
+            SettingsPreDisconnectHookExtra => SettingsPreDisconnectHook,
+            SettingsPostDisconnectHook => SettingsPreDisconnectHookExtra,
+            SettingsPostDisconnectHookExtra => SettingsPostDisconnectHook,
             SettingsDriverField(0) => SettingsPostDisconnectHookExtra,
             SettingsDriverField(idx) => SettingsDriverField(idx - 1),
             TestConnection => {
@@ -934,6 +1001,14 @@ impl ConnectionManagerWindow {
                 window.focus(&self.focus_handle, cx);
                 true
             }
+            Command::ImportItems => {
+                self.open_import(window, cx);
+                true
+            }
+            Command::ImportFromClient => {
+                self.open_import_external(window, cx);
+                true
+            }
             _ if count == 0 => {
                 matches!(command, Command::Cancel) && {
                     cx.emit(DismissEvent);
@@ -1000,6 +1075,15 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Up and Down move like k and j, except while a field is edited,
+        // where they leave it (see `handle_editing_command`).
+        let command = match (self.edit_state, command) {
+            (EditState::Editing, command) => command,
+            (_, Command::FocusDown) => Command::SelectNext,
+            (_, Command::FocusUp) => Command::SelectPrev,
+            (_, command) => command,
+        };
+
         if self.access.proxy_dropdown.read(cx).is_open()
             && self.handle_proxy_dropdown_command(command, cx)
         {
@@ -1476,6 +1560,7 @@ impl ConnectionManagerWindow {
                 }
                 true
             }
+            FormFocus::MainExtra(index) => self.step_main_extra_choice(index, forward),
             FormFocus::SshAuthPrivateKey | FormFocus::SshAuthPassword => {
                 if forward {
                     self.form_focus = FormFocus::SshAuthPassword;
@@ -1501,9 +1586,24 @@ impl ConnectionManagerWindow {
                 self.exit_edit_mode(window, cx);
                 true
             }
-            Command::Execute => {
+            Command::Execute | Command::FocusDown => {
                 self.exit_edit_mode(window, cx);
                 self.focus_down(cx);
+                true
+            }
+            Command::FocusUp => {
+                self.exit_edit_mode(window, cx);
+                self.focus_up(cx);
+                true
+            }
+            Command::CycleFocusForward => {
+                self.exit_edit_mode(window, cx);
+                self.next_tab(cx);
+                true
+            }
+            Command::CycleFocusBackward => {
+                self.exit_edit_mode(window, cx);
+                self.prev_tab(cx);
                 true
             }
             _ => false,
@@ -1630,6 +1730,7 @@ impl ConnectionManagerWindow {
             uri_mode_active,
             password_source_is_literal,
             can_save_password,
+            extra_count: self.main_extra_stops().len() as u8,
         }
     }
 
@@ -1658,6 +1759,12 @@ impl ConnectionManagerWindow {
                 } else if !state.can_save_password && next_focus == PasswordSave {
                     next_focus = PasswordToggle;
                 }
+
+                if let MainExtra(index) = next_focus
+                    && index >= state.extra_count
+                {
+                    next_focus = TestConnection;
+                }
             }
             ActiveTab::Access => {
                 if (self.access.access_tab_mode == AccessTabMode::ManagedSsm
@@ -1669,6 +1776,10 @@ impl ConnectionManagerWindow {
                 }
             }
             ActiveTab::Settings | ActiveTab::Mcp => {}
+        }
+
+        if next_focus == CopyTestError && self.test_status != TestStatus::Failed {
+            next_focus = TestConnection;
         }
 
         if next_focus != self.form_focus {
@@ -1686,6 +1797,7 @@ impl ConnectionManagerWindow {
                 UseUri | HostValueSource | Host | Port => 0,
                 DatabaseValueSource | Database | UserValueSource | User | PasswordValueSource
                 | Password | PasswordToggle | PasswordSave => 1,
+                MainExtra(index) => self.main_extra_scroll_index(index),
                 _ => 0,
             },
             ActiveTab::Access => match self.access.access_tab_mode {
@@ -1737,6 +1849,10 @@ impl ConnectionManagerWindow {
                 SettingsConfirmDangerous
                 | SettingsRequiresWhere
                 | SettingsRequiresPreview
+                | SettingsPreConnectHook
+                | SettingsPostConnectHook
+                | SettingsPreDisconnectHook
+                | SettingsPostDisconnectHook
                 | SettingsPreConnectHookExtra
                 | SettingsPostConnectHookExtra
                 | SettingsPreDisconnectHookExtra
@@ -1753,7 +1869,178 @@ impl ConnectionManagerWindow {
         self.form_scroll_handle.scroll_to_item(index);
     }
 
+    /// The MCP tab's ring from top to bottom: the name, the MCP switch and,
+    /// in builds with MCP, the client filter, every listed client, then the
+    /// selected client's access switch and role and policy pickers.
+    pub(super) fn mcp_stops(&self, cx: &App) -> Vec<FormFocus> {
+        let mut stops = vec![FormFocus::Name, FormFocus::McpEnabled];
+
+        #[cfg(feature = "mcp")]
+        stops.extend(self.mcp_governance_stops(cx));
+        #[cfg(not(feature = "mcp"))]
+        let _no_governance_controls = cx;
+
+        stops.extend([FormFocus::TestConnection, FormFocus::Save]);
+        stops
+    }
+
+    #[cfg(feature = "mcp")]
+    fn mcp_governance_stops(&self, cx: &App) -> Vec<FormFocus> {
+        let mut stops = vec![FormFocus::McpClientFilter];
+
+        let client_count = self.mcp_filtered_client_ids(cx).len().min(u8::MAX as usize);
+        stops.extend((0..client_count).map(|index| FormFocus::McpClient(index as u8)));
+
+        if let Some(actor_id) = self.mcp_tab.selected_actor_id.as_deref() {
+            stops.push(FormFocus::McpClientAllowed);
+
+            if self
+                .mcp_tab
+                .bindings
+                .iter()
+                .any(|binding| binding.actor_id == actor_id)
+            {
+                stops.extend([
+                    FormFocus::McpRole,
+                    FormFocus::McpExtraRoles,
+                    FormFocus::McpPolicy,
+                    FormFocus::McpExtraPolicies,
+                ]);
+            }
+        }
+
+        stops
+    }
+
+    /// Ids of the trusted clients the MCP tab lists for the current filter.
+    #[cfg(feature = "mcp")]
+    pub(super) fn mcp_filtered_client_ids(&self, cx: &App) -> Vec<String> {
+        let clients = self
+            .app_state
+            .read(cx)
+            .list_mcp_trusted_clients()
+            .unwrap_or_default();
+        let query = self
+            .mcp_tab
+            .conn_mcp_client_filter_input
+            .read(cx)
+            .value()
+            .to_string();
+
+        super::mcp_bindings::filter_clients(&clients, &query)
+            .into_iter()
+            .map(|client| client.id.clone())
+            .collect()
+    }
+
+    /// The MCP tab stop after (or before) the cursor, wrapping at either end.
+    fn step_mcp_stop(&self, forward: bool, cx: &App) -> FormFocus {
+        let stops = self.mcp_stops(cx);
+        let count = stops.len();
+
+        let next = match stops.iter().position(|stop| *stop == self.form_focus) {
+            Some(index) if forward => (index + 1) % count,
+            Some(index) => (index + count - 1) % count,
+            None => 0,
+        };
+
+        #[cfg(feature = "mcp")]
+        if let Some(FormFocus::McpClient(index)) = stops.get(next) {
+            self.mcp_tab
+                .conn_mcp_client_list_scroll_handle
+                .scroll_to_item(*index as usize);
+        }
+
+        stops[next]
+    }
+
+    /// Enter on an MCP tab stop: the switches toggle, the filter starts
+    /// editing, a client becomes the selected one and the role and policy
+    /// pickers take the keyboard.
+    fn activate_mcp_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.form_focus {
+            FormFocus::McpEnabled => {
+                self.mcp_tab.conn_mcp_enabled = !self.mcp_tab.conn_mcp_enabled;
+            }
+            #[cfg(feature = "mcp")]
+            FormFocus::McpClientFilter => {
+                self.edit_state = EditState::Editing;
+                self.mcp_tab
+                    .conn_mcp_client_filter_input
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            #[cfg(feature = "mcp")]
+            FormFocus::McpClient(index) => {
+                if let Some(actor_id) = self.mcp_filtered_client_ids(cx).get(index as usize) {
+                    self.select_mcp_client(actor_id.clone(), window, cx);
+                }
+            }
+            #[cfg(feature = "mcp")]
+            FormFocus::McpClientAllowed => {
+                if let Some(actor_id) = self.mcp_tab.selected_actor_id.clone() {
+                    let allowed = self
+                        .mcp_tab
+                        .bindings
+                        .iter()
+                        .any(|binding| binding.actor_id == actor_id);
+                    self.set_mcp_client_allowed(actor_id, !allowed, window, cx);
+                }
+            }
+            FormFocus::McpRole => {
+                self.mcp_tab
+                    .conn_mcp_role_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
+            FormFocus::McpPolicy => {
+                self.mcp_tab
+                    .conn_mcp_policy_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
+            FormFocus::McpExtraRoles => {
+                self.mcp_tab
+                    .conn_mcp_role_multi_select
+                    .update(cx, |select, cx| {
+                        focus_and_open_multi_select(select, window, cx)
+                    });
+            }
+            FormFocus::McpExtraPolicies => {
+                self.mcp_tab
+                    .conn_mcp_policy_multi_select
+                    .update(cx, |select, cx| {
+                        focus_and_open_multi_select(select, window, cx)
+                    });
+            }
+            _ => {}
+        }
+    }
+
+    /// Left and Right along Test connection, the Copy button of a failed
+    /// test and Save. Returns whether the cursor was on that row with the
+    /// Copy button shown.
+    fn step_test_row(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        use FormFocus::*;
+
+        if self.test_status != TestStatus::Failed {
+            return false;
+        }
+
+        let next = match (self.form_focus, forward) {
+            (TestConnection, true) | (Save, false) => CopyTestError,
+            (CopyTestError, true) => Save,
+            (CopyTestError, false) => TestConnection,
+            _ => return false,
+        };
+
+        self.form_focus = next;
+        cx.notify();
+        true
+    }
+
     pub(super) fn focus_down(&mut self, cx: &mut Context<Self>) {
+        if self.form_focus == FormFocus::CopyTestError {
+            self.form_focus = FormFocus::TestConnection;
+        }
+
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.down_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.down_access(
@@ -1764,7 +2051,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Settings => self
                 .form_focus
                 .down_settings(self.settings_driver_field_count()),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Mcp => self.step_mcp_stop(true, cx),
         };
         self.normalize_focus_for_state(cx);
         self.scroll_to_focused();
@@ -1772,6 +2059,10 @@ impl ConnectionManagerWindow {
     }
 
     fn focus_up(&mut self, cx: &mut Context<Self>) {
+        if self.form_focus == FormFocus::CopyTestError {
+            self.form_focus = FormFocus::TestConnection;
+        }
+
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.up_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.up_access(
@@ -1782,7 +2073,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Settings => self
                 .form_focus
                 .up_settings(self.settings_driver_field_count()),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Mcp => self.step_mcp_stop(false, cx),
         };
         self.normalize_focus_for_state(cx);
         self.scroll_to_focused();
@@ -1798,6 +2089,10 @@ impl ConnectionManagerWindow {
     }
 
     fn focus_left(&mut self, cx: &mut Context<Self>) {
+        if self.step_test_row(false, cx) {
+            return;
+        }
+
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.left_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.left_access(
@@ -1805,8 +2100,7 @@ impl ConnectionManagerWindow {
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
-            ActiveTab::Settings => self.form_focus.left_settings(),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Settings | ActiveTab::Mcp => self.form_focus.left_settings(),
         };
 
         if self.active_tab == ActiveTab::Access
@@ -1824,6 +2118,10 @@ impl ConnectionManagerWindow {
     }
 
     fn focus_right(&mut self, cx: &mut Context<Self>) {
+        if self.step_test_row(true, cx) {
+            return;
+        }
+
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.right_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.right_access(
@@ -1831,8 +2129,7 @@ impl ConnectionManagerWindow {
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
-            ActiveTab::Settings => self.form_focus.right_settings(),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Settings | ActiveTab::Mcp => self.form_focus.right_settings(),
         };
 
         if self.active_tab == ActiveTab::Access
@@ -2223,6 +2520,15 @@ impl ConnectionManagerWindow {
                 }
             }
 
+            FormFocus::SettingsPreConnectHook
+            | FormFocus::SettingsPostConnectHook
+            | FormFocus::SettingsPreDisconnectHook
+            | FormFocus::SettingsPostDisconnectHook => {
+                if let Some(dropdown) = self.settings_hook_dropdown(self.form_focus).cloned() {
+                    dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                }
+            }
+
             FormFocus::SettingsDriverField(idx) => {
                 if let Some(field) = self.settings_driver_field_def(idx) {
                     match &field.kind {
@@ -2258,8 +2564,28 @@ impl ConnectionManagerWindow {
                 }
             }
 
+            FormFocus::MainExtra(index) => {
+                self.activate_main_extra(index, window, cx);
+            }
+
+            FormFocus::McpEnabled
+            | FormFocus::McpClientFilter
+            | FormFocus::McpClient(_)
+            | FormFocus::McpClientAllowed
+            | FormFocus::McpRole
+            | FormFocus::McpExtraRoles
+            | FormFocus::McpPolicy
+            | FormFocus::McpExtraPolicies => {
+                self.activate_mcp_stop(window, cx);
+            }
+
             FormFocus::TestConnection => {
                 self.test_connection(window, cx);
+            }
+            FormFocus::CopyTestError => {
+                if let Some(error) = self.test_error.clone() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(error));
+                }
             }
             FormFocus::Save => {
                 self.save_profile(window, cx);
@@ -2267,6 +2593,139 @@ impl ConnectionManagerWindow {
         }
         self.normalize_focus_for_state(cx);
         cx.notify();
+    }
+
+    /// Enter on a Main-tab extra stop: a text field starts editing, a
+    /// checkbox toggles, a segmented choice or the SSL mode moves to the next
+    /// choice, the auth profile picker opens and a certificate picker browses.
+    fn activate_main_extra(&mut self, index: u8, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(stop) = self.main_extra_stops().get(index as usize).cloned() else {
+            return;
+        };
+
+        match stop {
+            MainExtraStop::DriverField(field) => {
+                if !self.is_field_enabled(&field) {
+                    return;
+                }
+
+                match &field.kind {
+                    FormFieldKind::Checkbox => {
+                        let checked = self
+                            .form
+                            .checkbox_states
+                            .get(&field.id)
+                            .copied()
+                            .unwrap_or(false);
+                        self.form.checkbox_states.insert(field.id.clone(), !checked);
+                    }
+                    FormFieldKind::Select { .. } => {
+                        self.step_main_extra_choice(index, true);
+                    }
+                    FormFieldKind::AuthProfileRef { .. } => {
+                        self.auth_profile
+                            .auth_profile_dropdown
+                            .update(cx, |dropdown, cx| dropdown.open(cx));
+                    }
+                    FormFieldKind::DynamicSelect { .. } => {}
+                    FormFieldKind::Text
+                    | FormFieldKind::Password
+                    | FormFieldKind::WriteOnly
+                    | FormFieldKind::Number
+                    | FormFieldKind::FilePath => {
+                        if let Some(input) = self.input_state_for_field(&field.id).cloned() {
+                            self.edit_state = EditState::Editing;
+                            input.update(cx, |state, cx| state.focus(window, cx));
+                        }
+                    }
+                }
+            }
+            MainExtraStop::SslMode => {
+                self.step_main_extra_choice(index, true);
+            }
+            MainExtraStop::SslCert(slot) => {
+                let current = self.ssl_cert_input(slot).read(cx).value().to_string();
+                let current = (!current.trim().is_empty()).then_some(current);
+                self.browse_ssl_cert(slot, current, window, cx);
+            }
+        }
+    }
+
+    /// Moves the choice of a segmented Main-tab extra stop (a driver select
+    /// field or the SSL mode) one step, wrapping at either end. Returns
+    /// whether the stop is such a choice.
+    fn step_main_extra_choice(&mut self, index: u8, forward: bool) -> bool {
+        let Some(stop) = self.main_extra_stops().get(index as usize).cloned() else {
+            return false;
+        };
+
+        match stop {
+            MainExtraStop::DriverField(field) => {
+                let FormFieldKind::Select { options } = &field.kind else {
+                    return false;
+                };
+
+                if !self.is_field_enabled(&field) {
+                    return true;
+                }
+
+                let current = self
+                    .form
+                    .select_values
+                    .get(&field.id)
+                    .cloned()
+                    .unwrap_or_else(|| field.default_value.clone());
+                let values: Vec<String> =
+                    options.iter().map(|option| option.value.clone()).collect();
+
+                if let Some(next) = step_choice(&values, &current, forward) {
+                    self.form.select_values.insert(field.id.clone(), next);
+                }
+                true
+            }
+            MainExtraStop::SslMode => {
+                let Some(modes) = self
+                    .form
+                    .selected_driver
+                    .as_ref()
+                    .and_then(|driver| driver.metadata().ssl_modes)
+                else {
+                    return false;
+                };
+
+                let values: Vec<String> = modes.iter().map(|mode| mode.id.to_string()).collect();
+
+                if let Some(next) = step_choice(&values, &self.form.selected_ssl_mode, forward) {
+                    self.form.selected_ssl_mode = next;
+                }
+                true
+            }
+            MainExtraStop::SslCert(_) => false,
+        }
+    }
+
+    /// Scroll target of a Main-tab extra stop: the form section of a driver
+    /// field, or the transport section after the driver's sections.
+    fn main_extra_scroll_index(&self, index: u8) -> usize {
+        let Some(driver) = self.form.selected_driver.as_ref() else {
+            return 0;
+        };
+        let form_def = driver.form_definition();
+        let Some(main_tab) = form_def.main_tab() else {
+            return 0;
+        };
+
+        // The environment row comes first, then one child per section.
+        match self.main_extra_stops().get(index as usize) {
+            Some(MainExtraStop::DriverField(field)) => main_tab
+                .sections
+                .iter()
+                .filter(|section| !section.fields.is_empty())
+                .position(|section| section.fields.iter().any(|f| f.id == field.id))
+                .map_or(0, |section| section + 1),
+            Some(_) => main_tab.sections.len() + 2,
+            None => 0,
+        }
     }
 }
 
@@ -2331,6 +2790,7 @@ mod tests {
             uri_mode_active,
             password_source_is_literal,
             can_save_password,
+            extra_count: 0,
         }
     }
 
@@ -2361,6 +2821,45 @@ mod tests {
 
         focus = focus.down_main(state);
         assert_eq!(focus, FormFocus::TestConnection);
+    }
+
+    /// The extra stops sit between the named fields and Test connection,
+    /// both ways.
+    #[test]
+    fn main_extra_stops_come_before_test_connection() {
+        let state = MainNavState {
+            extra_count: 2,
+            ..main_state(false, false, true, true)
+        };
+
+        let mut focus = FormFocus::PasswordValueSource;
+        focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::MainExtra(0));
+
+        focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::MainExtra(1));
+
+        focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::TestConnection);
+
+        focus = focus.up_main(state);
+        assert_eq!(focus, FormFocus::MainExtra(1));
+
+        focus = focus.up_main(state).up_main(state);
+        assert_eq!(focus, FormFocus::PasswordValueSource);
+    }
+
+    #[test]
+    fn step_choice_wraps_both_ways() {
+        let values = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        assert_eq!(super::step_choice(&values, "c", true).as_deref(), Some("a"));
+        assert_eq!(
+            super::step_choice(&values, "a", false).as_deref(),
+            Some("c")
+        );
+        assert_eq!(super::step_choice(&values, "x", true).as_deref(), Some("a"));
+        assert_eq!(super::step_choice(&[], "a", true), None);
     }
 
     #[test]
@@ -2711,11 +3210,15 @@ mod tests {
 
     // --- Settings tab ---
 
-    const SETTINGS_HOOK_EXTRA_ORDER: [FormFocus; 6] = [
+    const SETTINGS_HOOK_EXTRA_ORDER: [FormFocus; 10] = [
         FormFocus::SettingsRequiresPreview,
+        FormFocus::SettingsPreConnectHook,
         FormFocus::SettingsPreConnectHookExtra,
+        FormFocus::SettingsPostConnectHook,
         FormFocus::SettingsPostConnectHookExtra,
+        FormFocus::SettingsPreDisconnectHook,
         FormFocus::SettingsPreDisconnectHookExtra,
+        FormFocus::SettingsPostDisconnectHook,
         FormFocus::SettingsPostDisconnectHookExtra,
         FormFocus::SettingsDriverField(0),
     ];

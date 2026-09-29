@@ -19,26 +19,45 @@ foco toma `Enter` y `Space` para sí.
 
 ## Global (disponible sin importar el foco)
 
-| Teclas                                    | Acción                                 |
-| ----------------------------------------- | -------------------------------------- |
-| `Ctrl+Shift+P` / `Cmd+Shift+P`            | Alternar command palette               |
-| `Ctrl+Shift+N` / `Cmd+Shift+N`            | Abrir el Connection Manager            |
-| `Ctrl+n` / `Cmd+n`                        | Nueva pestaña de query                 |
-| `Ctrl+w` / `Cmd+w`                        | Cerrar pestaña actual                  |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab`             | Pestaña siguiente / anterior           |
-| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Cambiar a la pestaña N                 |
-| `Ctrl+o` / `Cmd+o`                        | Abrir archivo de script                |
-| `Ctrl+Enter` / `Cmd+Enter`                | Ejecutar query                         |
-| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`    | Ejecutar query en nueva pestaña        |
-| `Escape`                                  | Cancelar / cerrar modal                |
-| `Tab` / `Shift+Tab`                       | Ciclar el foco adelante / atrás        |
-| `Ctrl+Shift+1`                            | Enfocar sidebar                        |
-| `Ctrl+Shift+2`                            | Enfocar editor                         |
-| `Ctrl+Shift+3`                            | Enfocar resultados                     |
-| `Ctrl+Shift+4`                            | Enfocar tareas en segundo plano        |
-| `Ctrl+Shift+A` / `Cmd+Shift+A`            | Abrir el visor de auditoría            |
-| `Ctrl+b` / `Cmd+b`                        | Alternar sidebar                       |
-| `Ctrl+m`                                  | Abrir el menú contextual de la pestaña |
+| Teclas                                           | Acción                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| `Ctrl+Shift+P` / `Cmd+Shift+P`                   | Alternar command palette                                          |
+| `Ctrl+Shift+N` / `Cmd+Shift+N`                   | Abrir el Connection Manager                                       |
+| `Ctrl+n` / `Cmd+n`                               | Nueva pestaña de query                                            |
+| `Ctrl+w` / `Cmd+w`                               | Cerrar pestaña actual                                             |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`                    | Pestaña siguiente / anterior                                      |
+| `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown`      | Mover la pestaña activa a la izquierda / derecha                  |
+| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9`        | Cambiar a la pestaña N                                            |
+| `Ctrl+o` / `Cmd+o`                               | Abrir archivo de script                                           |
+| `Ctrl+Enter` / `Cmd+Enter`                       | Ejecutar query                                                    |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`           | Ejecutar query en nueva pestaña                                   |
+| `Escape`                                         | Cancelar / cerrar modal                                           |
+| `Tab` / `Shift+Tab`                              | Ciclar el foco adelante / atrás                                   |
+| `Ctrl+Shift+1`                                   | Enfocar sidebar                                                   |
+| `Ctrl+Shift+2`                                   | Enfocar editor                                                    |
+| `Ctrl+Shift+3`                                   | Enfocar resultados                                                |
+| `Ctrl+Shift+4`                                   | Enfocar tareas en segundo plano                                   |
+| `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
+| `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
+| `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
+| `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
+| `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Ocultar o mostrar los resultados de un documento de consulta, dejando solo el editor |
+| `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
+| `Ctrl+Shift+T` / `Cmd+Shift+T`                   | Mostrar u ocultar el panel de tareas en segundo plano             |
+| `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Mostrar la vista Connections / Scripts / Dashboards de la sidebar |
+| `Ctrl+Shift+B` / `Cmd+Shift+B`                   | Abrir o cerrar el centro de notificaciones                        |
+| `Ctrl+Shift+X` / `Cmd+Shift+X`                   | Abrir el error más reciente en el visor de auditoría              |
+| `Ctrl+Shift+Y` / `Cmd+Shift+Y`                   | Abrir en un menú los botones del toast más reciente               |
+| `Ctrl+Shift+L` / `Cmd+Shift+L`                   | Abrir el inicio de sesión de Auth Profile                         |
+| `Ctrl+Shift+O` / `Cmd+Shift+O`                   | Abrir el asistente de AWS SSO                                     |
+| `Ctrl+Shift+C` / `Cmd+Shift+C`                   | Abrir un gráfico guardado                                         |
+| `Ctrl+Shift+D` / `Cmd+Shift+D`                   | Nuevo dashboard                                                   |
+| `Ctrl+Shift+M` / `Cmd+Shift+M`                   | Abrir aprobaciones de MCP                                         |
+| `Ctrl+Shift+G` / `Cmd+Shift+G`                   | Actualizar gobernanza de MCP                                      |
+
+`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error, y pone a cero el contador de la insignia de errores de la barra de estado; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. `Ctrl+Shift+Y` lista los botones del toast más reciente en pantalla, como **Copiar**, **Ver en auditoría** o **Reconectar ahora**, luego **Mostrar detalles** u **Ocultar detalles** cuando tiene detalles, y **Descartar**; se maneja con las teclas del menú contextual y, sin ningún toast en pantalla, no abre nada. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
+
+Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y nada de eso entra en el ciclo de `Tab`: las entradas de la barra de actividad son `Ctrl+Shift+5` .. `Ctrl+Shift+7`, `Ctrl+Shift+A` (Auditoría), `Ctrl+Shift+M` (Aprobaciones) y `Ctrl+,` (Configuración); la búsqueda de comandos de la barra de título es `Ctrl+Shift+P` y su campana `Ctrl+Shift+B`; la entrada de tareas de la barra de estado es `Ctrl+Shift+T`, la de aprobaciones `Ctrl+Shift+M` y la insignia de errores `Ctrl+Shift+X`; una pestaña se cierra con `Ctrl+w`, se abre con `Ctrl+n`, se reordena con `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` y su menú de clic derecho se abre con `Ctrl+m`. Los botones de minimizar, maximizar y cerrar de la ventana quedan en manos de los atajos del escritorio.
 
 ## Sidebar
 
@@ -47,7 +66,7 @@ foco toma `Enter` y `Space` para sí.
 | `q` / `e`                                     | Cambiar de pestaña del sidebar (Connections / Scripts) |
 | `/`                                           | Enfocar búsqueda                                       |
 | `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior                       |
-| `h` / `l`                                     | Colapsar / expandir nodo                               |
+| `h` / `l`                                     | Colapsar / expandir nodo (`l` en una conexión desconectada la conecta) |
 | `Space`                                       | Expandir / colapsar                                    |
 | `g` / `Shift+g` (o `Home` / `End`)            | Primer / último elemento                               |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                                  |
@@ -64,6 +83,10 @@ foco toma `Enter` y `Space` para sí.
 | `Shift+n`                                     | Crear carpeta                                          |
 | `Ctrl+l`                                      | Enfocar el panel de la derecha                         |
 
+`Escape` en el campo de búsqueda devuelve el foco al árbol y conserva el filtro escrito.
+
+Cuando el árbol recibe el foco sin ninguna fila seleccionada, se vuelve a seleccionar la última fila elegida, o la primera si esa ya no está, así `h`, `l` y `Enter` actúan de inmediato.
+
 ## Editor
 
 | Teclas                         | Acción                                   |
@@ -76,6 +99,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+s` / `Cmd+s`             | Guardar query                            |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Guardar archivo como                     |
 | `Ctrl+/` / `Cmd+/`             | Alternar comentario de línea             |
+| `Shift+F10`                    | Abrir el menú de acciones del panel      |
 | `Enter`                        | Enfocar / ejecutar                       |
 
 (Las letras sin modificador se dejan intencionadamente para el input de texto,
@@ -89,14 +113,61 @@ mover el foco. Las mismas teclas de buscar y reemplazar muestran u ocultan el
 campo de reemplazo con el panel abierto. En el modo Normal de Vim el editor es de
 solo lectura, así que el panel de búsqueda se abre sin el campo de reemplazo.
 
+Mientras se escribe texto, `Tab` indenta y `Shift+Tab` quita la indentación, así
+que para salir del editor se usan `Ctrl+h` / `Ctrl+j` / `Ctrl+k`. En el panel de
+búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
+reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
+entre paneles, igual que fuera del editor.
+
+La toolbar del editor también es un menú. `Shift+F10` abre el menú de **acciones
+del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
+`Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
+`Shift+F10`) también lo abre. Un editor de scripts (Lua, Python, Bash) no tiene
+controles de conexión, así que su barra de contexto solo contiene un botón
+**Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
+menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
+una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar, Gráfico,
+Actualizar y el intervalo de actualización automática, cada una con su atajo
+cuando lo tiene. Muévete con `j` / `k` y elige con `Enter`, como en cualquier
+[menú contextual](#menú-contextual); `Escape` lo cierra. La entrada de
+actualización automática abre la lista de intervalos con el foco del teclado (ver
+[Desplegables](#desplegables)). Mientras la consulta tiene resultados, el menú
+sigue con la cabecera de resultados: Pestaña de resultados siguiente y anterior,
+Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
+(Mostrar) resultados. El menú también está en la command palette como
+**Abrir acciones del panel**.
+
 ## Modo Vim (opcional)
 
-Los editores de código pueden usar edición modal con un conjunto reducido de
-comandos de Vim. Viene desactivado. Actívalo en **Settings → General → Editor →
-Modo Vim en los editores de código** y guarda: los editores abiertos cambian al
-instante. Se aplica a todos los editores de código (SQL y los demás lenguajes de
-query, Lua, Python, Bash) y a nada más, así que los cuadros de búsqueda, los
-formularios y la paleta de comandos siguen escribiendo como siempre.
+Los editores de varias líneas pueden usar edición modal con un conjunto
+reducido de comandos de Vim. Viene desactivado. Actívalo en **Settings → General
+→ Editor → Modo Vim en los editores** y guarda: los editores abiertos
+cambian al instante. Se aplica a todos los editores de varias líneas:
+
+- el editor de código (SQL y los demás lenguajes de query, Lua, Python, Bash);
+- la pestaña del editor de objetos de S3 y el editor de vista previa del
+  explorador de objetos;
+- los diálogos del editor de celdas y de vista previa de documentos;
+- el editor JSON del diálogo de importar dashboard y el editor de query del
+  diálogo de agregar panel;
+- el panel de valor, la vista JSON de una colección de documentos y su editor
+  de pipeline de agregación.
+
+Los visores de solo lectura aceptan movimientos, selección Visual y copias, sin
+ediciones: un objeto de S3 decodificado en la pestaña del editor de objetos o en
+la vista previa del explorador de objetos, la vista Raw JSON del árbol de
+documentos, la vista previa SQL del constructor de queries, los diálogos de
+vista previa de SQL y de query, y los detalles de un evento de auditoría
+externo. Los campos de una línea, los cuadros de búsqueda, los formularios y la
+paleta de comandos siguen escribiendo como siempre.
+
+Fuera del editor de código, `Escape` funciona en dos pasos. En el modo Insertar
+el primer `Escape` vuelve al modo Normal, y en el modo Normal `Escape` hace lo
+mismo que sin Vim: cierra el diálogo, sale del editor o devuelve el teclado a la
+lista o al árbol que lo rodea. `Enter` en el modo Normal baja una línea y nunca
+confirma un diálogo. Con el modo Vim activo, los diálogos de vista previa de SQL
+y de query se abren con el teclado en la query, así que `j` y `k` mueven el
+cursor en lugar de desplazar el diálogo.
 
 Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
 debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `REEMPLAZAR`, `VISUAL`, `VISUAL LÍNEA` o `VISUAL BLOQUE`. Cada tab conserva su
@@ -191,8 +262,9 @@ Todo lo demás en modo Normal:
 
 | Entrada | Comportamiento en modo Normal |
 |---------|-------------------------------|
-| Otras letras no admitidas, puntuación, `Space` | Nada |
-| `Tab` / `Shift+Tab` | Nada: no indenta y el focus se queda en el editor |
+| Otras letras no admitidas y puntuación | Nada |
+| `Space` | Inicia una secuencia de líder (ver **Tecla líder** más abajo); sola, nada |
+| `Tab` / `Shift+Tab` | Mover el foco al panel siguiente / anterior, igual que fuera del editor (también en los modos Visual); no indenta |
 | `Ctrl+v` | Entrar en Visual Bloque (no pegar) |
 | Pegar (`Cmd+v` o el menú contextual) | Nada |
 | Composición y confirmación del método de entrada (IME) | Se descartan |
@@ -225,6 +297,37 @@ Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, tambi�
 
 **Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. En modo Reemplazar, el texto que llega sin pulsar una tecla, como una confirmación del IME, se inserta en lugar de sobrescribir, y `Backspace` no restaura caracteres a su alrededor. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
 
+**Tecla líder.** En modo Normal y en los modos Visual, la tecla líder inicia
+una secuencia de dos teclas que ejecuta un comando sin salir de la fila
+central del teclado. La tecla líder es `Space` por defecto; elige `,` o `\` en
+**Settings → General → Editor → Tecla líder**, y las secuencias la siguen. Después de ella, DBFlux espera
+hasta un segundo la tecla siguiente: una tecla que ninguna secuencia usa actúa
+como lo haría sola, y si no llega ninguna, la tecla líder no hace nada. En los
+modos Insertar y Reemplazar, y mientras el panel de búsqueda tiene el foco, la
+tecla líder escribe como siempre.
+
+| Teclas | Acción |
+|--------|--------|
+| `Leader a` | Abre el menú de acciones del panel, como `Shift+F10` |
+| `Leader r` | Ejecuta la consulta |
+| `Leader e` | Explica la consulta (editor de código) |
+| `Leader s` | Guarda |
+| `Leader f` | Abre el panel de búsqueda del editor, como `/` |
+| `Leader h` / `Leader l` | Pestaña anterior / siguiente del panel, como `Alt+h` / `Alt+l` |
+| `Leader p` | Abre la paleta de comandos |
+
+Un comando que el documento del editor no ofrece no hace nada, y la tecla que
+sigue a la líder nunca llega a Vim. Las secuencias funcionan en todos los
+editores con modo Vim. Dentro de un diálogo (el editor de celda, la vista
+previa del documento, Importar dashboard) pertenecen al diálogo: `Leader s` lo
+guarda o lo confirma, como su botón principal, `Leader f` abre el panel de
+búsqueda del editor, y un comando que el diálogo no usa, como ejecutar la
+consulta o abrir la paleta de comandos, no hace nada y nunca llega al
+documento que está detrás del diálogo. Aparecen en **Vim Normal** en **Settings → Keybindings**,
+donde se cambian como cualquier otro atajo. Al grabar teclas que empiezan por
+la tecla líder se guarda la propia líder, mostrada como `Leader`, así que el
+atajo sigue a la tecla líder cuando esta cambia.
+
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
 movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
 no hacen nada. Borrar tampoco modifica el portapapeles.
@@ -252,27 +355,70 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 
 | Teclas                                        | Acción                                     |
 | --------------------------------------------- | ------------------------------------------ |
-| `Ctrl+h` / `Ctrl+k` / `Ctrl+l`                | Enfocar panel izquierda / arriba / derecha |
+| `Ctrl+h` / `Ctrl+k`                           | Enfocar panel izquierda / arriba           |
+| `Ctrl+l`                                      | Entrar al panel lateral abierto a la derecha (panel de valor, inspector de fila, panel de documento o constructor de consultas); ver [Paneles laterales](#paneles-laterales) |
 | `Ctrl+j`                                      | Enfocar la toolbar                         |
 | `j` / `k` (o `Down` / `Up`)                   | Fila siguiente / anterior                  |
 | `h` / `l` (o `Left` / `Right`)                | Columna izquierda / derecha                |
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
+| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, o vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, dando la vuelta en los extremos |
+| `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
-| `Ctrl+e` / `Cmd+e`                            | Exportar resultados                        |
+| `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
 | `f`                                           | Enfocar la toolbar                         |
+| `Shift+f`                                     | Limpiar el filtro WHERE y recargar las filas; en una colección de documentos, vaciar el campo de filtro y buscar |
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
+| `Shift+t`                                     | Mostrar la vista siguiente del resultado (Datos o Cuadrícula, JSON, Gráfico y las demás que ofrezca), dando la vuelta; el teclado sigue en los resultados |
 | `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
-| `z`                                           | Alternar colapso del panel                 |
-| `m` (o `Shift+F10`)                           | Abrir menú contextual                      |
+| `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
+| `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
+
+Una pestaña de inspector de instancia también toma estas teclas: `m` abre el
+menú contextual de la fila elegida con las acciones de fila del driver (por
+ejemplo Kill session), `Enter` o `Escape` responden la confirmación y `F5` pide
+una instantánea nueva.
+
+En una colección de documentos, el submenú Barra de herramientas también lista
+Buscar, Historial de consultas, Volver a los documentos mientras se está dentro de
+un valor anidado, las otras vistas, y Recargar documento / Aplicar mi cambio mientras
+se muestra un conflicto de commit; Guardar todos los cambios y Revertir todos los
+cambios ejecutan el Commit y el Revert de la barra de edición. Historial de
+consultas abre el menú del historial con el teclado dentro: las teclas del menú
+contextual se mueven, `Enter` vuelve a ejecutar la consulta resaltada y `Escape`
+lo cierra.
+
+Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
+menú de acciones del panel, el mismo que muestra **Open pane actions** en la
+command palette.
+
+Una pestaña de análisis de dump toma las teclas de tabla en cada una de sus dos
+tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa,
+`Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
+tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
+clic en la cabecera) y Cancelar mientras se lee el archivo.
+
+## Diferencia de esquemas
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Fila siguiente / anterior: el modo de comparación, cada base de datos, conexión o instantánea de referencia, Calcular diferencia, cada cambio aplicable y los botones Vista previa del DDL / Aplicar |
+| `g` / `Shift+g` (o `Home` / `End`) | Primera / última fila |
+| `h` / `l` (o `Left` / `Right`) | Botón anterior / siguiente de la fila (En vivo o Instantánea, Vista previa del DDL o Aplicar) |
+| `Enter` | Pulsar el botón bajo el cursor: elegir el modo o la referencia, calcular, marcar un cambio, previsualizar o aplicar |
+| `Space` | Marcar o desmarcar el cambio bajo el cursor |
+| `F5` | Volver a calcular la diferencia |
+| `m` (o `Shift+F10`) | Acciones del panel: Calcular diferencia, Vista previa del DDL, Aplicar y los dos modos de comparación |
+
+Aplicar sigue pidiendo la misma confirmación que el botón.
 
 ## Diagrama de esquema
 
@@ -283,8 +429,81 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Shift` + `h` / `j` / `k` / `l` (o flechas) | Seleccionar la siguiente tabla en esa dirección y centrarla |
 | `Alt` + `h` / `j` / `k` / `l` (o flechas)   | Mover la tabla seleccionada                                 |
 | `r` / `s` / `c`                             | Diseño De izquierda a derecha / Copo de nieve / Compacto    |
-| `m`                                         | Abrir menú contextual                                       |
+| `m`                                         | Abrir menú contextual: acercar / alejar, restablecer la vista al 100%, ajustar a la vista, disposición, reorganizar las tablas, copiar como DBML o SQL, mostrar tipos de columna, mostrar índices y, con una tabla seleccionada, inspeccionar y enfocar |
 | `Escape`                                    | Quitar la selección                                         |
+
+## Gráficos
+
+Estas teclas valen en una pestaña de gráfico y en la vista de gráfico de un
+resultado (Gráfico, no Tabla + Gráfico, donde las teclas siguen en la tabla).
+Un punto resaltado hace de puntero: la cruz y la lectura lo muestran. En el
+gráfico de una pestaña de tabla o de colección el inspector de puntos también lo
+sigue; los gráficos de resultados de queries y las pestañas de gráfico no tienen
+inspector de puntos. Mover el puntero sobre el gráfico lo reemplaza.
+
+| Teclas | Acción |
+|--------|--------|
+| `h` / `l` (o `Left` / `Right`) | Resaltar el punto anterior / siguiente de la serie enfocada; la primera tecla empieza en el primer punto |
+| `g` / `Shift+g` (o `Home` / `End`) | Resaltar el primer / último punto |
+| `j` / `k` (o `Down` / `Up`) | Llevar el punto resaltado a la serie visible siguiente / anterior, en la X más cercana |
+| `Space` | Ocultar o mostrar la serie enfocada, como su entrada de la leyenda |
+| `Escape` | Quitar el punto resaltado, o cerrar un selector de eje abierto |
+| `Alt+l` / `Alt+h` | Tipo de gráfico siguiente / anterior (pestaña de gráfico) |
+| `]` / `[` | Rango de tiempo siguiente / anterior, Personalizado incluido (pestaña de gráfico) |
+| `F5` | Volver a ejecutar el gráfico (pestaña de gráfico) |
+| `Ctrl+s` / `Cmd+s` | Guardar el gráfico; en el diálogo del nombre `Enter` guarda y `Escape` cancela (pestaña de gráfico) |
+| `m` (o `Shift+F10`) | Acciones del panel (pestaña de gráfico): actualizar, intervalo de actualización automática, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar mientras está elegido Personalizado, tipo de gráfico siguiente / anterior, los selectores X, Y, Agrupar y Agregación, Estadísticas, el selector de métricas y sus controles en un gráfico de métrica, Guardar gráfico |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Enfocar el panel en esa dirección |
+
+Un selector de eje abierto desde el menú toma estas teclas hasta cerrarse:
+`j` / `k` recorren sus filas, `h` / `l` pasan al selector vecino (X, Y,
+Agrupar, Agregación), `Enter` elige la fila y lo cierra, `Space` alterna una
+columna Y y lo deja abierto, `Escape` lo cierra. En la vista de gráfico de un
+resultado, la entrada Barra de herramientas del menú contextual (`m`) lista el
+tipo de gráfico, los selectores de eje, el rango de tiempo y los controles del
+rango personalizado. El rango de fechas de un rango personalizado recibe el
+teclado desde su entrada del menú y se abre con `Enter`; elegir los días en su
+calendario todavía necesita el puntero.
+
+## Dashboards
+
+Estas teclas valen en una pestaña de dashboard, en modo View y Edit. Un anillo
+marca el panel elegido mientras el teclado está en el dashboard.
+
+| Teclas | Acción |
+|--------|--------|
+| `h` / `l` (o `Left` / `Right`) | Elegir el panel anterior / siguiente en orden de lectura |
+| `j` / `k` (o `Down` / `Up`) | Elegir el panel más cercano en la fila siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Elegir el primer / último panel |
+| `Enter` / `i` | Abrir el panel elegido: un chart toma las [teclas de gráficos](#gráficos) y un inspector las de la tabla, hasta `Escape`; en un divider, plegar o desplegar su sección |
+| `Space` | Plegar o desplegar la sección del divider elegido |
+| `c` | Configurar el panel de chart elegido |
+| `r` / `F2` | Renombrar el panel elegido |
+| `x` / `Delete` | Eliminar el panel elegido |
+| `a` | Añadir un panel |
+| `Shift` + `h` / `j` / `k` / `l` (o flechas) | Mover el panel elegido una celda (modo Edit) |
+| `Alt+Shift` + `h` / `l` | Estrechar / ensanchar el panel elegido (modo Edit) |
+| `Alt+Shift` + `k` / `j` | Acortar / alargar el panel elegido (modo Edit) |
+| `Alt+l` / `Alt+h` | Cambiar entre View y Edit |
+| `]` / `[` | Rango de tiempo compartido siguiente / anterior, Personalizado incluido |
+| `F5` | Actualizar todos los panels, o solo el abierto |
+| `m` (o `Shift+F10`) | Acciones del panel: las del panel elegido, añadir panel, actualizar, intervalo de actualización automática, el rango de tiempo y los controles del rango personalizado, View / Edit o Guardar como editable. Con un panel de chart abierto, su propio intervalo de actualización automática, su tipo de chart y Stats |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Enfocar el panel en esa dirección |
+
+Un movimiento o cambio de tamaño que sale de la cuadrícula o cae sobre otro
+panel se rechaza, igual que al arrastrar. En el popover Configure, `h` / `l`
+abren por turno los selectores X, Y, Agrupar y Agregación, `j` / `k` recorren
+el abierto, `Space` o `Enter` eligen, `Alt+l` / `Alt+h` cambian el tipo de chart,
+`Enter` sin selector abierto aplica y `Escape` cierra el selector y luego el
+popover.
+
+En el diálogo Add Panel, `Alt+l` / `Alt+h` cambian sus pestañas (también desde
+sus campos de texto, salvo en macOS). Las flechas recorren la lista de charts
+desde la búsqueda y `Enter` añade los charts marcados, o el resaltado si no hay
+ninguno marcado. `Tab` entra en una lista, donde funcionan `j` / `k`, `g` /
+`Shift+g` y `Space` (marcar un chart, elegir un namespace o una métrica),
+`h` / `l` pasan entre las listas de namespaces y métricas de la pestaña Metric
+y `/` vuelve a la búsqueda. `Escape` cierra el diálogo.
 
 ## Tareas en segundo plano
 
@@ -293,10 +512,16 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 | Teclas                                        | Acción                                   |
 | --------------------------------------------- | ---------------------------------------- |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k`                | Enfocar panel izquierda / abajo / arriba |
-| `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior         |
-| `g` / `Shift+g` (o `Home` / `End`)            | Primero / último                         |
-| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                    |
+| `j` / `k` (o `Down` / `Up`)                   | Seleccionar la tarea siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`)            | Seleccionar la primera / última tarea    |
+| `Space` / `Enter`                             | Mostrar u ocultar la salida de la tarea seleccionada |
+| `c`                                           | Cancelar la tarea seleccionada           |
+| `x`                                           | Descartar la tarea seleccionada cuando terminó |
+| `Shift+x`                                     | Limpiar las tareas terminadas            |
+| `m` / `Shift+F10`                             | Abrir el menú de acciones del panel      |
 | `z`                                           | Alternar colapso del panel               |
+
+La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en una fila también la selecciona. El menú de acciones lista **Mostrar salida**, **Cancelar tarea** y **Descartar** de la tarea seleccionada, y después **Limpiar terminadas** y **Ocultar el panel de tareas**, cada una con su atajo; se maneja con las teclas del menú contextual. **Borrar tareas terminadas** también está en la paleta de comandos.
 
 ## Centro de notificaciones
 
@@ -318,9 +543,21 @@ tareas en segundo plano. **Marcar todo como leído** lee todo y **Borrar leídas
 quita los elementos leídos. La lista dura lo que dura la sesión. Las
 actualizaciones aparecen aquí en lugar de en la barra de estado.
 
-| Teclas   | Acción                                                 |
-| -------- | ------------------------------------------------------ |
-| `Escape` | Cerrar el popover (un clic fuera de él hace lo mismo) |
+| Teclas                         | Acción                                                         |
+| ------------------------------ | -------------------------------------------------------------- |
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | Abrir o cerrar el popover desde cualquier parte del workspace  |
+| `j` / `k` (o `Down` / `Up`)    | Seleccionar la fila siguiente / anterior                       |
+| `g` / `Shift+g` (o `Home` / `End`) | Seleccionar la primera / última fila                       |
+| `Enter`                        | Abrir el destino de la fila seleccionada, como un clic en ella |
+| `r`                            | Marcar como leída la fila seleccionada                         |
+| `x`                            | Descartar la fila seleccionada, como **Más tarde** en la actualización |
+| `i`                            | Instalar la actualización listada (builds instalados desde la descarga directa) |
+| `Alt+l` / `Alt+h`              | Mostrar el filtro siguiente / anterior                         |
+| `Shift+r`                      | Marcar todo como leído                                         |
+| `Shift+x`                      | Borrar leídas                                                  |
+| `Escape`                       | Cerrar el popover (un clic fuera de él hace lo mismo)          |
+
+Mientras el popover está abierto se queda con el teclado: los paneles de atrás no reciben estas teclas. La fila seleccionada se dibuja sobre un tinte. Descartar quita un error o un trabajo terminado, y oculta una aprobación o la actualización hasta que termina la sesión. Las teclas aparecen en el contexto Notificaciones de Configuración > Atajos de teclado.
 
 ## Command palette
 
@@ -358,6 +595,67 @@ foco y no se está editando ninguna celda.
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
 | `Backspace` | Salir de un valor anidado (grillas de documentos) |
 
+## Paneles laterales
+
+Estas teclas se aplican después de que `Ctrl+l` mueve el foco desde una grilla de
+resultados al panel de valor, el inspector de fila, el panel de documento o el
+constructor de consultas que está a su lado.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Desplazar una línea abajo / arriba |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Desplazar una página abajo / arriba |
+| `g` / `Shift+g` (o `Home` / `End`) | Ir al principio / al final |
+| `Enter` | Editar el valor (panel de valor) |
+| `Escape` | Dejar de editar el valor, o volver a la grilla |
+| `Ctrl+h` | Volver a la grilla |
+| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar; en el inspector de fila Fijar o Soltar |
+
+Los constructores de consultas tienen teclas propias, descritas en
+[Constructores de consultas](#constructores-de-consultas).
+
+## Constructores de consultas
+
+Después de que `Ctrl+l` mueve el foco desde la grilla de una tabla a su
+constructor de consultas, o desde los documentos de una colección al
+constructor de documentos, un cursor marca una fila del constructor: la lista
+de columnas, una condición o grupo del filtro, un join, una fila de agrupación
+u orden, una asignación o una opción de ejecución, y en el constructor de
+documentos el nombre de la consulta, una consulta guardada, un campo
+proyectado o una fila de la etapa de grupo. Las teclas aparecen en los
+contextos Query Builder y Document Builder de Settings > Keybindings.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Fila siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Primera / última fila |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Ocho filas abajo / arriba |
+| `h` / `l` (o `Left` / `Right`) | Campo anterior / siguiente de la fila |
+| `Enter` / `i` | Usar el campo: escribir en un campo de texto, abrir un desplegable, pulsar un botón |
+| `Space` | Cambiar el interruptor de la fila (AND / OR, ASC / DESC, la casilla de una columna, el tipo de valor de una asignación) |
+| `a` | Agregar una entrada a la lista de la fila (una condición, un join, una clave de orden, una asignación) |
+| `Shift+a` | Agregar un grupo dentro del grupo de filtros de la fila |
+| `x` / `d` | Quitar la fila |
+| `Shift+j` / `Shift+k` | Bajar / subir una clave de orden de documentos |
+| `Alt+l` / `Alt+h` | Modo siguiente / anterior (SELECT, UPDATE, DELETE; Find, Aggregate) |
+| `Ctrl+Enter` | Ejecutar |
+| `Ctrl+s` | Guardar |
+| `m` / `Shift+F10` | Menú con las acciones de la fila y las del constructor (Run o Find, Open in Editor, Save, Reset o las consultas guardadas, los modos, Close) |
+| `Escape` | Salir de un campo a las filas, o volver a la grilla |
+| `Ctrl+h` | Volver a la grilla |
+
+En un campo de texto las letras se escriben y Escape vuelve a las filas. Un
+desplegable abierto con Enter responde a las teclas de los desplegables y
+devuelve el teclado al constructor al cerrarse. Una ejecución desde el teclado
+pasa por la misma confirmación y política de mutaciones que el botón Run, así
+que un UPDATE o DELETE sin WHERE sigue pidiendo confirmación. En el
+constructor de documentos, Enter sobre un campo abre el selector de campos con
+su búsqueda enfocada: escribe la ruta y pulsa Enter. Enter sobre un operador
+abre la lista de operadores, donde `j`, `k` y Enter eligen. Un Find desde el
+teclado deja el teclado en el constructor. macOS usa Cmd en
+lugar de Ctrl para `Ctrl+Enter` y `Ctrl+s`, y allí `Alt+l` / `Alt+h` funcionan
+solo fuera de los campos de texto.
+
 ## Árbol de documentos
 
 | Teclas | Acción |
@@ -374,6 +672,10 @@ foco y no se está editando ninguna celda.
 | `r` | Alternar la vista JSON sin formato |
 | `/` / `Ctrl+f` | Buscar; `n` / `Shift+n` coincidencia siguiente / anterior, `Escape` cierra |
 
+El campo de búsqueda y el editor de valores en línea conservan las letras que
+escribís. En el campo de búsqueda, `Enter` devuelve el teclado al árbol y mantiene
+las coincidencias, así `n` y `Shift+n` las recorren, y `Escape` cierra la búsqueda.
+
 ## Explorador clave-valor
 
 | Teclas | Acción |
@@ -381,9 +683,91 @@ foco y no se está editando ninguna celda.
 | `` Ctrl+` `` | Mostrar u ocultar la consola de comandos, también desde su campo |
 | `Ctrl+j` | Cargar más claves |
 | `t` | Editar la expiración de la clave seleccionada |
+| `Alt+l` / `Alt+h` | Filtro de tipo de clave siguiente / anterior (Todos primero); en el editor de expiración, su modo siguiente / anterior (Nunca, En, El) |
 
 `Ctrl+j` y `t` se aplican mientras la lista de claves tiene el foco, no dentro de
-un campo de texto.
+un campo de texto. `Alt+l` y `Alt+h` también funcionan desde los campos de patrón
+y de expiración, salvo en macOS, donde `Option` con una letra escribe un carácter.
+
+`m` abre el menú de la clave o el miembro seleccionado. Después de las acciones
+de la clave o el miembro lista los botones del panel de valor (recargar el valor,
+las demás opciones de Ver como y la lista de descompresión de un valor de texto,
+previsualizar los primeros bytes o cargar igual un valor grande, y las entradas
+pendientes y el formulario de claim de un stream) y los de la barra (mostrar las
+claves como árbol o lista, el intervalo de actualización automática, el borrado
+masivo, y Detener o Buscar en todo el keyspace mientras un escaneo filtrado lee
+página por página). En los diálogos Nueva clave y Añadir miembro, `Tab` y
+`Shift+Tab` recorren los campos como `j` y `k` y no salen del diálogo. Cuando la
+consola pide confirmar un comando peligroso, `Enter` en su campo vacío lo ejecuta
+y `Escape` lo cancela.
+
+## Almacenamiento de objetos
+
+En el explorador de objetos, `m` abre el menú de la fila seleccionada. Después
+de las entradas de la fila (un objeto también ofrece Abrir en el visor del
+sistema) lista los botones del listado: Subir, Nueva carpeta, Copiar la ruta
+actual, Cargar más mientras el nivel tenga otra página, Mostrar como lista o como
+árbol y, mientras una vista previa los muestra, Ver versiones, Cargar de todas
+formas y Descartar para cambios sin guardar. Sin una fila seleccionada, `m` abre
+esas mismas entradas como acciones del panel.
+
+En la lista de buckets, `m` lista Explorar, Calcular tamaño, Nuevo bucket y
+Actualizar.
+
+En una pestaña de editor de objetos, `Escape` saca el teclado del texto, `Enter`
+lo devuelve, y `m` lista entonces Guardar, Descartar, Buscar, la interpretación
+Automático / Raw, Recargar y, para un objeto por encima del límite de tamaño,
+Cargar de todas formas.
+
+Al salir de un objeto con ediciones sin guardar, el diálogo que pregunta qué
+hacer se abre con **Guardar** enfocado, así que `Enter` guarda. `Tab` y
+`Shift+Tab` pasan entre **Guardar**, **Cancelar** y **Descartar** sin salir del
+diálogo, `Enter` o `Space` presionan el botón enfocado y `Escape` cancela.
+
+## Visor de auditoría
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Evento siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Primer / último evento |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Bajar / subir un cuarto de página |
+| `]` / `[` | Página siguiente / anterior |
+| `Enter` / `Space` | Expandir o contraer el evento seleccionado |
+| `f` / `/` | Entrar a la barra de filtros; `h` / `l` se mueven, `Enter` activa, `Escape` sale |
+| `r` | Actualizar |
+| `Ctrl+e` / `Cmd+e` | Abrir el menú de exportación: las teclas del menú contextual pasan entre CSV y JSON, `Enter` exporta y `Escape` lo cierra |
+| `Alt+l` / `Alt+h` | Cambiar entre la tabla de eventos y el gráfico |
+| `m` (o `Shift+F10`) | Menú contextual del evento seleccionado: copiar como CSV, copiar el resumen, copiar como JSON, filtrar por su id de correlación y abrir una aprobación pendiente |
+
+## Aprobaciones MCP
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Llamada pendiente siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Primera / última llamada pendiente |
+| `a` | Aprobar la llamada seleccionada |
+| `r` | Rechazar la llamada seleccionada con el motivo escrito |
+| `Enter` / `i` | Escribir el motivo del rechazo; `Escape` vuelve a la lista |
+| `F5` | Recargar las llamadas pendientes |
+| `m` (o `Shift+F10`) | Acciones del panel: aprobar, rechazar, escribir el motivo, recargar |
+
+Las teclas aparecen en el contexto Aprobaciones MCP de Settings > Keybindings.
+
+## Asistente de migración
+
+| Teclas | Acción |
+|--------|--------|
+| `Alt+l` / `Alt+h` | Continuar / volver, como los botones del pie (también desde un campo de texto, salvo en macOS) |
+| `Ctrl+Enter` / `Cmd+Enter` | Continuar; en el paso Confirmar, iniciar la migración |
+| `j` / `k` (o `Down` / `Up`) | Mover el cursor del paso |
+| `h` / `l` (o `Left` / `Right`) | Origen y destino: contraer o expandir el nodo, o pasar de un árbol al otro. Mapeo de tablas: moverse entre el nombre de destino, el modo y **Columnas…** de una fila |
+| `Enter` / `i` | Marcar una tabla de origen, elegir la base de destino, escribir en un campo, abrir un desplegable o el detalle de columnas |
+| `Space` | Alternar el elemento bajo el cursor; en Confirmar, marcar la confirmación del plan destructivo |
+| `Shift+k` / `Shift+j` | Subir / bajar una tabla en el orden de carga |
+| `Escape` | Salir de un campo de texto o cerrar el detalle de columnas |
+| `m` (o `Shift+F10`) | Acciones del panel: Continuar, Volver, fijar el modo de todas las tablas, aceptar el orden de carga, la confirmación, Iniciar migración, Cancelar migración mientras corre y Cerrar al terminar |
+
+Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
 
 ## Campos de texto
 
@@ -395,6 +779,15 @@ un campo de texto.
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |
 | `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
 
+Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
+la sidebar o la barra de contexto de ejecución, los atajos globales que llevan
+`Ctrl` o `Cmd` siguen funcionando: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`,
+`Ctrl+Shift+P` y los demás de [Global](#global-disponible-sin-importar-el-foco).
+Las teclas sin esos modificadores, incluidas `Tab`, `Escape`, `Enter` y las
+flechas, se quedan en el campo. Un atajo que el propio campo define, como
+`Ctrl+a` o `Ctrl+c`, tiene prioridad sobre el global. Dentro de un diálogo, un
+menú, un desplegable o un selector, los atajos globales esperan a que se cierre.
+
 ## Diálogos
 
 | Teclas | Acción |
@@ -403,6 +796,15 @@ un campo de texto.
 | `Enter` | Confirmar, cuando el botón principal está habilitado |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Desplazar el contenido de un diálogo largo |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
+| `Tab` / `Shift+Tab` | Pasar al control siguiente / anterior dentro del diálogo |
+
+`Tab` y `Shift+Tab` dan la vuelta dentro de un diálogo abierto: desde el último
+control vuelven al primero, y nunca llevan el foco a los paneles de detrás.
+
+En los diálogos **Vista previa de SQL** y **Vista previa de consulta**, `Enter`
+o `Ctrl+c` / `Cmd+c` copian la query y cierran la vista previa, `j` / `k` y `Up` / `Down` la
+desplazan una línea, y `PageUp` / `PageDown` una página. Estas teclas aparecen en
+el contexto **Vista previa de SQL** de **Settings → Keybindings**.
 
 ## Formularios y la ventana de Settings
 
@@ -423,11 +825,64 @@ cuando no se está editando ningún campo de texto.
 | `Ctrl+w` / `Ctrl+q` | Cerrar la ventana de Settings |
 | `Ctrl+s` | Guardar la sección |
 | `Ctrl+h` / `Ctrl+l` | Moverse entre la navegación y la sección |
+| `n` / `d` / `i` | En una lista de perfiles (proxies, túneles SSH, perfiles de autenticación, hooks, servicios, MCP): nuevo, eliminar, importar |
 
-En el Connection Manager, `Ctrl+s` / `Cmd+s` guarda la conexión desde cualquier
+En **Settings → Keybindings**, `Enter` o `Space` graban teclas nuevas para el
+binding seleccionado, `r` lo restablece, `p` edita su contexto, `Delete` o
+`Backspace` quitan su atajo, `Shift+r` restablece todos los bindings, `c` abre
+el filtro de contexto y `/` o `f` enfocan el filtro de texto. `Enter` sobre un
+campo desplegable, como el proveedor de un perfil de autenticación, abre su
+lista con el foco del teclado (ver [Desplegables](#desplegables)). Mientras un
+login espera al navegador, los botones Abrir navegador, Copiar URL y Cancelar
+forman la fila debajo del botón de login. En la página Acerca de, `j` / `k` se
+mueven entre sus dos enlaces y `Enter` abre uno. Estas teclas, como las de
+navegación, aparecen en los contextos Settings Window y Form Navigation de
+**Settings → Keybindings** y se pueden reasignar ahí.
+
+En la lista de drivers del Connection Manager, `i` abre Importar conexiones y
+`Shift+i` abre Importar desde otro cliente, como los botones junto a Cancelar;
+escritas en el filtro de drivers, siguen siendo texto. En el Connection Manager, `Ctrl+s` /
+`Cmd+s` guarda la conexión desde cualquier
 parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como**
-y del método de autenticación SSH. En el visor de auditoría, `Left` / `Right`
+y del método de autenticación SSH. `Down` / `Up` se mueven como `j` / `k`;
+mientras se edita un campo lo dejan por el campo siguiente o anterior, y
+`Ctrl+l` / `Ctrl+h` lo dejan por la pestaña siguiente o anterior. `PageDown` /
+`PageUp` mueven el resaltado de un desplegable abierto una página. Después de
+la contraseña, el recorrido del formulario sigue por los demás campos del
+driver, como el selector de perfil de autenticación de una conexión AWS, que
+`Enter` abre, luego el modo SSL, cuya opción cambian `Left` / `Right` o `Enter`,
+y los selectores de certificados, donde `Enter` abre el explorador. Tras una
+prueba de conexión fallida, el botón **Copiar** del aviso queda entre **Probar
+conexión** y **Guardar**. En la pestaña Settings, el desplegable de hook de cada
+fase de conexión es una parada encima de su campo de hooks adicionales, y
+`Enter` le pasa el teclado. En la pestaña MCP, `j` / `k` recorren el interruptor
+de MCP, el filtro de clientes, cada cliente listado (`Enter` lo selecciona), el
+interruptor de acceso del cliente seleccionado y sus selectores de rol y de
+política. En el visor de auditoría, `Left` / `Right`
 sobre los intervalos de tiempo cambian el intervalo.
+
+## Desplegables
+
+Estas teclas se aplican a un desplegable o a una selección múltiple con el foco
+del teclado, por ejemplo después de que una entrada de menú lo abra. Las teclas
+que el desplegable no usa pasan al panel que lo contiene.
+
+| Teclas | Acción |
+|--------|--------|
+| `Enter` / `Space` | Abrir la lista |
+| `j` / `k` (o `Down` / `Up`) | Mover abajo / arriba en la lista abierta |
+| `Enter` | Elegir el elemento resaltado, o cerrar una selección múltiple |
+| `Space` | Elegir el elemento resaltado; marcarlo o desmarcarlo en una selección múltiple |
+| `Escape` | Cerrar la lista sin elegir |
+
+Al elegir un elemento o pulsar `Escape`, el foco vuelve al control que lo tenía
+antes del desplegable. Los desplegables que forman parte de un anillo de teclado,
+como la barra de contexto de ejecución y los filtros de auditoría, siguen
+respondiendo a las teclas de ese anillo. La única selección múltiple de la barra
+de contexto de ejecución, la lista de destinos de una fuente como un grupo de
+logs o un flujo de eventos, es la excepción: `Enter` sobre ella abre la lista con
+el foco del teclado, así que la manejan las teclas de arriba, y al cerrarla el
+foco vuelve a la barra.
 
 ## Menú contextual
 
@@ -446,5 +901,8 @@ sobre los intervalos de tiempo cambian el intervalo.
 | `Ctrl+f`                              | Alternar favorito                |
 | `Ctrl+r`                              | Renombrar                        |
 | `Ctrl+d`                              | Eliminar                         |
-| `/`                                   | Enfocar búsqueda                 |
+| `/`                                   | Enfocar búsqueda; en los campos de búsqueda, renombrar y guardar escribe una `/` |
 | `Ctrl+s` / `Cmd+s`                    | Guardar query                    |
+| `Alt+l` / `Alt+h`                     | Mostrar la lista siguiente / anterior (Recientes, Guardadas) |
+
+`Alt+l` y `Alt+h` también funcionan en los campos de búsqueda, renombrar y guardar del historial, salvo en macOS, donde `Option` con una letra escribe un carácter: allí funcionan solo desde la lista.

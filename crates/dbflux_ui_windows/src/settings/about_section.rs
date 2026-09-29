@@ -1,21 +1,98 @@
+use super::layout;
 use super::{SettingsSection, SettingsSectionId};
+use dbflux_app::keymap::Modifiers;
 use dbflux_components::primitives::Text;
+use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
-pub(super) struct AboutSection;
+const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+
+/// The links of the page, which the keyboard cursor moves between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AboutLink {
+    ReportBug,
+    ViewSource,
+}
+
+impl AboutLink {
+    fn url(self) -> String {
+        match self {
+            AboutLink::ReportBug => format!("{REPOSITORY}/issues"),
+            AboutLink::ViewSource => REPOSITORY.to_string(),
+        }
+    }
+}
+
+pub(super) struct AboutSection {
+    content_focused: bool,
+    pub(super) link_cursor: AboutLink,
+}
 
 impl AboutSection {
     pub(super) fn new(_cx: &mut Context<Self>) -> Self {
-        Self
+        Self {
+            content_focused: false,
+            link_cursor: AboutLink::ReportBug,
+        }
+    }
+
+    fn link_focused(&self, link: AboutLink) -> bool {
+        self.content_focused && self.link_cursor == link
     }
 }
 
 impl SettingsSection for AboutSection {
     fn section_id(&self) -> SettingsSectionId {
         SettingsSectionId::About
+    }
+
+    /// Down, Right and Tab move to the next link, Up, Left and Shift+Tab to
+    /// the previous one, and Enter or Space opens the link under the cursor.
+    fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.content_focused {
+            return;
+        }
+
+        let chord = key_chord_from_gpui(&event.keystroke);
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("down", modifiers) | ("right", modifiers) | ("tab", modifiers)
+                if modifiers == Modifiers::none() =>
+            {
+                self.link_cursor = AboutLink::ViewSource;
+                cx.notify();
+            }
+            ("up", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
+                self.link_cursor = AboutLink::ReportBug;
+                cx.notify();
+            }
+            ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                self.link_cursor = AboutLink::ReportBug;
+                cx.notify();
+            }
+            ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
+                cx.open_url(&self.link_cursor.url());
+            }
+            _ => {}
+        }
+    }
+
+    fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.content_focused = true;
+        cx.notify();
+    }
+
+    fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.content_focused = false;
+        cx.notify();
     }
 }
 
@@ -24,7 +101,6 @@ impl Render for AboutSection {
         let theme = cx.theme();
 
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
         const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
         const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 
@@ -40,7 +116,8 @@ impl Render for AboutSection {
             _ => "branding/stable/mark-256.png",
         };
 
-        let issues_url = format!("{}/issues", REPOSITORY);
+        let report_bug_focused = self.link_focused(AboutLink::ReportBug);
+        let view_source_focused = self.link_focused(AboutLink::ViewSource);
         let author_name = AUTHORS.split('<').next().unwrap_or(AUTHORS).trim();
         let license_display = LICENSE.replace(" OR ", " and ");
         let copyright_line = crate::labels::about_copyright(author_name);
@@ -97,32 +174,32 @@ impl Render for AboutSection {
                                         .flex()
                                         .items_baseline()
                                         .gap_1()
-                                        .child(
+                                        .child(layout::cursor_ring(
+                                            report_bug_focused,
                                             div()
                                                 .id("about-link-issues")
                                                 .cursor_pointer()
                                                 .hover(|d| d.underline())
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    move |_, _, cx| {
-                                                        cx.open_url(&issues_url);
-                                                    },
-                                                )
+                                                .on_click(|_, _, cx| {
+                                                    cx.open_url(&AboutLink::ReportBug.url());
+                                                })
                                                 .child(
                                                     Text::body(dbflux_i18n::t!(
                                                         "settings.about.report_bug"
                                                     ))
                                                     .color(theme.link),
                                                 ),
-                                        )
+                                            cx,
+                                        ))
                                         .child(Text::body(dbflux_i18n::t!("settings.about.or")))
-                                        .child(
+                                        .child(layout::cursor_ring(
+                                            view_source_focused,
                                             div()
                                                 .id("about-link-repo")
                                                 .cursor_pointer()
                                                 .hover(|d| d.underline())
-                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                    cx.open_url(REPOSITORY);
+                                                .on_click(|_, _, cx| {
+                                                    cx.open_url(&AboutLink::ViewSource.url());
                                                 })
                                                 .child(
                                                     Text::body(dbflux_i18n::t!(
@@ -130,7 +207,8 @@ impl Render for AboutSection {
                                                     ))
                                                     .color(theme.link),
                                                 ),
-                                        )
+                                            cx,
+                                        ))
                                         .child(Text::body(dbflux_i18n::t!(
                                             "settings.about.on_github"
                                         ))),

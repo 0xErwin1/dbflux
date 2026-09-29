@@ -6,7 +6,7 @@
 //! only renders when `ChartHost::source_for_point` returns `Some`.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, SharedString, div, px};
+use gpui::{AnyElement, App, ClickEvent, Div, SharedString, Stateful, Window, div, px};
 
 use crate::semantic::ChartColors;
 use crate::tokens::{ChartGeometry, FontSizes, Spacing, Widths};
@@ -41,10 +41,8 @@ pub struct SourceRowRef {
 
 /// Build the PointInspector dock element.
 ///
-/// This is a pure element factory: it does not call any action callbacks
-/// directly. Action wiring (e.g. "Show in tree" → scroll_to_row) must be
-/// done by the caller via GPUI on_click/on_mouse_down listeners on the
-/// stable element IDs exposed by `action_button`.
+/// The host owns the table the point came from, so it passes what
+/// "Show in tree" does (`on_show_in_tree`, run on click).
 ///
 /// # Arguments
 /// * `source` — the source row reference for the hovered point.
@@ -55,6 +53,7 @@ pub struct SourceRowRef {
 /// * `delta_prev` — optional formatted delta vs the previous decimated sample.
 /// * `delta_avg` — optional formatted delta vs the window average.
 /// * `colors` — semantic chart colors for the active theme.
+/// * `on_show_in_tree` — runs when "Show in tree" is clicked.
 #[allow(clippy::too_many_arguments)]
 pub fn point_inspector_element(
     source: SourceRowRef,
@@ -65,6 +64,7 @@ pub fn point_inspector_element(
     delta_prev: Option<&str>,
     delta_avg: Option<&str>,
     colors: &ChartColors,
+    on_show_in_tree: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     div()
         .w(Widths::INSPECTOR)
@@ -177,15 +177,15 @@ pub fn point_inspector_element(
                         .id("inspector-quick-actions")
                         .flex()
                         .gap(Spacing::XXS)
-                        // The host wraps the dock in its own mouse listener and
-                        // scrolls its table to the source row; the button only
-                        // carries a stable element ID that encodes the row index.
-                        .child(action_button(
-                            dbflux_i18n::t!("chart.point_inspector.show_in_tree"),
-                            "show-in-tree",
-                            source.row_idx,
-                            colors,
-                        )),
+                        .child(
+                            action_button(
+                                dbflux_i18n::t!("chart.point_inspector.show_in_tree"),
+                                "show-in-tree",
+                                source.row_idx,
+                                colors,
+                            )
+                            .on_click(on_show_in_tree),
+                        ),
                 ),
         )
         .into_any_element()
@@ -249,15 +249,13 @@ fn action_button_element_id(id_slug: &str, row_idx: usize) -> String {
 }
 
 /// Active action button (hover-enabled). `id_slug` is a stable, locale-independent
-/// suffix for the element ID (previously derived from the English label) so the
-/// host can still read the `SourceRowRef.row_idx` encoded in it. The actual
-/// scroll is wired by the host — the inspector does not own the target entity.
+/// suffix for the element ID, which also carries the source row index.
 fn action_button(
     label: String,
     id_slug: &'static str,
     row_idx: usize,
     colors: &ChartColors,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     div()
         .id(gpui::ElementId::Name(
             action_button_element_id(id_slug, row_idx).into(),
@@ -362,7 +360,11 @@ mod tests {
         assert_ne!(en, es);
     }
 
-    struct InspectorHarness;
+    #[derive(Default)]
+    struct InspectorHarness {
+        /// Row indexes "Show in tree" was clicked for.
+        shown: std::rc::Rc<std::cell::RefCell<Vec<usize>>>,
+    }
 
     impl gpui::Render for InspectorHarness {
         fn render(
@@ -384,6 +386,10 @@ mod tests {
                     None,
                     None,
                     &ChartColors::dark(),
+                    {
+                        let shown = self.shown.clone();
+                        move |_, _, _| shown.borrow_mut().push(4)
+                    },
                 ))
         }
     }
@@ -407,7 +413,7 @@ mod tests {
         let (_view, visual) = cx.add_window_view(move |window, _cx| {
             window.observe_frames(&capture_for_window);
             window.refresh();
-            InspectorHarness
+            InspectorHarness::default()
         });
         visual.run_until_parked();
 
@@ -429,6 +435,43 @@ mod tests {
             quick_actions_text,
             dbflux_i18n::t!("chart.point_inspector.show_in_tree")
         );
+    }
+
+    /// "Show in tree" runs on click (release), with its own handler, and is
+    /// exposed as clickable.
+    #[gpui::test]
+    fn show_in_tree_runs_its_handler_on_click(cx: &mut gpui::TestAppContext) {
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let shown: std::rc::Rc<std::cell::RefCell<Vec<usize>>> = std::rc::Rc::default();
+        let shown_for_window = shown.clone();
+        let (_view, visual) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            InspectorHarness {
+                shown: shown_for_window,
+            }
+        });
+        visual.run_until_parked();
+
+        let bounds = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .as_ref()
+            .and_then(|frame| {
+                frame
+                    .nodes()
+                    .map(|(_, node)| node)
+                    .find(|node| node.id() == "inspector-action-show-in-tree-row-4")
+                    .map(|node| node.bounds())
+            })
+            .expect("the Show in tree button is rendered");
+
+        visual.simulate_click(bounds.center(), gpui::Modifiers::default());
+        visual.run_until_parked();
+
+        assert_eq!(shown.borrow().as_slice(), [4]);
     }
 
     #[test]

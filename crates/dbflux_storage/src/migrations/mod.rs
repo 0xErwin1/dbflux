@@ -180,6 +180,7 @@ impl MigrationRegistry {
         registry.register(mod_035_cfg_keybinding_overrides::MigrationImpl);
         registry.register(mod_036_app_pending_execution_rejection_reason::MigrationImpl);
         registry.register(mod_037_qry_saved_document_queries::MigrationImpl);
+        registry.register(mod_038_general_settings_vim_leader::MigrationImpl);
         registry
     }
 
@@ -407,6 +408,7 @@ mod mod_034_cfg_tool_policy_approval_classes;
 mod mod_035_cfg_keybinding_overrides;
 mod mod_036_app_pending_execution_rejection_reason;
 mod mod_037_qry_saved_document_queries;
+mod mod_038_general_settings_vim_leader;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1114,6 +1116,7 @@ mod tests {
             "035_cfg_keybinding_overrides",
             "036_app_pending_execution_rejection_reason",
             "037_qry_saved_document_queries",
+            "038_general_settings_vim_leader",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

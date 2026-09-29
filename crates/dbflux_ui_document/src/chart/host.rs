@@ -150,12 +150,11 @@ impl ChartHost for HostAdapter {
         match self {
             HostAdapter::DataGrid(entity) => {
                 entity.update(cx, |panel, cx| {
-                    panel.chart_host_scroll_to_row(row_idx, cx);
+                    panel.chart_host_scroll_to_row(row_idx, window, cx);
                 });
             }
             HostAdapter::Standalone => {}
         }
-        let _ = window;
     }
 }
 

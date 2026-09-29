@@ -25,6 +25,7 @@ impl SettingsWindow {
             || self.gen_settings.dangerous_requires_where != saved.dangerous_requires_where
             || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
             || self.gen_settings.vim_mode != saved.vim_mode
+            || self.gen_settings.vim_leader != saved.vim_leader
         {
             return true;
         }

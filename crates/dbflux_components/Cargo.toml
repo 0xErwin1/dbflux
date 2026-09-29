@@ -13,6 +13,7 @@ license.workspace = true
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
+gpui-base = { path = "../../vendor/gpui-base" }
 dbflux_core.workspace = true
 dbflux_i18n.workspace = true
 tree-sitter.workspace = true

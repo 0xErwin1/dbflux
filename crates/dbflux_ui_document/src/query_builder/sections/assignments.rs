@@ -3,10 +3,10 @@ use gpui_component::ActiveTheme;
 
 use dbflux_components::controls::{Button, ButtonVariant, Input};
 use dbflux_components::tokens::{FontSizes, Spacing};
-use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+use dbflux_core::{AssignmentValue, ScalarLiteral};
 
 use crate::labels::assignment_value_kind_label;
-use crate::query_builder::mutation_state::AssignmentRow;
+use crate::query_builder::keyboard::row_id;
 use crate::query_builder::panel::QueryBuilderPanel;
 
 /// Returns `true` when `value` is the `Expression` variant.
@@ -54,9 +54,11 @@ pub fn render_assignments(
         .map(|s| s.assignments.len())
         .unwrap_or(0);
 
+    let mark = panel.rail_mark.clone();
     let mut container = div().flex().flex_col().gap_1();
 
     for row_ix in 0..row_count {
+        let assignment_row = row_id::assignment(row_ix);
         let value = panel
             .mutation_state
             .as_ref()
@@ -77,23 +79,32 @@ pub fn render_assignments(
             AssignmentValue::Literal(_) | AssignmentValue::Expression(_)
         );
 
-        let mut row_div = div().flex().flex_row().gap_1().items_center();
+        let mut row_div = mark
+            .row(&assignment_row, div())
+            .flex()
+            .flex_row()
+            .gap_1()
+            .items_center();
 
         // Column name input
         if let Some(col_state) = panel.assign_col_inputs.get(&row_ix).cloned() {
-            row_div = row_div.child(div().w(gpui::px(140.0)).child(
-                Input::new(&col_state).placeholder(dbflux_i18n::t!(
-                    "document.query_builder.assignments.column_placeholder"
-                )),
-            ));
+            row_div = row_div.child(
+                mark.ring(&assignment_row, "column", div())
+                    .w(gpui::px(140.0))
+                    .child(Input::new(&col_state).placeholder(dbflux_i18n::t!(
+                        "document.query_builder.assignments.column_placeholder"
+                    ))),
+            );
         }
 
         // Value input (Literal / Expression only)
         if show_value_input {
             if let Some(val_state) = panel.assign_val_inputs.get(&row_ix).cloned() {
-                row_div = row_div.child(div().flex_1().child(Input::new(&val_state).placeholder(
-                    dbflux_i18n::t!("document.query_builder.assignments.value_placeholder"),
-                )));
+                row_div = row_div.child(mark.ring(&assignment_row, "value", div()).flex_1().child(
+                    Input::new(&val_state).placeholder(dbflux_i18n::t!(
+                        "document.query_builder.assignments.value_placeholder"
+                    )),
+                ));
             }
         } else {
             row_div = row_div.child(
@@ -107,19 +118,16 @@ pub fn render_assignments(
 
         // Kind-cycle button
         row_div = row_div.child(
-            Button::new(("qb-assign-kind", row_ix), kind_label)
-                .inline()
-                .variant(kind_variant)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if let Some(state) = this.mutation_state.as_mut()
-                        && let Some(row) = state.assignments.get_mut(row_ix)
-                    {
-                        let new_value = cycle_value_kind(&row.assignment.value, &row.raw_text);
-                        row.assignment.value = new_value;
-                    }
-                    this.refresh_mutation_preview_pure();
-                    cx.notify();
-                })),
+            mark.ring_element(
+                &assignment_row,
+                "kind",
+                Button::new(("qb-assign-kind", row_ix), kind_label)
+                    .inline()
+                    .variant(kind_variant)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.cycle_assignment_kind(row_ix, cx);
+                    })),
+            ),
         );
 
         // Remove button
@@ -128,14 +136,7 @@ pub fn render_assignments(
                 .inline()
                 .variant(ButtonVariant::Ghost)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if let Some(state) = this.mutation_state.as_mut()
-                        && row_ix < state.assignments.len()
-                    {
-                        state.assignments.remove(row_ix);
-                        this.pending_assign_rebuild = true;
-                    }
-                    this.refresh_mutation_preview_pure();
-                    cx.notify();
+                    this.remove_assignment(row_ix, cx);
                 })),
         );
 
@@ -164,25 +165,17 @@ pub fn render_assignments(
 
     // "Add assignment" button
     container = container.child(
-        Button::new(
-            "qb-assign-add",
-            dbflux_i18n::t!("document.query_builder.assignments.add_button"),
-        )
-        .variant(ButtonVariant::Ghost)
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            if let Some(state) = this.mutation_state.as_mut() {
-                state.assignments.push(AssignmentRow {
-                    assignment: Assignment {
-                        column: String::new(),
-                        value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
-                    },
-                    raw_text: String::new(),
-                });
-                this.pending_assign_rebuild = true;
-            }
-            this.refresh_mutation_preview_pure();
-            cx.notify();
-        })),
+        mark.row(
+            &row_id::assignment_add(),
+            div().flex().child(
+                Button::new(
+                    "qb-assign-add",
+                    dbflux_i18n::t!("document.query_builder.assignments.add_button"),
+                )
+                .variant(ButtonVariant::Ghost)
+                .on_click(cx.listener(|this, _event, _window, cx| this.add_assignment(cx))),
+            ),
+        ),
     );
 
     container.into_any_element()

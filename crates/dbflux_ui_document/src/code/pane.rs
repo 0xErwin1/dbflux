@@ -292,6 +292,317 @@ impl CodeDocument {
             Box::new(move |_window, cx| e.update(cx, |d, cx| d.side_panels(cx)))
         });
 
+        handle.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e))
+        });
+
         handle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::code::CodeDocument;
+    use crate::pane::{PaneAction, PaneActionRun};
+    use dbflux_app::keymap::Command;
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::keymap::init_keymap;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn open_sql_document(
+        cx: &mut TestAppContext,
+    ) -> (Entity<CodeDocument>, &mut VisualTestContext) {
+        open_document(cx, QueryLanguage::Sql)
+    }
+
+    fn open_document(
+        cx: &mut TestAppContext,
+        language: QueryLanguage,
+    ) -> (Entity<CodeDocument>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+            init_keymap(cx);
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let slot: Rc<RefCell<Option<Entity<CodeDocument>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(app_state.clone(), None, language, window, cx)
+                });
+                slot.replace(Some(document.clone()));
+                gpui_component::Root::new(document, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let document = slot.borrow().clone().expect("document created");
+        (document, window)
+    }
+
+    fn actions(document: &Entity<CodeDocument>, window: &mut VisualTestContext) -> Vec<PaneAction> {
+        let document = document.clone();
+        window.update(|_, cx| document.read(cx).pane_actions(&document))
+    }
+
+    fn command_of(action: &PaneAction) -> Option<Command> {
+        match action.run {
+            PaneActionRun::Command(command) => Some(command),
+            PaneActionRun::Callback(_) => None,
+        }
+    }
+
+    mod coverage {
+        use super::{actions, open_document, open_sql_document};
+        use crate::keyboard_coverage::CODE_EDITOR_CHROME;
+        use dbflux_core::QueryLanguage;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+        use gpui::TestAppContext;
+
+        #[gpui::test]
+        fn the_sql_editor_chrome_is_covered(cx: &mut TestAppContext) {
+            let (document, window) = open_sql_document(cx);
+            let menu: Vec<String> = actions(&document, window)
+                .iter()
+                .map(|action| action.id.to_string())
+                .collect();
+
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+
+            let checked = Coverage::new(CODE_EDITOR_CHROME)
+                .with_menu_entries(menu)
+                .assert_covered(&frame);
+            assert!(
+                checked.iter().any(|id| id == "run-query-btn"),
+                "{checked:?}"
+            );
+        }
+
+        #[gpui::test]
+        fn the_script_editor_chrome_is_covered(cx: &mut TestAppContext) {
+            let (document, window) = open_document(cx, QueryLanguage::Python);
+            let menu: Vec<String> = actions(&document, window)
+                .iter()
+                .map(|action| action.id.to_string())
+                .collect();
+
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+
+            let checked = Coverage::new(CODE_EDITOR_CHROME)
+                .with_menu_entries(menu)
+                .assert_covered(&frame);
+            assert!(
+                checked.iter().any(|id| id == "exec-context-pane-actions"),
+                "{checked:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn the_pane_actions_list_every_sql_toolbar_button(cx: &mut TestAppContext) {
+        let (document, window) = open_sql_document(cx);
+        let actions = actions(&document, window);
+
+        let ids: Vec<&str> = actions.iter().map(|action| action.id.as_ref()).collect();
+        assert_eq!(
+            ids,
+            [
+                "run",
+                "run-in-new-tab",
+                "save",
+                "format",
+                "history",
+                "explain",
+                "chart",
+                "refresh",
+                "auto-refresh",
+            ]
+        );
+
+        let command = |id: &str| {
+            actions
+                .iter()
+                .find(|action| action.id == id)
+                .and_then(command_of)
+        };
+        assert_eq!(command("run"), Some(Command::RunQuery));
+        assert_eq!(command("run-in-new-tab"), Some(Command::RunQueryInNewTab));
+        assert_eq!(command("save"), Some(Command::SaveQuery));
+        assert_eq!(command("history"), Some(Command::ToggleHistoryDropdown));
+        assert_eq!(command("refresh"), Some(Command::RunQuery));
+
+        let format = actions.iter().find(|action| action.id == "format");
+        assert!(
+            format.is_some_and(|action| !action.enabled),
+            "the formatter is unavailable, as on the toolbar"
+        );
+
+        let run = actions.iter().find(|action| action.id == "run");
+        assert!(
+            run.is_some_and(|action| action.shortcut.is_some()),
+            "an entry with a key binding shows its keys"
+        );
+    }
+
+    #[gpui::test]
+    fn the_auto_refresh_entry_hands_the_keyboard_to_its_dropdown(cx: &mut TestAppContext) {
+        let (document, window) = open_sql_document(cx);
+
+        let document_focus = document.clone();
+        window.update(|window, cx| {
+            document_focus.update(cx, |document, cx| {
+                document.focus_handle.focus(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let auto_refresh = actions(&document, window)
+            .into_iter()
+            .find(|action| action.id == "auto-refresh")
+            .expect("an auto-refresh entry");
+        let PaneActionRun::Callback(open_interval) = auto_refresh.run else {
+            panic!("the auto-refresh entry runs a callback");
+        };
+
+        window.update(|window, cx| open_interval(window, cx));
+        window.run_until_parked();
+
+        let dropdown = window.update(|_, cx| document.read(cx).refresh.refresh_dropdown.clone());
+        let (open, focused) = window.update(|window, cx| {
+            let dropdown = dropdown.read(cx);
+            (dropdown.is_open(), dropdown.is_focused(window))
+        });
+        assert!(open && focused, "the interval dropdown opens with focus");
+
+        window.simulate_keystrokes("j escape");
+        window.run_until_parked();
+
+        let (open, document_focused) = window.update(|window, cx| {
+            (
+                dropdown.read(cx).is_open(),
+                document.read(cx).focus_handle.is_focused(window),
+            )
+        });
+        assert!(!open, "Escape closes the interval list");
+        assert!(document_focused, "focus returns to the editor pane");
+    }
+
+    /// Enter on the target list of the context bar opens it with keyboard
+    /// focus, so its own keys drive it: j / k move, Space toggles and Escape
+    /// hands focus back to the ring (see the multi-select's own tests).
+    #[gpui::test]
+    fn enter_on_the_target_list_hands_it_the_keyboard(cx: &mut TestAppContext) {
+        use crate::code::{ContextBarSlot, SqlQueryFocus};
+        use dbflux_components::controls::DropdownItem;
+
+        let (document, window) = open_sql_document(cx);
+
+        let targets = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.focus_mode = SqlQueryFocus::ContextBar;
+                document.context_bar_slot = ContextBarSlot::SourceTargets;
+                document.focus_handle.focus(window, cx);
+
+                let targets = document.source.source_targets.clone();
+                targets.update(cx, |targets, cx| {
+                    targets.set_items(
+                        vec![DropdownItem::new("orders"), DropdownItem::new("payments")],
+                        cx,
+                    );
+                });
+                targets
+            })
+        });
+
+        let handled = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(Command::Execute, window, cx)
+            })
+        });
+        assert!(handled);
+
+        let (open, focused) = window.update(|window, cx| {
+            let targets = targets.read(cx);
+            (targets.is_open(), targets.is_focused(window))
+        });
+        assert!(open && focused, "the target list opens with keyboard focus");
+
+        let (focus_mode, return_target) = window.update(|window, cx| {
+            let document = document.read(cx);
+            (
+                document.focus_mode,
+                document.focus_handle.is_focused(window),
+            )
+        });
+        assert_eq!(
+            focus_mode,
+            SqlQueryFocus::ContextBar,
+            "the ring stays active"
+        );
+        assert!(!return_target, "the list, not the ring, has the keys now");
+    }
+
+    /// Inside the dangerous-query dialog, Tab moves from the close button to
+    /// the "Don't ask again" box, and Space checks it (a keyboard click, on
+    /// key release) without running or closing anything.
+    #[gpui::test]
+    fn tab_and_space_check_dont_ask_again(cx: &mut TestAppContext) {
+        use crate::code::PendingDangerousQuery;
+        use dbflux_core::DangerousQueryKind;
+
+        let (document, window) = open_sql_document(cx);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.focus(window, cx);
+                document.ask_dangerous_query_confirm(
+                    PendingDangerousQuery {
+                        query: "DELETE FROM orders".to_string(),
+                        kind: DangerousQueryKind::DeleteNoWhere,
+                        in_new_tab: false,
+                        suppress: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("tab tab space");
+        window.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("space").expect("valid keystroke"),
+        });
+        window.run_until_parked();
+
+        let suppress = window.update(|_, cx| {
+            document
+                .read(cx)
+                .pending
+                .dangerous_query
+                .as_ref()
+                .map(|pending| pending.suppress)
+        });
+        assert_eq!(suppress, Some(true), "the dialog stays open, box checked");
     }
 }

@@ -6,9 +6,8 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-/// Boxed mouse-down handler used by filter-bar render helpers.
-pub(crate) type FilterBarClickHandler =
-    Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
+/// Boxed click handler used by filter-bar render helpers.
+pub(crate) type FilterBarClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// Tracks the current relational-filter state for the filter-bar chip and
 /// inline error affordance.
@@ -134,7 +133,7 @@ pub(crate) fn render_relational_chip(
         .bg(theme.secondary)
         .cursor_pointer()
         .hover(move |d| d.bg(theme_hover.secondary.opacity(0.7)))
-        .on_mouse_down(MouseButton::Left, on_click)
+        .on_click(on_click)
         .child(
             Icon::new(AppIcon::Link2)
                 .small()
@@ -212,7 +211,7 @@ pub(crate) fn render_relational_error(
                 .rounded(Radii::SM)
                 .px(Spacing::XS)
                 .hover(move |d| d.bg(theme_hover.secondary))
-                .on_mouse_down(MouseButton::Left, on_open_builder)
+                .on_click(on_open_builder)
                 .child(
                     Text::caption(dbflux_i18n::t!("document.data.grid.filter.open_in_builder"))
                         .color(theme_ring),

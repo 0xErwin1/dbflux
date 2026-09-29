@@ -12,7 +12,8 @@ use dbflux_components::tokens::{
     ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
 };
 use dbflux_components::typography::AppFonts;
-use dbflux_ui_base::keymap::{CODE_EDITOR_KEY_CONTEXT, RunCommand, last_keystroke};
+use dbflux_components::vim::VimBinding;
+use dbflux_ui_base::keymap::{CODE_EDITOR_KEY_CONTEXT, RunCommand};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::KeyContext;
 use gpui_component::scroll::ScrollableElement;
@@ -27,7 +28,241 @@ fn toolbar_divider(theme: &gpui_component::theme::Theme) -> impl IntoElement {
 }
 
 impl CodeDocument {
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The toolbar as pane actions (see [`crate::pane::PaneAction`]): the
+    /// same buttons, under the same conditions, so the whole toolbar is
+    /// reachable from the pane-actions menu. `entity` is this document, for
+    /// the entries that call back into it.
+    pub(crate) fn pane_actions(&self, entity: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+
+        if self.read_only {
+            return Vec::new();
+        }
+
+        let is_executing = self.state == DocumentState::Executing;
+        let is_db_language = self.supports_connection_context();
+        let context = ContextId::Editor;
+        let mut actions = Vec::new();
+
+        if is_executing {
+            actions.push(
+                PaneAction::command(
+                    "run",
+                    dbflux_i18n::t!("document.code.toolbar.cancel"),
+                    Command::CancelQuery,
+                    context,
+                )
+                .icon(AppIcon::X),
+            );
+        } else {
+            actions.push(
+                PaneAction::command(
+                    "run",
+                    dbflux_i18n::t!("document.code.toolbar.run"),
+                    Command::RunQuery,
+                    context,
+                )
+                .icon(AppIcon::Play)
+                .enabled(!self.drift.preflight_running),
+            );
+        }
+
+        if is_db_language && !is_executing {
+            actions.push(
+                PaneAction::command(
+                    "run-in-new-tab",
+                    dbflux_i18n::t!("document.code.toolbar.run_in_new_tab"),
+                    Command::RunQueryInNewTab,
+                    context,
+                )
+                .icon(AppIcon::SquarePlay),
+            );
+        }
+
+        actions.push(
+            PaneAction::command(
+                "save",
+                dbflux_i18n::t!("document.code.toolbar.save"),
+                Command::SaveQuery,
+                context,
+            )
+            .icon(AppIcon::Save),
+        );
+
+        actions.push(
+            PaneAction::callback(
+                "format",
+                dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
+                |_window, _cx| {},
+            )
+            .icon(AppIcon::Zap)
+            .enabled(false),
+        );
+
+        actions.push(
+            PaneAction::command(
+                "history",
+                dbflux_i18n::t!("document.code.toolbar.query_history"),
+                Command::ToggleHistoryDropdown,
+                context,
+            )
+            .icon(AppIcon::History),
+        );
+
+        if is_db_language {
+            let document = entity.clone();
+            actions.push(
+                PaneAction::callback(
+                    "explain",
+                    dbflux_i18n::t!("document.code.toolbar.explain_query"),
+                    move |window, cx| {
+                        document.update(cx, |document, cx| document.run_explain(window, cx));
+                    },
+                )
+                .icon(AppIcon::Info),
+            );
+        }
+
+        let document = entity.clone();
+        actions.push(
+            PaneAction::callback(
+                "chart",
+                dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
+                move |_window, cx| {
+                    document.update(cx, |document, cx| document.emit_chart_this_query(cx));
+                },
+            )
+            .icon(AppIcon::ChartColumnBig),
+        );
+
+        if is_db_language {
+            let refresh_command = if self.runner.is_primary_active() {
+                Command::CancelQuery
+            } else {
+                Command::RunQuery
+            };
+
+            actions.push(
+                PaneAction::command(
+                    "refresh",
+                    dbflux_i18n::t!("document.code.toolbar.refresh"),
+                    refresh_command,
+                    context,
+                )
+                .icon(AppIcon::RefreshCcw),
+            );
+
+            let dropdown = self.refresh.refresh_dropdown.clone();
+            actions.push(
+                PaneAction::callback(
+                    "auto-refresh",
+                    dbflux_i18n::t!("document.code.toolbar.auto_refresh_interval"),
+                    move |window, cx| {
+                        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                    },
+                )
+                .icon(AppIcon::Clock),
+            );
+        }
+
+        actions.extend(self.results_pane_actions());
+
+        actions
+    }
+
+    /// The results header as pane actions: the result tabs (switch, close)
+    /// and the maximize and hide buttons, while there are results to show.
+    fn results_pane_actions(&self) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+
+        let mut actions = Vec::new();
+        let tab_count = self.result_tabs.result_tabs.len();
+
+        if tab_count > 0 {
+            actions.push(
+                PaneAction::command(
+                    "next-result-tab",
+                    dbflux_i18n::t!("document.code.toolbar.next_result_tab"),
+                    Command::NextResultTab,
+                    ContextId::Results,
+                )
+                .icon(AppIcon::ChevronRight)
+                .enabled(tab_count > 1),
+            );
+            actions.push(
+                PaneAction::command(
+                    "previous-result-tab",
+                    dbflux_i18n::t!("document.code.toolbar.previous_result_tab"),
+                    Command::PrevResultTab,
+                    ContextId::Results,
+                )
+                .icon(AppIcon::ChevronLeft)
+                .enabled(tab_count > 1),
+            );
+            actions.push(
+                PaneAction::command(
+                    "close-result-tab",
+                    dbflux_i18n::t!("document.code.toolbar.close_result_tab"),
+                    Command::CloseResultTab,
+                    ContextId::Results,
+                )
+                .icon(AppIcon::CircleX),
+            );
+        }
+
+        if tab_count == 0 && self.execution.live_output.is_none() {
+            return actions;
+        }
+
+        let (maximize_label, maximize_icon) = if self.results_maximized {
+            (
+                dbflux_i18n::t!("document.code.toolbar.restore_results"),
+                AppIcon::Minimize2,
+            )
+        } else {
+            (
+                dbflux_i18n::t!("document.code.toolbar.maximize_results"),
+                AppIcon::Maximize2,
+            )
+        };
+        actions.push(
+            PaneAction::command(
+                "maximize-results",
+                maximize_label,
+                Command::ToggleResults,
+                ContextId::Editor,
+            )
+            .icon(maximize_icon),
+        );
+
+        let hidden = self.layout == SqlQueryLayout::EditorOnly;
+        let (hide_id, hide_label, hide_icon) = if hidden {
+            (
+                "show-results",
+                dbflux_i18n::t!("document.code.toolbar.show_results"),
+                AppIcon::PanelBottomOpen,
+            )
+        } else {
+            (
+                "hide-results",
+                dbflux_i18n::t!("document.code.toolbar.hide_results"),
+                AppIcon::PanelBottomClose,
+            )
+        };
+        actions.push(
+            PaneAction::command(
+                hide_id,
+                hide_label,
+                Command::ToggleEditor,
+                ContextId::Editor,
+            )
+            .icon(hide_icon),
+        );
+
+        actions
+    }
+
+    fn render_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift.preflight_running;
@@ -85,6 +320,7 @@ impl CodeDocument {
         let run_shortcut = "Ctrl \u{21B5}";
 
         let show_run_group = !is_read_only && is_db_language && !is_executing;
+        let refresh_menu_focused = self.refresh.refresh_dropdown.read(cx).is_focused(window);
 
         let run_summary = super::statements::run_summary_label(
             self.statement_count().filter(|_| is_db_language),
@@ -145,19 +381,22 @@ impl CodeDocument {
                     .child(self.render_secondary_actions(is_read_only, cx))
             })
             .when(!is_read_only && is_db_language, |el| {
-                el.child(toolbar_divider(&theme)).child(SplitButton::new(
-                    "sql-refresh-split",
-                    Button::new("sql-refresh-action", refresh_label)
-                        .icon(refresh_icon)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if this.runner.is_primary_active() {
-                                this.cancel_query(cx);
-                            } else {
-                                this.run_query(window, cx);
-                            }
-                        })),
-                    self.refresh.refresh_dropdown.clone(),
-                ))
+                el.child(toolbar_divider(&theme)).child(
+                    SplitButton::new(
+                        "sql-refresh-split",
+                        Button::new("sql-refresh-action", refresh_label)
+                            .icon(refresh_icon)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.cancel_query(cx);
+                                } else {
+                                    this.run_query(window, cx);
+                                }
+                            })),
+                        self.refresh.refresh_dropdown.clone(),
+                    )
+                    .menu_focused(refresh_menu_focused),
+                )
             })
             .child(div().flex_1())
             .when_some(run_summary, |el, summary| {
@@ -306,11 +545,14 @@ impl CodeDocument {
         // ring of its own.
         let mut key_context = KeyContext::default();
         key_context.add(CODE_EDITOR_KEY_CONTEXT);
+        if let Some(identifier) = self.vim.leader_key_context(cx) {
+            key_context.add(identifier);
+        }
         for (key, value) in self.key_context_entries(cx) {
             key_context.set(key, value);
         }
 
-        div()
+        let editor = div()
             .size_full()
             .flex()
             .flex_col()
@@ -326,52 +568,18 @@ impl CodeDocument {
                         .update(cx, |state, cx| state.focus(window, cx));
                     cx.emit(DocumentEvent::RequestFocus);
                 }),
-            )
-            .capture_action(
-                cx.listener(|this, _: &gpui_component::input::Escape, window, cx| {
-                    this.clear_vim_count_and_notify(cx);
-                    if this.handle_vim_escape_action(window, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            .capture_action(cx.listener(
-                |this, _: &gpui_component::input::IndentInline, window, cx| {
-                    if this.vim_swallows_indent_action(window, cx) {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .capture_action(cx.listener(
-                |this, _: &gpui_component::input::OutdentInline, window, cx| {
-                    if this.vim_swallows_indent_action(window, cx) {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .capture_action(
-                cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
-                    this.clear_vim_count_and_notify(cx);
-                    if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            .capture_action(
-                cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
-                    this.clear_vim_count_and_notify(cx);
-                    if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            // A keymap binding runs before the key listeners below. Vim takes
-            // its own keys ahead of a default binding, as it did when the
-            // workspace resolved keys after them; a binding the user made
-            // wins over Vim. Any other command drops a half-typed count or
-            // operator, and Cancel keeps the editor focused, as the Escape
-            // key listener does when no binding takes the key.
-            .capture_action(cx.listener(|this, action: &RunCommand, window, cx| {
+            );
+
+        let input = self.vim.input_id();
+
+        VimBinding::wire(editor, input, cx)
+            // A keymap binding runs before the key listeners Vim installs. Vim
+            // takes its own keys ahead of a default binding, as it did when the
+            // workspace resolved keys after them; a binding the user made wins
+            // over Vim. Any other command drops a half-typed count or operator,
+            // and Cancel keeps the editor focused, as the Escape key listener
+            // does when no binding takes the key.
+            .capture_action(cx.listener(move |this, action: &RunCommand, window, cx| {
                 if let Some(command) = Command::from_action_id(&action.command)
                     && this.handle_editor_overlay_pane_move(command, window, cx)
                 {
@@ -379,30 +587,13 @@ impl CodeDocument {
                     return;
                 }
 
-                if !action.from_user_binding
-                    && let Some(keystroke) = last_keystroke(cx)
-                    && this.handle_vim_key_down(
-                        &gpui::KeyDownEvent {
-                            keystroke,
-                            is_held: false,
-                            prefer_character_input: false,
-                        },
-                        window,
-                        cx,
-                    )
-                {
+                if VimBinding::route_binding(this, input, action.from_user_binding, window, cx) {
                     cx.stop_propagation();
                     return;
                 }
 
-                this.clear_vim_count_and_notify(cx);
                 if Command::from_action_id(&action.command) == Some(Command::Cancel) {
                     this.schedule_editor_refocus(window, cx);
-                }
-            }))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if this.handle_vim_key_down(event, window, cx) {
-                    cx.stop_propagation();
                 }
             }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
@@ -419,42 +610,16 @@ impl CodeDocument {
             }))
             .child(
                 div().flex_1().min_h_0().overflow_hidden().child(
-                    gpui_component::input::Editor::new(&self.editor.input_state)
+                    self.vim
+                        .editor(self.read_only)
                         .appearance(false)
-                        .readonly(self.editor_input_locked())
                         .text_size(EditorMetrics::CODE_FONT)
                         .line_height(EditorMetrics::CODE_LINE_HEIGHT)
                         .w_full()
                         .h_full(),
                 ),
             )
-            .when_some(self.vim_mode(), |el, mode| {
-                el.child(self.render_vim_mode_indicator(mode, cx))
-            })
-    }
-
-    fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .id("vim-mode-indicator")
-            .flex()
-            .flex_none()
-            .items_center()
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(Text::caption(crate::labels::vim_mode_label(mode)))
-            .when(!self.vim.pending_keys.is_empty(), |el| {
-                el.child(
-                    div()
-                        .id("vim-pending-command")
-                        .ml(Spacing::SM)
-                        .child(self.vim.pending_keys.clone()),
-                )
-            })
+            .children(self.vim.render_indicator(cx))
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1015,7 +1180,7 @@ impl Render for CodeDocument {
 
         let context_bar = self.render_context_bar(cx).into_any_element();
         let production_banner = self.render_production_banner(cx);
-        let toolbar = self.render_toolbar(cx).into_any_element();
+        let toolbar = self.render_toolbar(window, cx).into_any_element();
 
         let editor_view = if self.routine_definition_pending {
             self.render_awaiting_connection(cx).into_any_element()

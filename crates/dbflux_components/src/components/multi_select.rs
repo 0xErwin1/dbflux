@@ -1,12 +1,15 @@
+use crate::actions::RunCommand;
 use crate::controls::Checkbox;
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, Icon};
-use crate::tokens::{ChamferCut, Fields, FontSizes, Heights, Spacing};
+use crate::primitives::{Chamfer, ChamferRing, Icon};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    Anchor, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
+    Anchor, ElementId, EventEmitter, FocusHandle, IntoElement, ParentElement, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred,
+    div, point, px,
 };
 use gpui_component::ActiveTheme;
 
@@ -32,6 +35,15 @@ pub struct MultiSelect {
     bare: bool,
     summary_name: Option<SharedString>,
     leading_icon: Option<AppIcon>,
+    /// Row the keyboard points at while the list is open.
+    highlighted_index: Option<usize>,
+    /// Created the first time the control is focused from the keyboard
+    /// (see [`MultiSelect::focus`]).
+    focus_handle: Option<FocusHandle>,
+    /// Where focus was before [`MultiSelect::focus`], given back when the
+    /// list closes from the keyboard.
+    return_focus: Option<FocusHandle>,
+    _focus_out: Option<Subscription>,
 }
 
 impl MultiSelect {
@@ -46,6 +58,10 @@ impl MultiSelect {
             bare: false,
             summary_name: None,
             leading_icon: None,
+            highlighted_index: None,
+            focus_handle: None,
+            return_focus: None,
+            _focus_out: None,
         }
     }
 
@@ -146,7 +162,132 @@ impl MultiSelect {
             return;
         }
         self.open = !self.open;
+        self.highlighted_index = self.open.then_some(0);
         cx.notify();
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Moves keyboard focus to the control, so it answers the `Dropdown`
+    /// keys itself: Enter or Space opens the list, j / k and the arrows move,
+    /// Space toggles the highlighted item, and Enter or Escape closes the
+    /// list and gives focus back to the element that held it before.
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.ensure_focus_handle(window, cx);
+
+        if !handle.contains_focused(window, cx) {
+            self.return_focus = window.focused(cx);
+        }
+
+        handle.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Whether keyboard focus is on the control.
+    pub fn is_focused(&self, window: &Window) -> bool {
+        self.focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(window))
+    }
+
+    fn ensure_focus_handle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> FocusHandle {
+        if let Some(handle) = &self.focus_handle {
+            return handle.clone();
+        }
+
+        let handle = cx.focus_handle();
+
+        self._focus_out = Some(
+            cx.on_focus_out(&handle, window, |this, _event, _window, cx| {
+                this.return_focus = None;
+                this.close(cx);
+            }),
+        );
+
+        self.focus_handle = Some(handle.clone());
+        handle
+    }
+
+    fn close(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.open = false;
+            self.highlighted_index = None;
+            cx.notify();
+        }
+    }
+
+    fn move_highlight(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let count = self.items.len();
+        if count == 0 {
+            return;
+        }
+
+        let next = match (self.highlighted_index, forward) {
+            (Some(index), true) => (index + 1) % count,
+            (Some(0), false) | (None, false) => count - 1,
+            (Some(index), false) => index - 1,
+            (None, true) => 0,
+        };
+
+        self.highlighted_index = Some(next);
+        self.menu_scroll_handle.scroll_to_item(next);
+        cx.notify();
+    }
+
+    fn give_focus_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(previous) = self.return_focus.take() else {
+            return;
+        };
+
+        if self.is_focused(window) {
+            previous.focus(window, cx);
+        }
+    }
+
+    /// Answers the `Dropdown` keys while the control has focus. A key it has
+    /// no use for in its current state propagates to the pane around it.
+    fn handle_run_command(
+        &mut self,
+        action: &RunCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let handled = match Command::from_action_id(&action.command) {
+            Some(Command::SelectNext) if self.open => {
+                self.move_highlight(true, cx);
+                true
+            }
+            Some(Command::SelectPrev) if self.open => {
+                self.move_highlight(false, cx);
+                true
+            }
+            Some(Command::ExpandCollapse) if self.open => {
+                if let Some(index) = self.highlighted_index {
+                    self.toggle_index(index, cx);
+                }
+                true
+            }
+            Some(Command::Execute | Command::Cancel) if self.open => {
+                self.close(cx);
+                self.give_focus_back(window, cx);
+                true
+            }
+            Some(Command::Execute | Command::ExpandCollapse) if !self.items.is_empty() => {
+                self.toggle_open(cx);
+                true
+            }
+            Some(Command::Cancel) if self.return_focus.is_some() => {
+                self.give_focus_back(window, cx);
+                true
+            }
+            _ => false,
+        };
+
+        if !handled {
+            cx.propagate();
+        }
     }
 
     fn handle_mouse_down_out(
@@ -155,10 +296,7 @@ impl MultiSelect {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.open {
-            self.open = false;
-            cx.notify();
-        }
+        self.close(cx);
     }
 
     fn render_trigger_label(&self) -> SharedString {
@@ -202,6 +340,16 @@ impl MultiSelect {
             .enumerate()
             .map(|(index, item)| {
                 let checked = self.selected_indices.contains(&index);
+                let highlighted = self.highlighted_index == Some(index);
+
+                let row_shape = if highlighted {
+                    Chamfer::new(ChamferCut::KEYCAP)
+                        .fill(ChromeColors::tint(theme).opacity(Fields::MENU_HIGHLIGHT_ALPHA))
+                } else {
+                    Chamfer::new(ChamferCut::KEYCAP)
+                        .fill_hover(theme.list_hover)
+                        .interactive(("ms-row-shape", index))
+                };
 
                 div()
                     .id(("ms-item", index))
@@ -219,17 +367,10 @@ impl MultiSelect {
                     } else {
                         theme.foreground
                     })
-                    .child(
-                        Chamfer::new(ChamferCut::KEYCAP)
-                            .fill_hover(theme.list_hover)
-                            .interactive(("ms-row-shape", index)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.toggle_index(index, cx);
-                        }),
-                    )
+                    .child(row_shape)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.toggle_index(index, cx);
+                    }))
                     .child(
                         Checkbox::new(SharedString::from(format!("ms-item-{}", index)))
                             .checked(checked),
@@ -255,12 +396,9 @@ impl MultiSelect {
                         .fill_hover(theme.list_hover)
                         .interactive("ms-clear-shape"),
                 )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _event, _window, cx| {
-                        this.clear_selection(cx);
-                    }),
-                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.clear_selection(cx);
+                }))
                 .child(dbflux_i18n::t!("controls.multi_select.clear_all"))
         });
 
@@ -301,7 +439,8 @@ impl MultiSelect {
 }
 
 impl Render for MultiSelect {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let keyboard_focused = self.is_focused(window);
         let theme = cx.theme();
         let is_empty = self.items.is_empty();
         let label = self.render_trigger_label();
@@ -333,6 +472,10 @@ impl Render for MultiSelect {
                 shape = shape
                     .fill_hover(theme.secondary_hover)
                     .interactive("ms-trigger-shape");
+            }
+
+            if keyboard_focused {
+                shape = shape.ring(ChamferRing::focus(ChromeColors::tint(theme)));
             }
 
             shape
@@ -388,7 +531,15 @@ impl Render for MultiSelect {
             .child(trigger)
             .child(self.render_menu(cx));
 
-        let mut container = div().id(self.id.clone()).w_full().child(trigger_wrap);
+        let mut container = div()
+            .id(self.id.clone())
+            .key_context(ContextId::Dropdown.as_gpui_context())
+            .when_some(self.focus_handle.as_ref(), |element, handle| {
+                element.track_focus(handle)
+            })
+            .on_action(cx.listener(Self::handle_run_command))
+            .w_full()
+            .child(trigger_wrap);
 
         if self.open {
             container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
@@ -431,6 +582,121 @@ fn more_label(extra: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::more_label;
+
+    /// Keyboard tests against a real window, with the `Dropdown` keys the
+    /// app keymap binds (see `bind_dropdown_keys_for_tests`).
+    mod keyboard {
+        use super::super::{MultiSelect, MultiSelectChanged};
+        use crate::controls::{DropdownItem, bind_dropdown_keys_for_tests};
+        use gpui::{
+            AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+            ParentElement as _, Render, SharedString, Styled as _, TestAppContext,
+            VisualTestContext, Window, div,
+        };
+
+        struct Owner {
+            focus: FocusHandle,
+            multi_select: Entity<MultiSelect>,
+            changes: Vec<Vec<SharedString>>,
+            _subscription: gpui::Subscription,
+        }
+
+        impl Render for Owner {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .track_focus(&self.focus)
+                    .child(self.multi_select.clone())
+            }
+        }
+
+        fn setup(cx: &mut TestAppContext) -> (Entity<Owner>, &mut VisualTestContext) {
+            cx.update(gpui_component::init);
+            bind_dropdown_keys_for_tests(cx);
+
+            let (owner, window) = cx.add_window_view(|window, cx| {
+                let multi_select = cx.new(|cx| {
+                    let mut multi_select = MultiSelect::new("keyboard-multi-select");
+                    multi_select.set_items(
+                        vec![
+                            DropdownItem::new("One"),
+                            DropdownItem::new("Two"),
+                            DropdownItem::new("Three"),
+                        ],
+                        cx,
+                    );
+                    multi_select
+                });
+
+                let subscription = cx.subscribe_in(
+                    &multi_select,
+                    window,
+                    |this: &mut Owner, _, event: &MultiSelectChanged, _window, _cx| {
+                        this.changes.push(event.selected_values.clone());
+                    },
+                );
+
+                Owner {
+                    focus: cx.focus_handle(),
+                    multi_select,
+                    changes: Vec::new(),
+                    _subscription: subscription,
+                }
+            });
+            window.run_until_parked();
+
+            window.update(|window, cx| {
+                let focus = owner.read(cx).focus.clone();
+                focus.focus(window, cx);
+
+                let multi_select = owner.read(cx).multi_select.clone();
+                multi_select.update(cx, |multi_select, cx| multi_select.focus(window, cx));
+            });
+            window.run_until_parked();
+
+            (owner, window)
+        }
+
+        #[gpui::test]
+        fn space_toggles_the_highlighted_item_and_escape_returns_focus(cx: &mut TestAppContext) {
+            let (owner, window) = setup(cx);
+
+            window.simulate_keystrokes("space");
+            window.run_until_parked();
+            let open = window.update(|_, cx| owner.read(cx).multi_select.read(cx).is_open());
+            assert!(open, "Space opens the list");
+
+            window.simulate_keystrokes("space j j space k k space");
+            window.run_until_parked();
+
+            let values =
+                window.update(|_, cx| owner.read(cx).multi_select.read(cx).selected_values());
+            assert_eq!(
+                values,
+                vec![SharedString::from("Three")],
+                "One on, Three on, One off again"
+            );
+
+            window.simulate_keystrokes("escape");
+            window.run_until_parked();
+
+            let (open, owner_focused, changes) = window.update(|window, cx| {
+                let owner = owner.read(cx);
+                (
+                    owner.multi_select.read(cx).is_open(),
+                    owner.focus.is_focused(window),
+                    owner.changes.len(),
+                )
+            });
+            assert!(!open, "Escape closes the list");
+            assert!(owner_focused, "Escape hands focus back");
+            assert_eq!(changes, 3, "every toggle reports the new selection");
+        }
+    }
 
     #[test]
     fn multi_select_keys_resolve_in_both_locales() {

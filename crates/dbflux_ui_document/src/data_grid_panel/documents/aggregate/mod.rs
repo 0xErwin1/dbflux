@@ -24,6 +24,7 @@ use dbflux_components::components::document_tree::{
 };
 use dbflux_components::controls::InputEvent;
 use dbflux_components::modals::ModalFocus;
+use dbflux_components::vim::VimBinding;
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
     EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
@@ -208,6 +209,8 @@ fn sort_flat_rows(flat: &mut FlatView, sort: SortState) {
 /// State of the Aggregate view of one collection tab.
 pub(in crate::data_grid_panel) struct AggregateViewState {
     pub pipeline_editor: Entity<EditorState>,
+    /// Vim mode for the pipeline editor.
+    pub pipeline_vim: VimBinding,
     /// Why the pipeline cannot run, shown under the editor.
     pub pipeline_error: Option<String>,
     pub view_mode: DataViewMode,
@@ -253,6 +256,7 @@ impl AggregateViewState {
                 .language("json")
                 .line_number(true)
         });
+        let pipeline_vim = VimBinding::new(pipeline_editor.clone(), window, cx);
 
         let subscriptions =
             vec![
@@ -267,6 +271,7 @@ impl AggregateViewState {
 
         Self {
             pipeline_editor,
+            pipeline_vim,
             pipeline_error: None,
             view_mode: DataViewMode::Document,
             results: None,
@@ -1306,6 +1311,93 @@ mod panel_tests {
             });
         });
         window.run_until_parked();
+    }
+
+    /// Both collection editors follow the Vim mode setting while open.
+    #[gpui::test]
+    fn the_collection_editors_follow_the_vim_setting(cx: &mut TestAppContext) {
+        use dbflux_components::vim::VimMode;
+
+        let (panel, window) = collection_panel(
+            cx,
+            DocumentFeatures::QUERY_SLOTS | DocumentFeatures::AGGREGATE,
+        );
+        let modes = |window: &mut VisualTestContext| {
+            window.update(|_, app| {
+                let collection = &panel.read(app).collection;
+                (
+                    collection.json_vim.mode(),
+                    collection.aggregate.pipeline_vim.mode(),
+                )
+            })
+        };
+        assert_eq!(modes(window), (None, None));
+
+        window.update(|_, app| dbflux_components::vim::set_vim_enabled(app, true));
+        window.run_until_parked();
+        assert_eq!(
+            modes(window),
+            (Some(VimMode::Normal), Some(VimMode::Normal))
+        );
+
+        window.update(|_, app| dbflux_components::vim::set_vim_enabled(app, false));
+        window.run_until_parked();
+        assert_eq!(modes(window), (None, None));
+    }
+
+    /// With Vim mode on, the pipeline editor takes Vim keys: `j` moves
+    /// down, `i` inserts, and Escape returns to Normal mode.
+    #[gpui::test]
+    fn the_pipeline_editor_takes_vim_keys(cx: &mut TestAppContext) {
+        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        let (panel, window) = collection_panel(
+            cx,
+            DocumentFeatures::QUERY_SLOTS | DocumentFeatures::AGGREGATE,
+        );
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.collection.tab = CollectionTab::Aggregate;
+                panel
+                    .collection
+                    .aggregate
+                    .pipeline_editor
+                    .update(cx, |editor, cx| {
+                        editor.set_value("ab\ncd", window, cx);
+                        editor.set_selected_range(0..0, cx);
+                        editor.focus(window, cx);
+                    });
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        let text_and_cursor = |window: &mut VisualTestContext| {
+            window.update(|_, app| {
+                let editor = panel
+                    .read(app)
+                    .collection
+                    .aggregate
+                    .pipeline_editor
+                    .read(app);
+                (editor.value().to_string(), editor.cursor())
+            })
+        };
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(window), ("ab\ncd".into(), 3));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.simulate_keystrokes("escape");
+        window.simulate_keystrokes("x");
+        window.run_until_parked();
+        assert_eq!(
+            text_and_cursor(window).0,
+            "ab\ncd",
+            "x deleted in Normal mode"
+        );
     }
 
     #[test]

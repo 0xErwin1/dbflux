@@ -19,6 +19,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{ChromeColors, DocumentMetrics, ObjectStoreMetrics};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::VimBinding;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -180,20 +181,33 @@ impl ObjectEditorDocument {
 
         match (&self.load, self.buffer.as_ref()) {
             (LoadState::Failed(refusal), _) => self.render_refusal(refusal, cx),
-            (_, Some(buffer)) => div()
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .pt(ObjectStoreMetrics::EDITOR_PADDING_TOP)
-                .bg(theme.background)
-                .child(
-                    gpui_component::input::Editor::new(&buffer.input)
-                        .appearance(false)
-                        .disabled(!buffer.is_editable())
-                        .w_full()
-                        .h_full(),
-                )
-                .into_any_element(),
+            (_, Some(buffer)) => {
+                let editor = div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .pt(ObjectStoreMetrics::EDITOR_PADDING_TOP)
+                    .bg(theme.background)
+                    .child(
+                        buffer
+                            .vim
+                            .editor(!buffer.is_editable())
+                            .appearance(false)
+                            .w_full()
+                            .h_full(),
+                    );
+                let indicator = buffer.vim.render_indicator(cx);
+                let wrapper = buffer
+                    .vim
+                    .leader_scope(div().flex_1().min_h_0().flex().flex_col(), cx);
+
+                let input = buffer.vim.input_id();
+
+                VimBinding::capture_run_command(VimBinding::wire(wrapper, input, cx), input, cx)
+                    .child(editor)
+                    .children(indicator)
+                    .into_any_element()
+            }
             (LoadState::Loading, None) => self.render_notice(
                 dbflux_i18n::t!("document.object_editor.status.loading"),
                 false,

@@ -6,6 +6,7 @@ use dbflux_components::tokens::{FontSizes, Spacing};
 
 use crate::data_grid_panel::mutation_executor::ExecutionMode;
 use crate::labels::{execution_count_state_label, execution_mode_label};
+use crate::query_builder::keyboard::row_id;
 use crate::query_builder::panel::QueryBuilderPanel;
 
 /// Renders the execution mode section.
@@ -36,14 +37,23 @@ pub fn render_execution(
         ExecutionMode::DirectAutocommit,
     ];
 
-    let mut mode_row = div().flex().flex_row().gap_1().items_center().child(
-        div()
-            .text_size(FontSizes::SM)
-            .text_color(theme.muted_foreground)
-            .child(dbflux_i18n::t!(
-                "document.query_builder.execution.mode_label"
-            )),
-    );
+    let mark = panel.rail_mark.clone();
+    let mode_row_id = row_id::execution_mode();
+
+    let mut mode_row = mark
+        .row(&mode_row_id, div())
+        .flex()
+        .flex_row()
+        .gap_1()
+        .items_center()
+        .child(
+            div()
+                .text_size(FontSizes::SM)
+                .text_color(theme.muted_foreground)
+                .child(dbflux_i18n::t!(
+                    "document.query_builder.execution.mode_label"
+                )),
+        );
 
     for mode in modes {
         let is_active = mode == current_mode;
@@ -53,14 +63,15 @@ pub fn render_execution(
             ButtonVariant::Secondary
         };
         mode_row = mode_row.child(
-            Button::new(("qb-exec-mode", mode as usize), execution_mode_label(mode))
-                .variant(variant)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if let Some(state) = this.mutation_state.as_mut() {
-                        state.exec_options.mode = mode;
-                    }
-                    cx.notify();
-                })),
+            mark.ring_element(
+                &mode_row_id,
+                &format!("mode-{}", mode as usize),
+                Button::new(("qb-exec-mode", mode as usize), execution_mode_label(mode))
+                    .variant(variant)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.set_execution_mode(mode, cx);
+                    })),
+            ),
         );
     }
 
@@ -72,7 +83,8 @@ pub fn render_execution(
         theme.muted_foreground
     };
 
-    let chunk_row = div()
+    let chunk_row = mark
+        .row(&row_id::chunk_size(), div())
         .flex()
         .flex_row()
         .gap_1()
@@ -111,7 +123,8 @@ pub fn render_execution(
         theme.muted_foreground
     };
 
-    let lock_row = div()
+    let lock_row = mark
+        .row(&row_id::lock_timeout(), div())
         .flex()
         .flex_row()
         .gap_1()

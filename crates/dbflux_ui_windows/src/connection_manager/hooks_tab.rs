@@ -140,6 +140,36 @@ impl ConnectionManagerWindow {
         }
     }
 
+    /// Returns the hook dropdown a Settings tab focus target picks from.
+    pub(super) fn settings_hook_dropdown(&self, focus: FormFocus) -> Option<&Entity<Dropdown>> {
+        let tab = &self.settings_tab;
+
+        match focus {
+            FormFocus::SettingsPreConnectHook => Some(&tab.conn_pre_hook_dropdown),
+            FormFocus::SettingsPostConnectHook => Some(&tab.conn_post_hook_dropdown),
+            FormFocus::SettingsPreDisconnectHook => Some(&tab.conn_pre_disconnect_hook_dropdown),
+            FormFocus::SettingsPostDisconnectHook => Some(&tab.conn_post_disconnect_hook_dropdown),
+            _ => None,
+        }
+    }
+
+    /// The hook dropdown of a phase, with the form's cursor ring.
+    fn render_hook_dropdown(&self, focus_target: FormFocus, cx: &Context<Self>) -> Option<Div> {
+        let dropdown = self.settings_hook_dropdown(focus_target)?.clone();
+        let focused = self.edit_state == EditState::Navigating
+            && self.active_tab == ActiveTab::Settings
+            && self.form_focus == focus_target;
+
+        Some(
+            layout::cursor_ring(
+                focused,
+                div().w(Widths::CM_FORM_DROPDOWN).child(dropdown),
+                cx,
+            )
+            .w(Widths::CM_FORM_DROPDOWN),
+        )
+    }
+
     /// Returns the "extra hooks" input a Settings tab focus target edits.
     pub(super) fn settings_hook_extra_input(
         &self,
@@ -206,11 +236,7 @@ impl ConnectionManagerWindow {
                             .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.pre_connect_hook")),
                     )
-                    .child(
-                        div()
-                            .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.settings_tab.conn_pre_hook_dropdown.clone()),
-                    ),
+                    .children(self.render_hook_dropdown(FormFocus::SettingsPreConnectHook, cx)),
             )
             .children(self.render_hook_extra_row(FormFocus::SettingsPreConnectHookExtra, cx))
             .child(
@@ -224,11 +250,7 @@ impl ConnectionManagerWindow {
                             .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.post_connect_hook")),
                     )
-                    .child(
-                        div()
-                            .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.settings_tab.conn_post_hook_dropdown.clone()),
-                    ),
+                    .children(self.render_hook_dropdown(FormFocus::SettingsPostConnectHook, cx)),
             )
             .children(self.render_hook_extra_row(FormFocus::SettingsPostConnectHookExtra, cx))
             .child(
@@ -242,11 +264,7 @@ impl ConnectionManagerWindow {
                             .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.pre_disconnect_hook")),
                     )
-                    .child(
-                        div()
-                            .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.settings_tab.conn_pre_disconnect_hook_dropdown.clone()),
-                    ),
+                    .children(self.render_hook_dropdown(FormFocus::SettingsPreDisconnectHook, cx)),
             )
             .children(self.render_hook_extra_row(FormFocus::SettingsPreDisconnectHookExtra, cx))
             .child(
@@ -260,11 +278,7 @@ impl ConnectionManagerWindow {
                             .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.post_disconnect_hook")),
                     )
-                    .child(
-                        div()
-                            .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.settings_tab.conn_post_disconnect_hook_dropdown.clone()),
-                    ),
+                    .children(self.render_hook_dropdown(FormFocus::SettingsPostDisconnectHook, cx)),
             )
             .children(self.render_hook_extra_row(FormFocus::SettingsPostDisconnectHookExtra, cx))
             .when(show_process_run_warning, |this| {

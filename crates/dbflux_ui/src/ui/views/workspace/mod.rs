@@ -1,7 +1,10 @@
 mod actions;
 mod dispatch;
 pub mod inspector;
+#[cfg(test)]
+mod keyboard_coverage_tests;
 mod notifications;
+mod pane_actions;
 pub mod pipeline;
 mod render;
 mod shell;
@@ -21,7 +24,8 @@ use dbflux_ui_base::modals::{
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
 use dbflux_ui_base::{
-    AppStateGlobal, OpenAuditRequested, drain_hook_load_diagnostics, report_error,
+    AppStateGlobal, OpenAuditRequested, UserErrorReported, drain_hook_load_diagnostics,
+    report_error,
 };
 
 #[cfg(feature = "mcp")]
@@ -384,6 +388,11 @@ pub struct Workspace {
     command_search_focus: FocusHandle,
     /// The notifications popover under the title-bar bell.
     notifications: notifications::NotificationsPopoverState,
+    /// The active document's actions menu, open after `OpenPaneActions`.
+    pane_actions_menu: Option<pane_actions::PaneActionsMenu>,
+    /// Correlation id of the most recent user-facing error, the target of
+    /// Open Last Error in Audit.
+    last_user_error: Option<uuid::Uuid>,
 
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
@@ -427,6 +436,14 @@ impl Workspace {
         cx.set_global(AppStateGlobal {
             entity: app_state.clone(),
         });
+        dbflux_ui_base::app_state_entity::publish_vim_setting(&app_state, cx);
+
+        // Subscribed before the startup diagnostics below are reported, so
+        // Open Last Error in Audit also reaches those.
+        cx.subscribe(&app_state, |this, _, event: &UserErrorReported, _| {
+            this.last_user_error = Some(event.correlation_id);
+        })
+        .detach();
 
         let hook_load_errors = app_state.update(cx, |state, _| {
             drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
@@ -1602,6 +1619,8 @@ impl Workspace {
             focus_handle,
             command_search_focus: cx.focus_handle(),
             notifications: notifications::NotificationsPopoverState::new(cx),
+            pane_actions_menu: None,
+            last_user_error: None,
             _background_purge_task: None,
             pending_login_modal_open: None,
         };
@@ -1802,6 +1821,16 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.prev_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
             ),
+            PaletteCommand::new(
+                "move_tab_left",
+                dbflux_i18n::t!("palette.command.move_tab_left.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            ),
+            PaletteCommand::new(
+                "move_tab_right",
+                dbflux_i18n::t!("palette.command.move_tab_right.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            ),
             // Results
             PaletteCommand::new(
                 "export_results",
@@ -1822,6 +1851,11 @@ impl Workspace {
             PaletteCommand::new(
                 "refresh_schema",
                 dbflux_i18n::t!("palette.command.refresh_schema.name"),
+                dbflux_i18n::t!("palette.category.connections"),
+            ),
+            PaletteCommand::new(
+                "export_connections",
+                dbflux_i18n::t!("palette.command.export_connections.name"),
                 dbflux_i18n::t!("palette.category.connections"),
             ),
             // Focus
@@ -1867,6 +1901,36 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "clear_finished_tasks",
+                dbflux_i18n::t!("palette.command.clear_finished_tasks.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "toggle_notifications",
+                dbflux_i18n::t!("palette.command.toggle_notifications.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_pane_actions",
+                dbflux_i18n::t!("palette.command.open_pane_actions.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "show_connections_view",
+                dbflux_i18n::t!("palette.command.show_connections_view.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "show_scripts_view",
+                dbflux_i18n::t!("palette.command.show_scripts_view.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "show_dashboards_view",
+                dbflux_i18n::t!("palette.command.show_dashboards_view.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "open_settings",
                 dbflux_i18n::t!("palette.command.open_settings.name"),
                 dbflux_i18n::t!("palette.category.view"),
@@ -1898,6 +1962,16 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.open_audit_viewer.name"),
                 dbflux_i18n::t!("palette.category.view"),
             ),
+            PaletteCommand::new(
+                "open_last_error_in_audit",
+                dbflux_i18n::t!("palette.command.open_last_error_in_audit.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_toast_actions",
+                dbflux_i18n::t!("palette.command.open_toast_actions.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
             // Charts / Dashboards
             PaletteCommand::new(
                 "open_saved_chart",
@@ -1923,8 +1997,18 @@ impl Workspace {
 
     /// The key context of the workspace root: `Workspace`, the context that
     /// owns the keyboard (see [`Workspace::active_context`]) and, while a
-    /// document owns it, the entries the document contributes.
+    /// document owns it, the entries the document contributes. While a
+    /// workspace overlay owns the keyboard the global chords stay out, even
+    /// when the overlay reports a text field.
     fn root_key_context(&self, cx: &Context<Self>) -> gpui::KeyContext {
+        if let Some(context) = self.overlay_context(cx) {
+            return dbflux_ui_base::keymap::overlay_root_key_context(
+                dbflux_ui_base::keymap::WORKSPACE_KEY_CONTEXT,
+                context,
+                &[],
+            );
+        }
+
         let context = self.active_context(cx);
 
         let entries = if self.focus_target == FocusTarget::Document {
@@ -1945,58 +2029,8 @@ impl Workspace {
     }
 
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
-        // A quit request can open the active-query prompt over any other
-        // overlay, and the prompt is drawn above them, so it owns the keyboard
-        // first.
-        if self.modal_active_query.read(cx).is_visible() {
-            return ContextId::ConfirmModal;
-        }
-
-        if self.command_palette.read(cx).is_visible() {
-            return ContextId::CommandPalette;
-        }
-
-        if self.sidebar.read(cx).has_child_picker_open() {
-            // When the filter input inside the picker is focused, defer to the
-            // text-input keymap so typing does not trigger list navigation.
-            if self.sidebar.read(cx).child_picker_filter_is_focused() {
-                return ContextId::TextInput;
-            }
-            return ContextId::EventStreamsPicker;
-        }
-
-        if self.sql_preview_modal.read(cx).is_visible() {
-            return ContextId::SqlPreviewModal;
-        }
-
-        // Text-input-bearing modals must own the keymap so the underlying
-        // sidebar/document context does not consume typed characters as
-        // command shortcuts. Returning `TextInput` (which has no parent in
-        // the keymap fallback chain) ensures only input-level bindings fire.
-        if self.modal_import_dashboard.read(cx).is_visible()
-            || self.modal_create_dashboard.read(cx).is_visible()
-            || self.modal_rename_item.read(cx).is_visible()
-            || self.modal_add_panel.read(cx).is_visible()
-            || self.modal_drop_table.read(cx).is_visible()
-            || self.modal_tunnel_auth.read(cx).is_visible()
-        {
-            return ContextId::TextInput;
-        }
-
-        // Confirm-only modals (no text input) still need to swallow keys so
-        // global shortcuts do not run while the user is reading a confirmation
-        // dialog.
-        if self.modal_delete_connection.read(cx).is_visible()
-            || self.modal_unsaved_changes.read(cx).is_visible()
-            || self.modal_delete_dashboard.read(cx).is_visible()
-            || self.modal_delete_saved_chart.read(cx).is_visible()
-            || self.sidebar.read(cx).delete_modal_state().is_some()
-        {
-            return ContextId::ConfirmModal;
-        }
-
-        if self.tab_bar.read(cx).has_context_menu_open() {
-            return ContextId::ContextMenu;
+        if let Some(context) = self.overlay_context(cx) {
+            return context;
         }
 
         if self.focus_target == FocusTarget::Sidebar && self.sidebar.read(cx).is_renaming() {
@@ -2017,6 +2051,74 @@ impl Workspace {
         }
 
         self.focus_target.to_context()
+    }
+
+    /// The context of the workspace overlay that owns the keyboard (a
+    /// prompt, the palette, a picker, a dialog or the tab menu), or `None`
+    /// when no overlay is open and the focused panel owns it.
+    fn overlay_context(&self, cx: &Context<Self>) -> Option<ContextId> {
+        // A quit request can open the active-query prompt over any other
+        // overlay, and the prompt is drawn above them, so it owns the keyboard
+        // first.
+        if self.modal_active_query.read(cx).is_visible() {
+            return Some(ContextId::ConfirmModal);
+        }
+
+        // The popover floats over every other layer and holds focus while
+        // it is open.
+        if self.notifications.is_open() {
+            return Some(ContextId::Notifications);
+        }
+
+        if self.command_palette.read(cx).is_visible() {
+            return Some(ContextId::CommandPalette);
+        }
+
+        if self.sidebar.read(cx).has_child_picker_open() {
+            // When the filter input inside the picker is focused, defer to the
+            // text-input keymap so typing does not trigger list navigation.
+            if self.sidebar.read(cx).child_picker_filter_is_focused() {
+                return Some(ContextId::TextInput);
+            }
+            return Some(ContextId::EventStreamsPicker);
+        }
+
+        if self.sql_preview_modal.read(cx).is_visible() {
+            return Some(ContextId::SqlPreviewModal);
+        }
+
+        // Text-input-bearing modals must own the keymap so the underlying
+        // sidebar/document context does not consume typed characters as
+        // command shortcuts. `TextInput` has no parent in the keymap fallback
+        // chain, and as an overlay it keeps no global chords either, so only
+        // input-level bindings fire.
+        if self.modal_import_dashboard.read(cx).is_visible()
+            || self.modal_create_dashboard.read(cx).is_visible()
+            || self.modal_rename_item.read(cx).is_visible()
+            || self.modal_add_panel.read(cx).is_visible()
+            || self.modal_drop_table.read(cx).is_visible()
+            || self.modal_tunnel_auth.read(cx).is_visible()
+        {
+            return Some(ContextId::TextInput);
+        }
+
+        // Confirm-only modals (no text input) still need to swallow keys so
+        // global shortcuts do not run while the user is reading a confirmation
+        // dialog.
+        if self.modal_delete_connection.read(cx).is_visible()
+            || self.modal_unsaved_changes.read(cx).is_visible()
+            || self.modal_delete_dashboard.read(cx).is_visible()
+            || self.modal_delete_saved_chart.read(cx).is_visible()
+            || self.sidebar.read(cx).delete_modal_state().is_some()
+        {
+            return Some(ContextId::ConfirmModal);
+        }
+
+        if self.tab_bar.read(cx).has_context_menu_open() || self.has_pane_actions_menu() {
+            return Some(ContextId::ContextMenu);
+        }
+
+        None
     }
 
     /// Moves keyboard focus to `target`. Focusing the background tasks
@@ -4031,6 +4133,83 @@ mod tab_close_request_tests {
         );
     }
 
+    /// The approvals keys run through the workspace like any key binding:
+    /// `a` approves the selected call instead of reaching `unreachable!`.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn the_approvals_keys_reach_the_approvals_tab(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        app_state.update(window, |state, _| {
+            state
+                .request_mcp_execution(
+                    "agent-a".to_string(),
+                    "conn-a".to_string(),
+                    "delete_records".to_string(),
+                    serde_json::from_value(serde_json::json!("destructive"))
+                        .expect("destructive classification"),
+                    serde_json::json!({ "table": "items" }),
+                )
+                .expect("queue a pending execution");
+        });
+        open_approvals(window, &workspace);
+
+        window.simulate_keystrokes("a");
+        window.run_until_parked();
+
+        let pending = window.update(|_, cx| {
+            app_state
+                .read(cx)
+                .list_mcp_pending_executions()
+                .expect("list pending executions")
+        });
+        assert!(pending.is_empty(), "`a` approves the selected call");
+    }
+
+    /// An open migrate wizard reports its own key context, and every command
+    /// its layer binds reaches it through the workspace's dispatch domains.
+    #[gpui::test]
+    fn the_migrate_wizard_keys_reach_the_wizard(cx: &mut TestAppContext) {
+        use dbflux_core::TableRef;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_migrate_wizard(
+                    uuid::Uuid::new_v4(),
+                    None,
+                    vec![TableRef::new("users")],
+                    window,
+                    cx,
+                );
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let context = window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)));
+        assert_eq!(context, crate::keymap::ContextId::MigrateWizard);
+
+        for command in [
+            Command::SelectNext,
+            Command::SelectPrev,
+            Command::ColumnLeft,
+            Command::ColumnRight,
+            Command::Execute,
+            Command::ExpandCollapse,
+            Command::MoveSelectedUp,
+            Command::MoveSelectedDown,
+            Command::NextPanelTab,
+            Command::PrevPanelTab,
+            Command::RunQuery,
+            Command::Cancel,
+        ] {
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.dispatch(command, window, cx));
+            });
+        }
+    }
+
     /// The Migrate action opens the wizard as a tab; repeating it for the same
     /// selection focuses that tab, and a different selection gets its own.
     #[gpui::test]
@@ -4110,6 +4289,47 @@ mod tab_close_request_tests {
 
         window.simulate_keystrokes("ctrl-shift-1");
         assert_eq!(target(window), FocusTarget::Sidebar);
+    }
+
+    /// Ctrl+Shift+Page Up and Page Down move the active tab one place left
+    /// or right, as dragging it does, and stop at either end.
+    #[gpui::test]
+    fn ctrl_shift_page_keys_move_the_active_tab(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let first = open_code_tab(window, &workspace, &app_state);
+        let second = open_code_tab(window, &workspace, &app_state);
+        let order = |window: &mut VisualTestContext| -> Vec<DocumentId> {
+            window.update(|_, cx| {
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .documents()
+                    .iter()
+                    .map(|tab| tab.id())
+                    .collect()
+            })
+        };
+        activate_tab(window, &workspace, second);
+        window.update(|window, _| window.activate_window());
+
+        window.simulate_keystrokes("ctrl-shift-pageup");
+        window.run_until_parked();
+        assert_eq!(order(window), vec![second, first]);
+        assert_eq!(active_tab_id(window, &workspace), Some(second));
+
+        window.simulate_keystrokes("ctrl-shift-pageup");
+        window.run_until_parked();
+        assert_eq!(
+            order(window),
+            vec![second, first],
+            "the first place stops it"
+        );
+
+        window.simulate_keystrokes("ctrl-shift-pagedown");
+        window.run_until_parked();
+        assert_eq!(order(window), vec![first, second]);
+        assert_eq!(active_tab_id(window, &workspace), Some(second));
     }
 
     fn tasks_panel_rendered(window: &mut VisualTestContext) -> bool {

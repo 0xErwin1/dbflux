@@ -424,6 +424,12 @@ impl ImportConnectionsPanel {
     /// Switches the source picker to the first registered external-client
     /// importer. Called by the connection manager's "Import from another
     /// client" footer button, right after `reset`.
+    /// Whether another client, rather than a DBFlux bundle, is the source.
+    #[cfg(test)]
+    pub(super) fn external_source_selected(&self) -> bool {
+        matches!(self.source_selection, ImportSourceSelection::External(_))
+    }
+
     pub fn preselect_external_source(&mut self, cx: &mut Context<Self>) {
         if let Some(importer) = importers().into_iter().next() {
             self.source_selection = ImportSourceSelection::External(importer.id().to_string());

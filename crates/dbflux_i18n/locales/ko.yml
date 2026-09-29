@@ -175,6 +175,13 @@ components:
   file_picker:
     browse: "찾아보기…"
 composites:
+  rail:
+    add: "추가"
+    add_group: "그룹 추가"
+    remove: "제거"
+    toggle: "전환"
+    move_up: "위로 이동"
+    move_down: "아래로 이동"
   refresh_split_button:
     label: 새로고침
 controls:
@@ -1027,6 +1034,27 @@ document:
         created_with_limitations: "\"%{name}\" 버킷 생성됨 (제한 있음)"
     breadcrumb: "버킷"
   chart:
+    pane_actions:
+      refresh: "새로 고침"
+      auto_refresh: "자동 새로 고침 간격…"
+      next_time_range: "다음 시간 범위"
+      prev_time_range: "이전 시간 범위"
+      date_range: "사용자 지정 범위: 날짜…"
+      start_hour: "사용자 지정 범위: 시작 시…"
+      start_minute: "사용자 지정 범위: 시작 분…"
+      end_hour: "사용자 지정 범위: 종료 시…"
+      end_minute: "사용자 지정 범위: 종료 분…"
+      next_kind: "다음 차트 유형"
+      prev_kind: "이전 차트 유형"
+      x_axis: "X 축…"
+      y_axis: "Y 계열…"
+      group_by: "그룹 기준…"
+      aggregation: "집계…"
+      metric_rail: "지표 선택기"
+      next_dimension: "다음 차원 필터"
+      prev_dimension: "이전 차원 필터"
+      period: "기간…"
+      statistic: "통계…"
     toolbar:
       type_label: 유형
       stats: 통계
@@ -1127,6 +1155,15 @@ document:
       query_history: 쿼리 기록
       explain_query: 쿼리 실행 계획
       open_in_chart: 현재 쿼리를 차트 문서에서 열기
+      run_in_new_tab: 새 탭에서 실행
+      auto_refresh_interval: "자동 새로고침 간격…"
+      next_result_tab: "다음 결과 탭"
+      previous_result_tab: "이전 결과 탭"
+      close_result_tab: "결과 탭 닫기"
+      maximize_results: "결과 최대화"
+      restore_results: "결과 복원"
+      hide_results: "결과 숨기기"
+      show_results: "결과 표시"
     vim:
       normal: "노멀"
       insert: "삽입"
@@ -1219,6 +1256,7 @@ document:
           title: SET 절의 원시 SQL 표현식
           body: SET 절에 원시 SQL 표현식이 있습니다 — 매개변수 바인딩을 우회합니다
     context_bar:
+      pane_actions: 작업
       file:
         saved: 저장됨
         unsaved: 저장 안 됨
@@ -1280,6 +1318,11 @@ document:
     title:
       untitled: 제목 없음
   dashboard:
+    pane_actions:
+      open_panel: "패널 열기"
+      fold_section: "섹션 접기 또는 펼치기"
+      switch_to_view: "보기로 전환"
+      switch_to_edit: "편집으로 전환"
     builder:
       preset:
         last_15_min: 최근 15분
@@ -1445,6 +1488,30 @@ document:
         remove: 정렬 제거
       generate_sql:
         title: SQL 생성
+      toolbar:
+        title: "도구 모음"
+        export: "내보내기…"
+        clear_filter: "필터 지우기"
+        open_builder: "쿼리 빌더 열기"
+        reset_builder: "빌더 쿼리 초기화"
+        save_changes: "모든 변경 사항 저장"
+        revert_changes: "모든 변경 사항 되돌리기"
+        auto_refresh: "자동 새로 고침 간격…"
+        maximize: "결과 최대화"
+        restore: "결과 복원"
+        hide: "결과 숨기기"
+        query_history: "쿼리 기록…"
+        step_to_root: "문서로 돌아가기"
+        view_documents: "문서 보기"
+        view_schema: "스키마 보기"
+        view_aggregate: "집계 보기"
+        show_view: "%{view} 보기"
+        value_format: "값을 %{format}(으)로 읽기"
+        value_wrap: "값 줄 바꿈 전환"
+        value_pretty_print: "값 서식 지정"
+        value_compact: "값 압축"
+        value_revert: "값 되돌리기"
+        value_save: "값 저장"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -1668,6 +1735,8 @@ document:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"
     multiple_analyzers_note: "여러 등록된 드라이버가 이 확장자를 읽을 수 있습니다. %{analyzer}(으)로 분석했습니다."
+    pane_actions:
+      sort_by: "%{column} 기준 정렬"
     parsing:
       title: "덤프 구문 분석 중…"
       cancel: 취소
@@ -1780,6 +1849,8 @@ document:
     requested_at: "요청 시각"
     waiting_label: "대기"
     exec_id: "실행 %{id}"
+    pane_actions:
+      reason: "거부 사유 입력"
     status:
       pending: "대기 중"
     waiting:
@@ -2072,6 +2143,11 @@ document:
       delete_member: 멤버 삭제
       edit_member: 멤버 편집
       edit_value: 값 편집
+      show_as_tree: "키를 트리로 표시"
+      show_as_list: "키를 목록으로 표시"
+      close_claim: "클레임 양식 닫기"
+      view_as: "값을 %{view}(으)로 보기"
+      decompression: "압축 해제 방식 선택…"
       new_key: 새 키…
       rename: 이름 바꾸기
     history_modal:
@@ -2247,6 +2323,7 @@ document:
       mode_placeholder: 모드
       unset_option: "(설정 안 함)"
       set_all_label: "모두 설정:"
+      set_all_to: "모두 %{mode}(으)로 설정"
       columns_button: "열…"
       unmapped_count:
         one: "%{count}개 매핑되지 않음"
@@ -2301,6 +2378,10 @@ document:
         expand: 펼치기
         open: 열기
         new_folder_inside: 이 폴더에 새 폴더…
+        copy_path: "현재 경로 복사"
+        load_more: "더 불러오기"
+        show_as_list: "목록으로 보기"
+        show_as_tree: "트리로 보기"
         delete_folder: 폴더 삭제
     create_folder:
       cancel: 취소
@@ -2516,6 +2597,8 @@ document:
       loading: "개체를 불러오는 중…"
       preparing: "편집기를 준비하는 중…"
       size_tooltip: "마지막으로 불러오거나 저장한 개체 크기"
+    pane_actions:
+      reload: "객체 다시 불러오기"
   query_builder:
     aggregate:
       fn:
@@ -2745,6 +2828,11 @@ document:
       copy_as_sql: SQL로 복사
       focus_table: 이 테이블에 포커스
       inspect_schema: 스키마 검사
+      reset_view: "보기 초기화 (100%)"
+      fit: "화면에 맞추기"
+      arrange: "테이블 정렬"
+      show_types: "열 유형 표시"
+      show_indexes: "인덱스 표시"
       layout: 레이아웃
       zoom_in: 확대
       zoom_out: 축소
@@ -3179,6 +3267,10 @@ palette:
       name: 다음 탭
     prev_tab:
       name: 이전 탭
+    move_tab_left:
+      name: 탭을 왼쪽으로 이동
+    move_tab_right:
+      name: 탭을 오른쪽으로 이동
     export_results:
       name: 결과 내보내기
     open_connection_manager:
@@ -3187,6 +3279,8 @@ palette:
       name: 현재 연결 끊기
     refresh_schema:
       name: 스키마 새로고침
+    export_connections:
+      name: "연결 내보내기"
     focus_sidebar:
       name: 사이드바 포커스
     focus_editor:
@@ -3203,6 +3297,16 @@ palette:
       name: 결과 패널 전환
     toggle_tasks:
       name: 작업 패널 전환
+    clear_finished_tasks:
+      name: 완료된 작업 지우기
+    toggle_notifications:
+      name: "알림 전환"
+    show_connections_view:
+      name: "연결 보기 표시"
+    show_scripts_view:
+      name: "스크립트 보기 표시"
+    show_dashboards_view:
+      name: "대시보드 보기 표시"
     open_settings:
       name: 설정 열기
     open_login_modal:
@@ -3215,10 +3319,16 @@ palette:
       name: MCP 거버넌스 새로고침
     open_audit_viewer:
       name: 감사 뷰어 열기
+    open_last_error_in_audit:
+      name: "감사에서 마지막 오류 열기"
+    open_toast_actions:
+      name: "토스트 작업 열기…"
     open_saved_chart:
       name: "차트 열기…"
     new_dashboard:
       name: "새 대시보드…"
+    open_pane_actions:
+      name: "패널 작업 열기…"
     analyze_dump_file:
       name: "데이터베이스 덤프 분석…"
   category:
@@ -3302,8 +3412,15 @@ settings:
     editor:
       group: "편집기"
     vim_mode:
-      label: "코드 편집기에서 Vim 모드 사용"
+      label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."
+    vim_leader:
+      label: "리더 키"
+      hint: "노멀 모드와 비주얼 모드에서 Vim 리더 시퀀스를 시작합니다. 예를 들어 리더 다음 a를 누르면 패널 작업이 열립니다. 저장하면 열려 있는 편집기에 적용됩니다."
+      option:
+        space: "스페이스"
+        comma: "쉼표 (,)"
+        backslash: "백슬래시 (\\)"
     restore_session:
       label: "시작 시 열린 탭 복원"
     reopen_connections:
@@ -3435,6 +3552,8 @@ settings:
       prev_tab: 이전 탭
       switch_to_tab: 탭으로 전환
       open_tab_menu: 탭 메뉴 열기
+      move_tab_left: 탭을 왼쪽으로 이동
+      move_tab_right: 탭을 오른쪽으로 이동
       focus_sidebar: 사이드바 포커스
       focus_editor: 편집기 포커스
       focus_results: 결과 포커스
@@ -3451,6 +3570,8 @@ settings:
       select_last: 마지막 항목 선택
       page_down: 페이지 아래로
       page_up: 페이지 위로
+      next_panel_tab: 다음 패널 탭
+      prev_panel_tab: 이전 패널 탭
       extend_select_next: 선택 영역 아래로 확장
       extend_select_prev: 선택 영역 위로 확장
       toggle_selection: 선택 전환
@@ -3467,6 +3588,7 @@ settings:
       toggle_favorite: 즐겨찾기 전환
       run_query: 쿼리 실행
       run_query_in_new_tab: 새 탭에서 쿼리 실행
+      explain_query: 쿼리 실행 계획
       cancel_query: 쿼리 취소
       open_history: 기록 드롭다운 전환
       open_saved_queries: 저장된 쿼리 열기
@@ -3475,21 +3597,29 @@ settings:
       open_script_file: 스크립트 파일 열기…
       toggle_comment: 주석 전환
       export_results: 결과 내보내기
+      clear_filter: 필터 지우기
+      next_result_tab: 다음 결과 탭
+      prev_result_tab: 이전 결과 탭
+      close_result_tab: 결과 탭 닫기
       results_next_page: 결과 다음 페이지
       results_prev_page: 결과 이전 페이지
       focus_toolbar: 도구 모음 포커스
       toggle_panel: 패널 전환
       results_delete_row: 행 삭제
       results_add_row: 행 추가
+      add_item: "항목 추가"
+      add_group: "그룹 추가"
       results_duplicate_row: 행 복제
       results_copy_row: 행 복사
       results_copy_cell: 셀 복사
       toggle_record_view: 레코드 뷰 전환
       cycle_document_view: 트리 / 테이블 / JSON 전환
+      cycle_result_view: "결과 보기 전환"
       toggle_value_panel: 값 패널 전환
       toggle_row_inspector: 행 검사기 전환
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
+      open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로
       menu_down: 메뉴 아래로
       menu_select: 메뉴 선택
@@ -3504,11 +3634,23 @@ settings:
       toggle_editor: 편집기 패널 전환
       toggle_results: 결과 패널 전환
       toggle_tasks: 작업 패널 전환
+      cancel_task: 작업 취소
+      clear_finished_tasks: 완료된 작업 지우기
       toggle_sidebar: 사이드바 전환
       open_settings: 설정 열기
       open_login_modal: 인증 프로필 로그인 열기
       open_sso_wizard: AWS SSO 마법사 열기
       open_audit_viewer: 감사 뷰어 열기
+      open_last_error_in_audit: "감사에서 마지막 오류 열기"
+      open_toast_actions: "토스트 작업 열기"
+      toggle_notifications: "알림 전환"
+      mark_notification_read: "알림 읽음으로 표시"
+      mark_all_notifications_read: "모든 알림 읽음으로 표시"
+      clear_read_notifications: "읽은 알림 지우기"
+      install_update: "업데이트 설치"
+      show_connections_view: "연결 보기 표시"
+      show_scripts_view: "스크립트 보기 표시"
+      show_dashboards_view: "대시보드 보기 표시"
       open_mcp_approvals: MCP 승인 열기
       refresh_mcp_governance: MCP 거버넌스 새로고침
       open_saved_chart: "차트 열기…"
@@ -3554,6 +3696,26 @@ settings:
       toggle_console: 콘솔 표시/숨기기
       load_more: 더 불러오기
       edit_expiry: 만료 편집…
+      copy_preview: 미리보기 복사
+      import_items: "가져오기…"
+      import_from_client: "다른 클라이언트에서 가져오기…"
+      reset_binding: "단축키 재설정"
+      reset_all_bindings: "모든 단축키 재설정"
+      edit_binding_context: "단축키 컨텍스트 편집"
+      filter_by_context: "컨텍스트로 필터"
+      next_time_range: "다음 시간 범위"
+      prev_time_range: "이전 시간 범위"
+      configure_panel: "패널 구성"
+      move_panel_left: "패널 왼쪽으로 이동"
+      move_panel_right: "패널 오른쪽으로 이동"
+      move_panel_up: "패널 위로 이동"
+      move_panel_down: "패널 아래로 이동"
+      resize_panel_narrower: "패널 좁게"
+      resize_panel_wider: "패널 넓게"
+      resize_panel_shorter: "패널 낮게"
+      resize_panel_taller: "패널 높게"
+      approve_execution: "대기 중인 호출 승인"
+      reject_execution: "대기 중인 호출 거부"
     context:
       global: 전역
       sidebar: 사이드바
@@ -3580,6 +3742,16 @@ settings:
       modal: 모달 대화상자
       key_value: 키-값 브라우저
       settings: 설정 창
+      inspector: 인스펙터
+      notifications: 알림
+      query_builder: "쿼리 빌더"
+      document_builder: "문서 빌더"
+      chart: "차트"
+      dashboard: "대시보드"
+      add_panel_picker: "패널 추가 선택기"
+      mcp_approvals: "MCP 승인"
+      migrate_wizard: "마이그레이션 마법사"
+      vim_normal: "Vim 노멀 모드"
     category:
       global: 전역
       focus: 포커스
@@ -4533,6 +4705,9 @@ tasks_panel:
   clear_finished: "완료된 작업 지우기"
   cancel: "작업 취소"
   dismiss: "닫기"
+  show_output: "출력 보기"
+  hide_output: "출력 숨기기"
+  collapse: "작업 패널 숨기기"
   empty: 백그라운드 작업이 없습니다.
   output_truncated: "… 패널에서 출력이 잘렸습니다"
 toast:
@@ -4540,6 +4715,7 @@ toast:
     copy: 복사
     show_details: 세부 정보 표시
     hide_details: 세부 정보 숨기기
+    dismiss: 닫기
 workspace:
   rail:
     connections: "연결"
@@ -4668,7 +4844,7 @@ notifications:
     updates: 업데이트
     earlier: 이전
   footer:
-    hint: 행을 클릭하면 열립니다
+    hint: 행을 클릭하거나 Enter 키를 누르면 열립니다
     clear_read: 읽은 항목 지우기
   empty:
     title: 모두 확인했습니다

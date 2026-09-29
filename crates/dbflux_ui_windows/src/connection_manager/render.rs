@@ -469,6 +469,8 @@ impl ConnectionManagerWindow {
     /// Test-connection result banner shown above the footer.
     fn render_test_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let test_status = self.test_status;
+        let copy_focused =
+            self.edit_state == EditState::Navigating && self.form_focus == FormFocus::CopyTestError;
         let test_error = self.test_error.clone();
         let test_result_body = self
             .test_result
@@ -540,6 +542,7 @@ impl ConnectionManagerWindow {
                     )
                     .ghost()
                     .icon(AppIcon::Copy)
+                    .focused(copy_focused)
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(message_to_copy.clone()));
                     }),
@@ -589,7 +592,13 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let field_focus = Self::field_id_to_focus(&field_def.id, is_ssh_tab);
-        let focused = show_focus && field_focus == Some(self.form_focus);
+        let extra_focus = if is_ssh_tab {
+            None
+        } else {
+            self.main_extra_focus_for_field(&field_def.id)
+        };
+        let focused = show_focus
+            && (field_focus == Some(self.form_focus) || extra_focus == Some(self.form_focus));
 
         match &field_def.kind {
             // WriteOnly fields behave identically to Password in connection forms:
@@ -685,7 +694,7 @@ impl ConnectionManagerWindow {
                         let fallback_input_focus = input_state.clone();
 
                         self.cm_control_frame(
-                            false,
+                            focused,
                             None,
                             field_enabled,
                             None,
@@ -914,6 +923,7 @@ impl ConnectionManagerWindow {
                         )
                     })
                     .child(self.auth_profile.auth_profile_dropdown.clone());
+                let dropdown = layout::cursor_ring(focused, dropdown, cx);
 
                 Self::field_row_cm(
                     field_def.label.clone(),

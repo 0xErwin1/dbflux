@@ -25,6 +25,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+n` / `Cmd+n` | New query tab |
 | `Ctrl+w` / `Cmd+w` | Close tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Move the active tab left / right |
 | `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Switch to tab N |
 | `Ctrl+o` / `Cmd+o` | Open script file |
 | `Ctrl+Enter` / `Cmd+Enter` | Run query |
@@ -38,6 +39,24 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
 | `Ctrl+m` | Open tab context menu |
+| `Ctrl+,` / `Cmd+,` | Open settings |
+| `Ctrl+Shift+E` / `Cmd+Shift+E` | Hide or show the results of a query document, leaving the editor alone |
+| `Ctrl+Shift+R` / `Cmd+Shift+R` | Maximize the results of a query document over the editor, or restore the split |
+| `Ctrl+Shift+T` / `Cmd+Shift+T` | Show or hide the background tasks panel |
+| `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Show the Connections / Scripts / Dashboards view of the sidebar |
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the notifications center |
+| `Ctrl+Shift+X` / `Cmd+Shift+X` | Open the most recent error in the audit viewer |
+| `Ctrl+Shift+Y` / `Cmd+Shift+Y` | Open the buttons of the newest toast in a menu |
+| `Ctrl+Shift+L` / `Cmd+Shift+L` | Open auth profile login |
+| `Ctrl+Shift+O` / `Cmd+Shift+O` | Open the AWS SSO wizard |
+| `Ctrl+Shift+C` / `Cmd+Shift+C` | Open a saved chart |
+| `Ctrl+Shift+D` / `Cmd+Shift+D` | New dashboard |
+| `Ctrl+Shift+M` / `Cmd+Shift+M` | Open MCP approvals |
+| `Ctrl+Shift+G` / `Cmd+Shift+G` | Refresh MCP governance |
+
+`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does, and clears the count on the status bar's error badge; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. `Ctrl+Shift+Y` lists the buttons of the newest toast on screen, such as **Copy**, **View in Audit** or **Reconnect now**, then **Show details** or **Hide details** when it has details, and **Dismiss**; the context menu keys drive it, and with no toast on screen it opens nothing. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette.
+
+The shell's clickable items all have a key, and none of them joins the `Tab` cycle: the activity rail entries are `Ctrl+Shift+5` .. `Ctrl+Shift+7`, `Ctrl+Shift+A` (Audit), `Ctrl+Shift+M` (Approvals) and `Ctrl+,` (Settings); the title bar's command search is `Ctrl+Shift+P` and its bell `Ctrl+Shift+B`; the status bar's tasks entry is `Ctrl+Shift+T`, its approvals entry `Ctrl+Shift+M` and its error badge `Ctrl+Shift+X`; a tab is closed with `Ctrl+w`, opened with `Ctrl+n`, reordered with `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown`, and its right-click menu opens with `Ctrl+m`. The window's own minimize, maximize and close buttons are left to the desktop's shortcuts.
 
 ## Sidebar
 
@@ -46,7 +65,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `q` / `e` | Switch sidebar tab (Connections / Scripts) |
 | `/` | Focus search |
 | `j` / `k` (or `Down` / `Up`) | Select next / previous |
-| `h` / `l` | Collapse / expand node |
+| `h` / `l` | Collapse / expand node (`l` on a disconnected connection connects it) |
 | `Space` | Expand / collapse |
 | `g` / `Shift+g` (or `Home` / `End`) | First / last item |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
@@ -63,6 +82,10 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Shift+n` | Create folder |
 | `Ctrl+l` | Focus panel to the right |
 
+`Escape` in the search field returns focus to the tree and keeps the typed filter.
+
+When the tree gains focus with no row selected, the row selected last is selected again, or the first row when that one is gone, so `h`, `l` and `Enter` act right away.
+
 ## Editor
 
 | Keys | Action |
@@ -75,6 +98,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+s` / `Cmd+s` | Save query |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Save file as |
 | `Ctrl+/` / `Cmd+/` | Toggle line comment |
+| `Shift+F10` | Open the pane actions menu |
 | `Enter` | Focus / execute |
 
 (Unmodified letters are intentionally left to the text input so typing works.)
@@ -87,13 +111,53 @@ before moving focus. The same find-and-replace keys toggle the replace field
 while the panel is open. In Vim Normal mode the editor is read-only, so the find
 panel opens without its replace field.
 
+While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
+`Ctrl+h` / `Ctrl+j` / `Ctrl+k` to leave the editor. In the find panel, `Tab` /
+`Shift+Tab` move between the query and replace fields while the replace field is
+shown; otherwise they cycle focus between panels, as they do outside the editor.
+
+The editor's toolbar is also a menu. `Shift+F10` opens the **pane actions** menu
+from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
+the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
+editor (Lua, Python, Bash) has no connection controls, so its context bar holds
+only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
+presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
+history, Explain, Chart, Refresh and the auto-refresh interval, each with its
+shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
+[context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
+the interval list with keyboard focus (see [Dropdowns](#dropdowns)). While the
+query has results, the menu goes on with the results header: Next and Previous
+result tab, Close result tab, Maximize (Restore) results and Hide (Show)
+results. The menu is also in the command palette as **Open pane actions**.
+
 ## Vim mode (opt-in)
 
-Code editors can use modal editing with a small set of Vim commands. It is off
-by default. Turn it on in **Settings → General → Editor → Vim mode in code
-editors** and save: open editors switch over at once. It applies to every code
-editor (SQL and the other query languages, Lua, Python, Bash) and to nothing
-else, so search boxes, forms, and the command palette keep typing as usual.
+Multi-line editors can use modal editing with a small set of Vim commands. It
+is off by default. Turn it on in **Settings → General → Editor → Vim mode in
+editors** and save: open editors switch over at once. It applies to every
+multi-line editor:
+
+- the code editor (SQL and the other query languages, Lua, Python, Bash);
+- the S3 object editor tab and the object browser's preview editor;
+- the cell editor and document preview dialogs;
+- the JSON editor of the import dashboard dialog and the query editor of the
+  add panel dialog;
+- the value panel, the JSON view of a document collection and its aggregation
+  pipeline editor.
+
+Read-only viewers take motions, Visual selection and yanks, and no edits: a
+decoded S3 object in the object editor tab or the object browser's preview, the
+document tree's Raw JSON view, the query builder's SQL preview, the SQL and
+query preview dialogs, and the details of an external audit event. Single-line
+fields, search boxes, forms, and the command palette keep typing as usual.
+
+Outside the code editor, `Escape` works in two steps. In Insert mode the first
+`Escape` returns to Normal mode, and in Normal mode `Escape` does what it does
+without Vim: it closes the dialog, leaves the editor, or hands the keyboard back
+to the list or tree around it. `Enter` in Normal mode moves down a line and
+never confirms a dialog. With Vim mode on, the SQL and query preview dialogs
+open with the keyboard in the query, so `j` and `k` move the cursor instead of
+scrolling the dialog.
 
 An editor starts in Normal mode when it opens and when you turn Vim mode on. A
 strip under the editor shows the mode: `NORMAL`, `INSERT`, `REPLACE`, `VISUAL`, `VISUAL LINE`, or `VISUAL BLOCK`. Each tab keeps its
@@ -183,8 +247,9 @@ Everything else in Normal mode:
 
 | Input | Behavior in Normal mode |
 |-------|-------------------------|
-| Other unsupported letters, punctuation, `Space` | Nothing |
-| `Tab` / `Shift+Tab` | Nothing: no indent, and focus stays in the editor |
+| Other unsupported letters and punctuation | Nothing |
+| `Space` | Starts a leader sequence (see **Leader key** below); on its own, nothing |
+| `Tab` / `Shift+Tab` | Cycle focus forward / backward between panels, as outside the editor (also in the Visual modes); no indent |
 | `Ctrl+v` | Enter Visual Block mode (not paste) |
 | Paste (`Cmd+v` or the context menu) | Nothing |
 | Input method (IME) composition and commit | Dropped |
@@ -216,6 +281,36 @@ Each `x`, `dd`, or motion-based `d` invocation is one undo step, including count
 
 **IME limitation.** A late stale unmark from a prior composition after the next composition starts can prematurely commit the active native composition and split the Vim undo group. On a read-only or Normal-mode transition, pending displayed preedit is finalized as-is rather than accepting a later candidate. In Replace mode, text that arrives without a key press, such as an IME commit, is inserted rather than overwriting, and `Backspace` does not restore characters around it. This is not a claim of full IME safety; live UI behavior has not been validated.
 
+**Leader key.** In Normal mode and the Visual modes, the leader key starts a
+two-key sequence that runs a command without leaving the home row. The leader
+is `Space` by default; choose `,` or `\` in **Settings → General → Editor →
+Leader key**, and the sequences move with it. After it, DBFlux waits up to one second for the next key: a key no
+sequence uses runs as it would on its own, and when no key follows, the leader
+does nothing. The leader types as usual in Insert and Replace modes and while
+the find panel has focus.
+
+| Keys | Action |
+|------|--------|
+| `Leader a` | Open the pane actions menu, as `Shift+F10` |
+| `Leader r` | Run the query |
+| `Leader e` | Explain the query (code editor) |
+| `Leader s` | Save |
+| `Leader f` | Open the editor's find panel, as `/` |
+| `Leader h` / `Leader l` | Previous / next tab of the panel, as `Alt+h` / `Alt+l` |
+| `Leader p` | Open the command palette |
+
+A command the editor's document does not offer does nothing, and the key after
+the leader never reaches Vim. The sequences apply to every editor with Vim
+mode. Inside a dialog (the cell editor, the document preview, Import
+dashboard) they belong to the dialog: `Leader s` saves or confirms it, as its
+primary button does, `Leader f` opens the editor's find panel, and a command
+the dialog has no use for, such as running the query or opening the command
+palette, does nothing and never reaches the document behind the dialog. They
+are listed under **Vim Normal** in **Settings → Keybindings**, where they can be
+changed like any other binding. Recording keys that start with the leader key
+stores the leader itself, shown as `Leader`, so the binding moves with the
+leader.
+
 **Read-only editors** (routine definitions) accept motions, `yy`, and
 motion-based `y`; `x`, `r`, `R`, `dd`, `cc`, motion-based `c` / `d`, Visual `c`, and `u` do nothing there.
 A read-only delete does not change the clipboard.
@@ -241,27 +336,66 @@ A read-only delete does not change the clipboard.
 
 | Keys | Action |
 |------|--------|
-| `Ctrl+h` / `Ctrl+k` / `Ctrl+l` | Focus left / up / right panel |
+| `Ctrl+h` / `Ctrl+k` | Focus left / up panel |
+| `Ctrl+l` | Move into the side panel that is open on the right (value panel, row inspector, document panel or query builder); see [Side panels](#side-panels) |
 | `Ctrl+j` | Focus toolbar |
 | `j` / `k` (or `Down` / `Up`) | Next / previous row |
 | `h` / `l` (or `Left` / `Right`) | Column left / right |
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
+| `Alt+l` / `Alt+h` | Next / previous result tab of a query, or next / previous view (Documents, Schema, Aggregate) of a document collection, wrapping at either end |
+| `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
-| `Ctrl+e` / `Cmd+e` | Export results |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
+| `Shift+f` | Clear the WHERE filter and reload the rows; in a document collection, empty the filter slot and find |
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
+| `Shift+t` | Show the next view of the result (Data or Grid, JSON, Chart and the other views it offers), wrapping; the keyboard stays in the results |
 | `v` | Toggle the value panel for the selected cell |
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
-| `z` | Toggle panel collapse |
-| `m` (or `Shift+F10`) | Open context menu |
+| `z` | Maximize the results of a query document over the editor, or restore the split |
+| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
+
+An instance inspector tab takes these keys too: `m` opens the context menu of
+the selected row with the driver's row actions (for example Kill session),
+`Enter` or `Escape` answer the confirmation, and `F5` fetches a fresh snapshot.
+
+In a document collection the Toolbar submenu also lists Find, Query history,
+Back to the documents while stepped into a nested value, the other views, and
+Reload document / Apply my change while a commit conflict is shown; Save all changes and
+Revert all changes run the edit bar's Commit and Revert. Query history opens the
+history menu with the keyboard in it: the context menu keys move, `Enter` runs
+the highlighted query again and `Escape` closes it.
+
+When the results offer no context menu of their own, `m` opens the pane actions
+menu instead, the same one the command palette's **Open pane actions** shows.
+
+A dump analysis tab takes the table keys in each of its two tables: `Alt+l` and
+`Alt+h` move between Largest keys and By prefix, `Escape` cancels an analysis
+that is still reading the file, and `m` lists the other table, a sort per column
+of the table the keyboard is in (as a header click sorts it) and Cancel while
+the file is read.
+
+## Schema diff
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous row: the comparison mode, each reference database, connection or snapshot, Compute, each applicable change, and the Preview DDL / Apply buttons |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last row |
+| `h` / `l` (or `Left` / `Right`) | Previous / next button of the row (Live or Snapshot, Preview DDL or Apply) |
+| `Enter` | Press the button under the cursor: choose the mode or the reference, compute, check a change, preview or apply |
+| `Space` | Check or uncheck the change under the cursor |
+| `F5` | Compute the diff again |
+| `m` (or `Shift+F10`) | Pane actions: Compute, Preview DDL, Apply and the two comparison modes |
+
+Apply still asks for the same confirmation as the button.
 
 ## Schema diagram
 
@@ -272,8 +406,79 @@ A read-only delete does not change the clipboard.
 | `Shift` + `h` / `j` / `k` / `l` (or arrow keys) | Select the next table in that direction and center on it |
 | `Alt` + `h` / `j` / `k` / `l` (or arrow keys) | Move the selected table |
 | `r` / `s` / `c` | Left to right / Snowflake / Compact layout |
-| `m` | Open context menu |
+| `m` | Open context menu: zoom in / out, reset the view to 100%, fit to view, layout, arrange the tables, copy as DBML or SQL, show column types, show indexes, and for a selected table inspect and focus |
 | `Escape` | Clear the selection |
+
+## Charts
+
+These keys apply in a chart tab and in the chart view of a result (Chart, not
+Table + Chart, where the keys stay with the table). A highlighted point stands
+in for the pointer: the crosshair and the readout show it. In the chart of a
+table or collection tab the point inspector follows it too; charts of query
+results and chart tabs have no point inspector. Moving the pointer over the
+chart replaces it.
+
+| Keys | Action |
+|------|--------|
+| `h` / `l` (or `Left` / `Right`) | Highlight the previous / next point of the focused series; the first key starts at the first point |
+| `g` / `Shift+g` (or `Home` / `End`) | Highlight the first / last point |
+| `j` / `k` (or `Down` / `Up`) | Move the highlighted point to the next / previous visible series, at the nearest X |
+| `Space` | Hide or show the focused series, like its legend entry |
+| `Escape` | Clear the highlighted point, or close an open axis picker |
+| `Alt+l` / `Alt+h` | Next / previous chart type (chart tab) |
+| `]` / `[` | Next / previous time range, Custom included (chart tab) |
+| `F5` | Run the chart again (chart tab) |
+| `Ctrl+s` / `Cmd+s` | Save the chart; in the name prompt `Enter` saves and `Escape` cancels (chart tab) |
+| `m` (or `Shift+F10`) | Pane actions (chart tab): refresh, auto-refresh interval, next / previous time range, the custom range controls and Apply while Custom is selected, next / previous chart type, the X, Y, Group and Aggregation pickers, Stats, the metric picker and its controls for a metric chart, Save chart |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Focus the panel in that direction |
+
+An axis picker opened from the menu takes these keys until it closes: `j` / `k`
+move through its rows, `h` / `l` switch to the neighboring picker (X, Y, Group,
+Aggregation), `Enter` picks the row and closes it, `Space` toggles a Y column
+and keeps it open, `Escape` closes it. In the chart view of a result, the
+Toolbar entry of the context menu (`m`) lists the chart type, the axis pickers,
+the time range and the custom range controls. The date range of a custom range
+takes the keyboard from its menu entry and opens with `Enter`; picking the
+days in its calendar still needs the pointer.
+
+## Dashboards
+
+These keys apply in a dashboard tab, in View and Edit mode. A ring marks the
+selected panel while the keyboard is in the dashboard.
+
+| Keys | Action |
+|------|--------|
+| `h` / `l` (or `Left` / `Right`) | Select the previous / next panel in reading order |
+| `j` / `k` (or `Down` / `Up`) | Select the nearest panel on the next / previous row |
+| `g` / `Shift+g` (or `Home` / `End`) | Select the first / last panel |
+| `Enter` / `i` | Open the selected panel: a chart takes the [chart keys](#charts), an inspector table the table keys, until `Escape`; on a divider, fold or unfold its section |
+| `Space` | Fold or unfold the selected divider's section |
+| `c` | Configure the selected chart panel |
+| `r` / `F2` | Rename the selected panel |
+| `x` / `Delete` | Remove the selected panel |
+| `a` | Add a panel |
+| `Shift` + `h` / `j` / `k` / `l` (or arrow keys) | Move the selected panel one grid cell (Edit mode) |
+| `Alt+Shift` + `h` / `l` | Make the selected panel narrower / wider (Edit mode) |
+| `Alt+Shift` + `k` / `j` | Make the selected panel shorter / taller (Edit mode) |
+| `Alt+l` / `Alt+h` | Switch between View and Edit |
+| `]` / `[` | Next / previous shared time range, Custom included |
+| `F5` | Refresh every panel, or only the open one |
+| `m` (or `Shift+F10`) | Pane actions: the selected panel's actions, add panel, refresh, auto-refresh interval, the time range and the custom range controls, View / Edit or Save as editable. With a chart panel open, its own auto-refresh interval, its chart type and Stats |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Focus the panel in that direction |
+
+A move or resize that leaves the grid or lands on another panel is refused, as
+a drag is. In the Configure popover, `h` / `l` open the X, Y, Group and
+Aggregation pickers in turn, `j` / `k` move through the open one, `Space` or
+`Enter` pick, `Alt+l` / `Alt+h` switch the chart type, `Enter` without a picker
+applies and `Escape` closes the picker and then the popover.
+
+In the Add Panel dialog, `Alt+l` / `Alt+h` switch its tabs (also from its text
+fields, except on macOS). The arrows move through the chart list from the
+search and `Enter` adds the checked charts, or the highlighted one when none is
+checked. `Tab` moves into a list, where `j` / `k`, `g` / `Shift+g` and `Space`
+(check a chart, pick a namespace or metric) work, `h` / `l` switch between the
+Metric tab's namespace and metric lists and `/` goes back to the search.
+`Escape` closes the dialog.
 
 ## Background Tasks
 
@@ -282,10 +487,16 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 | Keys | Action |
 |------|--------|
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` | Focus left / down / up panel |
-| `j` / `k` (or `Down` / `Up`) | Select next / previous |
-| `g` / `Shift+g` (or `Home` / `End`) | First / last |
-| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
+| `j` / `k` (or `Down` / `Up`) | Select the next / previous task |
+| `g` / `Shift+g` (or `Home` / `End`) | Select the first / last task |
+| `Space` / `Enter` | Show or hide the selected task's output |
+| `c` | Cancel the selected task |
+| `x` | Dismiss the selected task once it has finished |
+| `Shift+x` | Clear the finished tasks |
+| `m` / `Shift+F10` | Open the panel's actions menu |
 | `z` | Toggle panel collapse |
+
+The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** is also a command palette entry.
 
 ## Notifications center
 
@@ -306,7 +517,19 @@ session. Updates show here instead of in the status bar.
 
 | Keys | Action |
 |------|--------|
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the popover from anywhere in the workspace |
+| `j` / `k` (or `Down` / `Up`) | Select the next / previous row |
+| `g` / `Shift+g` (or `Home` / `End`) | Select the first / last row |
+| `Enter` | Open the selected row's target, as a click on the row does |
+| `r` | Mark the selected row read |
+| `x` | Dismiss the selected row, as **Later** does for the update |
+| `i` | Install the listed update (builds installed from the direct download) |
+| `Alt+l` / `Alt+h` | Show the next / previous filter |
+| `Shift+r` | Mark all read |
+| `Shift+x` | Clear read |
 | `Escape` | Close the popover (a click outside it does the same) |
+
+While the popover is open it keeps the keyboard: the panels behind it see none of these keys. The selected row is drawn on a tint. Dismissing removes an error or a finished job, and hides an approval or the update until the session ends. The keys are listed under the Notifications context in Settings > Keybindings.
 
 ## Command palette
 
@@ -344,6 +567,64 @@ edited.
 | `e` | Expand or collapse a nested column (document grids) |
 | `Backspace` | Step out of a nested value (document grids) |
 
+## Side panels
+
+These keys apply after `Ctrl+l` moves focus from a result grid into the value
+panel, row inspector, document panel or query builder beside it.
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Scroll a line down / up |
+| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Scroll a page down / up |
+| `g` / `Shift+g` (or `Home` / `End`) | Scroll to the top / end |
+| `Enter` | Edit the value (value panel) |
+| `Escape` | Stop editing the value, or go back to the grid |
+| `Ctrl+h` | Go back to the grid |
+| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save; in the row inspector Pin or Unpin |
+
+The query builders have keys of their own, listed under
+[Query builders](#query-builders).
+
+## Query builders
+
+After `Ctrl+l` moves focus from a table's grid into its query builder, or from
+a collection's documents into the document builder, a cursor marks one row of
+the builder: the column list, a condition or group of the filter, a join, a
+grouping or sort row, an assignment or an execution option, and in the
+document builder the query name, a saved query, a projected field or a group
+stage row. The keys are listed under the Query Builder and Document Builder
+contexts in Settings > Keybindings.
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous row |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last row |
+| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Eight rows down / up |
+| `h` / `l` (or `Left` / `Right`) | Previous / next field of the row |
+| `Enter` / `i` | Work the field: type in a text field, open a dropdown, press a button |
+| `Space` | Flip the row's switch (AND / OR, ASC / DESC, a column checkbox, an assignment's value kind) |
+| `a` | Add an entry to the row's list (a condition, a join, a sort key, an assignment) |
+| `Shift+a` | Add a group inside the row's filter group |
+| `x` / `d` | Remove the row |
+| `Shift+j` / `Shift+k` | Move a document sort key down / up |
+| `Alt+l` / `Alt+h` | Next / previous mode (SELECT, UPDATE, DELETE; Find, Aggregate) |
+| `Ctrl+Enter` | Run |
+| `Ctrl+s` | Save |
+| `m` / `Shift+F10` | Menu of the row's actions and the builder's own (Run or Find, Open in Editor, Save, Reset or the saved queries, the modes, Close) |
+| `Escape` | Leave a field back to the rows, or go back to the grid |
+| `Ctrl+h` | Go back to the grid |
+
+In a text field the letters are typed text and Escape returns to the rows. A
+dropdown opened with Enter takes the dropdown keys and gives the keyboard back
+to the builder when it closes. A run from the keyboard goes through the same
+confirmation and mutation policy as the Run button, so an UPDATE or DELETE
+without WHERE still asks first. In the document builder, Enter on a field
+opens the field picker with its search focused: type the path and press Enter.
+Enter on an operator opens the operator list, where `j`, `k` and Enter pick.
+A Find from the keyboard keeps the keyboard in the builder. macOS uses Cmd instead of Ctrl for
+`Ctrl+Enter` and `Ctrl+s`, and there `Alt+l` / `Alt+h` work only outside the
+text fields.
+
 ## Document tree
 
 | Keys | Action |
@@ -360,6 +641,10 @@ edited.
 | `r` | Toggle the raw JSON view |
 | `/` / `Ctrl+f` | Search; `n` / `Shift+n` next / previous match, `Escape` closes |
 
+The search field and the inline value editor keep the letters you type. In the
+search field, `Enter` returns the keyboard to the tree with the matches kept, so
+`n` and `Shift+n` step through them, and `Escape` closes the search.
+
 ## Key-value browser
 
 | Keys | Action |
@@ -367,8 +652,87 @@ edited.
 | `` Ctrl+` `` | Show or hide the command console, also from the console input |
 | `Ctrl+j` | Load more keys |
 | `t` | Edit the expiry of the selected key |
+| `Alt+l` / `Alt+h` | Next / previous key type filter (All first); in the expiry editor, its next / previous mode (Never, In, At) |
 
 `Ctrl+j` and `t` apply while the key list has focus, not inside a text field.
+`Alt+l` and `Alt+h` also work from the pattern and expiry fields, except on
+macOS, where `Option` with a letter types a character.
+
+`m` opens the menu of the selected key or member. After the key or member
+actions it lists the value panel's buttons (reload the value, the other View
+as choices and the decompression list of a string value, preview the first
+bytes or load a large value anyway, and a stream's pending entries and claim
+form) and the toolbar's (show the keys as a tree or a list, the auto-refresh
+interval, bulk delete, and Stop or Search whole keyspace while a filtered scan
+reads page by page). In the New key and Add member dialogs `Tab` and `Shift+Tab`
+move through the fields like `j` and `k` and stay in the dialog. When the
+console asks to confirm a dangerous command, `Enter` in its empty field runs it
+and `Escape` cancels it.
+
+## Object storage
+
+In the object browser, `m` opens the selected row's menu. After the row's
+entries (an object also offers Open in system viewer) it lists the listing's
+buttons: Upload, New folder, Copy the current path, Load more while the level
+has another page, Show as a list or a tree, and, while a preview shows them,
+View versions, Load anyway and Discard for unsaved edits. With no row selected,
+`m` opens the same listing entries as the pane actions.
+
+In the bucket list, `m` lists Browse, Calculate size, New bucket and Refresh.
+
+In an object editor tab, `Escape` takes the keyboard out of the text, `Enter`
+puts it back, and `m` then lists Save, Discard, Find, the Auto / Raw
+interpretation, Reload and, for an object over the size limit, Load anyway.
+
+When you leave an object with unsaved edits, the dialog that asks what to do
+opens with **Save** focused, so `Enter` saves. `Tab` and `Shift+Tab` move
+between **Save**, **Cancel** and **Discard** without leaving the dialog, `Enter`
+or `Space` presses the focused button, and `Escape` cancels.
+
+## Audit viewer
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous event |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last event |
+| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Move a quarter page down / up |
+| `]` / `[` | Next / previous page |
+| `Enter` / `Space` | Expand or collapse the selected event |
+| `f` / `/` | Enter the filter toolbar; `h` / `l` move, `Enter` activates, `Escape` leaves |
+| `r` | Refresh |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move between CSV and JSON, `Enter` exports, `Escape` closes it |
+| `Alt+l` / `Alt+h` | Switch between the event table and the chart |
+| `m` (or `Shift+F10`) | Context menu of the selected event: copy as CSV, copy the summary, copy as JSON, filter by its correlation id, and open a pending approval |
+
+## MCP approvals
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous pending call |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last pending call |
+| `a` | Approve the selected call |
+| `r` | Reject the selected call, sending the typed reason |
+| `Enter` / `i` | Type the rejection reason; `Escape` returns to the list |
+| `F5` | Reload the pending calls |
+| `m` (or `Shift+F10`) | Pane actions: approve, reject, type the reason, refresh |
+
+The keys are listed under the MCP Approvals context in Settings > Keybindings.
+
+## Migrate wizard
+
+| Keys | Action |
+|------|--------|
+| `Alt+l` / `Alt+h` | Continue / back, like the footer buttons (also from a text field, except on macOS) |
+| `Ctrl+Enter` / `Cmd+Enter` | Continue; on the Confirm step, start the migration |
+| `j` / `k` (or `Down` / `Up`) | Move the cursor of the step |
+| `h` / `l` (or `Left` / `Right`) | Source and Target: collapse or expand the node, or move between the two trees. Tables Mapping: move between a row's target name, mode and **Columns…** |
+| `Enter` / `i` | Check a source table, choose the target database, type in a field, open a dropdown or the column drill-in |
+| `Space` | Toggle the item under the cursor; on Confirm, check the destructive-plan acknowledgment |
+| `Shift+k` / `Shift+j` | Move a table up / down in the load order |
+| `Escape` | Leave a text field or close the column drill-in |
+| `m` (or `Shift+F10`) | Pane actions: Continue, Back, set every table's mode, accept the load order, the acknowledgment, Start migration, Cancel migration while it runs and Close once it is done |
+
+The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 
 ## Text fields
 
@@ -380,6 +744,15 @@ edited.
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
 
+While you type in a text field outside a dialog, such as the sidebar search or
+the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd` keep
+working: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the
+others in [Global](#global-available-regardless-of-focus). Keys without those
+modifiers, including `Tab`, `Escape`, `Enter` and the arrows, stay with the
+field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
+over the global one. Inside a dialog, a menu, a dropdown or a picker the global
+shortcuts wait until it closes.
+
 ## Dialogs
 
 | Keys | Action |
@@ -388,6 +761,15 @@ edited.
 | `Enter` | Confirm, when the primary button is enabled |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Scroll a long dialog body |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Close / save the cell editor and the document preview |
+| `Tab` / `Shift+Tab` | Move to the next / previous control inside the dialog |
+
+`Tab` and `Shift+Tab` wrap around inside an open dialog: from the last control
+they return to the first, and they never move focus to the panels behind it.
+
+In the **SQL Preview** and **Query Preview** dialogs, `Enter` or
+`Ctrl+c` / `Cmd+c` copies the query and closes the preview, `j` / `k` and `Up` /
+`Down` scroll it a line, and `PageUp` / `PageDown` a page. These keys are listed
+under the **SQL Preview** context in **Settings → Keybindings**.
 
 ## Forms and the settings window
 
@@ -408,11 +790,59 @@ when no text field is being edited.
 | `Ctrl+w` / `Ctrl+q` | Close the settings window |
 | `Ctrl+s` | Save the section |
 | `Ctrl+h` / `Ctrl+l` | Move between the navigation and the section |
+| `n` / `d` / `i` | In a profile list (proxies, SSH tunnels, auth profiles, hooks, services, MCP): new, delete, import |
 
-In the Connection Manager, `Ctrl+s` / `Cmd+s` saves the connection from
-anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
-of the SSH authentication method. In the audit viewer, `Left` / `Right` on the
+In **Settings → Keybindings**, `Enter` or `Space` records new keys for the
+selected binding, `r` resets it, `p` edits its context, `Delete` or `Backspace`
+removes its shortcut, `Shift+r` resets every binding, `c` opens the context
+filter and `/` or `f` focuses the text filter. `Enter` on a dropdown field, such
+as the provider of an auth profile, opens its list with keyboard focus (see
+[Dropdowns](#dropdowns)). While a login waits for the browser, the Open browser,
+Copy URL and Cancel buttons are the row under the login button. On the About
+page, `j` / `k` move between its two links and `Enter` opens one. These keys,
+like the navigation keys, are listed under the Settings Window and Form
+Navigation contexts in **Settings → Keybindings** and can be rebound there.
+
+In the Connection Manager's driver list, `i` opens Import connections and
+`Shift+i` opens Import from another client, as the buttons beside Cancel do;
+typed into the driver filter, they stay text. In the Connection Manager,
+`Ctrl+s` / `Cmd+s` saves the connection from anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
+of the SSH authentication method. `Down` / `Up` move like `j` / `k`; while a
+field is being edited they leave it for the next or previous field, and
+`Ctrl+l` / `Ctrl+h` leave it for the next or previous tab. `PageDown` /
+`PageUp` move the highlight of an open dropdown a page at a time. After the
+password, the form's ring continues through the driver's other fields, such as
+the auth profile picker of an AWS connection, which `Enter` opens, then the SSL
+mode, whose choice `Left` / `Right` or `Enter` change, and the certificate
+pickers, where `Enter` browses. After a failed connection test, the banner's
+**Copy** button sits between **Test connection** and **Save**. On the Settings
+tab, each connection phase's hook dropdown is a stop above its extra hooks
+field, and `Enter` hands it the keyboard. On the MCP tab, `j` / `k` move through
+the MCP switch, the client filter, each listed client (`Enter` selects it), the
+selected client's access switch and its role and policy pickers. In the audit viewer, `Left` / `Right` on the
 time presets change the preset.
+
+## Dropdowns
+
+These keys apply to a dropdown or a multi-select that has keyboard focus, for
+example after a menu entry opens one. Keys a dropdown does not use pass to the
+panel around it.
+
+| Keys | Action |
+|------|--------|
+| `Enter` / `Space` | Open the list |
+| `j` / `k` (or `Down` / `Up`) | Move down / up in the open list |
+| `Enter` | Choose the highlighted item, or close a multi-select |
+| `Space` | Choose the highlighted item; toggle it in a multi-select |
+| `Escape` | Close the list without choosing |
+
+Choosing an item or pressing `Escape` gives focus back to the control that held
+it before the dropdown. Dropdowns that belong to a keyboard ring, such as the
+execution context bar and the audit filters, are still driven by that ring's
+keys. The one multi-select of the execution context bar, the targets list of a
+source such as a log group or event stream, is the exception: `Enter` on it
+opens the list with keyboard focus, so the keys above drive it, and closing it
+returns focus to the bar.
 
 ## Context menu
 
@@ -431,5 +861,8 @@ time presets change the preset.
 | `Ctrl+f` | Toggle favorite |
 | `Ctrl+r` | Rename |
 | `Ctrl+d` | Delete |
-| `/` | Focus search |
+| `/` | Focus search; inside the search, rename and save fields it types a `/` |
 | `Ctrl+s` / `Cmd+s` | Save query |
+| `Alt+l` / `Alt+h` | Show the next / previous list (Recent, Saved) |
+
+`Alt+l` and `Alt+h` also work in the history's search, rename and save fields, except on macOS, where `Option` with a letter types a character: there they work from the list only.

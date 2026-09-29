@@ -273,6 +273,10 @@ impl KeyValueDocument {
             return true;
         }
 
+        if matches!(command, Command::NextPanelTab | Command::PrevPanelTab) {
+            return self.step_panel_tab(command == Command::NextPanelTab, window, cx);
+        }
+
         if !self.focus_handle.is_focused(window) {
             return false;
         }
@@ -288,6 +292,45 @@ impl KeyValueDocument {
             }
             _ => false,
         }
+    }
+
+    /// Alt+L / Alt+H: the next or previous mode of the open expiry editor,
+    /// otherwise the next or previous key type filter (All first), wrapping.
+    /// Returns false when neither is offered.
+    fn step_panel_tab(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if let Some(editor) = &self.expiry_editor {
+            let modes = super::expiry::ExpiryMode::ALL;
+            let current = modes
+                .iter()
+                .position(|mode| *mode == editor.mode)
+                .unwrap_or(0);
+            let next = step_index(current, modes.len(), forward);
+            self.set_expiry_mode(modes[next], window, cx);
+            return true;
+        }
+
+        if !self
+            .key_features
+            .contains(KeyValueFeatures::SCAN_TYPE_FILTER)
+        {
+            return false;
+        }
+
+        let options: Vec<Option<KeyType>> = std::iter::once(None)
+            .chain(TYPE_FILTERS.into_iter().map(Some))
+            .collect();
+        let current = options
+            .iter()
+            .position(|option| *option == self.type_filter)
+            .unwrap_or(0);
+        let next = step_index(current, options.len(), forward);
+        self.set_type_filter(options[next], cx);
+        true
     }
 
     fn render_document_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -876,6 +919,15 @@ impl KeyValueDocument {
             .body(body)
             .footer(footer)
             .into_any_element()
+    }
+}
+
+/// The index `forward` (or back) from `current` among `len`, wrapping.
+fn step_index(current: usize, len: usize, forward: bool) -> usize {
+    if forward {
+        (current + 1) % len
+    } else {
+        (current + len - 1) % len
     }
 }
 
