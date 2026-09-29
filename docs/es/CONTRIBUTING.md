@@ -144,6 +144,27 @@ se muestran sin importar el type.
 - Fixes de seguridad: usa `fix(security): ...` o añade un trailer `Security:
   ...` para que el cambio caiga bajo la sección Security.
 
+## Cobertura de teclado
+
+Toda acción de DBFlux debe poder alcanzarse con el teclado: un comando asignado en el contexto de teclas de la superficie, o una entrada de un menú que el teclado abre (el menú de acciones del panel, o el menú `m` de una tabla o un rail). Dos comprobaciones impiden que entre una acción que solo funciona con el mouse:
+
+- `python3 scripts/lint.py mouse-down` rechaza los handlers `on_mouse_down` del botón izquierdo que no figuran en `scripts/mouse_down_allowlist.txt`. Las activaciones usan `on_click`.
+- Los tests de cobertura de teclado dibujan cada superficie y comparan cada elemento que ejecuta una acción al hacer clic con el registro de cobertura de esa superficie (`dbflux_ui_base::keyboard_coverage`). Un elemento que el registro no lista hace fallar el test, y el fallo indica cómo corregirlo.
+
+Cuando agregues un elemento interactivo:
+
+1. Dale un `.id(...)` estable y actívalo con `.on_click(...)`.
+2. Dale a su acción un camino de teclado: un `Command` asignado en el contexto de teclas de la superficie, o una entrada en sus acciones del panel o en su menú `m` que ejecute la misma acción. Dentro de un diálogo, un control que toma el foco se alcanza con Tab.
+3. Registra el id en el registro de la superficie que lo dibuja: `crates/dbflux_ui_document/src/keyboard_coverage.rs` para los documentos, `crates/dbflux_ui_windows/src/keyboard_coverage.rs` para las ventanas de ajustes y del gestor de conexiones, `crates/dbflux_ui/src/ui/views/workspace/keyboard_coverage_tests.rs` para el marco del workspace, o el módulo de tests de un diálogo. Usa `KeyboardPath::MouseOnly("motivo")` solo para el marco de la ventana y los gestos del puntero. Un motivo que empieza con `gap:` registra un camino de teclado que falta, para que siga visible.
+
+Ejecuta los tests de cobertura con:
+
+```bash
+cargo nextest run --workspace _covered
+```
+
+Una ejecución del workspace compila los crates de UI con las features con las que se distribuye la app, así que también comprueba las superficies MCP y el modo Lua de los hooks. Los tests propios del helper se ejecutan con `cargo nextest run -p dbflux_ui_base keyboard_coverage`.
+
 ## Issues
 
 Antes de abrir un issue:

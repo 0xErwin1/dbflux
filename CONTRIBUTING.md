@@ -104,6 +104,27 @@ Breaking changes (`feat!:`, `fix!:`, or a `BREAKING CHANGE:` footer) always surf
 - If a single PR contains both internal and user-visible changes, split them into separate commits with the appropriate types.
 - Security fixes: use `fix(security): ...` or add a `Security: ...` trailer so the change lands under the Security section.
 
+## Keyboard Coverage
+
+Every action in DBFlux must be reachable from the keyboard: a command bound in the key context of the surface, or an entry of a menu the keyboard opens (the pane actions menu, or the `m` menu of a table or rail). Two checks stop a mouse-only action from landing:
+
+- `python3 scripts/lint.py mouse-down` rejects left-button `on_mouse_down` handlers that are not listed in `scripts/mouse_down_allowlist.txt`. Activations use `on_click`.
+- The keyboard coverage tests render each surface and check every element that runs an action on click against the coverage registry of that surface (`dbflux_ui_base::keyboard_coverage`). An element the registry does not list fails the test, and the failure says how to fix it.
+
+When you add an interactive element:
+
+1. Give it a stable `.id(...)` and activate it with `.on_click(...)`.
+2. Give its action a keyboard path: a `Command` bound in the key context of the surface, or an entry in its pane actions or `m` menu that runs the same action. Inside a dialog, a control that takes focus is reached with Tab.
+3. Register the id in the registry of the surface that draws it: `crates/dbflux_ui_document/src/keyboard_coverage.rs` for documents, `crates/dbflux_ui_windows/src/keyboard_coverage.rs` for the settings and connection manager windows, `crates/dbflux_ui/src/ui/views/workspace/keyboard_coverage_tests.rs` for the workspace shell, or the test module of a dialog. Use `KeyboardPath::MouseOnly("reason")` only for window chrome and pointer gestures. A reason that starts with `gap:` records a missing keyboard path so it stays visible.
+
+Run the coverage tests with:
+
+```bash
+cargo nextest run --workspace _covered
+```
+
+A workspace run builds the UI crates with the features the app ships with, so it also checks the MCP surfaces and the Lua hook mode. The helper's own tests run with `cargo nextest run -p dbflux_ui_base keyboard_coverage`.
+
 ## Issues
 
 Before opening an issue:
