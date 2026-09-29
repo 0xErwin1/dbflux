@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.8.4] - 2026-09-29
+
+
+### Fixed
+
+* Give dialog editors focus on open and let connection manager fields type navigation letters (#781)
+
 ## [0.8.3] - 2026-09-29
 
 
