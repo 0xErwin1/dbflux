@@ -174,6 +174,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         (
+            "auth-provider-selector.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "drv-confirm-dangerous.*",
             KeyboardPath::Command(Command::Execute),
         ),
