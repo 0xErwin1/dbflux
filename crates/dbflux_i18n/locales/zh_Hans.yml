@@ -1505,6 +1505,7 @@ document:
         view_documents: "显示文档"
         view_schema: "显示结构"
         view_aggregate: "显示聚合"
+        show_view: "显示%{view}"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -3605,6 +3606,7 @@ settings:
       results_copy_cell: 复制单元格
       toggle_record_view: 切换记录视图
       cycle_document_view: 切换树 / 表格 / JSON
+      cycle_result_view: "切换结果视图"
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
       results_set_null: 将单元格设为 NULL

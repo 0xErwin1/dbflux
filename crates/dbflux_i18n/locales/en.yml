@@ -1505,6 +1505,7 @@ document:
         view_documents: "Show Documents"
         view_schema: "Show Schema"
         view_aggregate: "Show Aggregate"
+        show_view: "Show %{view}"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -3605,6 +3606,7 @@ settings:
       results_copy_cell: Copy cell
       toggle_record_view: Toggle record view
       cycle_document_view: Cycle tree / table / JSON
+      cycle_result_view: "Cycle result view"
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
       results_set_null: Set cell to NULL

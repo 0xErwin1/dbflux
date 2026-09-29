@@ -3694,7 +3694,7 @@ impl DataGridPanel {
     }
 
     /// Icon shown next to each result-view mode chip (Data, Chart, JSON, ...).
-    fn result_mode_icon(mode: ResultViewMode) -> AppIcon {
+    pub(super) fn result_mode_icon(mode: ResultViewMode) -> AppIcon {
         match mode {
             ResultViewMode::Table => AppIcon::Table,
             ResultViewMode::Chart => AppIcon::ChartSpline,

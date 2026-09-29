@@ -1505,6 +1505,7 @@ document:
         view_documents: "문서 보기"
         view_schema: "스키마 보기"
         view_aggregate: "집계 보기"
+        show_view: "%{view} 보기"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -3605,6 +3606,7 @@ settings:
       results_copy_cell: 셀 복사
       toggle_record_view: 레코드 뷰 전환
       cycle_document_view: 트리 / 테이블 / JSON 전환
+      cycle_result_view: "결과 보기 전환"
       toggle_value_panel: 값 패널 전환
       toggle_row_inspector: 행 검사기 전환
       results_set_null: 셀을 NULL로 설정

@@ -831,6 +831,7 @@ impl DataGridPanel {
                 self.toggle_view_mode(cx);
                 true
             }
+            Command::CycleResultView => self.cycle_result_view(window, cx),
             Command::SaveQuery if self.commits_document_patches(cx) => {
                 self.commit_document_edits(cx);
                 true

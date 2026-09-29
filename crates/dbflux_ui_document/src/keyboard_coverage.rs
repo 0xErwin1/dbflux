@@ -50,15 +50,15 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
             "hide-results-panel",
             KeyboardPath::Command(Command::ToggleEditor),
         ),
-        // The Table / JSON switch of the results chrome sets the result view,
-        // which no key switches (T only cycles a collection's views).
+        // The mode bar of the results (Data, JSON, Chart): Shift+T shows the
+        // next view, and the grid's Toolbar submenu lists them.
         (
             "seg-ctl-item-table",
-            KeyboardPath::MouseOnly("gap: no key switches the Table / JSON result views"),
+            KeyboardPath::Command(Command::CycleResultView),
         ),
         (
             "seg-ctl-item-json",
-            KeyboardPath::MouseOnly("gap: no key switches the Table / JSON result views"),
+            KeyboardPath::Command(Command::CycleResultView),
         ),
     ],
 };
@@ -145,9 +145,11 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
                  no key inside the island (Enter edits, Escape leaves)",
             ),
         ),
+        // The footer's view switch (Grid / JSON / Chart): Shift+T, and the
+        // Toolbar submenu's Show entries.
         (
             "seg-ctl-item-result-view-*",
-            KeyboardPath::MouseOnly("gap: no key switches the Data / JSON / Chart result views"),
+            KeyboardPath::Command(Command::CycleResultView),
         ),
         // The Tree / Table / JSON switch of a document collection.
         (

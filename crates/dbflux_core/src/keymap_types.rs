@@ -104,6 +104,9 @@ pub enum Command {
     ResultsCopyCell,
     ToggleRecordView,
     CycleDocumentView,
+    /// Shows the next view of a result (Data, JSON, Chart and the others
+    /// its shape offers), wrapping at the end.
+    CycleResultView,
     ToggleValuePanel,
     ToggleRowInspector,
     ResultsSetNull,
@@ -395,6 +398,7 @@ impl Command {
             Command::ResultsCopyCell => "Copy cell",
             Command::ToggleRecordView => "Toggle record view",
             Command::CycleDocumentView => "Cycle tree / table / JSON",
+            Command::CycleResultView => "Cycle result view",
             Command::ToggleValuePanel => "Toggle value panel",
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::ResultsSetNull => "Set cell to NULL",
@@ -589,6 +593,7 @@ impl Command {
             Command::ResultsCopyCell => "results_copy_cell",
             Command::ToggleRecordView => "toggle_record_view",
             Command::CycleDocumentView => "cycle_document_view",
+            Command::CycleResultView => "cycle_result_view",
             Command::ToggleValuePanel => "toggle_value_panel",
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::ResultsSetNull => "results_set_null",
@@ -800,6 +805,7 @@ impl Command {
             Command::ResultsCopyCell,
             Command::ToggleRecordView,
             Command::CycleDocumentView,
+            Command::CycleResultView,
             Command::ToggleValuePanel,
             Command::ToggleRowInspector,
             Command::ResultsSetNull,
@@ -986,6 +992,7 @@ impl Command {
             | Command::ResultsCopyCell
             | Command::ToggleRecordView
             | Command::CycleDocumentView
+            | Command::CycleResultView
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
             | Command::ResultsSetNull

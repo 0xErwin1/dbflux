@@ -350,11 +350,12 @@ A read-only delete does not change the clipboard.
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
+| `Shift+t` | Show the next view of the result (Data or Grid, JSON, Chart and the other views it offers), wrapping; the keyboard stays in the results |
 | `v` | Toggle the value panel for the selected cell |
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
-| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
+| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
 
 An instance inspector tab takes these keys too: `m` opens the context menu of
 the selected row with the driver's row actions (for example Kill session),

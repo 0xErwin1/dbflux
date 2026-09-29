@@ -11,6 +11,7 @@ use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
+use crate::result_view::ResultViewMode;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::AxisPill;
 use dbflux_components::common::time_range::state::TimeRange;
@@ -32,6 +33,9 @@ pub(crate) enum ToolbarAction {
     ClearFilter,
     /// The table / tree view switch.
     ToggleView,
+    /// A view of the result's view switch (Data, JSON, Chart and the other
+    /// views its shape offers): the footer's switch or the results' mode bar.
+    ResultView(ResultViewMode),
     /// The Builder button.
     OpenBuilder,
     /// Reset in the "rows come from the builder query" notice.
@@ -105,6 +109,12 @@ impl ToolbarAction {
             ToolbarAction::Export => "export",
             ToolbarAction::ClearFilter => "clear-filter",
             ToolbarAction::ToggleView => "toggle-view",
+            ToolbarAction::ResultView(ResultViewMode::Table) => "result-view-table",
+            ToolbarAction::ResultView(ResultViewMode::Chart) => "result-view-chart",
+            ToolbarAction::ResultView(ResultViewMode::Both) => "result-view-both",
+            ToolbarAction::ResultView(ResultViewMode::Json) => "result-view-json",
+            ToolbarAction::ResultView(ResultViewMode::Text) => "result-view-text",
+            ToolbarAction::ResultView(ResultViewMode::Raw) => "result-view-raw",
             ToolbarAction::OpenBuilder => "open-builder",
             ToolbarAction::ResetBuilder => "reset-builder",
             ToolbarAction::SaveChanges => "save-changes",
@@ -144,6 +154,7 @@ impl ToolbarAction {
             ToolbarAction::Export => AppIcon::FileSpreadsheet,
             ToolbarAction::ClearFilter => AppIcon::X,
             ToolbarAction::ToggleView => AppIcon::Braces,
+            ToolbarAction::ResultView(mode) => DataGridPanel::result_mode_icon(mode),
             ToolbarAction::OpenBuilder => AppIcon::ListFilter,
             ToolbarAction::ResetBuilder => AppIcon::RotateCcw,
             ToolbarAction::SaveChanges => AppIcon::Save,
@@ -175,6 +186,7 @@ impl ToolbarAction {
             ToolbarAction::Export => Some(Command::ExportResults),
             ToolbarAction::ClearFilter => Some(Command::ClearFilter),
             ToolbarAction::ToggleView => Some(Command::CycleDocumentView),
+            ToolbarAction::ResultView(_) => Some(Command::CycleResultView),
             ToolbarAction::CollectionView(_) => Some(Command::NextResultTab),
             _ => None,
         }
@@ -226,6 +238,14 @@ impl DataGridPanel {
         if filter_row_shown && !self.builder.builder_open && self.can_open_builder(cx) {
             actions.push(ToolbarAction::OpenBuilder);
         }
+
+        let current_view = self.result_view_mode();
+        actions.extend(
+            self.available_result_view_modes(cx)
+                .into_iter()
+                .filter(|mode| *mode != current_view)
+                .map(ToolbarAction::ResultView),
+        );
 
         if (filter_row_shown || shows_chart) && self.supports_auto_refresh() {
             actions.push(ToolbarAction::AutoRefresh);
@@ -350,6 +370,14 @@ impl DataGridPanel {
                     dbflux_i18n::t!("document.data.grid.toolbar.switch_to_table")
                 }
             },
+            ToolbarAction::ResultView(mode) => {
+                let view = if self.footer_hosts_view_switch() {
+                    crate::labels::table_view_mode_label(mode)
+                } else {
+                    crate::labels::result_view_mode_label(mode)
+                };
+                dbflux_i18n::t!("document.data.context_menu.toolbar.show_view", view = view)
+            }
             ToolbarAction::OpenBuilder if self.collection.builder.open => {
                 dbflux_i18n::t!("document.collection.builder.close")
             }
@@ -504,6 +532,7 @@ impl DataGridPanel {
                 self.clear_filter(window, cx);
             }
             ToolbarAction::ToggleView => self.toggle_view_mode(cx),
+            ToolbarAction::ResultView(mode) => self.show_result_view(mode, window, cx),
             ToolbarAction::OpenBuilder if self.is_document_collection(cx) => {
                 self.toggle_document_builder(window, cx)
             }
@@ -933,6 +962,56 @@ mod tests {
         );
     }
 
+    /// Shift+T shows the next view of the result (the footer's Grid / JSON
+    /// switch) and keeps the keyboard in the grid; the Toolbar submenu lists
+    /// the views not shown and runs them.
+    #[gpui::test]
+    fn shift_t_and_the_toolbar_entries_switch_the_result_view(cx: &mut TestAppContext) {
+        use super::ToolbarAction;
+        use crate::result_view::ResultViewMode;
+
+        let (host, panel, window) = host_filtered_table(cx, "");
+        let mode = |window: &mut VisualTestContext| {
+            window.update(|_, cx| panel.read(cx).result_view_mode())
+        };
+
+        window.simulate_keystrokes("shift-t");
+        window.run_until_parked();
+
+        assert!(
+            window
+                .update(|_, cx| host.read(cx).commands.clone())
+                .contains(&Command::CycleResultView),
+            "Shift+T reaches the grid as the result view command"
+        );
+        assert_eq!(mode(window), ResultViewMode::Json);
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).active_context(cx)),
+            ContextId::Results,
+            "the keyboard stays in the grid"
+        );
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        assert!(
+            !actions.contains(&ToolbarAction::ResultView(ResultViewMode::Json)),
+            "the view shown is not listed"
+        );
+        let table_entry = actions
+            .iter()
+            .position(|action| *action == ToolbarAction::ResultView(ResultViewMode::Table))
+            .expect("the Toolbar submenu lists the Grid view");
+
+        let mut keys = vec!["m", "k", "l"];
+        keys.extend(std::iter::repeat_n("j", table_entry));
+        keys.push("enter");
+        for key in keys {
+            window.simulate_keystrokes(key);
+            window.run_until_parked();
+        }
+
+        assert_eq!(mode(window), ResultViewMode::Table);
+    }
+
     #[test]
     fn toolbar_labels_resolve_in_every_locale() {
         let keys = [
@@ -952,6 +1031,7 @@ mod tests {
             "view_documents",
             "view_schema",
             "view_aggregate",
+            "show_view",
         ];
 
         for key in keys {

@@ -1957,6 +1957,41 @@ impl DataGridPanel {
         cx.notify();
     }
 
+    /// Shows `mode` from the keyboard and keeps the keyboard in the grid:
+    /// the table element the keyboard may have been on is not drawn in the
+    /// other views.
+    pub(super) fn show_result_view(
+        &mut self,
+        mode: ResultViewMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_result_view_mode(mode, cx);
+        self.focus_table(window, cx);
+    }
+
+    /// Shows the view after the current one among those the result offers
+    /// (`Command::CycleResultView`), wrapping. Returns false when the result
+    /// has a single view.
+    pub(super) fn cycle_result_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let modes = self.available_result_view_modes(cx);
+        if modes.len() < 2 {
+            return false;
+        }
+
+        let next = modes
+            .iter()
+            .position(|mode| *mode == self.chrome.result_view_mode)
+            .map_or(0, |index| (index + 1) % modes.len());
+
+        self.show_result_view(modes[next], window, cx);
+        true
+    }
+
     /// Whether the source offers the Data / Chart / JSON result views: every
     /// query result and table browse, and a collection on a time-series
     /// connection.

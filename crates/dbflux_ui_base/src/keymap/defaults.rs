@@ -637,6 +637,12 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("t", Modifiers::none()),
         Command::CycleDocumentView,
     );
+    // The result's own views (Data, JSON, Chart). Alt+H / Alt+L stay the
+    // result tabs of a query document, which hold these views.
+    layer.bind(
+        KeyChord::new("t", Modifiers::shift()),
+        Command::CycleResultView,
+    );
     layer.bind(
         KeyChord::new("v", Modifiers::none()),
         Command::ToggleValuePanel,

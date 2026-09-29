@@ -3387,6 +3387,37 @@ mod result_tab_keyboard_tests {
         window.update(|_, cx| document.read(cx).result_tabs.active_result_index)
     }
 
+    /// From the results, the result view command switches the shown result
+    /// between the views of the results' mode bar (Data, then JSON).
+    #[gpui::test]
+    fn the_result_view_command_switches_the_shown_result(cx: &mut TestAppContext) {
+        use crate::code::SqlQueryFocus;
+        use crate::result_view::ResultViewMode;
+
+        let (document, window) = document_with_result_tabs(cx, 1);
+        window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                document.focus_mode = SqlQueryFocus::Results
+            })
+        });
+
+        let mode = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .active_result_grid()
+                    .map(|grid| grid.read(cx).result_view_mode())
+            })
+        };
+        assert_eq!(mode(window), Some(ResultViewMode::Table));
+
+        dispatch(window, &document, Command::CycleResultView);
+        assert_eq!(mode(window), Some(ResultViewMode::Json));
+
+        dispatch(window, &document, Command::CycleResultView);
+        assert_eq!(mode(window), Some(ResultViewMode::Table));
+    }
+
     #[gpui::test]
     fn result_tab_commands_switch_and_close_the_shown_tab(cx: &mut TestAppContext) {
         let (document, window) = document_with_result_tabs(cx, 3);
