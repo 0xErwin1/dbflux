@@ -1,5 +1,10 @@
 packages:
   - '.'
+overrides:
+  # Security advisories: override only the GHSA-affected ranges, so future
+  # unrelated undici/sharp majors keep resolving as declared.
+  'undici@>=7.0.0 <7.29.1': ^7.29.1
+  'sharp@0.35.2': ^0.35.4
 allowBuilds:
   core-js-pure: true
   esbuild: true
