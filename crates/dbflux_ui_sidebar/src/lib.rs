@@ -1420,10 +1420,17 @@ impl Sidebar {
         self.pending_tunnel_auth_profile_id
     }
 
+    /// Records whether the sidebar holds keyboard focus. Gaining it, including
+    /// a return from the filter while the sidebar was already focused, gives
+    /// the active tree a cursor when it has none.
     pub fn set_connections_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
         if self.connections_focused != focused {
             self.connections_focused = focused;
             cx.notify();
+        }
+
+        if focused {
+            self.ensure_tree_cursor(cx);
         }
     }
 
@@ -1480,6 +1487,10 @@ impl Sidebar {
 
             if tab == SidebarTab::Dashboards {
                 self.refresh_dashboards_tree(cx);
+            }
+
+            if self.connections_focused {
+                self.ensure_tree_cursor(cx);
             }
 
             cx.notify();

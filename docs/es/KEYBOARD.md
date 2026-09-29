@@ -85,6 +85,8 @@ Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y na
 
 `Escape` en el campo de búsqueda devuelve el foco al árbol y conserva el filtro escrito.
 
+Cuando el árbol recibe el foco sin ninguna fila seleccionada, se vuelve a seleccionar la última fila elegida, o la primera si esa ya no está, así `h`, `l` y `Enter` actúan de inmediato.
+
 ## Editor
 
 | Teclas                         | Acción                                   |

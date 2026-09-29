@@ -115,6 +115,43 @@ impl Sidebar {
         cx.notify();
     }
 
+    /// Gives the active tree a cursor when it has rows but none is selected,
+    /// so the first hjkl or Enter after the tree gains keyboard focus acts on
+    /// a row. The row the user last selected comes back when it is still
+    /// visible; otherwise the first row is selected. An existing cursor is
+    /// left alone.
+    pub(super) fn ensure_tree_cursor(&mut self, cx: &mut Context<Self>) {
+        let tree = self.active_tree_state().clone();
+        if tree.read(cx).selected_entry().is_some() {
+            return;
+        }
+
+        let visible_count = self.active_visible_entry_count(cx);
+        if visible_count == 0 {
+            return;
+        }
+
+        let remembered_id = self.active_anchor().map(SharedString::from);
+
+        tree.update(cx, |state, cx| {
+            let remembered_index = remembered_id
+                .and_then(|id| state.index_of(&id))
+                .filter(|index| !Self::is_failure_row(state, *index));
+
+            let index = remembered_index
+                .unwrap_or_else(|| Self::first_tree_row_index(state, visible_count));
+
+            state.set_selected_index(Some(index), cx);
+            state.scroll_to_item(index, gpui::ScrollStrategy::Center);
+        });
+
+        if let Some(entry) = tree.read(cx).selected_entry().cloned() {
+            self.set_selection_anchor(entry.item().id.as_ref());
+        }
+
+        cx.notify();
+    }
+
     pub fn select_last(&mut self, cx: &mut Context<Self>) {
         let visible_count = self.active_visible_entry_count(cx);
         if visible_count == 0 {
@@ -1076,5 +1113,130 @@ mod tests {
             business_children,
             vec![ids.conn1, ids.conn2, ids.conn3, ids.folder1, ids.folder3]
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_cursor_tests {
+    use crate::Sidebar;
+    use crate::table_loading::object_tree_adapter_tests::{
+        register_per_database_driver, test_app_state,
+    };
+    use dbflux_core::SchemaNodeId;
+    use dbflux_ui_base::app_state_entity::AppStateEntity;
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use std::sync::atomic::Ordering;
+    use uuid::Uuid;
+
+    fn add_disconnected_profile(
+        state: &Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+        name: &str,
+        sort_order: i32,
+    ) -> Uuid {
+        let mut profile =
+            dbflux_core::ConnectionProfile::new(name, dbflux_core::DbConfig::default_postgres());
+        let profile_id = Uuid::new_v4();
+        profile.id = profile_id;
+
+        state.update(cx, |state, _| {
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, sort_order),
+            );
+        });
+
+        profile_id
+    }
+
+    fn selected_item_id(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Option<String> {
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar
+                .active_tree_state()
+                .read(cx)
+                .selected_entry()
+                .map(|entry| entry.item().id.to_string())
+        })
+    }
+
+    fn profile_item(profile_id: Uuid) -> String {
+        SchemaNodeId::Profile { profile_id }.to_string()
+    }
+
+    /// Focusing the tree with no cursor puts one on the first row, so the
+    /// first Enter acts on it instead of needing a `j` first.
+    #[gpui::test]
+    async fn focusing_the_tree_without_a_cursor_selects_the_first_row(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let (connect_calls, _) = register_per_database_driver(&state, cx);
+        let first = add_disconnected_profile(&state, cx, "first", 1000);
+        add_disconnected_profile(&state, cx, "second", 2000);
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        assert_eq!(selected_item_id(&sidebar, cx), None);
+
+        sidebar.update(cx, |sidebar, cx| sidebar.set_connections_focused(true, cx));
+        assert_eq!(selected_item_id(&sidebar, cx), Some(profile_item(first)));
+
+        sidebar.update(cx, |sidebar, cx| sidebar.execute(cx));
+        cx.run_until_parked();
+        assert_eq!(connect_calls.load(Ordering::SeqCst), 1);
+        state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&first));
+        });
+    }
+
+    /// A cursor the user already placed survives the tree gaining focus.
+    #[gpui::test]
+    async fn focusing_the_tree_keeps_an_existing_cursor(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        register_per_database_driver(&state, cx);
+        add_disconnected_profile(&state, cx, "first", 1000);
+        let second = add_disconnected_profile(&state, cx, "second", 2000);
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.select_next(cx);
+            sidebar.select_next(cx);
+        });
+        assert_eq!(selected_item_id(&sidebar, cx), Some(profile_item(second)));
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_connections_focused(false, cx);
+            sidebar.set_connections_focused(true, cx);
+        });
+        assert_eq!(selected_item_id(&sidebar, cx), Some(profile_item(second)));
+    }
+
+    /// When the tree lost its cursor (a rebuild clears it) the row the user
+    /// last selected comes back, including when the sidebar never lost focus,
+    /// as when Escape leaves the filter.
+    #[gpui::test]
+    async fn focusing_the_tree_restores_the_last_selected_row(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        register_per_database_driver(&state, cx);
+        add_disconnected_profile(&state, cx, "first", 1000);
+        let second = add_disconnected_profile(&state, cx, "second", 2000);
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_connections_focused(true, cx);
+            sidebar.select_next(cx);
+        });
+        assert_eq!(selected_item_id(&sidebar, cx), Some(profile_item(second)));
+
+        sidebar.update(cx, |sidebar, cx| {
+            let tree = sidebar.active_tree_state().clone();
+            tree.update(cx, |tree, cx| tree.set_selected_index(None, cx));
+        });
+        assert_eq!(selected_item_id(&sidebar, cx), None);
+
+        sidebar.update(cx, |sidebar, cx| sidebar.set_connections_focused(true, cx));
+        assert_eq!(selected_item_id(&sidebar, cx), Some(profile_item(second)));
     }
 }

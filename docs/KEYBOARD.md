@@ -84,6 +84,8 @@ The shell's clickable items all have a key, and none of them joins the `Tab` cyc
 
 `Escape` in the search field returns focus to the tree and keeps the typed filter.
 
+When the tree gains focus with no row selected, the row selected last is selected again, or the first row when that one is gone, so `h`, `l` and `Enter` act right away.
+
 ## Editor
 
 | Keys | Action |
