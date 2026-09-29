@@ -5,6 +5,7 @@
 
 pub mod apply;
 pub mod diff_source;
+mod keyboard;
 pub mod pane;
 pub mod view;
 

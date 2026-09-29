@@ -211,16 +211,14 @@ impl KeyValueDocument {
             .border_color(theme.table_row_border)
             .font_family(AppFonts::MONO)
             .text_size(KeyValueMetrics::FOLDER_ROW_FONT)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.focus_mode = super::KeyValueFocusMode::List;
-                    this.list_cursor = Some(row_index);
-                    this.toggle_folder(&prefix_for_click, cx);
-                    cx.emit(DocumentEvent::RequestFocus);
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.focus_mode = super::KeyValueFocusMode::List;
+                this.list_cursor = Some(row_index);
+                this.toggle_folder(&prefix_for_click, cx);
+                cx.emit(DocumentEvent::RequestFocus);
+            }))
             .child(
                 div()
                     .flex_1()
@@ -357,16 +355,14 @@ impl KeyValueDocument {
                     )
             })
             .when(!selected, |row| row.hover(|row| row.bg(theme.list_hover)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.focus_mode = super::KeyValueFocusMode::List;
-                    this.list_cursor = Some(row_index);
-                    this.select_index(key_index, cx);
-                    cx.emit(DocumentEvent::RequestFocus);
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.focus_mode = super::KeyValueFocusMode::List;
+                this.list_cursor = Some(row_index);
+                this.select_index(key_index, cx);
+                cx.emit(DocumentEvent::RequestFocus);
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {

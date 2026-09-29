@@ -27,6 +27,7 @@ use crate::pane::ObjectSavedCallback;
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{DbError, ObjectMetadata, RefreshPolicy};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -86,6 +87,8 @@ struct Buffer {
     /// back — a decoded view never writes its re-encoded form over the
     /// object's real bytes.
     source: TextSource,
+    /// Vim mode for this buffer; a new buffer gets a new binding.
+    vim: VimBinding,
     _subscription: Subscription,
 }
 
@@ -123,9 +126,32 @@ pub struct ObjectEditorDocument {
     /// Set when a save was started by the interrupted-close flow, so a write
     /// that lands also asks the workspace to close the tab.
     close_after_save: bool,
+    /// Whether the buffer holds the keyboard. Escape takes it out, so the
+    /// Results keys reach the tab (Enter, `m`), and Enter or a click puts it
+    /// back.
+    buffer_has_keyboard: bool,
 }
 
 impl EventEmitter<DocumentEvent> for ObjectEditorDocument {}
+
+impl VimHost for ObjectEditorDocument {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.buffer
+            .as_ref()
+            .and_then(|buffer| buffer.vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.buffer
+            .as_mut()
+            .and_then(|buffer| buffer.vim.for_input_mut(input))
+    }
+
+    /// A decoded view is shown read-only: motions and yanks, no edits.
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        !self.is_editable()
+    }
+}
 
 impl ObjectEditorDocument {
     pub fn new(
@@ -153,6 +179,7 @@ impl ObjectEditorDocument {
             encoding_override: None,
             on_saved,
             close_after_save: false,
+            buffer_has_keyboard: true,
         };
 
         doc.load_object(cx);
@@ -242,11 +269,19 @@ impl ObjectEditorDocument {
     }
 
     /// The buffer is a text input and owns every letter it is given.
+    /// Text input while the buffer holds the keyboard; the Results keys
+    /// otherwise (no buffer yet, or Escape took the keyboard out of it).
     pub fn active_context(&self) -> ContextId {
-        ContextId::TextInput
+        if self.buffer.is_some() && self.buffer_has_keyboard {
+            ContextId::TextInput
+        } else {
+            ContextId::Results
+        }
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.buffer_has_keyboard = true;
+
         match self.buffer.as_ref() {
             Some(buffer) => buffer
                 .input
@@ -396,11 +431,19 @@ impl ObjectEditorDocument {
         cx: &mut Context<Self>,
     ) {
         let input = build_text_input(&self.key, &pending.body.text, window, cx);
+        let vim = VimBinding::new(input.clone(), window, cx);
 
         let subscription = cx.subscribe_in(
             &input,
             window,
             |this, input, event: &InputEvent, _window, cx| {
+                // A click into the buffer takes the keyboard back.
+                if matches!(event, InputEvent::Focus) && !this.buffer_has_keyboard {
+                    this.buffer_has_keyboard = true;
+                    cx.notify();
+                    return;
+                }
+
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
@@ -427,12 +470,16 @@ impl ObjectEditorDocument {
             byte_len: pending.body.byte_len,
             dirty: false,
             source: pending.source,
+            vim,
             _subscription: subscription,
         });
 
         input.update(cx, |state, cx| {
             state.set_value(&pending.body.text, window, cx);
         });
+
+        let input_id = input.entity_id();
+        VimBinding::follow_setting(self, input_id, cx);
 
         cx.notify();
     }
@@ -667,8 +714,149 @@ impl ObjectEditorDocument {
                 self.open_find(window, cx);
                 true
             }
+            // Escape in the buffer hands the keyboard to the tab; the
+            // component's find panel closes on its own Escape first.
+            Command::Cancel if self.buffer.is_some() && self.buffer_has_keyboard => {
+                self.buffer_has_keyboard = false;
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+                true
+            }
+            Command::Execute if self.buffer.is_some() => {
+                self.focus(window, cx);
+                true
+            }
+            Command::Execute if self.shows_load_anyway() => {
+                self.load_anyway(cx);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Key context entries the workspace adds while this tab owns the
+    /// keyboard: the buffer's Vim mode.
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(SharedString, SharedString)> {
+        self.buffer
+            .as_ref()
+            .and_then(|buffer| buffer.vim.key_context_entry(cx))
+            .into_iter()
+            .collect()
+    }
+
+    /// Whether the size gate's Load anyway button shows.
+    fn shows_load_anyway(&self) -> bool {
+        matches!(&self.load, LoadState::Failed(refusal) if refusal.is_too_large())
+    }
+
+    /// The header's and the size gate's buttons, each enabled when its
+    /// button is: Save, Discard, Find, the Auto / Raw interpretation, Reload
+    /// and Load anyway.
+    pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+        use dbflux_components::icons::AppIcon;
+
+        let editable = self.is_editable();
+        let can_act = editable && self.is_dirty() && !self.saving;
+        let context = ContextId::TextInput;
+
+        let callback =
+            |id: &'static str,
+             label: String,
+             run: fn(&mut ObjectEditorDocument, &mut Window, &mut Context<Self>)| {
+                let target = this.downgrade();
+                PaneAction::callback(id, label, move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| run(doc, window, cx));
+                    }
+                })
+            };
+
+        let mut actions = Vec::new();
+
+        if editable {
+            actions.push(
+                PaneAction::command(
+                    "object-editor-save",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.save"),
+                    Command::SaveQuery,
+                    context,
+                )
+                .icon(AppIcon::Save)
+                .enabled(can_act),
+            );
+            actions.push(
+                callback(
+                    "object-editor-discard",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                    |doc, window, cx| doc.discard_edits(window, cx),
+                )
+                .icon(AppIcon::RotateCcw)
+                .enabled(can_act),
+            );
+        }
+
+        if self.buffer.is_some() {
+            actions.push(
+                callback(
+                    "object-editor-find",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.find"),
+                    |doc, window, cx| {
+                        doc.focus(window, cx);
+                        doc.open_find(window, cx);
+                    },
+                )
+                .icon(AppIcon::Search),
+            );
+        }
+
+        if (self.buffer.is_some() && !editable) || self.has_raw_override() {
+            let (label, raw) = if self.has_raw_override() {
+                (
+                    dbflux_i18n::t!("document.object_browser.preview.body.encoding_auto"),
+                    false,
+                )
+            } else {
+                (
+                    dbflux_i18n::t!("document.object_browser.preview.body.encoding_raw"),
+                    true,
+                )
+            };
+            let target = this.downgrade();
+            actions.push(PaneAction::callback(
+                "object-editor-interpretation",
+                label,
+                move |_window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.set_raw_override(raw, cx));
+                    }
+                },
+            ));
+        }
+
+        actions.push(
+            PaneAction::command(
+                "object-editor-reload",
+                dbflux_i18n::t!("document.object_editor.pane_actions.reload"),
+                Command::RefreshSchema,
+                ContextId::Results,
+            )
+            .icon(AppIcon::RefreshCcw)
+            .enabled(!self.is_dirty()),
+        );
+
+        if self.shows_load_anyway() {
+            actions.push(
+                callback(
+                    "object-editor-load-anyway",
+                    dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
+                    |doc, _window, cx| doc.load_anyway(cx),
+                )
+                .icon(AppIcon::Download),
+            );
+        }
+
+        actions
     }
 
     /// Opens the editor component's find panel over the buffer.
@@ -688,6 +876,17 @@ impl ObjectEditorDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.install_buffer_from_source_for_test(text, TextSource::Raw, window, cx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_buffer_from_source_for_test(
+        &mut self,
+        text: &str,
+        source: TextSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.load = LoadState::Ready;
         self.install_buffer(
             PendingBody {
@@ -697,7 +896,7 @@ impl ObjectEditorDocument {
                     byte_len: text.len() as u64,
                 },
                 content_type: Some("text/plain".to_string()),
-                source: TextSource::Raw,
+                source,
             },
             window,
             cx,
@@ -992,6 +1191,159 @@ mod tests {
         });
     }
 
+    /// Escape takes the keyboard out of the buffer, where the Results keys
+    /// reach the tab; Enter hands it back. The pane actions list Discard,
+    /// which restores the baseline like its button.
+    /// An edited object with the keyboard out of the text. The test below
+    /// proves Escape and the pane actions.
+    #[gpui::test]
+    fn the_object_editor_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::OBJECT_EDITOR;
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ObjectEditorDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        "notes.md".to_string(),
+                        Rc::new(|_key: &str, _cx: &mut gpui::App| {}),
+                        app_state,
+                        cx,
+                    )
+                });
+                doc.update(cx, |doc, cx| {
+                    doc.install_buffer_for_test("baseline", window, cx);
+                    doc.type_for_test("edited", window, cx);
+                });
+                doc
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| doc.update(cx, |doc, cx| doc.focus(window, cx)));
+        window.run_until_parked();
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            doc.read(cx)
+                .pane_actions(&doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(OBJECT_EDITOR)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "object-editor-save"),
+            "{checked:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn escape_leaves_the_buffer_and_the_pane_actions_discard(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use crate::pane::PaneActionRun;
+        use dbflux_app::keymap::ContextId;
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ObjectEditorDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        "notes.md".to_string(),
+                        Rc::new(|_key: &str, _cx: &mut gpui::App| {}),
+                        app_state,
+                        cx,
+                    )
+                });
+                doc.update(cx, |doc, cx| {
+                    doc.install_buffer_for_test("baseline", window, cx);
+                    doc.type_for_test("edited", window, cx);
+                });
+                doc
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| doc.update(cx, |doc, cx| doc.focus(window, cx)));
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::TextInput
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::Results,
+            "Escape leaves the buffer"
+        );
+
+        let discard = window.update(|_, cx| {
+            doc.read(cx)
+                .pane_actions(&doc)
+                .into_iter()
+                .find(|action| action.id.as_ref() == "object-editor-discard")
+        });
+        let Some(discard) = discard else {
+            panic!("the pane actions list Discard");
+        };
+        assert!(
+            discard.enabled,
+            "Discard is enabled while the buffer is dirty"
+        );
+        let PaneActionRun::Callback(run) = discard.run else {
+            panic!("Discard runs a callback");
+        };
+        window.update(|window, cx| run(window, cx));
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| doc.read(cx).is_dirty()));
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::TextInput,
+            "Enter hands the keyboard back to the buffer"
+        );
+    }
+
     /// Discarding restores the baseline and clears the dirty state, so the tab
     /// stops advertising an edit that no longer exists.
     #[gpui::test]
@@ -1182,5 +1534,157 @@ mod tests {
             assert_eq!(doc.state(), DocumentState::Error);
             assert!(doc.byte_len().is_none());
         });
+    }
+
+    /// The document in a keymap host with Vim mode set to `vim`, its buffer
+    /// installed from `source` and focused.
+    fn vim_test_document<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        vim: bool,
+        text: &'static str,
+        source: crate::object_browser::TextSource,
+    ) -> (
+        gpui::Entity<ObjectEditorDocument>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, vim));
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ObjectEditorDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        "notes.md".to_string(),
+                        Rc::new(|_key: &str, _cx: &mut gpui::App| {}),
+                        app_state,
+                        cx,
+                    )
+                });
+                doc.update(cx, |doc, cx| {
+                    doc.install_buffer_from_source_for_test(text, source, window, cx);
+                });
+                doc
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.run_until_parked();
+        window.update(|window, cx| doc.update(cx, |doc, cx| doc.focus(window, cx)));
+        window.run_until_parked();
+
+        (doc, window)
+    }
+
+    fn buffer_text_and_cursor(
+        doc: &gpui::Entity<ObjectEditorDocument>,
+        window: &mut gpui::VisualTestContext,
+    ) -> (String, usize) {
+        window.update(|_, cx| {
+            let input = doc
+                .read(cx)
+                .buffer
+                .as_ref()
+                .map(|buffer| buffer.input.clone())
+                .expect("a buffer is installed");
+            let state = input.read(cx);
+            (state.value().to_string(), state.cursor())
+        })
+    }
+
+    /// With Vim mode on, the buffer starts in Normal mode: `j` moves down
+    /// instead of typing, `i` inserts, the first Escape returns to Normal and
+    /// keeps the keyboard in the buffer, and the second leaves the buffer.
+    #[gpui::test]
+    fn vim_mode_edits_the_buffer_and_escape_steps_out(cx: &mut gpui::TestAppContext) {
+        use crate::object_browser::TextSource;
+        use dbflux_app::keymap::ContextId;
+
+        let (doc, window) = vim_test_document(cx, true, "abc\ndef", TextSource::Raw);
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        assert_eq!(buffer_text_and_cursor(&doc, window), ("abc\ndef".into(), 4));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.run_until_parked();
+        assert_eq!(buffer_text_and_cursor(&doc, window).0, "abc\nXdef");
+        assert!(window.update(|_, cx| doc.read(cx).is_dirty()));
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::TextInput,
+            "the first Escape only leaves Insert mode"
+        );
+        window.simulate_keystrokes("x");
+        window.run_until_parked();
+        assert_eq!(buffer_text_and_cursor(&doc, window).0, "abc\ndef");
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::Results,
+            "Escape in Normal mode leaves the buffer"
+        );
+    }
+
+    /// Turning the setting off updates an open buffer at once: keys type again.
+    #[gpui::test]
+    fn vim_mode_follows_the_setting_live(cx: &mut gpui::TestAppContext) {
+        use crate::object_browser::TextSource;
+
+        let (doc, window) = vim_test_document(cx, true, "abc", TextSource::Raw);
+
+        window.update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, false));
+        window.run_until_parked();
+        window.simulate_input("j");
+        window.run_until_parked();
+        assert_eq!(buffer_text_and_cursor(&doc, window).0, "jabc");
+
+        window.update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        window.run_until_parked();
+        window.simulate_keystrokes("l");
+        window.run_until_parked();
+        assert_eq!(buffer_text_and_cursor(&doc, window), ("jabc".into(), 2));
+    }
+
+    /// A decoded view stays read-only but takes the keyboard, so Vim motions
+    /// work in it while edits do nothing.
+    #[gpui::test]
+    fn a_decoded_buffer_takes_vim_motions_but_no_edits(cx: &mut gpui::TestAppContext) {
+        use crate::object_browser::TextSource;
+
+        let (doc, window) = vim_test_document(
+            cx,
+            true,
+            "abc\ndef",
+            TextSource::Decoded(dbflux_core::Encoding::Gzip),
+        );
+
+        window.simulate_keystrokes("j x");
+        window.simulate_keystrokes("i");
+        window.simulate_input("Z");
+        window.run_until_parked();
+
+        assert_eq!(buffer_text_and_cursor(&doc, window), ("abc\ndef".into(), 4));
+        assert!(!window.update(|_, cx| doc.read(cx).is_dirty()));
     }
 }

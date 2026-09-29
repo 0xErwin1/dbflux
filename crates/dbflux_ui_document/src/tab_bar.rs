@@ -405,13 +405,11 @@ impl TabBar {
                     .size(TabMetrics::CLOSE_ICON)
                     .muted(),
             )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _event, _window, cx| {
-                    cx.stop_propagation();
-                    this.request_close(id, cx);
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                cx.stop_propagation();
+                this.request_close(id, cx);
+            }))
             .into_any_element()
     }
 

@@ -157,8 +157,15 @@ Chart** alterna entre la lista de eventos y un chart de los eventos agrupados
 por category, outcome o level. Desde el teclado, activar los presets de tiempo
 pasa al siguiente.
 
-El menú contextual de una fila añade **Copy row as CSV**, **Copy summary** y —
-cuando el evento tiene un correlation id — **Filter by correlation**.
+El menú contextual de una fila lista **Copy row as CSV**, **Copy summary**,
+**Copy row as JSON**, **Filter by correlation** cuando el evento tiene un
+correlation id, y **Open approval** para una llamada de agente que espera
+aprobación. Se abre con clic derecho sobre una fila, o con `m` (o `Shift+F10`)
+sobre la fila seleccionada.
+
+Desde el teclado, `Ctrl+E` (`Cmd+E` en macOS) abre el menú de exportación y
+`Alt+L` / `Alt+H` alternan entre la tabla y el chart. Las demás teclas del visor
+están en [Atajos de teclado](KEYBOARD.md#visor-de-auditoría).
 
 ### Seguir un error hasta su fila de audit
 

@@ -29,7 +29,8 @@ use dbflux_components::tokens::{
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{
-    CancelToken, Connection, OrderResult, TableRef, TaskId, TaskKind, TaskStatus, TaskTarget,
+    CancelToken, Connection, LogErr, OrderResult, TableRef, TaskId, TaskKind, TaskStatus,
+    TaskTarget,
 };
 use dbflux_transfer::TableMappingMode;
 use dbflux_transfer::TableTransferStatus;
@@ -47,6 +48,8 @@ use crate::migrate_wizard::MigrateWizard;
 use crate::migrate_wizard::column_mapping::TableMigrationConfig;
 use crate::migrate_wizard::phases::{ReorderState, RunState};
 use crate::migrate_wizard::{build_migration_options, build_migration_table_plans};
+use crate::pane::PaneAction;
+use dbflux_core::keymap_types::{Command, ContextId};
 
 /// Outcome of resolving the FK load order on the `Options` → `Confirm`
 /// transition: either a full order is ready to run, or the selected tables
@@ -259,6 +262,8 @@ pub struct ConfirmRunPhase {
     pre_run_warnings: Vec<String>,
 
     reorder: Option<ReorderState>,
+    /// Keyboard cursor over the load-order rows of the reorder interrupt.
+    reorder_cursor: usize,
     final_order: Option<Vec<TableRef>>,
     confirmed_destructive: bool,
     /// Explicit user acknowledgment required before a destructive plan can be
@@ -308,6 +313,7 @@ impl ConfirmRunPhase {
             summary,
             pre_run_warnings: inputs.pre_run_warnings,
             reorder,
+            reorder_cursor: 0,
             final_order,
             confirmed_destructive: false,
             destructive_ack: false,
@@ -332,6 +338,161 @@ impl ConfirmRunPhase {
     /// Whether the run switches referential integrity off on the target.
     pub fn disables_referential_integrity(&self) -> bool {
         self.disable_referential_integrity
+    }
+
+    /// Whether the plan may start now: a destructive plan needs the explicit
+    /// acknowledgment, and the load order must be settled.
+    fn start_enabled(&self) -> bool {
+        self.run_state == RunState::Idle
+            && self.reorder.is_none()
+            && (!self.summary.has_destructive() || self.destructive_ack)
+    }
+
+    fn toggle_destructive_ack(&mut self, cx: &mut Context<Self>) {
+        if self.summary.has_destructive() {
+            self.destructive_ack = !self.destructive_ack;
+            cx.notify();
+        }
+    }
+
+    /// Runs a keymap command on the step. In the load-order interrupt J / K
+    /// move the cursor, Shift+J / Shift+K move the row under it and Enter
+    /// accepts the order; on the plan, Space checks the destructive
+    /// acknowledgment and Ctrl+Enter starts the run; once it is done, Enter
+    /// closes the wizard. Returns whether the command applied.
+    pub fn handle_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
+        match self.run_state {
+            RunState::Idle if self.reorder.is_some() => self.handle_reorder_command(command, cx),
+            RunState::Idle => match command {
+                Command::ExpandCollapse => {
+                    self.toggle_destructive_ack(cx);
+                    true
+                }
+                Command::RunQuery => {
+                    if self.start_enabled() {
+                        self.on_start_migration(cx);
+                    }
+                    true
+                }
+                _ => false,
+            },
+            RunState::Running => false,
+            RunState::Done => {
+                if command == Command::Execute {
+                    cx.emit(ConfirmRunEvent::CloseRequested);
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    fn handle_reorder_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
+        let count = self
+            .reorder
+            .as_ref()
+            .map_or(0, |reorder| reorder.list.len());
+        let last = count.saturating_sub(1);
+
+        match command {
+            Command::SelectNext => {
+                self.reorder_cursor = (self.reorder_cursor + 1).min(last);
+                cx.notify();
+                true
+            }
+            Command::SelectPrev => {
+                self.reorder_cursor = self.reorder_cursor.saturating_sub(1);
+                cx.notify();
+                true
+            }
+            Command::MoveSelectedDown if self.reorder_cursor < last => {
+                self.move_reorder_row(self.reorder_cursor, 1, cx);
+                self.reorder_cursor += 1;
+                true
+            }
+            Command::MoveSelectedUp if self.reorder_cursor > 0 => {
+                self.move_reorder_row(self.reorder_cursor, -1, cx);
+                self.reorder_cursor -= 1;
+                true
+            }
+            Command::MoveSelectedDown | Command::MoveSelectedUp => true,
+            Command::Execute => {
+                self.accept_reorder(cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The step's buttons for the wizard's pane actions menu: the load-order
+    /// row moves and Accept, the destructive acknowledgment and Start.
+    pub fn pane_actions(&self, entity: &Entity<Self>) -> Vec<PaneAction> {
+        let context = ContextId::MigrateWizard;
+        let mut actions = Vec::new();
+
+        if self.run_state != RunState::Idle {
+            return actions;
+        }
+
+        if let Some(reorder) = self.reorder.as_ref() {
+            let last = reorder.list.len().saturating_sub(1);
+            actions.push(
+                PaneAction::command(
+                    "migrate-reorder-up",
+                    dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.up"),
+                    Command::MoveSelectedUp,
+                    context,
+                )
+                .enabled(self.reorder_cursor > 0),
+            );
+            actions.push(
+                PaneAction::command(
+                    "migrate-reorder-down",
+                    dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.down"),
+                    Command::MoveSelectedDown,
+                    context,
+                )
+                .enabled(self.reorder_cursor < last),
+            );
+
+            let phase = entity.downgrade();
+            actions.push(PaneAction::callback(
+                "migrate-reorder-accept",
+                dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.accept"),
+                move |_window, cx| {
+                    phase
+                        .update(cx, |phase, cx| phase.accept_reorder(cx))
+                        .log_err();
+                },
+            ));
+            return actions;
+        }
+
+        if self.summary.has_destructive() {
+            let phase = entity.downgrade();
+            actions.push(PaneAction::callback(
+                "migrate-destructive-ack",
+                dbflux_i18n::t!("document.migrate_wizard.confirm.destructive_ack"),
+                move |_window, cx| {
+                    phase
+                        .update(cx, |phase, cx| phase.toggle_destructive_ack(cx))
+                        .log_err();
+                },
+            ));
+        }
+
+        actions.push(
+            PaneAction::command(
+                "migrate-start",
+                dbflux_i18n::t!("document.migrate_wizard.confirm.start_migration"),
+                Command::RunQuery,
+                context,
+            )
+            .icon(AppIcon::Play)
+            .enabled(self.start_enabled()),
+        );
+
+        actions
     }
 
     fn move_reorder_row(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
@@ -691,9 +852,10 @@ struct RunTaskContext {
 }
 
 impl Render for ConfirmRunPhase {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let keyboard = self.focus_handle.is_focused(window);
         let body = match self.run_state {
-            RunState::Idle => self.render_confirm(cx),
+            RunState::Idle => self.render_confirm(keyboard, cx),
             RunState::Running => self.render_running(cx),
             RunState::Done => self.render_done(cx),
         };
@@ -712,7 +874,7 @@ impl Render for ConfirmRunPhase {
 }
 
 impl ConfirmRunPhase {
-    fn render_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_confirm(&self, keyboard: bool, cx: &mut Context<Self>) -> AnyElement {
         let summary = div()
             .flex()
             .flex_col()
@@ -727,7 +889,7 @@ impl ConfirmRunPhase {
             .child(self.render_summary_rows(cx));
 
         let action = match self.reorder.is_some() {
-            true => self.render_reorder_interrupt(cx),
+            true => self.render_reorder_interrupt(keyboard, cx),
             false => self.render_start_action(cx),
         };
 
@@ -827,14 +989,18 @@ impl ConfirmRunPhase {
             .into_any_element()
     }
 
-    fn render_reorder_interrupt(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_reorder_interrupt(&self, keyboard: bool, cx: &mut Context<Self>) -> AnyElement {
         let Some(reorder) = self.reorder.as_ref() else {
             return div().into_any_element();
         };
+        let cursor_fill = cx.theme().accent;
 
         let rows = reorder.list.iter().enumerate().map(|(index, table)| {
             let is_last = index + 1 == reorder.list.len();
             div()
+                .when(keyboard && index == self.reorder_cursor, |row| {
+                    row.bg(cursor_fill)
+                })
                 .flex()
                 .items_center()
                 .gap(Spacing::SM)

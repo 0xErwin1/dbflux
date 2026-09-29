@@ -191,6 +191,7 @@ fn arrows_switch_the_hook_execution_mode(cx: &mut TestAppContext) {
 /// the test restores the defaults at the end.
 #[gpui::test]
 fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
     use dbflux_ui_base::keymap::{effective_keymap, keymap_overrides};
 
@@ -275,4 +276,254 @@ fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAp
 
     window.update(|_, cx| keybindings.update(cx, |section, cx| section.reset_all(cx)));
     assert!(keymap_overrides().is_empty(), "the defaults are back");
+}
+
+fn proxies_focus(
+    settings: &Entity<SettingsCoordinator>,
+    window: &mut VisualTestContext,
+) -> super::proxies_section::ProxyFocus {
+    window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Proxies(section) => section.read(cx).proxy_focus,
+        _ => unreachable!("the proxies section is open"),
+    })
+}
+
+/// The section keys (`n` new, `d` delete, `i` import) are keymap commands of
+/// the Settings context: `n` opens a new profile form, the same key arriving
+/// without its binding does nothing, and a rebound key takes over.
+#[gpui::test]
+fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    use super::proxies_section::ProxyFocus;
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
+    use dbflux_ui_base::keymap::{apply_keymap_overrides, keymap_overrides};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Proxies);
+    focus_content(&settings, window);
+    assert_eq!(proxies_focus(&settings, window), ProxyFocus::ProfileList);
+
+    window.update(|window, cx| {
+        settings.update(cx, |settings, cx| {
+            let event = KeyDownEvent {
+                keystroke: Keystroke::parse("n").expect("valid keystroke"),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            settings.handle_key_event(&event, window, cx);
+        })
+    });
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::ProfileList,
+        "an `n` that no binding turned into a command does nothing"
+    );
+
+    window.simulate_keystrokes("n");
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::Form,
+        "`n` opens the form of a new proxy"
+    );
+
+    window.simulate_keystrokes("escape");
+    assert_eq!(proxies_focus(&settings, window), ProxyFocus::ProfileList);
+
+    // The section keys carry their own predicate, and so does their slot.
+    let slot = BindingSlot::new(
+        ContextId::Settings,
+        Command::AddItem,
+        KeyChord::new("n", Modifiers::none()),
+    )
+    .with_predicate("Settings && focus == section && !Input");
+    let mut overrides = keymap_overrides();
+    overrides.set(slot, Some(KeySequence::parse("a").expect("valid sequence")));
+    window.update(|_, cx| apply_keymap_overrides(overrides, cx));
+    window.run_until_parked();
+
+    window.simulate_keystrokes("n");
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::ProfileList,
+        "the old key no longer adds a proxy"
+    );
+
+    window.simulate_keystrokes("a");
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::Form,
+        "the new key adds one"
+    );
+}
+
+/// In the key bindings editor `c` opens the context filter with keyboard
+/// focus and Shift+R drops every override, as the Reset to defaults button.
+#[gpui::test]
+fn keybindings_keys_open_the_context_filter_and_reset_everything(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
+    use dbflux_ui_base::keymap::{apply_keymap_overrides, keymap_overrides};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    window.simulate_keystrokes("c");
+    let (open, focused) = window.update(|window, cx| {
+        let filter = keybindings.read(cx).context_filter.read(cx);
+        (filter.is_open(), filter.is_focused(window))
+    });
+    assert!(open && focused, "`c` opens the context filter with focus");
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+
+    let slot = BindingSlot::new(
+        ContextId::Global,
+        Command::OpenAuditViewer,
+        KeyChord::new("a", Modifiers::primary_shift()),
+    );
+    let mut overrides = keymap_overrides();
+    overrides.set(
+        slot,
+        Some(KeySequence::parse("ctrl+k a").expect("valid sequence")),
+    );
+    window.update(|_, cx| {
+        apply_keymap_overrides(overrides.clone(), cx);
+        keybindings.update(cx, |section, _| section.overrides = overrides);
+    });
+
+    window.simulate_keystrokes("shift-r");
+    assert!(
+        keymap_overrides().is_empty(),
+        "Shift+R restores the defaults"
+    );
+}
+
+/// The About page's links take the keyboard: Down moves to View source and
+/// Enter opens it.
+#[gpui::test]
+fn the_about_links_open_from_the_keyboard(cx: &mut TestAppContext) {
+    let (settings, window) = open_settings(cx, SettingsSectionId::About);
+    focus_content(&settings, window);
+
+    window.simulate_keystrokes("j enter");
+
+    assert_eq!(
+        window.opened_url().as_deref(),
+        Some(env!("CARGO_PKG_REPOSITORY"))
+    );
+}
+
+/// Recording a Vim leader binding stores the leader key pressed first as
+/// the leader itself, so the new keys keep following the leader when it
+/// changes.
+#[gpui::test]
+fn recording_a_leader_binding_keeps_it_relative_to_the_leader(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
+    use dbflux_ui_base::keymap::{
+        apply_keymap_overrides, default_vim_leader, effective_keymap, keymap_overrides,
+        set_vim_leader,
+    };
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    let leader_then = |key: &str| {
+        KeySequence::new(vec![
+            KeyChord::leader(),
+            KeyChord::new(key, Modifiers::none()),
+        ])
+        .expect("two chords")
+    };
+    let slot = BindingSlot::new(
+        ContextId::VimNormal,
+        Command::OpenPaneActions,
+        leader_then("a"),
+    );
+
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.start_recording(slot.clone(), ContextId::VimNormal, cx)
+        })
+    });
+    window.simulate_keystrokes("space x");
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    window.run_until_parked();
+
+    assert_eq!(
+        keymap_overrides().effective_keys(&slot),
+        Some(leader_then("x")),
+        "Space pressed first is recorded as the leader"
+    );
+
+    window.update(|_, cx| set_vim_leader(KeyChord::new(",", Modifiers::none()), cx));
+    assert_eq!(
+        effective_keymap()
+            .keys_for_command(ContextId::VimNormal, Command::OpenPaneActions)
+            .map(KeySequence::to_storage_string)
+            .as_deref(),
+        Some(", x"),
+        "the recorded binding follows the new leader"
+    );
+
+    window.update(|_, cx| {
+        set_vim_leader(default_vim_leader(), cx);
+        apply_keymap_overrides(dbflux_app::keymap::KeymapOverrides::new(), cx);
+    });
+}
+
+/// Every section of the settings window. The tests above prove the
+/// navigation, section keys and form rings.
+#[gpui::test]
+fn every_settings_section_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SETTINGS;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+    let capture = FrameCapture::observe(window);
+
+    let sections = [
+        SettingsSectionId::General,
+        SettingsSectionId::Audit,
+        SettingsSectionId::Keybindings,
+        SettingsSectionId::Updates,
+        SettingsSectionId::Proxies,
+        SettingsSectionId::SshTunnels,
+        SettingsSectionId::AuthProfiles,
+        SettingsSectionId::Services,
+        SettingsSectionId::Hooks,
+        SettingsSectionId::Drivers,
+        SettingsSectionId::About,
+        #[cfg(feature = "mcp")]
+        SettingsSectionId::McpClients,
+        #[cfg(feature = "mcp")]
+        SettingsSectionId::McpRoles,
+        #[cfg(feature = "mcp")]
+        SettingsSectionId::McpPolicies,
+    ];
+
+    for section in sections {
+        window.update(|window, cx| {
+            settings.update(cx, |settings, cx| {
+                settings.set_active_section(section, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id.starts_with("settings-nav-")),
+            "{section:?}: {checked:?}"
+        );
+    }
 }

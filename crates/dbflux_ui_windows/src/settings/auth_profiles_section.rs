@@ -137,6 +137,11 @@ pub(super) enum AuthFormField {
     Provider(usize),
     DynamicField(usize),
     ProviderLogin,
+    /// The buttons of the login URL panel shown while an interactive login
+    /// waits for the browser.
+    LoginOpenBrowser,
+    LoginCopyUrl,
+    LoginCancel,
     Enabled,
     ExportButton,
     DeleteButton,
@@ -164,6 +169,7 @@ fn build_form_rows(
     has_providers: bool,
     dynamic_field_count: usize,
     selected_provider_supports_login: bool,
+    login_url_shown: bool,
     is_editing: bool,
     is_reflected: bool,
 ) -> Vec<Vec<AuthFormField>> {
@@ -180,6 +186,14 @@ fn build_form_rows(
 
     if selected_provider_supports_login {
         rows.push(vec![AuthFormField::ProviderLogin]);
+
+        if login_url_shown {
+            rows.push(vec![
+                AuthFormField::LoginOpenBrowser,
+                AuthFormField::LoginCopyUrl,
+                AuthFormField::LoginCancel,
+            ]);
+        }
     }
 
     // Reflected profiles do not expose the Enabled toggle (it is managed by
@@ -560,6 +574,19 @@ impl AuthProfilesSection {
             .iter()
             .map(|(field_id, _, _)| field_id.clone())
             .collect();
+
+        let dropdown_ids = field_defs
+            .iter()
+            .filter(|(_, _, kind)| {
+                matches!(
+                    kind,
+                    FormFieldKind::DynamicSelect { .. } | FormFieldKind::AuthProfileRef { .. }
+                )
+            })
+            .map(|(field_id, _, _)| field_id.clone())
+            .collect::<HashSet<_>>();
+        self.dynamic_dropdowns
+            .retain(|field_id, _| dropdown_ids.contains(field_id));
 
         let mut dropdown_subs: Vec<Subscription> = Vec::new();
 
@@ -973,7 +1000,11 @@ impl AuthProfilesSection {
                 .flex()
                 .flex_col()
                 .gap(FormMetrics::HELP_GAP)
-                .child(div().w(AUTH_SELECT_WIDTH).child(dropdown))
+                .child(layout::cursor_ring(
+                    self.is_cursor_on_dynamic_field(&field_id),
+                    div().w(AUTH_SELECT_WIDTH).child(dropdown),
+                    cx,
+                ))
                 .when_some(help, |column, help| column.child(layout::help_text(help)))
                 .when_some(login_hint, |column, hint| {
                     column.child(Text::body(hint).font_size(FormMetrics::HELP_FONT).warning())
@@ -1046,7 +1077,11 @@ impl AuthProfilesSection {
 
         layout::form_row(
             label,
-            div().w(AUTH_SELECT_WIDTH).child(dropdown),
+            layout::cursor_ring(
+                self.is_cursor_on_dynamic_field(&field_id),
+                div().w(AUTH_SELECT_WIDTH).child(dropdown),
+                cx,
+            ),
             help.map(SharedString::from),
         )
         .into_any_element()
@@ -1922,6 +1957,24 @@ impl AuthProfilesSection {
             .count()
     }
 
+    /// Asks the active provider to abort whatever in-flight login it has for
+    /// the profile being edited. The provider's login future then returns an
+    /// error and the spawned login task cleans up the final status.
+    fn cancel_provider_login(&mut self, cx: &mut Context<Self>) {
+        if let Some(profile) = self.current_form_profile(cx)
+            && let Some(provider) = self.selected_provider(cx)
+        {
+            let _aborted = provider.abort_login(&profile);
+        }
+
+        self.active_login_url = None;
+        self.provider_login_status = Some((
+            dbflux_i18n::t!("settings.auth_profiles.login_cancelled"),
+            false,
+        ));
+        cx.notify();
+    }
+
     /// Renders the inline login-URL panel: shows the verification URL with
     /// Open Browser, Copy URL, and Cancel buttons. Used while an interactive
     /// SSO login is in flight from the Settings window.
@@ -1937,6 +1990,7 @@ impl AuthProfilesSection {
                 )
                 .primary()
                 .icon(AppIcon::ExternalLink)
+                .focused(self.is_cursor_on(AuthFormField::LoginOpenBrowser))
                 .on_click(cx.listener(move |_this, _, _, cx| {
                     cx.open_url(&url_for_open);
                 })),
@@ -1948,6 +2002,7 @@ impl AuthProfilesSection {
                 )
                 .secondary()
                 .icon(AppIcon::Copy)
+                .focused(self.is_cursor_on(AuthFormField::LoginCopyUrl))
                 .on_click(cx.listener(move |_this, _, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(url_for_copy.clone()));
                 })),
@@ -1958,23 +2013,9 @@ impl AuthProfilesSection {
                     dbflux_i18n::t!("settings.auth_profiles.cancel"),
                 )
                 .danger()
+                .focused(self.is_cursor_on(AuthFormField::LoginCancel))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    // Ask the active provider to abort whatever
-                    // in-flight login it has for the profile
-                    // being edited. The provider's login future
-                    // will then return an error and the spawned
-                    // login task will clean up final status.
-                    if let Some(profile) = this.current_form_profile(cx)
-                        && let Some(provider) = this.selected_provider(cx)
-                    {
-                        let _aborted = provider.abort_login(&profile);
-                    }
-                    this.active_login_url = None;
-                    this.provider_login_status = Some((
-                        dbflux_i18n::t!("settings.auth_profiles.login_cancelled"),
-                        false,
-                    ));
-                    cx.notify();
+                    this.cancel_provider_login(cx);
                 })),
             );
 
@@ -2658,6 +2699,14 @@ impl AuthProfilesSection {
         self.content_focused && self.auth_focus == AuthFocus::Form && self.auth_form_field == field
     }
 
+    /// Whether the form cursor is on the provider field `field_id`.
+    fn is_cursor_on_dynamic_field(&self, field_id: &str) -> bool {
+        self.provider_field_order
+            .iter()
+            .position(|id| id == field_id)
+            .is_some_and(|idx| self.is_cursor_on(AuthFormField::DynamicField(idx)))
+    }
+
     /// Export and Delete, on the left of the footer, for a stored profile.
     fn render_section_footer_leading_actions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Reflected profiles are edited in-place via save_edit; they cannot be
@@ -2796,6 +2845,7 @@ impl FormSection for AuthProfilesSection {
             !self.provider_entries_cache.is_empty(),
             self.provider_field_order.len(),
             self.selected_provider_supports_login,
+            self.active_login_url.is_some(),
             self.editing_profile_id.is_some(),
             self.edit_snapshot.is_some(),
         )
@@ -2814,6 +2864,14 @@ impl FormSection for AuthProfilesSection {
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             AuthFormField::DynamicField(idx) => {
+                if let Some(field_id) = self.provider_field_order.get(idx)
+                    && let Some(dropdown) = self.dynamic_dropdowns.get(field_id).cloned()
+                {
+                    self.auth_editing_field = false;
+                    dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                    return;
+                }
+
                 if let Some(field_id) = self.provider_field_order.get(idx).cloned()
                     && let Some(input) = self.form_inputs.get(&field_id)
                 {
@@ -2834,17 +2892,31 @@ impl FormSection for AuthProfilesSection {
                 self.focus_current_field(window, cx);
             }
             AuthFormField::Provider(_) => {
-                // The provider selector is a single dropdown widget.
-                // Keyboard activation (Enter) on this row focuses the dropdown;
-                // the dropdown's own keyboard handling takes over from there.
-                // No state mutation is needed here — selection is driven by
-                // the `DropdownSelectionChanged` subscription in the constructor.
+                // The dropdown takes the keyboard until a provider is chosen
+                // or it closes; the `DropdownSelectionChanged` subscription in
+                // the constructor applies the choice.
+                self.provider_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
             }
             AuthFormField::Enabled => {
                 self.profile_enabled = !self.profile_enabled;
             }
             AuthFormField::ProviderLogin => {
                 self.login_selected_profile(cx);
+            }
+            AuthFormField::LoginOpenBrowser => {
+                if let Some(url) = self.active_login_url.as_deref() {
+                    cx.open_url(url);
+                }
+            }
+            AuthFormField::LoginCopyUrl => {
+                if let Some(url) = self.active_login_url.clone() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(url));
+                }
+            }
+            AuthFormField::LoginCancel => {
+                self.cancel_provider_login(cx);
+                self.validate_form_field();
             }
             AuthFormField::ExportButton => {
                 self.request_export(cx);
@@ -3015,7 +3087,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn form_rows_include_generic_provider_login_without_aws_feature() {
-        let rows = build_form_rows(true, 2, true, false, false);
+        let rows = build_form_rows(true, 2, true, false, false, false);
 
         assert!(
             rows.iter()
@@ -3026,6 +3098,27 @@ mod tests {
                 .iter()
                 .any(|row| row.contains(&AuthFormField::DeleteButton))
         );
+    }
+
+    /// While a login waits for the browser, its Open browser, Copy URL and
+    /// Cancel buttons form the row under the login button.
+    #[::core::prelude::v1::test]
+    fn form_rows_list_the_login_url_buttons_while_a_login_waits() {
+        let login_url_row = vec![
+            AuthFormField::LoginOpenBrowser,
+            AuthFormField::LoginCopyUrl,
+            AuthFormField::LoginCancel,
+        ];
+
+        let waiting = build_form_rows(true, 0, true, true, true, false);
+        let login_index = waiting
+            .iter()
+            .position(|row| row == &vec![AuthFormField::ProviderLogin])
+            .expect("the login row is listed");
+        assert_eq!(waiting.get(login_index + 1), Some(&login_url_row));
+
+        let idle = build_form_rows(true, 0, true, false, true, false);
+        assert!(!idle.contains(&login_url_row));
     }
 
     #[::core::prelude::v1::test]
@@ -3343,7 +3436,7 @@ mod tests {
     /// unaffected so it continues to serve editable profiles.
     #[::core::prelude::v1::test]
     fn form_rows_include_save_and_delete_when_editing() {
-        let rows = build_form_rows(true, 0, false, true, false);
+        let rows = build_form_rows(true, 0, false, false, true, false);
         assert!(
             rows.iter()
                 .any(|row| row.contains(&AuthFormField::SaveButton)),
@@ -3359,7 +3452,7 @@ mod tests {
     /// When creating a new profile (not editing), there must be no DeleteButton.
     #[::core::prelude::v1::test]
     fn form_rows_no_delete_when_creating() {
-        let rows = build_form_rows(true, 0, false, false, false);
+        let rows = build_form_rows(true, 0, false, false, false, false);
         assert!(
             !rows
                 .iter()
@@ -3441,7 +3534,7 @@ mod tests {
     /// from DBFlux (spec S36, design §14).
     #[::core::prelude::v1::test]
     fn reflected_profile_has_no_delete_button_row() {
-        let rows = build_form_rows(true, 3, false, true, /* is_reflected */ true);
+        let rows = build_form_rows(true, 3, false, false, true, /* is_reflected */ true);
         assert!(
             !rows
                 .iter()
@@ -3459,7 +3552,7 @@ mod tests {
     /// Export button; a stored editable profile must.
     #[::core::prelude::v1::test]
     fn export_button_only_for_stored_editable_profile() {
-        let reflected = build_form_rows(true, 2, false, true, /* is_reflected */ true);
+        let reflected = build_form_rows(true, 2, false, false, true, /* is_reflected */ true);
         assert!(
             !reflected
                 .iter()
@@ -3467,7 +3560,7 @@ mod tests {
             "reflected profiles must not expose an Export button"
         );
 
-        let stored = build_form_rows(true, 2, false, /* is_editing */ true, false);
+        let stored = build_form_rows(true, 2, false, false, /* is_editing */ true, false);
         assert!(
             stored
                 .iter()
@@ -3475,7 +3568,7 @@ mod tests {
             "stored editable profiles must expose an Export button"
         );
 
-        let creating = build_form_rows(true, 2, false, /* is_editing */ false, false);
+        let creating = build_form_rows(true, 2, false, false, /* is_editing */ false, false);
         assert!(
             !creating
                 .iter()
@@ -3488,7 +3581,7 @@ mod tests {
     /// state is managed by the AWS file, not DBFlux.
     #[::core::prelude::v1::test]
     fn reflected_profile_has_no_enabled_row() {
-        let rows = build_form_rows(true, 2, false, true, /* is_reflected */ true);
+        let rows = build_form_rows(true, 2, false, false, true, /* is_reflected */ true);
         assert!(
             !rows.iter().any(|row| row.contains(&AuthFormField::Enabled)),
             "reflected profiles must not expose the Enabled toggle"
@@ -3500,7 +3593,7 @@ mod tests {
     #[::core::prelude::v1::test]
     fn reflected_profile_has_no_provider_selector_row() {
         let rows = build_form_rows(
-            /* has_providers */ true, 2, false, true, /* is_reflected */ true,
+            /* has_providers */ true, 2, false, false, true, /* is_reflected */ true,
         );
         assert!(
             !rows
@@ -3897,7 +3990,7 @@ mod tests {
     #[::core::prelude::v1::test]
     fn reflected_form_rows_have_no_enabled_or_delete_for_any_field_count() {
         for field_count in [0usize, 1, 5, 10] {
-            let rows = build_form_rows(true, field_count, false, true, true);
+            let rows = build_form_rows(true, field_count, false, false, true, true);
             assert!(
                 !rows.iter().any(|r| r.contains(&AuthFormField::Enabled)),
                 "Enabled row must be absent for reflected profiles (field_count={field_count})"

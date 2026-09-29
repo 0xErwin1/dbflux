@@ -1,10 +1,11 @@
+use super::pane_actions::PaneActionsOwner;
 use super::*;
 use dbflux_components::composites::Island;
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, IslandMetrics, ShellMetrics, TabMetrics};
+use dbflux_components::tokens::{ChromeColors, Feedback, IslandMetrics, ShellMetrics, TabMetrics};
 use dbflux_ui_document::DocumentSidePanel;
 use gpui_component::resizable::ResizablePanel;
 
@@ -28,6 +29,13 @@ fn defer_to_end_of_effect_cycle<T: 'static>(
 /// the window activation inside the command owns the final focus.
 fn palette_command_opens_native_window(command_id: &str) -> bool {
     matches!(command_id, "open_settings" | "open_connection_manager")
+}
+
+/// Palette commands that open a popover and move focus into it. Refocusing
+/// the workspace afterwards would leave the popover open without the keys
+/// that close it.
+fn palette_command_focuses_a_popover(command_id: &str) -> bool {
+    command_id == "toggle_notifications"
 }
 
 impl Workspace {
@@ -86,6 +94,22 @@ impl Workspace {
     /// own header. Collapsed, nothing is rendered there: the status bar's
     /// tasks chip is the only way back in.
     fn render_tasks_panel(&self, cx: &mut Context<Self>) -> ResizablePanel {
+        // The panel's pane-actions menu opens over its top right corner.
+        let tasks_menu = self
+            .pane_actions_menu_is_for_tasks()
+            .then(|| self.render_pane_actions_menu(cx))
+            .flatten()
+            .map(|menu| {
+                deferred(
+                    div()
+                        .absolute()
+                        .top(Spacing::SM)
+                        .right(Spacing::SM)
+                        .child(menu),
+                )
+                .with_priority(1)
+            });
+
         resizable_panel()
             .size(ShellMetrics::TASKS_PANEL_HEIGHT)
             .size_range(px(80.0)..px(2000.0))
@@ -93,6 +117,7 @@ impl Workspace {
                 div()
                     .id("tasks-panel")
                     .debug_selector(|| "tasks-panel".to_string())
+                    .relative()
                     .flex()
                     .flex_col()
                     .size_full()
@@ -104,7 +129,8 @@ impl Workspace {
                             }
                         }),
                     )
-                    .child(self.tasks_panel.clone()),
+                    .child(self.tasks_panel.clone())
+                    .children(tasks_menu),
             )
     }
 }
@@ -115,8 +141,15 @@ impl Render for Workspace {
             // `take` before scheduling keeps dispatch at most once across
             // re-renders; the deferred callback runs after the render pass
             // returns, or not at all if the window closes first.
-            let refocus_parent = !palette_command_opens_native_window(command_id);
+            let refocus_parent = !palette_command_opens_native_window(command_id)
+                && !palette_command_focuses_a_popover(command_id);
             defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
+                // Focus leaves the closed palette's input first, so a menu
+                // the command opens returns focus to the workspace, not to
+                // that input.
+                if refocus_parent {
+                    this.focus_handle.focus(window, cx);
+                }
                 this.handle_command(command_id, window, cx);
                 if refocus_parent {
                     this.focus_handle.focus(window, cx);
@@ -220,6 +253,20 @@ impl Render for Workspace {
 
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
+        let menu_owner = self.pane_actions_menu_owner();
+        let pane_actions_menu = matches!(menu_owner, Some(PaneActionsOwner::Document(_)))
+            .then(|| self.render_pane_actions_menu(cx))
+            .flatten()
+            .map(|menu| {
+                deferred(
+                    div()
+                        .absolute()
+                        .top(Spacing::SM)
+                        .left(Spacing::SM)
+                        .child(menu),
+                )
+                .with_priority(1)
+            });
         let document_side_panels = self
             .tab_manager
             .update(cx, |mgr, cx| mgr.active_side_panels(window, cx));
@@ -255,6 +302,7 @@ impl Render for Workspace {
                             .child(doc),
                     )
                 })
+                .children(pane_actions_menu)
                 .children(toast_layer)
                 .into_any_element()
         } else {
@@ -316,6 +364,10 @@ impl Render for Workspace {
             .ml(IslandMetrics::GAP)
             .when(has_tabs, |island| island.child(self.tab_bar.clone()))
             .child(div().flex_1().min_h_0().child(document_panes));
+
+        let toast_actions_menu = matches!(menu_owner, Some(PaneActionsOwner::Toast(_)))
+            .then(|| self.render_pane_actions_menu(cx))
+            .flatten();
 
         let focus_handle = self.focus_handle.clone();
         let root_key_context = self.root_key_context(cx);
@@ -832,6 +884,33 @@ impl Render for Workspace {
                         .with_priority(1)
                     })
             })
+            // The toast menu opens where the toasts stack, under the title
+            // bar at the right edge.
+            .when_some(toast_actions_menu, |this, menu| {
+                this.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .top(ShellMetrics::TITLE_BAR_HEIGHT + Feedback::TOAST_STACK_INSET)
+                            .right(Feedback::TOAST_STACK_INSET)
+                            .child(menu),
+                    )
+                    .with_priority(2),
+                )
+            })
+            // A click outside the pane-actions menu closes it; the menu itself
+            // is drawn over the pane that offered it.
+            .when(self.has_pane_actions_menu(), |this| {
+                use crate::ui::components::context_menu as ctx;
+
+                let workspace = cx.entity();
+                this.child(ctx::render_menu_overlay(
+                    "pane-actions-menu-overlay",
+                    move |_, cx| {
+                        workspace.update(cx, |workspace, cx| workspace.close_pane_actions(cx));
+                    },
+                ))
+            })
             // Tab context menu rendered at workspace level for proper positioning
             .when_some(tab_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
@@ -980,7 +1059,10 @@ mod tests {
 
     use gpui::{Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div};
 
-    use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
+    use super::{
+        defer_to_end_of_effect_cycle, palette_command_focuses_a_popover,
+        palette_command_opens_native_window,
+    };
 
     #[test]
     fn workspace_render_draws_no_collapsed_tasks_bar() {
@@ -1032,6 +1114,12 @@ mod tests {
         assert!(palette_command_opens_native_window(
             "open_connection_manager"
         ));
+    }
+
+    #[test]
+    fn popover_palette_commands_skip_the_parent_refocus() {
+        assert!(palette_command_focuses_a_popover("toggle_notifications"));
+        assert!(!palette_command_focuses_a_popover("open_audit_viewer"));
     }
 
     #[test]

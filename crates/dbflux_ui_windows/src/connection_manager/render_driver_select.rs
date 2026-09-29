@@ -394,6 +394,7 @@ impl ConnectionManagerWindow {
                 )
                 .secondary()
                 .icon(AppIcon::Download)
+                .when_some(Self::shortcut(Command::ImportItems), Button::kbd)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.open_import(window, cx);
                 })),
@@ -405,6 +406,7 @@ impl ConnectionManagerWindow {
                 )
                 .secondary()
                 .icon(AppIcon::ArrowLeftRight)
+                .when_some(Self::shortcut(Command::ImportFromClient), Button::kbd)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.open_import_external(window, cx);
                 })),

@@ -263,7 +263,7 @@ impl Workspace {
     /// Shows a sidebar view from the rail. Choosing the view already on
     /// screen collapses the sidebar; any other choice switches to it,
     /// expands the sidebar and gives it focus.
-    fn show_sidebar_view(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+    pub(super) fn show_sidebar_view(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
         let expanded = !self.sidebar_dock.read(cx).is_collapsed();
 
         if expanded && self.sidebar.read(cx).active_tab() == tab {

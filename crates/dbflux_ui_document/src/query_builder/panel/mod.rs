@@ -5,6 +5,7 @@ use std::rc::Rc;
 use dbflux_components::controls::{
     CompletionProvider, Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
 };
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{
     AggFn, BoolOp, ColumnInfo, ColumnKind, Comparator, CountSpec, FilterNode, GroupByEntry,
     JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue, Predicate,
@@ -13,8 +14,8 @@ use dbflux_core::{
     render_filter_node_sql,
 };
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, Task,
-    WeakEntity, Window,
+    App, AppContext, Context, Entity, EntityId, EventEmitter, FocusHandle, Render, Subscription,
+    Task, WeakEntity, Window,
 };
 use gpui_component::input::EditorState as GpuiEditorState;
 use uuid::Uuid;
@@ -304,6 +305,9 @@ pub struct QueryBuilderPanel {
     /// `None` only in unit tests that bypass the GPUI runtime via `make_panel`.
     pub(crate) sql_preview_state: Option<Entity<GpuiEditorState>>,
 
+    /// Vim motions in the SQL preview; `None` with `sql_preview_state`.
+    pub(crate) sql_preview_vim: Option<VimBinding>,
+
     /// Set to `true` whenever `sql_preview` text changes, so the render cycle
     /// can flush the new text into `sql_preview_state` while `Window` is available.
     pub(crate) pending_preview_sync: bool,
@@ -523,11 +527,36 @@ pub struct QueryBuilderPanel {
     /// `spec.aggregates` because they are incomplete (empty column for
     /// non-CountStar functions). Surfaced as a footer warning.
     pub(crate) incomplete_aggregate_row_count: usize,
+
+    /// Keyboard cursor over the rail's rows and its action menu.
+    pub(crate) rail: dbflux_components::composites::RailNav<QueryBuilderPanel>,
+
+    /// Where the cursor is drawn, taken at the start of each render.
+    pub(crate) rail_mark: dbflux_components::composites::RailMark,
 }
 
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
+
+/// The SQL preview is generated text: Vim moves, selects and yanks in it.
+impl VimHost for QueryBuilderPanel {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.sql_preview_vim
+            .as_ref()
+            .and_then(|vim| vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.sql_preview_vim
+            .as_mut()
+            .and_then(|vim| vim.for_input_mut(input))
+    }
+
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        true
+    }
+}
 
 impl QueryBuilderPanel {
     /// Creates a new panel for the given source table.
@@ -619,6 +648,8 @@ impl QueryBuilderPanel {
         let focus_handle = Some(cx.focus_handle());
 
         let sql_preview_state = cx.new(|cx| GpuiEditorState::new(window, cx).language("sql"));
+        let sql_preview_vim = VimBinding::new(sql_preview_state.clone(), window, cx);
+        let sql_preview_input = sql_preview_vim.input_id();
 
         let limit_val = limit_text.clone();
         let limit_input_state = cx.new(|cx| {
@@ -746,7 +777,7 @@ impl QueryBuilderPanel {
             })
             .collect();
 
-        Self {
+        let mut panel = Self {
             current_spec: spec,
             projection_mode,
             projection_rows,
@@ -764,6 +795,7 @@ impl QueryBuilderPanel {
             generate_preview,
             generate_mutation_preview,
             sql_preview_state: Some(sql_preview_state),
+            sql_preview_vim: Some(sql_preview_vim),
             pending_preview_sync: true,
             limit_input_state: Some(limit_input_state),
             offset_input_state: Some(offset_input_state),
@@ -814,7 +846,12 @@ impl QueryBuilderPanel {
             pre_group_projection: None,
             sort_validation_error: None,
             incomplete_aggregate_row_count: 0,
-        }
+            rail: Default::default(),
+            rail_mark: Default::default(),
+        };
+
+        VimBinding::follow_setting(&mut panel, sql_preview_input, cx);
+        panel
     }
 
     /// Returns the current SQL preview text.

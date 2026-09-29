@@ -48,7 +48,8 @@ converted crate by crate and stays in English for now.
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| **Vim mode in code editors** | Off | Modal editing in code editors: Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See [Vim mode](KEYBOARD.md#vim-mode-opt-in) in the keyboard reference. |
+| **Vim mode in editors** | Off | Modal editing in every multi-line editor (code editor, object editor, JSON dialogs, value panel, collection JSON view and pipeline; motions only in read-only viewers): Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See [Vim mode](KEYBOARD.md#vim-mode-opt-in) in the keyboard reference. |
+| **Leader key** | Space | The key that starts Vim's leader sequences in Normal and Visual modes, such as the leader then `a` for the pane actions: Space, comma or backslash. Applies to open editors when you save, and leader bindings you changed in **Keybindings** follow it. |
 
 ### Startup & session
 
@@ -191,7 +192,8 @@ outside Vim's Normal and Visual modes.
 
 **Resetting.** An overridden binding shows a reset arrow that restores its
 default keys and context (`r` on a selected binding does the same, and `Delete`
-removes its shortcut). **Reset to defaults** in the footer drops every override.
+removes its shortcut). **Reset to defaults** in the footer drops every override,
+as `Shift+R` does from the list. `c` opens the context filter.
 The footer also shows how many bindings are overridden.
 
 Changes apply at once in every window, without a restart. Only your overrides

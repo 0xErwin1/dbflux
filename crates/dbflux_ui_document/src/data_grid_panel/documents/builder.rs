@@ -298,8 +298,14 @@ impl DataGridPanel {
                 self.write_document_slots(write, window, cx);
             }
             DocumentBuilderEvent::FindRequested => {
+                // Find focuses the table; a Find pressed from the keyboard
+                // inside the rail keeps the keyboard there.
+                let keep_rail = self.keyboard_in_document_builder(cx);
                 self.collection.tab = CollectionTab::Documents;
                 self.find_documents(window, cx);
+                if keep_rail {
+                    self.enter_side_island(window, cx);
+                }
             }
             DocumentBuilderEvent::RunPipelineRequested(pipeline) => {
                 self.run_builder_pipeline(pipeline, window, cx);
@@ -2571,6 +2577,369 @@ mod tests {
         assert_eq!(
             filter.origin.y, limit.origin.y,
             "a wide grid keeps the slots on one line"
+        );
+    }
+
+    /// A collection grid with its builder open beside it, hosted as the
+    /// workspace hosts it, under the app keymap.
+    fn keyboard_rail(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<DataGridPanel>,
+        gpui::Entity<crate::document_builder::DocumentBuilderPanel>,
+        &mut VisualTestContext,
+    ) {
+        use crate::data_grid_panel::tests::rail_keys::host_in_rail;
+
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(StubDocumentConnection::new(
+                DatabaseCategory::Document,
+                aggregate_features(),
+                true,
+            )),
+        );
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        let (panel, window) = host_in_rail(cx, move |window, cx| {
+            cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("shop", "orders"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+                DataGridPanel::new_internal(source, app_state, vec![], window, cx)
+            })
+        });
+        open_builder(&panel, window);
+        let builder = builder(&panel, window);
+
+        (panel, builder, window)
+    }
+
+    /// A collection with the Documents, Schema and Aggregate views, hosted
+    /// as the workspace hosts it, with the keyboard on the grid.
+    fn keyboard_collection(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+        use crate::data_grid_panel::tests::rail_keys::host_in_rail;
+
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(StubDocumentConnection::new(
+                DatabaseCategory::Document,
+                aggregate_features(),
+                true,
+            )),
+        );
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        host_in_rail(cx, move |window, cx| {
+            cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("shop", "orders"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+                DataGridPanel::new_internal(source, app_state, vec![], window, cx)
+            })
+        })
+    }
+
+    fn run_toolbar(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+        action: crate::data_grid_panel::context_menu::toolbar::ToolbarAction,
+    ) {
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.run_toolbar_action(action, window, cx))
+        });
+        window.run_until_parked();
+    }
+
+    /// The Toolbar submenu lists the collection's Builder toggle: its entry
+    /// opens the builder rail, and closes it again while it is open.
+    #[gpui::test]
+    fn the_toolbar_entry_opens_and_closes_the_document_builder(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::context_menu::toolbar::ToolbarAction;
+
+        let (panel, window) = keyboard_collection(cx);
+        let is_open = |window: &mut VisualTestContext| {
+            window.update(|_, cx| panel.read(cx).document_builder_is_open())
+        };
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        assert!(
+            actions.contains(&ToolbarAction::OpenBuilder),
+            "the Toolbar lists the Builder toggle: {actions:?}"
+        );
+        assert!(!is_open(window));
+
+        run_toolbar(&panel, window, ToolbarAction::OpenBuilder);
+        assert!(is_open(window), "the entry opens the builder");
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        assert!(actions.contains(&ToolbarAction::OpenBuilder));
+
+        run_toolbar(&panel, window, ToolbarAction::OpenBuilder);
+        assert!(!is_open(window), "the entry closes the open builder");
+    }
+
+    /// The query bar's Find, history and clear filter and the view tabs are
+    /// reachable from the keyboard: the Toolbar entries run Find and open
+    /// the history menu, whose menu keys rerun a query; Shift+F empties the
+    /// filter slot and finds; Alt+L / Alt+H step through the views.
+    #[gpui::test]
+    fn the_query_bar_and_views_are_driven_by_keys(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::context_menu::toolbar::ToolbarAction;
+        use crate::data_grid_panel::tests::rail_keys::{context, keys};
+        use dbflux_app::keymap::ContextId;
+
+        let (panel, window) = keyboard_collection(cx);
+
+        set_slot_texts(&panel, window, "{ status: 1 }", "");
+        run_toolbar(&panel, window, ToolbarAction::Find);
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.history.len()),
+            1,
+            "the Find entry runs the query and records it"
+        );
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        for expected in [
+            ToolbarAction::ClearFilter,
+            ToolbarAction::Find,
+            ToolbarAction::QueryHistory,
+            ToolbarAction::CollectionView(CollectionTab::Schema),
+            ToolbarAction::CollectionView(CollectionTab::Aggregate),
+        ] {
+            assert!(
+                actions.contains(&expected),
+                "the Toolbar lists {expected:?}: {actions:?}"
+            );
+        }
+
+        keys(window, "shift-f");
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            "",
+            "Shift+F empties the filter slot"
+        );
+
+        run_toolbar(&panel, window, ToolbarAction::QueryHistory);
+        assert_eq!(context(&panel, window), ContextId::ContextMenu);
+
+        // The cleared query ran last, so it leads the history.
+        keys(window, "j enter");
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            "{ status: 1 }",
+            "J then Enter reruns the older query"
+        );
+        assert!(!window.update(|_, cx| panel.read(cx).collection.history_open));
+
+        keys(window, "alt-l");
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.tab),
+            CollectionTab::Schema,
+            "Alt+L shows the next view"
+        );
+
+        keys(window, "alt-h");
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.tab),
+            CollectionTab::Documents,
+            "Alt+H shows the previous view"
+        );
+    }
+
+    /// Ctrl+L enters the document builder; A adds a condition, whose field
+    /// is picked by typing its path, whose operator comes from the operator
+    /// list driven by J and Enter, and whose value is typed; Ctrl+Enter
+    /// finds; X removes the condition; Alt+L switches to Aggregate; M opens
+    /// the rail's menu.
+    /// The document builder rail with a condition, and its rail menu.
+    /// `the_document_builder_is_driven_by_keys` proves Ctrl+L reaches it and
+    /// `m` opens its menu.
+    #[gpui::test]
+    fn the_document_builder_rail_is_covered(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::tests::rail_keys::keys;
+        use crate::keyboard_coverage::{DATA_GRID, DOCUMENT_BUILDER};
+        use dbflux_components::composites::RailOwner as _;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let (panel, builder, window) = keyboard_rail(cx);
+        keys(window, "ctrl-l j a");
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            let rail = builder
+                .read(cx)
+                .rail_actions(cx)
+                .into_iter()
+                .map(|entry| entry.id.to_string());
+            let toolbar = panel
+                .read(cx)
+                .toolbar_actions(cx)
+                .into_iter()
+                .map(|action| action.id().to_string());
+            rail.chain(toolbar).collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let coverage = || {
+            Coverage::new(DOCUMENT_BUILDER)
+                .with_surface(DATA_GRID)
+                .with_menu_entries(menu.iter().cloned())
+        };
+
+        let checked = coverage().assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id.starts_with("doc-builder-")),
+            "{checked:?}"
+        );
+
+        keys(window, "m");
+        let checked = coverage().assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "rail-action-close"),
+            "{checked:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn the_document_builder_is_driven_by_keys(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::tests::rail_keys::{context, keys};
+        use dbflux_app::keymap::ContextId;
+
+        let (panel, builder, window) = keyboard_rail(cx);
+
+        keys(window, "ctrl-l");
+        assert_eq!(context(&panel, window), ContextId::DocumentBuilder);
+
+        keys(window, "j a");
+        let (id, path, operator) = first_condition(&panel, window);
+        assert!(path.is_empty(), "A adds an empty condition");
+        assert_eq!(
+            window.update(|_, cx| builder.read(cx).rail_cursor_for_test()),
+            Some(format!("condition-{id}")),
+            "the cursor moves onto it"
+        );
+
+        keys(window, "enter");
+        window.simulate_input("age");
+        window.run_until_parked();
+        keys(window, "enter");
+        assert_eq!(
+            first_condition(&panel, window).1,
+            "age",
+            "Enter picks the typed path"
+        );
+        assert_eq!(
+            context(&panel, window),
+            ContextId::DocumentBuilder,
+            "the keyboard is back on the rail"
+        );
+
+        keys(window, "l enter j enter");
+        assert_ne!(
+            first_condition(&panel, window).2,
+            operator,
+            "J and Enter pick another operator"
+        );
+        assert_eq!(context(&panel, window), ContextId::DocumentBuilder);
+
+        keys(window, "l enter");
+        window.simulate_input("30");
+        window.run_until_parked();
+        keys(window, "escape");
+        assert_eq!(context(&panel, window), ContextId::DocumentBuilder);
+        assert!(
+            slot_texts(&panel, window).0.contains("age"),
+            "the condition reached the filter slot: {:?}",
+            slot_texts(&panel, window)
+        );
+
+        keys(window, "ctrl-enter");
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.tab),
+            CollectionTab::Documents,
+            "Ctrl+Enter finds, as the Find button does"
+        );
+        assert_eq!(
+            context(&panel, window),
+            ContextId::DocumentBuilder,
+            "a Find from the rail keeps the keyboard there"
+        );
+
+        keys(window, "x");
+        assert!(
+            window.update(|_, cx| builder.read(cx).draft().conditions().is_empty()),
+            "X removes the condition"
+        );
+
+        keys(window, "alt-l");
+        assert_eq!(
+            window.update(|_, cx| builder.read(cx).mode()),
+            DocumentQueryMode::Aggregate,
+            "Alt+L switches to Aggregate"
+        );
+
+        keys(window, "m");
+        assert_eq!(context(&panel, window), ContextId::ContextMenu);
+        keys(window, "escape escape");
+        assert_eq!(context(&panel, window), ContextId::Results);
+    }
+
+    /// Shift+J and Shift+K move a sort key, the way dragging it does.
+    #[gpui::test]
+    fn shift_j_moves_a_sort_key_down(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::tests::rail_keys::keys;
+
+        let (panel, builder, window) = keyboard_rail(cx);
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| {
+                grid.collection.sort_input.update(cx, |input, cx| {
+                    input.set_value("{ a: 1, b: -1 }", window, cx)
+                });
+                grid.sync_slots_into_document_builder(cx);
+            });
+        });
+        window.run_until_parked();
+
+        let sort_paths = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                builder
+                    .read(cx)
+                    .draft()
+                    .sort
+                    .iter()
+                    .map(|key| key.path.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(sort_paths(window), vec!["a", "b"]);
+
+        keys(window, "ctrl-l");
+        let first_sort = window.update(|_, cx| {
+            builder
+                .read(cx)
+                .rail_rows_for_test(cx)
+                .iter()
+                .position(|id| id == "sort-0")
+                .expect("the sort keys are rows")
+        });
+        for _ in 0..first_sort {
+            keys(window, "j");
+        }
+
+        keys(window, "shift-j");
+        assert_eq!(sort_paths(window), vec!["b", "a"]);
+        assert_eq!(
+            window.update(|_, cx| builder.read(cx).rail_cursor_for_test()),
+            Some("sort-1".to_string()),
+            "the cursor stays on the moved key"
         );
     }
 }

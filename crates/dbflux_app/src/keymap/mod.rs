@@ -8,7 +8,7 @@ mod keymap_layer;
 mod overrides;
 mod recording;
 
-pub use chord::{KeyChord, KeySequence, MAX_SEQUENCE_LENGTH, Modifiers, ParseError};
+pub use chord::{KeyChord, KeySequence, LEADER_KEY, MAX_SEQUENCE_LENGTH, Modifiers, ParseError};
 pub use dbflux_core::keymap_types::{Command, ContextId};
 pub use focus::FocusTarget;
 pub use keymap_layer::{KeymapLayer, KeymapStack};

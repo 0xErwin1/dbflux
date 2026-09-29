@@ -73,6 +73,8 @@ pub struct JsonEditorView {
     validation_error: Option<String>,
     show_format_buttons: bool,
     min_editor_height: Pixels,
+    readonly: bool,
+    below_editor: Option<AnyElement>,
     on_format: Option<ClickHandler>,
     on_compact: Option<ClickHandler>,
     on_save: ClickHandler,
@@ -92,6 +94,8 @@ impl JsonEditorView {
             validation_error: None,
             show_format_buttons: false,
             min_editor_height: px(300.0),
+            readonly: false,
+            below_editor: None,
             on_format: None,
             on_compact: None,
             on_save: Box::new(on_save),
@@ -117,6 +121,21 @@ impl JsonEditorView {
 
     pub fn min_editor_height(mut self, height: Pixels) -> Self {
         self.min_editor_height = height;
+        self
+    }
+
+    /// Rejects user text changes. The editor element applies this to its
+    /// state every frame, so an owner that locks the input (Vim's Normal
+    /// mode) passes the lock here.
+    pub fn readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
+        self
+    }
+
+    /// A row drawn right under the editor frame, such as the Vim mode
+    /// indicator.
+    pub fn below_editor(mut self, element: Option<impl IntoElement>) -> Self {
+        self.below_editor = element.map(IntoElement::into_any_element);
         self
     }
 
@@ -173,6 +192,7 @@ impl JsonEditorView {
                     )
                     .child(
                         Editor::new(&self.input)
+                            .readonly(self.readonly)
                             .w_full()
                             .h_full()
                             .font_family(AppFonts::MONO)
@@ -180,6 +200,7 @@ impl JsonEditorView {
                             .text_color(ChromeColors::strong(theme)),
                     ),
             )
+            .children(self.below_editor)
             .children(status)
             .children(error_line);
 

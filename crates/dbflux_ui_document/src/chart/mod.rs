@@ -6,6 +6,7 @@
 //! `ChartView`, hidden-series state, the rail, and toolbar rendering.
 
 pub mod host;
+pub(crate) mod keyboard;
 pub mod metric_picker;
 pub(crate) mod metric_picker_render;
 pub mod shell;

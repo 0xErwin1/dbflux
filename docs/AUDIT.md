@@ -141,8 +141,14 @@ switches between the event list and a chart of the events grouped by category,
 outcome, or level. From the keyboard, activating the time presets moves to the
 next one.
 
-A row's context menu adds **Copy row as CSV**, **Copy summary**, and — when the
-event has a correlation id — **Filter by correlation**.
+A row's context menu lists **Copy row as CSV**, **Copy summary**, **Copy row as
+JSON**, **Filter by correlation** when the event has a correlation id, and
+**Open approval** for an agent call parked for approval. Right-click a row, or
+press `m` (or `Shift+F10`) on the selected one.
+
+From the keyboard, `Ctrl+E` (`Cmd+E` on macOS) opens the export menu and
+`Alt+L` / `Alt+H` switch between the table and the chart. The other viewer keys
+are listed in [Keyboard shortcuts](KEYBOARD.md#audit-viewer).
 
 ### Follow an error to its audit row
 

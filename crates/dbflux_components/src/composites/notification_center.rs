@@ -57,6 +57,7 @@ pub struct NotificationRow {
     meta: SharedString,
     meta_code: Option<SharedString>,
     unread: bool,
+    selected: bool,
     actions: Vec<Button>,
     on_open: Option<ClickHandler>,
 }
@@ -78,6 +79,7 @@ impl NotificationRow {
             meta: SharedString::default(),
             meta_code: None,
             unread: false,
+            selected: false,
             actions: Vec::new(),
             on_open: None,
         }
@@ -108,6 +110,12 @@ impl NotificationRow {
 
     pub fn unread(mut self, unread: bool) -> Self {
         self.unread = unread;
+        self
+    }
+
+    /// The row the keyboard points at, drawn on a tint wash.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
         self
     }
 
@@ -227,6 +235,9 @@ impl NotificationRow {
             .pr(NotificationMetrics::ROW_PADDING_RIGHT)
             .border_b_1()
             .border_color(theme.table_row_border)
+            .when(self.selected, |row| {
+                row.bg(tint.opacity(NotificationMetrics::SELECTED_ALPHA))
+            })
             .when(!unread, |row| {
                 row.opacity(NotificationMetrics::READ_OPACITY)
             })

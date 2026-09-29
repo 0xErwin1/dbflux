@@ -39,7 +39,8 @@ impl GeneralSettingsRepository {
                        dangerous_requires_where, dangerous_requires_preview,
                        style, schema_snapshot_retention,
                        object_preview_size_limit_mib, language,
-                       key_value_size_limit_mib, vim_mode, editor_row_limit, updated_at
+                       key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
+                       updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -72,7 +73,8 @@ impl GeneralSettingsRepository {
                 key_value_size_limit_mib: row.get(19)?,
                 vim_mode: row.get(20)?,
                 editor_row_limit: row.get(21)?,
-                updated_at: row.get(22)?,
+                vim_leader: row.get(22)?,
+                updated_at: row.get(23)?,
             })
         });
 
@@ -100,8 +102,9 @@ impl GeneralSettingsRepository {
                     dangerous_requires_where, dangerous_requires_preview,
                     style, schema_snapshot_retention,
                     object_preview_size_limit_mib, language,
-                    key_value_size_limit_mib, vim_mode, editor_row_limit, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, datetime('now'))
+                    key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
+                    updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -124,6 +127,7 @@ impl GeneralSettingsRepository {
                     key_value_size_limit_mib = excluded.key_value_size_limit_mib,
                     vim_mode = excluded.vim_mode,
                     editor_row_limit = excluded.editor_row_limit,
+                    vim_leader = excluded.vim_leader,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -148,6 +152,7 @@ impl GeneralSettingsRepository {
                     settings.key_value_size_limit_mib,
                     settings.vim_mode,
                     settings.editor_row_limit,
+                    settings.vim_leader,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -197,6 +202,9 @@ pub struct GeneralSettingsDto {
     /// Whether code editors use modal (Vim) editing: 1 on, 0 off.
     pub vim_mode: i32,
     pub editor_row_limit: i64,
+    /// The key that starts Vim leader sequences, in the keymap's stored key
+    /// form (`space`, `,`).
+    pub vim_leader: String,
     pub updated_at: String,
 }
 
@@ -253,6 +261,7 @@ mod tests {
             key_value_size_limit_mib: 10,
             vim_mode: 0,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
 
@@ -304,6 +313,7 @@ mod tests {
                 key_value_size_limit_mib: 10,
                 vim_mode: 0,
                 editor_row_limit: 10_000,
+                vim_leader: "space".to_string(),
                 updated_at: String::new(),
             };
 
@@ -375,6 +385,7 @@ mod tests {
             key_value_size_limit_mib: 10,
             vim_mode: 0,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
 
@@ -418,6 +429,10 @@ mod tests {
             "key_value_size_limit_mib column default should be 10"
         );
         assert_eq!(fetched.vim_mode, 0, "vim_mode column default should be 0");
+        assert_eq!(
+            fetched.vim_leader, "space",
+            "vim_leader column default should be 'space'"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -456,6 +471,7 @@ mod tests {
             key_value_size_limit_mib: 42,
             vim_mode: 0,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
 
@@ -468,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_mode_round_trips_through_upsert() {
+    fn vim_mode_and_leader_round_trip_through_upsert() {
         let path = temp_db("vim_mode_roundtrip");
         let conn = open_database(&path).expect("should open");
         MigrationRegistry::new()
@@ -501,6 +517,7 @@ mod tests {
             key_value_size_limit_mib: 10,
             vim_mode: 1,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
 
@@ -508,6 +525,14 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.vim_mode, 1);
+
+        repo.upsert(&GeneralSettingsDto {
+            vim_leader: ",".to_string(),
+            ..dto
+        })
+        .expect("should upsert the leader");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.vim_leader, ",");
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

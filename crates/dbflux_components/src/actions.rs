@@ -1,4 +1,4 @@
-use gpui::{Action, SharedString, actions};
+use gpui::{Action, App, Global, Keystroke, SharedString, actions};
 
 actions!(
     dbflux,
@@ -86,4 +86,28 @@ pub fn shortcut_label(
         Some(labels) => (labels.0)(context, command),
         None => Some(SharedString::from(fallback.to_string())),
     }
+}
+
+/// The last key pressed in any window, and the interceptor that records it.
+#[derive(Default)]
+struct LastKeystroke(Option<Keystroke>, Option<gpui::Subscription>);
+
+impl Global for LastKeystroke {}
+
+/// Starts recording the last key pressed in any window, for
+/// [`last_keystroke`]. The keymap calls it once at startup
+/// (`dbflux_ui_base::keymap::init_keymap`).
+pub fn record_last_keystroke(cx: &mut App) {
+    let recorder = cx.intercept_keystrokes(|event, _window, cx| {
+        cx.default_global::<LastKeystroke>().0 = Some(event.keystroke.clone());
+    });
+    cx.default_global::<LastKeystroke>().1 = Some(recorder);
+}
+
+/// The key whose binding is being dispatched: interceptors run before key
+/// bindings, so while a binding's action runs this is the keystroke that
+/// matched it (the last one of a key sequence).
+pub fn last_keystroke(cx: &App) -> Option<Keystroke> {
+    cx.try_global::<LastKeystroke>()
+        .and_then(|recorded| recorded.0.clone())
 }

@@ -303,6 +303,53 @@ impl BucketsTableDocument {
         }
     }
 
+    /// The toolbar's and the details panel's buttons, for the pane actions
+    /// menu `m` opens: browse the selected bucket, calculate its size, new
+    /// bucket and refresh.
+    pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+        use dbflux_components::icons::AppIcon;
+
+        let has_selection = self.selected_bucket.is_some();
+        let context = ContextId::Results;
+        let target = this.downgrade();
+
+        vec![
+            PaneAction::command(
+                "buckets-browse",
+                dbflux_i18n::t!("document.buckets_table.details.browse"),
+                Command::Execute,
+                context,
+            )
+            .icon(AppIcon::Folder)
+            .enabled(has_selection),
+            PaneAction::callback(
+                "buckets-calculate-size",
+                dbflux_i18n::t!("document.buckets_table.details.calculate_size"),
+                move |_window, cx| {
+                    if let Some(table) = target.upgrade() {
+                        table.update(cx, |table, cx| table.estimate_selected_bucket_size(cx));
+                    }
+                },
+            )
+            .enabled(has_selection),
+            PaneAction::command(
+                "buckets-new",
+                dbflux_i18n::t!("document.buckets_table.toolbar.new_bucket"),
+                Command::ResultsAddRow,
+                context,
+            )
+            .icon(AppIcon::Plus),
+            PaneAction::command(
+                "buckets-refresh",
+                dbflux_i18n::t!("document.buckets_table.toolbar.refresh"),
+                Command::RefreshSchema,
+                context,
+            )
+            .icon(AppIcon::RefreshCcw),
+        ]
+    }
+
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_mode = BucketsFocusMode::Search;
         self.search_input
@@ -398,5 +445,54 @@ impl BucketsTableDocument {
             }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BucketsTableDocument;
+    use gpui::AppContext as _;
+
+    /// The pane actions list the details panel's Calculate size, which no
+    /// key reaches otherwise, enabled once a bucket is selected.
+    #[gpui::test]
+    fn the_pane_actions_offer_the_size_calculation(cx: &mut gpui::TestAppContext) {
+        crate::keyboard_test_support::init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (table, window) = cx.add_window_view(|window, cx| {
+            BucketsTableDocument::new(uuid::Uuid::new_v4(), app_state, window, cx)
+        });
+
+        let size_entry = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                table
+                    .read(cx)
+                    .pane_actions(&table)
+                    .into_iter()
+                    .find(|action| action.id.as_ref() == "buckets-calculate-size")
+                    .map(|action| action.enabled)
+            })
+        };
+
+        assert_eq!(size_entry(window), Some(false), "disabled without a bucket");
+
+        window.update(|_, cx| {
+            table.update(cx, |table, _| {
+                table.selected_bucket = Some("logs".to_string())
+            })
+        });
+        assert_eq!(
+            size_entry(window),
+            Some(true),
+            "enabled for the selected bucket"
+        );
     }
 }

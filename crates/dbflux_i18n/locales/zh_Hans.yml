@@ -175,6 +175,13 @@ components:
   file_picker:
     browse: 浏览…
 composites:
+  rail:
+    add: "添加"
+    add_group: "添加组"
+    remove: "移除"
+    toggle: "切换"
+    move_up: "上移"
+    move_down: "下移"
   refresh_split_button:
     label: 刷新
 controls:
@@ -1027,6 +1034,27 @@ document:
         created_with_limitations: "已创建存储桶 %{name}（有限制）"
     breadcrumb: "存储桶"
   chart:
+    pane_actions:
+      refresh: "刷新"
+      auto_refresh: "自动刷新间隔…"
+      next_time_range: "下一个时间范围"
+      prev_time_range: "上一个时间范围"
+      date_range: "自定义范围：日期…"
+      start_hour: "自定义范围：开始小时…"
+      start_minute: "自定义范围：开始分钟…"
+      end_hour: "自定义范围：结束小时…"
+      end_minute: "自定义范围：结束分钟…"
+      next_kind: "下一个图表类型"
+      prev_kind: "上一个图表类型"
+      x_axis: "X 轴…"
+      y_axis: "Y 系列…"
+      group_by: "分组依据…"
+      aggregation: "聚合…"
+      metric_rail: "指标选择器"
+      next_dimension: "下一个维度筛选"
+      prev_dimension: "上一个维度筛选"
+      period: "周期…"
+      statistic: "统计…"
     toolbar:
       type_label: 类型
       stats: 统计
@@ -1127,6 +1155,15 @@ document:
       query_history: 查询历史
       explain_query: 解释查询
       open_in_chart: 在图表文档中打开当前查询
+      run_in_new_tab: 在新标签页中运行
+      auto_refresh_interval: 自动刷新间隔…
+      next_result_tab: "下一个结果标签页"
+      previous_result_tab: "上一个结果标签页"
+      close_result_tab: "关闭结果标签页"
+      maximize_results: "最大化结果"
+      restore_results: "还原结果"
+      hide_results: "隐藏结果"
+      show_results: "显示结果"
     vim:
       normal: "普通"
       insert: "插入"
@@ -1219,6 +1256,7 @@ document:
           title: SET 中的原生 SQL 表达式
           body: SET 子句包含原生 SQL 表达式 — 绕过参数绑定
     context_bar:
+      pane_actions: 操作
       file:
         saved: 已保存
         unsaved: 未保存
@@ -1280,6 +1318,11 @@ document:
     title:
       untitled: 未命名
   dashboard:
+    pane_actions:
+      open_panel: "打开面板"
+      fold_section: "折叠或展开分区"
+      switch_to_view: "切换到查看"
+      switch_to_edit: "切换到编辑"
     builder:
       preset:
         last_15_min: 最近 15 分钟
@@ -1445,6 +1488,30 @@ document:
         remove: 移除排序
       generate_sql:
         title: 生成 SQL
+      toolbar:
+        title: "工具栏"
+        export: "导出…"
+        clear_filter: "清除筛选"
+        open_builder: "打开查询构建器"
+        reset_builder: "重置构建器查询"
+        save_changes: "保存所有更改"
+        revert_changes: "还原所有更改"
+        auto_refresh: "自动刷新间隔…"
+        maximize: "最大化结果"
+        restore: "还原结果"
+        hide: "隐藏结果"
+        query_history: "查询历史…"
+        step_to_root: "返回文档"
+        view_documents: "显示文档"
+        view_schema: "显示结构"
+        view_aggregate: "显示聚合"
+        show_view: "显示%{view}"
+        value_format: "将值按 %{format} 读取"
+        value_wrap: "切换值的自动换行"
+        value_pretty_print: "格式化值"
+        value_compact: "压缩值"
+        value_revert: "还原值"
+        value_save: "保存值"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1668,6 +1735,8 @@ document:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"
     multiple_analyzers_note: "多个已注册驱动都能读取此扩展名；已使用 %{analyzer} 进行分析。"
+    pane_actions:
+      sort_by: "按 %{column} 排序"
     parsing:
       title: 正在解析转储…
       cancel: 取消
@@ -1780,6 +1849,8 @@ document:
     requested_at: "请求时间"
     waiting_label: "等待"
     exec_id: "执行 %{id}"
+    pane_actions:
+      reason: "输入拒绝原因"
     status:
       pending: "待处理"
     waiting:
@@ -2072,6 +2143,11 @@ document:
       delete_member: 删除元素
       edit_member: 编辑元素
       edit_value: 编辑值
+      show_as_tree: "以树形显示键"
+      show_as_list: "以列表显示键"
+      close_claim: "关闭认领表单"
+      view_as: "将值查看为 %{view}"
+      decompression: "选择解压方式…"
       new_key: 新建键…
       rename: 重命名
     history_modal:
@@ -2247,6 +2323,7 @@ document:
       mode_placeholder: 模式
       unset_option: （未设置）
       set_all_label: 全部设置：
+      set_all_to: "全部设为%{mode}"
       columns_button: 列…
       unmapped_count:
         one: "%{count} 个未映射"
@@ -2301,6 +2378,10 @@ document:
         expand: 展开
         open: 打开
         new_folder_inside: 在内部新建文件夹…
+        copy_path: "复制当前路径"
+        load_more: "加载更多"
+        show_as_list: "以列表显示"
+        show_as_tree: "以树形显示"
         delete_folder: 删除文件夹
     create_folder:
       cancel: 取消
@@ -2516,6 +2597,8 @@ document:
       loading: 正在加载对象…
       preparing: 正在准备编辑器…
       size_tooltip: 上次加载或保存时的对象大小
+    pane_actions:
+      reload: "重新加载对象"
   query_builder:
     aggregate:
       fn:
@@ -2745,6 +2828,11 @@ document:
       copy_as_sql: 复制为 SQL
       focus_table: 聚焦此表
       inspect_schema: 检查 Schema
+      reset_view: "重置视图 (100%)"
+      fit: "适应视图"
+      arrange: "重新排列表"
+      show_types: "显示列类型"
+      show_indexes: "显示索引"
       layout: 布局
       zoom_in: 放大
       zoom_out: 缩小
@@ -3179,6 +3267,10 @@ palette:
       name: 下一个标签页
     prev_tab:
       name: 上一个标签页
+    move_tab_left:
+      name: 向左移动标签页
+    move_tab_right:
+      name: 向右移动标签页
     export_results:
       name: 导出结果
     open_connection_manager:
@@ -3187,6 +3279,8 @@ palette:
       name: 断开当前连接
     refresh_schema:
       name: 刷新 Schema
+    export_connections:
+      name: "导出连接"
     focus_sidebar:
       name: 聚焦侧边栏
     focus_editor:
@@ -3203,6 +3297,16 @@ palette:
       name: 切换结果面板
     toggle_tasks:
       name: 切换任务面板
+    clear_finished_tasks:
+      name: 清除已完成任务
+    toggle_notifications:
+      name: "切换通知"
+    show_connections_view:
+      name: "显示连接视图"
+    show_scripts_view:
+      name: "显示脚本视图"
+    show_dashboards_view:
+      name: "显示仪表盘视图"
     open_settings:
       name: 打开设置
     open_login_modal:
@@ -3215,10 +3319,16 @@ palette:
       name: 刷新 MCP 治理
     open_audit_viewer:
       name: 打开审计查看器
+    open_last_error_in_audit:
+      name: "在审计中打开最近的错误"
+    open_toast_actions:
+      name: "打开提示操作…"
     open_saved_chart:
       name: 打开图表…
     new_dashboard:
       name: 新建仪表盘…
+    open_pane_actions:
+      name: 打开面板操作…
     analyze_dump_file:
       name: 分析数据库转储…
   category:
@@ -3302,8 +3412,15 @@ settings:
     editor:
       group: "编辑器"
     vim_mode:
-      label: "在代码编辑器中使用 Vim 模式"
+      label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
+    vim_leader:
+      label: "Leader 键"
+      hint: "在普通模式和可视模式下开始 Vim Leader 序列，例如先按 Leader 再按 a 打开面板操作。保存后应用于已打开的编辑器。"
+      option:
+        space: "空格"
+        comma: "逗号 (,)"
+        backslash: "反斜杠 (\\)"
     restore_session:
       label: "启动时恢复打开的标签页"
     reopen_connections:
@@ -3435,6 +3552,8 @@ settings:
       prev_tab: 上一个标签页
       switch_to_tab: 切换到标签页
       open_tab_menu: 打开标签页菜单
+      move_tab_left: 向左移动标签页
+      move_tab_right: 向右移动标签页
       focus_sidebar: 聚焦侧边栏
       focus_editor: 聚焦编辑器
       focus_results: 聚焦结果
@@ -3451,6 +3570,8 @@ settings:
       select_last: 选择最后一项
       page_down: 向下翻页
       page_up: 向上翻页
+      next_panel_tab: 下一个面板标签页
+      prev_panel_tab: 上一个面板标签页
       extend_select_next: 向下扩展选择
       extend_select_prev: 向上扩展选择
       toggle_selection: 切换选择
@@ -3467,6 +3588,7 @@ settings:
       toggle_favorite: 切换收藏
       run_query: 执行查询
       run_query_in_new_tab: 在新标签页中执行查询
+      explain_query: 解释查询
       cancel_query: 取消查询
       open_history: 切换历史下拉菜单
       open_saved_queries: 打开已保存查询
@@ -3475,21 +3597,29 @@ settings:
       open_script_file: 打开脚本文件…
       toggle_comment: 切换注释
       export_results: 导出结果
+      clear_filter: 清除筛选
+      next_result_tab: 下一个结果标签页
+      prev_result_tab: 上一个结果标签页
+      close_result_tab: 关闭结果标签页
       results_next_page: 结果下一页
       results_prev_page: 结果上一页
       focus_toolbar: 聚焦工具栏
       toggle_panel: 切换面板
       results_delete_row: 删除行
       results_add_row: 添加行
+      add_item: "添加项"
+      add_group: "添加组"
       results_duplicate_row: 复制行
       results_copy_row: 复制行
       results_copy_cell: 复制单元格
       toggle_record_view: 切换记录视图
       cycle_document_view: 切换树 / 表格 / JSON
+      cycle_result_view: "切换结果视图"
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
+      open_pane_actions: 打开面板操作
       menu_up: 菜单上移
       menu_down: 菜单下移
       menu_select: 菜单选择
@@ -3504,11 +3634,23 @@ settings:
       toggle_editor: 切换编辑器面板
       toggle_results: 切换结果面板
       toggle_tasks: 切换任务面板
+      cancel_task: 取消任务
+      clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导
       open_audit_viewer: 打开审计查看器
+      open_last_error_in_audit: "在审计中打开最近的错误"
+      open_toast_actions: "打开提示操作"
+      toggle_notifications: "切换通知"
+      mark_notification_read: "将通知标记为已读"
+      mark_all_notifications_read: "将所有通知标记为已读"
+      clear_read_notifications: "清除已读通知"
+      install_update: "安装更新"
+      show_connections_view: "显示连接视图"
+      show_scripts_view: "显示脚本视图"
+      show_dashboards_view: "显示仪表盘视图"
       open_mcp_approvals: 打开 MCP 审批
       refresh_mcp_governance: 刷新 MCP 治理
       open_saved_chart: 打开图表…
@@ -3554,6 +3696,26 @@ settings:
       toggle_console: 显示或隐藏控制台
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
+      copy_preview: 复制预览
+      import_items: "导入…"
+      import_from_client: "从其他客户端导入…"
+      reset_binding: "重置快捷键"
+      reset_all_bindings: "重置所有快捷键"
+      edit_binding_context: "编辑快捷键上下文"
+      filter_by_context: "按上下文筛选"
+      next_time_range: "下一个时间范围"
+      prev_time_range: "上一个时间范围"
+      configure_panel: "配置面板"
+      move_panel_left: "面板左移"
+      move_panel_right: "面板右移"
+      move_panel_up: "面板上移"
+      move_panel_down: "面板下移"
+      resize_panel_narrower: "面板变窄"
+      resize_panel_wider: "面板变宽"
+      resize_panel_shorter: "面板变矮"
+      resize_panel_taller: "面板变高"
+      approve_execution: "批准待处理调用"
+      reject_execution: "拒绝待处理调用"
     context:
       global: 全局
       sidebar: 侧边栏
@@ -3581,6 +3743,16 @@ settings:
       modal: 模态对话框
       key_value: 键值浏览器
       settings: 设置窗口
+      inspector: 检查器
+      notifications: 通知
+      query_builder: "查询构建器"
+      document_builder: "文档构建器"
+      chart: "图表"
+      dashboard: "仪表板"
+      add_panel_picker: "添加面板选择器"
+      mcp_approvals: "MCP 审批"
+      migrate_wizard: "迁移向导"
+      vim_normal: "Vim 普通模式"
     category:
       global: 全局
       focus: 聚焦
@@ -4532,6 +4704,9 @@ tasks_panel:
   clear_finished: "清除已完成"
   cancel: "取消任务"
   dismiss: "关闭"
+  show_output: "显示输出"
+  hide_output: "隐藏输出"
+  collapse: "隐藏任务面板"
   empty: 无后台任务
   output_truncated: …面板中输出已截断
 toast:
@@ -4539,6 +4714,7 @@ toast:
     copy: 复制
     show_details: 显示详情
     hide_details: 隐藏详情
+    dismiss: 关闭
 workspace:
   rail:
     connections: "连接"
@@ -4667,7 +4843,7 @@ notifications:
     updates: 更新
     earlier: 更早
   footer:
-    hint: 点击一行即可打开
+    hint: 点击一行或按 Enter 即可打开
     clear_read: 清除已读
   empty:
     title: 一切都是最新的

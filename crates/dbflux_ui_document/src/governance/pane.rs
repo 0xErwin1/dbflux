@@ -6,7 +6,6 @@ use crate::handle::DocumentEvent;
 use crate::pane::{BoxedDocEventCallback, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use dbflux_core::RefreshPolicy;
-use dbflux_core::keymap_types::ContextId;
 use gpui::{App, Entity, IntoElement};
 
 impl McpApprovalsView {
@@ -18,7 +17,7 @@ impl McpApprovalsView {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::McpApprovals,
             // render
@@ -31,9 +30,11 @@ impl McpApprovalsView {
                 let e = entity.clone();
                 Box::new(move |w, cx| e.update(cx, |d, cx| d.focus(w, cx)))
             },
-            // dispatch_command — j/k/a/r are handled by the view's own key
-            // handler, and the workspace keeps every other command.
-            Box::new(|_cmd, _w, _cx| false),
+            // dispatch_command
+            {
+                let e = entity.clone();
+                Box::new(move |cmd, w, cx| e.update(cx, |d, cx| d.dispatch_command(cmd, w, cx)))
+            },
             // meta_snapshot
             {
                 let e = entity.clone();
@@ -59,9 +60,11 @@ impl McpApprovalsView {
             Box::new(|_cx| true),
             // connection_id
             Box::new(|_cx| None),
-            // active_context — only the global chords, so the bare j/k/a/r
-            // keys reach the view's key handler.
-            Box::new(|_cx| ContextId::Global),
+            // active_context
+            {
+                let e = entity.clone();
+                Box::new(move |cx| e.read(cx).active_context())
+            },
             // change_summary
             Box::new(|_cx| None),
             // refresh_policy
@@ -81,6 +84,13 @@ impl McpApprovalsView {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e))
+        });
+
+        pane
     }
 }

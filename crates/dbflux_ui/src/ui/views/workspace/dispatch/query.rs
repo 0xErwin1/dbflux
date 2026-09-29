@@ -24,6 +24,12 @@ impl Workspace {
                 });
                 Some(true)
             }
+            Command::ExplainQuery => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ExplainQuery, window, cx);
+                });
+                Some(true)
+            }
             Command::ToggleComment => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(Command::ToggleComment, window, cx);
@@ -111,6 +117,7 @@ impl Workspace {
             | Command::ResultsCopyCell
             | Command::ToggleRecordView
             | Command::CycleDocumentView
+            | Command::CycleResultView
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector => {
                 self.tab_manager.update(cx, |mgr, cx| {

@@ -28,6 +28,7 @@ use std::io::BufWriter;
 
 mod items;
 mod sections;
+pub(super) mod toolbar;
 use sections::MenuRowCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,8 +133,52 @@ pub(super) fn place_context_menu(
     }
 }
 
+/// One row of the data grid's export menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExportMenuEntry {
+    /// Write the result to a file in this format.
+    Save(ExportFormat),
+    /// Put the result on the clipboard in this format.
+    Copy(ExportFormat),
+}
+
+impl ExportMenuEntry {
+    /// Raw binary has no text form, so it cannot go to the clipboard.
+    pub(super) fn is_enabled(self) -> bool {
+        !matches!(self, ExportMenuEntry::Copy(ExportFormat::Binary))
+    }
+}
+
+/// The export menu row one step from `from`, wrapping at both ends and
+/// passing over disabled rows. Returns `from` when no other row is enabled.
+pub(super) fn step_export_selection(
+    entries: &[ExportMenuEntry],
+    from: usize,
+    forward: bool,
+) -> usize {
+    let count = entries.len();
+    if count == 0 {
+        return 0;
+    }
+
+    let mut index = from.min(count - 1);
+    for _ in 0..count {
+        index = if forward {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+
+        if entries[index].is_enabled() {
+            return index;
+        }
+    }
+
+    from
+}
+
 impl DataGridPanel {
-    fn restore_focus_after_context_menu(
+    pub(in crate::data_grid_panel) fn restore_focus_after_context_menu(
         &mut self,
         is_document_view: bool,
         window: &mut Window,
@@ -199,13 +244,14 @@ impl DataGridPanel {
             copy_query_submenu_open: false,
             filter_submenu_open: false,
             order_submenu_open: false,
+            toolbar_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
             is_column_header: false,
             doc_field_path: None,
             doc_field_value: None,
-            row_actions: Vec::new(),
+            row_actions: self.menu_row_actions(),
         });
 
         // Focus the context menu to receive keyboard events
@@ -231,6 +277,7 @@ impl DataGridPanel {
             copy_query_submenu_open: false,
             filter_submenu_open: false,
             order_submenu_open: false,
+            toolbar_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -289,6 +336,7 @@ impl DataGridPanel {
             copy_query_submenu_open: false,
             filter_submenu_open: false,
             order_submenu_open: false,
+            toolbar_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -660,6 +708,14 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        if let Some(context) = self.builder_rail_context(cx) {
+            return context;
+        }
+
+        if self.focused_side_island(cx).is_some() {
+            return ContextId::Inspector;
+        }
+
         let inline_text_input_active = self
             .grid_table
             .table_state
@@ -667,7 +723,10 @@ impl DataGridPanel {
             .map(|ts| ts.read(cx).is_editing_text_input())
             .unwrap_or(false);
 
-        if self.context_menu.is_some() {
+        if self.context_menu.is_some()
+            || self.chrome.export_menu_open
+            || self.collection.history_open
+        {
             ContextId::ContextMenu
         } else if inline_text_input_active || self.focus.edit_state == EditState::Editing {
             ContextId::TextInput
@@ -715,6 +774,7 @@ impl DataGridPanel {
         //   [sep] [Filter]? [Order]? [GenSQL]? [CopyQuery]?  (one group; the
         //                                                    separator opens it)
         //   [sep + row_action...]?    (if row_actions non-empty)
+        //   [sep + Toolbar]?          (if the grid shows any toolbar button)
         let inspect_row_enabled = !self.is_grouped_result();
 
         let base_items = if is_column_header {
@@ -762,7 +822,16 @@ impl DataGridPanel {
             0
         };
         let row_actions_start = after_copy_query; // index of the separator
-        let total_count = after_copy_query + row_actions_slots;
+        let after_row_actions = after_copy_query + row_actions_slots;
+
+        // Toolbar: sep(1) + trigger(1), when the grid shows any button.
+        let toolbar_actions = if is_column_header {
+            Vec::new()
+        } else {
+            self.toolbar_actions(cx)
+        };
+        let toolbar_trigger_idx = (!toolbar_actions.is_empty()).then_some(after_row_actions + 1);
+        let total_count = after_row_actions + if toolbar_actions.is_empty() { 0 } else { 2 };
 
         let filter_trigger_idx = has_filter.then_some(base_count + usize::from(separators.filter));
         let order_trigger_idx = has_order.then_some(after_filter + usize::from(separators.order));
@@ -774,13 +843,7 @@ impl DataGridPanel {
         let any_submenu_open = self
             .context_menu
             .as_ref()
-            .map(|m| {
-                m.sql_submenu_open
-                    || m.copy_query_submenu_open
-                    || m.filter_submenu_open
-                    || m.order_submenu_open
-            })
-            .unwrap_or(false);
+            .is_some_and(|m| m.any_submenu_open());
 
         let filter_submenu_actions: Vec<ContextMenuAction> = self
             .context_menu
@@ -802,6 +865,8 @@ impl DataGridPanel {
                 4 // SELECT WHERE, INSERT, UPDATE, DELETE
             } else if menu.copy_query_submenu_open {
                 3 // INSERT, UPDATE, DELETE
+            } else if menu.toolbar_submenu_open {
+                toolbar_actions.len()
             } else {
                 0
             }
@@ -825,6 +890,11 @@ impl DataGridPanel {
 
             // Row actions separator
             if row_action_count > 0 && idx == row_actions_start {
+                return true;
+            }
+
+            // Toolbar separator
+            if toolbar_trigger_idx.is_some() && idx == after_row_actions {
                 return true;
             }
 
@@ -893,7 +963,15 @@ impl DataGridPanel {
                     }
                 });
 
-                if let Some((row, position, action)) = pending_row_action {
+                let pending_toolbar_action = self
+                    .context_menu
+                    .as_ref()
+                    .filter(|menu| menu.toolbar_submenu_open)
+                    .and_then(|menu| toolbar_actions.get(menu.submenu_selected_index).copied());
+
+                if let Some(action) = pending_toolbar_action {
+                    self.run_toolbar_action_from_menu(action, window, cx);
+                } else if let Some((row, position, action)) = pending_row_action {
                     let row_values = self.collect_row_values(row, cx);
                     self.context_menu = None;
                     self.restore_focus_after_context_menu(false, window, cx);
@@ -937,31 +1015,28 @@ impl DataGridPanel {
                         };
                         self.handle_context_menu_action(action, window, cx);
                     } else if filter_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.filter_submenu_open = true;
-                        menu.order_submenu_open = false;
-                        menu.sql_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if order_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.order_submenu_open = true;
-                        menu.filter_submenu_open = false;
-                        menu.sql_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if gen_sql_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.sql_submenu_open = true;
-                        menu.filter_submenu_open = false;
-                        menu.order_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if copy_query_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.copy_query_submenu_open = true;
-                        menu.filter_submenu_open = false;
-                        menu.order_submenu_open = false;
-                        menu.sql_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if toolbar_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
+                        menu.toolbar_submenu_open = true;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if menu.selected_index < base_count
@@ -975,15 +1050,8 @@ impl DataGridPanel {
             }
             Command::MenuBack | Command::Cancel => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open
-                        || menu.copy_query_submenu_open
-                        || menu.filter_submenu_open
-                        || menu.order_submenu_open
-                    {
-                        menu.sql_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
-                        menu.filter_submenu_open = false;
-                        menu.order_submenu_open = false;
+                    if menu.any_submenu_open() {
+                        menu.close_submenus();
                         cx.notify();
                     } else {
                         let is_document_view = menu.is_document_view;
@@ -1098,7 +1166,14 @@ impl DataGridPanel {
 
     // === Export ===
 
+    /// Opens the export menu with the keyboard in it, or closes it when it is
+    /// already open (`Command::ExportResults`, the Export button).
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.chrome.export_menu_open {
+            self.close_export_menu(window, cx);
+            return;
+        }
+
         if self.result.rows.is_empty()
             && self.result.text_body.is_none()
             && self.result.raw_bytes.is_none()
@@ -1111,20 +1186,95 @@ impl DataGridPanel {
             return;
         }
 
-        let _ = window;
-        let _formats = dbflux_export::available_formats(&self.result.shape);
-
-        self.chrome.export_menu_open = !self.chrome.export_menu_open;
+        self.chrome.export_menu_open = true;
+        self.chrome.export_menu_selected = 0;
+        self.focus.export_menu_focus.focus(window, cx);
+        cx.emit(DataGridEvent::Focused);
         cx.notify();
+    }
+
+    /// Closes the export menu and hands the keyboard back to the grid.
+    pub(super) fn close_export_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.chrome.export_menu_open = false;
+
+        let is_document_view = self.view_config.mode == crate::DataViewMode::Document;
+        self.restore_focus_after_context_menu(is_document_view, window, cx);
+        cx.notify();
+    }
+
+    /// The rows of the export menu, in the order it draws them: a save row
+    /// per format, then a copy row per format.
+    pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
+        let formats = dbflux_export::available_formats(&self.result.shape);
+
+        formats
+            .iter()
+            .map(|&format| ExportMenuEntry::Save(format))
+            .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
+            .collect()
+    }
+
+    /// Handles the context-menu keys while the export menu is open: move,
+    /// run the highlighted row, or close. Every other command is refused, as
+    /// the cell menu refuses them.
+    pub(super) fn dispatch_export_menu_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let entries = self.export_menu_entries();
+
+        match cmd {
+            Command::MenuDown | Command::SelectNext => {
+                self.chrome.export_menu_selected =
+                    step_export_selection(&entries, self.chrome.export_menu_selected, true);
+                cx.notify();
+                true
+            }
+            Command::MenuUp | Command::SelectPrev => {
+                self.chrome.export_menu_selected =
+                    step_export_selection(&entries, self.chrome.export_menu_selected, false);
+                cx.notify();
+                true
+            }
+            Command::MenuSelect | Command::Execute => {
+                if let Some(&entry) = entries.get(self.chrome.export_menu_selected)
+                    && entry.is_enabled()
+                {
+                    self.run_export_menu_entry(entry, window, cx);
+                }
+                true
+            }
+            Command::MenuBack | Command::Cancel | Command::ExportResults => {
+                self.close_export_menu(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn run_export_menu_entry(
+        &mut self,
+        entry: ExportMenuEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match entry {
+            ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
+            ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
+        }
     }
 
     pub fn export_with_format(
         &mut self,
         format: ExportFormat,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.chrome.export_menu_open = false;
+        if self.chrome.export_menu_open {
+            self.close_export_menu(window, cx);
+        }
 
         let result = self.result.clone();
         let base_name = self.export_base_name();
@@ -1243,10 +1393,12 @@ impl DataGridPanel {
     pub fn copy_to_clipboard_with_format(
         &mut self,
         format: ExportFormat,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.chrome.export_menu_open = false;
+        if self.chrome.export_menu_open {
+            self.close_export_menu(window, cx);
+        }
 
         if matches!(format, ExportFormat::Binary) {
             self.pending.toast = Some(PendingToast {
@@ -1560,6 +1712,19 @@ impl DataGridPanel {
                 selected_index,
                 &mut menu_items,
                 &mut visual_index,
+                cx,
+            );
+
+            let toolbar_actions = self.toolbar_actions(cx);
+            self.render_toolbar_submenu_section(
+                menu,
+                &toolbar_actions,
+                submenus_open_left,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
             menu_items
@@ -4045,7 +4210,27 @@ mod tests {
     use super::DataGridPanel;
     use super::QueryGroupSeparators;
     use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
+    use super::{ExportMenuEntry, step_export_selection};
+    use dbflux_export::ExportFormat;
     use gpui::{Pixels, Point, Size, px};
+
+    /// The binary copy row cannot run, so the menu keys pass over it in both
+    /// directions and wrap at the ends.
+    #[test]
+    fn export_selection_wraps_and_skips_the_binary_copy_row() {
+        let entries = [
+            ExportMenuEntry::Save(ExportFormat::Binary),
+            ExportMenuEntry::Save(ExportFormat::Hex),
+            ExportMenuEntry::Copy(ExportFormat::Binary),
+            ExportMenuEntry::Copy(ExportFormat::Hex),
+        ];
+
+        assert_eq!(step_export_selection(&entries, 1, true), 3);
+        assert_eq!(step_export_selection(&entries, 3, false), 1);
+        assert_eq!(step_export_selection(&entries, 3, true), 0);
+        assert_eq!(step_export_selection(&entries, 0, false), 3);
+        assert_eq!(step_export_selection(&[], 0, true), 0);
+    }
 
     fn panel() -> Size<Pixels> {
         Size {

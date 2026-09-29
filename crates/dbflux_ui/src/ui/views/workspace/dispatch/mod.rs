@@ -29,6 +29,12 @@ impl CommandDispatcher for Workspace {
             return true;
         }
 
+        // The open notifications popover owns the keyboard (its context has
+        // no parent), so its commands never reach the panels behind it.
+        if let Some(result) = self.dispatch_notifications(cmd, window, cx) {
+            return result;
+        }
+
         // A visible workspace confirmation captures the keyboard
         // (ContextId::ConfirmModal resolves only Enter/Escape), so it is
         // resolved before every other dispatch domain, including the sidebar
@@ -104,9 +110,15 @@ impl CommandDispatcher for Workspace {
 
         if self.focus_target == FocusTarget::Sidebar
             && self.sidebar.read(cx).search_input_is_focused(window, cx)
-            && sidebar_tree_command_is_blocked_by_search_focus(cmd)
         {
-            return false;
+            if cmd == Command::Cancel {
+                self.set_focus(FocusTarget::Sidebar, window, cx);
+                return true;
+            }
+
+            if sidebar_tree_command_is_blocked_by_search_focus(cmd) {
+                return false;
+            }
         }
 
         // When context menu is open, only allow menu-related commands

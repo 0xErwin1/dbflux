@@ -102,6 +102,7 @@ pub fn save_general_settings(
         key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
         vim_mode: if settings.vim_mode { 1 } else { 0 },
         editor_row_limit,
+        vim_leader: settings.vim_leader.clone(),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1089,6 +1090,7 @@ fn load_general_settings(
             .ok()
             .filter(|value| *value > 0)
             .unwrap_or(10_000),
+        vim_leader: dto.vim_leader,
     }
 }
 
@@ -2467,6 +2469,7 @@ mod tests {
             key_value_size_limit_mib: 10,
             vim_mode: 0,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
 
@@ -2554,6 +2557,7 @@ mod tests {
             key_value_size_limit_mib: 10,
             vim_mode: 0,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
         runtime
@@ -2734,6 +2738,22 @@ mod tests {
     }
 
     #[test]
+    fn vim_leader_is_space_by_default_and_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.vim_leader, "space");
+
+        let settings = GeneralSettings {
+            vim_leader: ",".to_string(),
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save with a comma leader");
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.vim_leader, ",");
+    }
+
+    #[test]
     fn unknown_style_string_in_db_falls_back_to_default() {
         use dbflux_core::AppStyle;
 
@@ -2763,6 +2783,7 @@ mod tests {
             key_value_size_limit_mib: 10,
             vim_mode: 0,
             editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
             updated_at: String::new(),
         };
         runtime

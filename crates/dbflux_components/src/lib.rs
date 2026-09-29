@@ -29,6 +29,7 @@ pub mod result_panel;
 pub mod result_view;
 pub mod saved_chart;
 pub mod theme;
+pub mod vim;
 
 pub mod sql_preview;
 

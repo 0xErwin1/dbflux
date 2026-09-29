@@ -11,8 +11,8 @@ use gpui::{
     AnyElement, AnyWindowHandle, App, Div, ElementId, FocusHandle, Hsla, KeyContext, MouseButton,
     Pixels, ScrollHandle, SharedString, Stateful, Window, div, point, px,
 };
-use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::{ActiveTheme, FocusTrapElement};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -334,7 +334,8 @@ impl Modal {
     }
 
     /// Track `handle` on the backdrop so Escape and Enter reach the modal
-    /// whenever focus is inside it.
+    /// whenever focus is inside it, and trap focus there: Tab and Shift+Tab
+    /// cycle through the modal's controls and never leave it.
     pub fn focus_handle(mut self, handle: &FocusHandle) -> Self {
         self.focus_handle = Some(handle.clone());
         self
@@ -622,6 +623,7 @@ impl RenderOnce for Modal {
         let defer_keys = self.defer_keys;
         let key_scroll = self.key_scroll;
 
+        let trap_id = self.id.clone();
         let mut backdrop = div()
             .id(self.id)
             .absolute()
@@ -643,10 +645,6 @@ impl RenderOnce for Modal {
             ModalPlacement::Centered => backdrop.items_center(),
             ModalPlacement::Top(offset) => backdrop.items_start().pt(offset),
         };
-
-        if let Some(handle) = self.focus_handle {
-            backdrop = backdrop.track_focus(&handle);
-        }
 
         // The keymap binds Escape, Enter and the scroll keys in the `Modal`
         // key context. The backdrop sits below the window root, so these
@@ -718,7 +716,14 @@ impl RenderOnce for Modal {
             });
         }
 
-        backdrop.child(card)
+        let backdrop = backdrop.child(card);
+
+        // The trap tracks the modal's focus handle and keeps Tab and Shift+Tab
+        // cycling inside the modal, so they never reach the view behind it.
+        match self.focus_handle {
+            Some(handle) => backdrop.focus_trap(trap_id, &handle).into_any_element(),
+            None => backdrop.into_any_element(),
+        }
     }
 }
 
@@ -756,9 +761,9 @@ mod tests {
     };
     use crate::controls::{Input, InputState};
     use gpui::{
-        AccessibilityFrame, AppContext as _, Bounds, Context, Entity, FocusHandle, FrameObserver,
-        InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Render,
-        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+        AccessibilityFrame, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _,
+        FrameObserver, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels,
+        Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
     };
     use gpui_component::input::{Editor, EditorState};
     use std::sync::{Arc, Mutex};
@@ -1036,6 +1041,79 @@ mod tests {
         setup.click(editor.center());
 
         assert!(setup.events().is_empty(), "{:?}", setup.events());
+    }
+
+    /// A modal over a view that has its own focusable input, rendered under
+    /// the component `Root`, which answers Tab.
+    struct TrapHarness {
+        focus: FocusHandle,
+        outside: Entity<InputState>,
+        first: Entity<InputState>,
+        second: Entity<InputState>,
+    }
+
+    impl Render for TrapHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let body = div()
+                .flex()
+                .flex_col()
+                .child(Input::new(&self.first))
+                .child(Input::new(&self.second));
+
+            div().size_full().child(Input::new(&self.outside)).child(
+                Modal::new("Trap")
+                    .body(body)
+                    .focus_handle(&self.focus)
+                    .on_close(|_, _| {}),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn tab_and_shift_tab_stay_inside_an_open_modal(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let harness: std::rc::Rc<std::cell::RefCell<Option<Entity<TrapHarness>>>> =
+            std::rc::Rc::default();
+        let (_, window) = cx.add_window_view({
+            let harness = harness.clone();
+            move |window, cx| {
+                let view = cx.new(|cx| TrapHarness {
+                    focus: cx.focus_handle(),
+                    outside: cx.new(|cx| InputState::new(window, cx)),
+                    first: cx.new(|cx| InputState::new(window, cx)),
+                    second: cx.new(|cx| InputState::new(window, cx)),
+                });
+                harness.replace(Some(view.clone()));
+                gpui_component::Root::new(view, window, cx)
+            }
+        });
+        let view = harness.borrow().clone().expect("harness view");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            let first = view.read(cx).first.clone();
+            first.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.run_until_parked();
+
+        let focus_inside = |window: &mut VisualTestContext| {
+            window.update(|window, cx| {
+                let view = view.read(cx);
+                let outside_focused = view.outside.read(cx).focus_handle(cx).is_focused(window);
+                view.focus.contains_focused(window, cx) && !outside_focused
+            })
+        };
+
+        for step in 0..4 {
+            window.simulate_keystrokes("tab");
+            assert!(focus_inside(window), "Tab {step} left the modal");
+        }
+
+        for step in 0..4 {
+            window.simulate_keystrokes("shift-tab");
+            assert!(focus_inside(window), "Shift+Tab {step} left the modal");
+        }
     }
 
     #[gpui::test]

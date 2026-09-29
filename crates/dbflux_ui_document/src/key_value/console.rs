@@ -299,6 +299,11 @@ impl super::KeyValueDocument {
 
         let command = self.console.input.read(cx).value().trim().to_string();
         if command.is_empty() {
+            // Enter in the empty field answers a pending confirmation, as
+            // Run anyway does.
+            if self.console.pending.is_some() {
+                self.confirm_console_command(cx);
+            }
             return;
         }
 

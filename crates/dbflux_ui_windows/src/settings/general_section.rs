@@ -10,12 +10,18 @@ use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
 
+/// The leader keys Settings > General offers, in the keymap's stored key
+/// form: Space, and Vim's usual alternatives, comma and backslash (Vim's own
+/// default).
+const VIM_LEADER_CHOICES: [&str; 3] = ["space", ",", "\\"];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum GeneralFormRow {
     Theme,
     Style,
     Language,
     VimMode,
+    VimLeader,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -46,6 +52,7 @@ pub(super) struct GeneralSection {
     pub(super) gen_share_stable_db: bool,
     pub(super) dropdown_language: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
+    pub(super) dropdown_vim_leader: Entity<Dropdown>,
     pub(super) input_max_history: Entity<InputState>,
     pub(super) input_auto_save: Entity<InputState>,
     pub(super) input_refresh_interval: Entity<InputState>,
@@ -69,6 +76,7 @@ impl GeneralSection {
         let settings = app_state.read(cx).general_settings().clone();
         let language_index = Self::language_index(&settings.language);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
+        let vim_leader_index = Self::vim_leader_index(&settings.vim_leader);
         let max_history = settings.max_history_entries.to_string();
         let auto_save_interval = settings.auto_save_interval_ms.to_string();
         let refresh_interval = settings.default_refresh_interval_secs.to_string();
@@ -91,6 +99,12 @@ impl GeneralSection {
                 ))
                 .items(Self::refresh_policy_items())
                 .selected_index(Some(refresh_policy_index))
+        });
+        let dropdown_vim_leader = cx.new(move |_cx| {
+            Dropdown::new("general-vim-leader")
+                .placeholder(dbflux_i18n::t!("settings.general.vim_leader.label"))
+                .items(Self::vim_leader_items())
+                .selected_index(vim_leader_index)
         });
 
         let input_max_history = cx.new(|cx| {
@@ -145,6 +159,14 @@ impl GeneralSection {
             |this, _, event: &DropdownSelectionChanged, cx| {
                 this.gen_settings.default_refresh_policy =
                     Self::refresh_policy_for_index(event.index);
+                cx.notify();
+            },
+        );
+
+        let vim_leader_subscription = cx.subscribe(
+            &dropdown_vim_leader,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.gen_settings.vim_leader = Self::vim_leader_for_index(event.index).to_string();
                 cx.notify();
             },
         );
@@ -241,6 +263,7 @@ impl GeneralSection {
             gen_share_stable_db: dbflux_storage::paths::nightly_shares_stable_db(),
             dropdown_language,
             dropdown_refresh_policy,
+            dropdown_vim_leader,
             input_max_history,
             input_auto_save,
             input_refresh_interval,
@@ -253,6 +276,7 @@ impl GeneralSection {
             _subscriptions: vec![
                 language_subscription,
                 refresh_policy_subscription,
+                vim_leader_subscription,
                 blur_max_history,
                 blur_auto_save,
                 blur_refresh_interval,
@@ -349,6 +373,30 @@ impl GeneralSection {
                 "settings.general.refresh_policy.option.interval"
             )),
         ]
+    }
+
+    /// Vim leader choices, in index order (see [`Self::vim_leader_index`]).
+    fn vim_leader_items() -> Vec<DropdownItem> {
+        vec![
+            DropdownItem::new(dbflux_i18n::t!("settings.general.vim_leader.option.space")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.vim_leader.option.comma")),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.vim_leader.option.backslash"
+            )),
+        ]
+    }
+
+    /// The dropdown index of the stored leader `vim_leader`, or `None` for a
+    /// key the dropdown does not offer.
+    pub(super) fn vim_leader_index(vim_leader: &str) -> Option<usize> {
+        VIM_LEADER_CHOICES
+            .iter()
+            .position(|choice| *choice == vim_leader)
+    }
+
+    /// The stored leader of the dropdown index `index`.
+    pub(super) fn vim_leader_for_index(index: usize) -> &'static str {
+        VIM_LEADER_CHOICES.get(index).copied().unwrap_or("space")
     }
 
     pub(super) fn theme_index(theme: ThemeSetting) -> usize {
@@ -623,6 +671,57 @@ mod tests {
             assert_eq!(stored_editor_row_limit(section, cx), Some(5_000));
             assert!(!section.has_unsaved_general_changes(cx));
         });
+    }
+
+    /// Picking a leader in the Vim leader dropdown is an unsaved change until
+    /// Save, which stores it and hands it to open editors.
+    #[test]
+    fn choosing_a_vim_leader_marks_dirty_and_saves() {
+        with_general_section(|section, _, window, cx| {
+            assert_eq!(section.gen_settings.vim_leader, "space");
+
+            assert_eq!(
+                section
+                    .dropdown_vim_leader
+                    .read(cx)
+                    .selected_label()
+                    .map(|label| label.to_string()),
+                Some(dbflux_i18n::t!("settings.general.vim_leader.option.space")),
+                "the dropdown shows the saved leader"
+            );
+
+            section.gen_settings.vim_leader = GeneralSection::vim_leader_for_index(1).to_string();
+            assert_eq!(section.gen_settings.vim_leader, ",");
+            assert_eq!(section.general_change_count(cx), 1);
+
+            section.save_general_settings(window, cx);
+
+            assert_eq!(
+                section.app_state.read(cx).general_settings().vim_leader,
+                ","
+            );
+            let stored = section
+                .app_state
+                .read(cx)
+                .storage_runtime()
+                .general_settings()
+                .get()
+                .expect("stored general settings readable")
+                .map(|settings| settings.vim_leader);
+            assert_eq!(stored.as_deref(), Some(","));
+            assert!(!section.has_unsaved_general_changes(cx));
+        });
+    }
+
+    #[test]
+    fn vim_leader_choices_round_trip_through_their_dropdown_index() {
+        for (index, stored) in ["space", ",", "\\"].into_iter().enumerate() {
+            assert_eq!(GeneralSection::vim_leader_for_index(index), stored);
+            assert_eq!(GeneralSection::vim_leader_index(stored), Some(index));
+        }
+
+        assert_eq!(GeneralSection::vim_leader_index("ctrl+k"), None);
+        assert_eq!(GeneralSection::vim_leader_for_index(9), "space");
     }
 
     #[test]

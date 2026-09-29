@@ -517,13 +517,10 @@ impl ObjectBrowserDocument {
             .border_b_1()
             .border_color(theme.table_row_border)
             .when(archived, |d| d.opacity(ARCHIVED_ROW_OPACITY))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.select_node(select_id.clone(), cx);
-                    cx.emit(DocumentEvent::RequestFocus);
-                }),
-            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select_node(select_id.clone(), cx);
+                cx.emit(DocumentEvent::RequestFocus);
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -753,6 +750,10 @@ impl Render for ObjectBrowserDocument {
 
         if let Some(navigation) = self.resume_navigation.take() {
             self.run_navigation(navigation, window, cx);
+        }
+
+        if self.pending_navigation.is_some() {
+            self.unsaved_confirm_focus.apply_pending(window, cx);
         }
 
         // Neither needs a `Window`, but draining them here keeps every

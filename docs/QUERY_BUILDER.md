@@ -111,6 +111,16 @@ primary-key availability. Overriding the suggestion shows a tradeoff modal.
 dangerous-query confirmation (see
 [Dangerous-query confirmation](EDITOR.md#dangerous-query-confirmation)) before it runs.
 
+## Keyboard
+
+`Ctrl+l` from the table's grid moves the keyboard into the builder. `j` and
+`k` move a cursor over its rows, `h` and `l` between the fields of a row, and
+`Enter` works the field: it types in a text field, opens a dropdown or presses
+a button. `a` adds an entry, `Shift+a` a filter group, `x` removes the row and
+`Space` flips its switch. `Alt+l` and `Alt+h` switch the mode, `m` opens a menu
+with Run, Save, Reset and the rest, and `Escape` or `Ctrl+h` go back to the
+grid. The full list is in [Query builders](KEYBOARD.md#query-builders).
+
 ## Document collections
 
 Collections on drivers that offer it (MongoDB) have a visual builder for find
@@ -211,6 +221,17 @@ belong to the collection: its connection profile, database and collection.
 Saving under a name that already exists replaces that query. **Saved queries**
 lists them; opening one loads it in the mode it was saved in. Opening a saved
 find replaces all four slots, including clauses the builder cannot show.
+
+### Keyboard
+
+`Ctrl+l` from the collection's documents moves the keyboard into the builder,
+with the keys of the SQL builder (see [Keyboard](#keyboard)). Enter on a field
+opens the field picker with its search focused: type the path and press Enter.
+Enter on an operator opens the operator list, where `j`, `k` and Enter pick.
+`Shift+j` and `Shift+k` move a sort key, `Alt+l` and `Alt+h` switch between
+Find and Aggregate, and `m` lists Find or Run pipeline, Open in editor, Save,
+the saved queries and the modes. The full list is in
+[Query builders](KEYBOARD.md#query-builders).
 
 ### Limitations
 

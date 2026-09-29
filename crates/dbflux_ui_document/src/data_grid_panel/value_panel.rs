@@ -33,6 +33,7 @@ use dbflux_components::controls::{
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::vim::{VimBinding, VimHost};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::EditorState;
@@ -49,6 +50,21 @@ pub struct ValuePanelTarget {
     pub value: String,
     /// False for read-only results and read-only columns; hides the footer.
     pub editable: bool,
+}
+
+/// A button of the panel, run from the keyboard through the grid's Toolbar
+/// submenu (see `ValuePanelContent::buttons`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValuePanelButton {
+    /// A format of the header's selector.
+    Format(ValueFormat),
+    /// The header's word-wrap toggle.
+    Wrap,
+    /// The footer's Format: pretty-prints the value.
+    PrettyPrint,
+    Compact,
+    Revert,
+    Save,
 }
 
 /// Emitted when the user saves. `DataGridPanel` routes it into the shared
@@ -69,15 +85,30 @@ pub struct ValuePanelContent {
     /// count as an edit the user must resolve.
     loaded_text: String,
     input: Entity<EditorState>,
+    /// Vim mode for the editor; rebuilt with it.
+    vim: VimBinding,
     /// Whether the editor holds the keyboard. The results keymap binds bare
     /// letters to grid commands, so `DataGridPanel::active_context` has to
     /// hand the keyboard to the text layer while the user is typing here.
     editor_focused: bool,
     _input_subscription: Subscription,
     error: Option<String>,
+    /// Holds the keyboard while the user reads the panel without editing;
+    /// Enter moves it on into the editor.
+    focus_handle: FocusHandle,
 }
 
 impl EventEmitter<ValuePanelSaveEvent> for ValuePanelContent {}
+
+impl VimHost for ValuePanelContent {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.vim.for_input(input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.vim.for_input_mut(input)
+    }
+}
 
 impl ValuePanelContent {
     pub fn new(target: ValuePanelTarget, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -85,17 +116,95 @@ impl ValuePanelContent {
         let word_wrap = true;
         let text = initial_text(&target.value, format);
         let (input, subscription) = build_input(text.clone(), format, word_wrap, window, cx);
+        let vim = VimBinding::new(input.clone(), window, cx);
 
-        Self {
+        let mut panel = Self {
             target,
             format,
             word_wrap,
             loaded_text: text,
             input,
+            vim,
             editor_focused: false,
             _input_subscription: subscription,
             error: None,
-        }
+            focus_handle: cx.focus_handle(),
+        };
+
+        let input = panel.vim.input_id();
+        VimBinding::follow_setting(&mut panel, input, cx);
+        panel
+    }
+
+    /// Replaces the editor, with a fresh Vim binding for it.
+    fn install_input(
+        &mut self,
+        input: Entity<EditorState>,
+        subscription: Subscription,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vim = VimBinding::new(input.clone(), window, cx);
+        self.input = input;
+        self._input_subscription = subscription;
+        let input = self.vim.input_id();
+        VimBinding::follow_setting(self, input, cx);
+    }
+
+    /// The panel's own focus handle, which keyboard focus takes when it moves
+    /// into the panel from the grid.
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    /// Hand the keyboard to the editor, to change the value.
+    ///
+    /// Marks the editor as focused right away rather than on its `Focus`
+    /// event, which arrives only with the next frame: until then the grid
+    /// would keep reporting the panel's keys and claim the letters typed.
+    pub fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        self.editor_focused = true;
+        cx.notify();
+    }
+
+    /// Take the keyboard back from the editor to the panel, keeping the
+    /// text as typed. Mirrors `focus_editor`.
+    pub fn leave_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
+        self.editor_focused = false;
+        cx.notify();
+    }
+
+    /// Scroll the value by a line, a page, or to either end. The editor
+    /// clamps the offset to its content when it lays out.
+    pub fn scroll(
+        &self,
+        step: crate::data_grid_panel::side_island::IslandScroll,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::data_grid_panel::side_island::IslandScroll;
+
+        self.input.update(cx, |state, cx| {
+            let Some(line_height) = state.line_height() else {
+                return;
+            };
+
+            let viewport = state.input_bounds().size.height;
+            let page = (viewport - line_height).max(line_height);
+            let offset = state.scroll_offset();
+
+            let target = match step {
+                IslandScroll::LineUp => offset.y + line_height,
+                IslandScroll::LineDown => offset.y - line_height,
+                IslandScroll::PageUp => offset.y + page,
+                IslandScroll::PageDown => offset.y - page,
+                IslandScroll::Top => Pixels::ZERO,
+                IslandScroll::Bottom => Pixels::MIN,
+            };
+
+            state.set_scroll_offset(point(offset.x, target.min(Pixels::ZERO)), cx);
+        });
     }
 
     /// Whether the panel's editor currently owns the keyboard.
@@ -129,8 +238,7 @@ impl ValuePanelContent {
         let text = initial_text(&self.target.value, self.format);
         let (input, subscription) =
             build_input(text.clone(), self.format, self.word_wrap, window, cx);
-        self.input = input;
-        self._input_subscription = subscription;
+        self.install_input(input, subscription, window, cx);
         self.editor_focused = false;
         self.loaded_text = text;
         cx.notify();
@@ -156,8 +264,7 @@ impl ValuePanelContent {
         };
 
         let (input, subscription) = build_input(text.clone(), format, self.word_wrap, window, cx);
-        self.input = input;
-        self._input_subscription = subscription;
+        self.install_input(input, subscription, window, cx);
         self.editor_focused = false;
         // A modified buffer stays modified across the switch, so `loaded_text`
         // must keep pointing at the stored value's rendering.
@@ -204,6 +311,52 @@ impl ValuePanelContent {
             state.set_value(text, window, cx);
         });
         cx.notify();
+    }
+
+    /// The buttons the panel shows enabled right now, the format shown
+    /// excepted: the other formats and the wrap toggle, then for an editable
+    /// value Format and Compact (structured formats) and, once the value
+    /// changed, Revert and Save.
+    pub(crate) fn buttons(&self, cx: &App) -> Vec<ValuePanelButton> {
+        let mut buttons: Vec<ValuePanelButton> = ValueFormat::ALL
+            .into_iter()
+            .filter(|format| *format != self.format)
+            .map(ValuePanelButton::Format)
+            .collect();
+        buttons.push(ValuePanelButton::Wrap);
+
+        if !self.target.editable {
+            return buttons;
+        }
+
+        if self.format.is_structured() {
+            buttons.push(ValuePanelButton::PrettyPrint);
+            buttons.push(ValuePanelButton::Compact);
+        }
+
+        if self.is_modified(cx) {
+            buttons.push(ValuePanelButton::Revert);
+            buttons.push(ValuePanelButton::Save);
+        }
+
+        buttons
+    }
+
+    /// Runs what `button` runs when clicked.
+    pub(crate) fn press(
+        &mut self,
+        button: ValuePanelButton,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match button {
+            ValuePanelButton::Format(format) => self.set_format(format, window, cx),
+            ValuePanelButton::Wrap => self.toggle_word_wrap(window, cx),
+            ValuePanelButton::PrettyPrint => self.apply_transform(format_value, window, cx),
+            ValuePanelButton::Compact => self.apply_transform(compact_value, window, cx),
+            ValuePanelButton::Revert => self.revert(window, cx),
+            ValuePanelButton::Save => self.save(cx),
+        }
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) {
@@ -281,19 +434,25 @@ impl Render for ValuePanelContent {
 
         div()
             .id("value-panel-content")
+            .track_focus(&self.focus_handle)
             .size_full()
             .flex()
             .flex_col()
             .overflow_hidden()
             .child(self.render_header(cx))
             .child(
-                div()
-                    .id("value-panel-editor")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(gpui_component::input::Editor::new(&self.input).h_full()),
+                VimBinding::capture_run_command(
+                    VimBinding::wire(self.vim.leader_scope(div(), cx), self.vim.input_id(), cx),
+                    self.vim.input_id(),
+                    cx,
+                )
+                .id("value-panel-editor")
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(self.vim.editor(false).h_full()),
             )
+            .children(self.vim.render_indicator(cx))
             .when_some(self.error.clone(), |d, error| {
                 d.child(
                     div()
@@ -500,5 +659,139 @@ impl ValuePanelContent {
                         })),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod vim_tests {
+    use super::{ValuePanelContent, ValuePanelTarget};
+    use crate::keyboard_test_support::{KeymapHost, host_document, init_keyboard_runtime};
+    use dbflux_app::keymap::{Command, ContextId};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+
+    /// The panel under a keymap host that routes Cancel the way the grid's
+    /// inspector does: out of the editor into the panel.
+    fn open_panel(
+        cx: &mut TestAppContext,
+        vim: bool,
+    ) -> (Entity<ValuePanelContent>, &mut VisualTestContext) {
+        let (_host, panel, window) = open_panel_with_host(cx, vim);
+        (panel, window)
+    }
+
+    fn open_panel_with_host(
+        cx: &mut TestAppContext,
+        vim: bool,
+    ) -> (
+        Entity<KeymapHost<ValuePanelContent>>,
+        Entity<ValuePanelContent>,
+        &mut VisualTestContext,
+    ) {
+        init_keyboard_runtime(cx);
+        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, vim));
+
+        let (host, window) = host_document(
+            cx,
+            |window, cx| {
+                cx.new(|cx| {
+                    ValuePanelContent::new(
+                        ValuePanelTarget {
+                            row: 0,
+                            col: 0,
+                            column_name: "notes".to_string(),
+                            value: "ab\ncd".to_string(),
+                            editable: true,
+                        },
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |panel, _cx| {
+                if panel.editor_has_focus() {
+                    ContextId::TextInput
+                } else {
+                    ContextId::Inspector
+                }
+            },
+            |panel, command, window, cx| {
+                if command == Command::Cancel && panel.editor_has_focus() {
+                    panel.leave_editor(window, cx);
+                    return true;
+                }
+                false
+            },
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| panel.update(cx, |panel, cx| panel.focus_editor(window, cx)));
+        window.run_until_parked();
+
+        (host, panel, window)
+    }
+
+    fn text_and_cursor(
+        panel: &Entity<ValuePanelContent>,
+        window: &mut VisualTestContext,
+    ) -> (String, usize) {
+        window.update(|_, cx| {
+            let state = panel.read(cx).input.read(cx);
+            (state.value().to_string(), state.cursor())
+        })
+    }
+
+    /// With Vim mode on, `j` moves, the first Escape leaves Insert mode and
+    /// keeps the editor, and Escape in Normal mode leaves the editor.
+    #[gpui::test]
+    fn vim_mode_in_the_value_editor(cx: &mut TestAppContext) {
+        let (panel, window) = open_panel(cx, true);
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&panel, window), ("ab\ncd".into(), 3));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&panel, window).0, "ab\nXcd");
+        assert!(window.update(|_, cx| panel.read(cx).editor_has_focus()));
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
+    }
+
+    /// With Vim mode off, keys type and Escape leaves the editor at once.
+    #[gpui::test]
+    fn without_vim_mode_escape_leaves_the_editor(cx: &mut TestAppContext) {
+        let (panel, window) = open_panel(cx, false);
+
+        window.simulate_input("j");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(text_and_cursor(&panel, window).0, "jab\ncd");
+        assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
+    }
+
+    /// The leader works outside the code editor: `space a` in Normal mode
+    /// reaches the host as the pane-actions command, and Insert mode types
+    /// the space.
+    #[gpui::test]
+    fn leader_sequences_reach_the_host_from_the_value_editor(cx: &mut TestAppContext) {
+        let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+        let (host, panel, window) = open_panel_with_host(cx, true);
+        let host_commands =
+            |window: &mut VisualTestContext| window.update(|_, cx| host.read(cx).commands.clone());
+
+        window.simulate_keystrokes("space a");
+        window.run_until_parked();
+        assert_eq!(host_commands(window), vec![Command::OpenPaneActions]);
+        assert_eq!(text_and_cursor(&panel, window), ("ab\ncd".into(), 0));
+
+        window.simulate_keystrokes("i space escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&panel, window).0, " ab\ncd");
+        assert_eq!(host_commands(window).len(), 1);
     }
 }

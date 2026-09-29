@@ -27,6 +27,7 @@ use dbflux_components::tokens::{
     ChamferCut, ChromeColors, DocumentMetrics, Feedback, Spacing, SyntaxColors,
 };
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::VimBinding;
 use dbflux_core::{EventCategory, EventOutcome};
 use dbflux_storage::repositories::audit::AuditEventDto;
 use gpui::prelude::*;
@@ -211,15 +212,10 @@ impl AuditDocument {
 
     pub(super) fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
+        self.events.get(menu.row)?;
 
-        let event = self.events.get(menu.row)?;
-        let has_correlation = event
-            .correlation_id
-            .as_deref()
-            .map(|c| !c.is_empty())
-            .unwrap_or(false);
-
-        let items = Self::context_menu_items(has_correlation);
+        let row = menu.row;
+        let items = self.menu_items_for_row(row);
         let selected_index = menu.selected_index;
 
         let mut menu_elements: Vec<AnyElement> = Vec::new();
@@ -229,10 +225,6 @@ impl AuditDocument {
                 menu_elements.push(render_separator(cx).into_any_element());
                 continue;
             }
-
-            let Some(action) = item.action else {
-                continue;
-            };
 
             let is_selected = idx == selected_index;
 
@@ -257,44 +249,7 @@ impl AuditDocument {
                     }
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    // Resolve the action again — the menu may have changed.
-                    let has_corr = this
-                        .context_menu
-                        .as_ref()
-                        .and_then(|m| this.events.get(m.row))
-                        .and_then(|e| e.correlation_id.as_deref())
-                        .map(|c| !c.is_empty())
-                        .unwrap_or(false);
-                    let items = Self::context_menu_items(has_corr);
-                    if let Some(item) = items.get(idx)
-                        && item.action == Some(action)
-                        && let Some(menu) = this.context_menu.clone()
-                    {
-                        let event = this.events.get(menu.row).cloned();
-                        this.close_context_menu(window, cx);
-                        match action {
-                            AuditContextMenuAction::CopyRowAsCsv => {
-                                if let Some(event) = event {
-                                    let csv = Self::event_to_csv_row(&event);
-                                    cx.write_to_clipboard(ClipboardItem::new_string(csv));
-                                }
-                            }
-                            AuditContextMenuAction::CopySummary => {
-                                if let Some(event) = event {
-                                    let summary = event.summary.clone().unwrap_or_default();
-                                    cx.write_to_clipboard(ClipboardItem::new_string(summary));
-                                }
-                            }
-                            AuditContextMenuAction::FilterByCorrelation => {
-                                if let Some(event) = event
-                                    && let Some(correlation_id) =
-                                        event.correlation_id.clone().filter(|c| !c.is_empty())
-                                {
-                                    this.filter_by_correlation(correlation_id, cx);
-                                }
-                            }
-                        }
-                    }
+                    this.run_menu_item_at(row, idx, window, cx);
                 }))
                 .into_any_element(),
             );
@@ -943,17 +898,14 @@ impl AuditDocument {
             .border_b_1()
             .border_color(theme.table_row_border)
             .text_size(DocumentMetrics::TABLE_CELL_FONT)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    // Signal the workspace to update focus_target → Document so that
-                    // Ctrl+H and other panel-navigation bindings work correctly.
-                    cx.emit(DocumentEvent::RequestFocus);
-                    this.select_row(row_index, cx);
-                    this.toggle_event_expanded(event_id, cx);
-                    this.focus_handle.focus(window, cx);
-                }),
-            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // Signal the workspace to update focus_target → Document so that
+                // Ctrl+H and other panel-navigation bindings work correctly.
+                cx.emit(DocumentEvent::RequestFocus);
+                this.select_row(row_index, cx);
+                this.toggle_event_expanded(event_id, cx);
+                this.focus_handle.focus(window, cx);
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -1452,12 +1404,33 @@ impl AuditDocument {
             let details_input =
                 self.ensure_external_details_input(row_event_id, &pretty_details, window, cx);
             let details_rows = Self::event_code_rows(&pretty_details, 4);
+            let input_id = details_input.entity_id();
+            let scope = match self.external_details_vims.get(&input_id) {
+                Some(vim) => vim.leader_scope(div(), cx),
+                None => div(),
+            };
+            let container = VimBinding::capture_run_command(
+                VimBinding::wire(scope, input_id, cx),
+                input_id,
+                cx,
+            );
+            let indicator = self
+                .external_details_vims
+                .get(&input_id)
+                .and_then(|vim| vim.render_indicator(cx));
 
             block(
-                ReadOnlyEditor::new(&details_input)
-                    .appearance(false)
+                container
                     .w_full()
-                    .h(Self::event_text_height(details_rows))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        ReadOnlyEditor::new(&details_input)
+                            .appearance(false)
+                            .w_full()
+                            .h(Self::event_text_height(details_rows)),
+                    )
+                    .children(indicator)
                     .into_any_element(),
             )
         });
@@ -1521,9 +1494,15 @@ impl AuditDocument {
             menu_row(
                 SharedString::from(format!("audit-export-{}", index)),
                 &MenuItem::new(label).icon(AppIcon::Download),
-                false,
+                index == self.export_menu_selected,
                 cx,
             )
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if this.export_menu_selected != index {
+                    this.export_menu_selected = index;
+                    cx.notify();
+                }
+            }))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.export_with_format(format, cx);
             }))
@@ -1707,14 +1686,24 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<GpuiEditorState> {
-        Self::ensure_event_editor_input(
+        let input = Self::ensure_event_editor_input(
             &mut self.external_details_inputs,
             event_id,
             details_json,
             Some("json"),
             window,
             cx,
-        )
+        );
+
+        let input_id = input.entity_id();
+        if let std::collections::hash_map::Entry::Vacant(slot) =
+            self.external_details_vims.entry(input_id)
+        {
+            slot.insert(VimBinding::new(input.clone(), window, cx));
+            VimBinding::follow_setting(self, input_id, cx);
+        }
+
+        input
     }
 
     // ── Row sizing helpers ────────────────────────────────────────────────

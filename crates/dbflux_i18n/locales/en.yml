@@ -175,6 +175,13 @@ components:
   file_picker:
     browse: "Browse…"
 composites:
+  rail:
+    add: "Add"
+    add_group: "Add group"
+    remove: "Remove"
+    toggle: "Toggle"
+    move_up: "Move up"
+    move_down: "Move down"
   refresh_split_button:
     label: Refresh
 controls:
@@ -1027,6 +1034,27 @@ document:
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
     breadcrumb: "Buckets"
   chart:
+    pane_actions:
+      refresh: "Refresh"
+      auto_refresh: "Auto-refresh interval…"
+      next_time_range: "Next time range"
+      prev_time_range: "Previous time range"
+      date_range: "Custom range: dates…"
+      start_hour: "Custom range: start hour…"
+      start_minute: "Custom range: start minute…"
+      end_hour: "Custom range: end hour…"
+      end_minute: "Custom range: end minute…"
+      next_kind: "Next chart type"
+      prev_kind: "Previous chart type"
+      x_axis: "X axis…"
+      y_axis: "Y series…"
+      group_by: "Group by…"
+      aggregation: "Aggregation…"
+      metric_rail: "Metric picker"
+      next_dimension: "Next dimension filter"
+      prev_dimension: "Previous dimension filter"
+      period: "Period…"
+      statistic: "Statistic…"
     toolbar:
       type_label: TYPE
       stats: Stats
@@ -1127,6 +1155,15 @@ document:
       query_history: Query history
       explain_query: Explain query
       open_in_chart: Open current query in a chart document
+      run_in_new_tab: Run in new tab
+      auto_refresh_interval: "Auto-refresh interval…"
+      next_result_tab: "Next result tab"
+      previous_result_tab: "Previous result tab"
+      close_result_tab: "Close result tab"
+      maximize_results: "Maximize results"
+      restore_results: "Restore results"
+      hide_results: "Hide results"
+      show_results: "Show results"
     vim:
       normal: "NORMAL"
       insert: "INSERT"
@@ -1219,6 +1256,7 @@ document:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
     context_bar:
+      pane_actions: Actions
       file:
         saved: saved
         unsaved: unsaved
@@ -1280,6 +1318,11 @@ document:
     title:
       untitled: Untitled
   dashboard:
+    pane_actions:
+      open_panel: "Open panel"
+      fold_section: "Fold or unfold section"
+      switch_to_view: "Switch to View"
+      switch_to_edit: "Switch to Edit"
     builder:
       preset:
         last_15_min: Last 15 min
@@ -1445,6 +1488,30 @@ document:
         remove: Remove ordering
       generate_sql:
         title: Generate SQL
+      toolbar:
+        title: "Toolbar"
+        export: "Export…"
+        clear_filter: "Clear filter"
+        open_builder: "Open query builder"
+        reset_builder: "Reset builder query"
+        save_changes: "Save all changes"
+        revert_changes: "Revert all changes"
+        auto_refresh: "Auto-refresh interval…"
+        maximize: "Maximize results"
+        restore: "Restore results"
+        hide: "Hide results"
+        query_history: "Query history…"
+        step_to_root: "Back to the documents"
+        view_documents: "Show Documents"
+        view_schema: "Show Schema"
+        view_aggregate: "Show Aggregate"
+        show_view: "Show %{view}"
+        value_format: "Read the value as %{format}"
+        value_wrap: "Wrap or unwrap the value lines"
+        value_pretty_print: "Format the value"
+        value_compact: "Compact the value"
+        value_revert: "Revert the value"
+        value_save: "Save the value"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1668,6 +1735,8 @@ document:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"
     multiple_analyzers_note: "Multiple registered drivers can read this extension; analyzed with %{analyzer}."
+    pane_actions:
+      sort_by: "Sort by %{column}"
     parsing:
       title: "Parsing dump…"
       cancel: Cancel
@@ -1780,6 +1849,8 @@ document:
     requested_at: "Requested at"
     waiting_label: "Waiting"
     exec_id: "exec %{id}"
+    pane_actions:
+      reason: "Type the rejection reason"
     status:
       pending: "Pending"
     waiting:
@@ -2072,6 +2143,11 @@ document:
       delete_member: Delete member
       edit_member: Edit member
       edit_value: Edit value
+      show_as_tree: "Show keys as a tree"
+      show_as_list: "Show keys as a list"
+      close_claim: "Close the claim form"
+      view_as: "View the value as %{view}"
+      decompression: "Choose the decompression…"
       new_key: New key…
       rename: Rename
     history_modal:
@@ -2247,6 +2323,7 @@ document:
       mode_placeholder: Mode
       unset_option: "(unset)"
       set_all_label: "Set all:"
+      set_all_to: "Set all to %{mode}"
       columns_button: "Columns…"
       unmapped_count:
         one: "%{count} unmapped"
@@ -2301,6 +2378,10 @@ document:
         expand: Expand
         open: Open
         new_folder_inside: New folder inside…
+        copy_path: "Copy the current path"
+        load_more: "Load more"
+        show_as_list: "Show as a list"
+        show_as_tree: "Show as a tree"
         delete_folder: Delete folder
     create_folder:
       cancel: Cancel
@@ -2516,6 +2597,8 @@ document:
       loading: "Loading object…"
       preparing: "Preparing editor…"
       size_tooltip: Size of the object as last loaded or saved
+    pane_actions:
+      reload: "Reload the object"
   query_builder:
     aggregate:
       fn:
@@ -2745,6 +2828,11 @@ document:
       copy_as_sql: Copy as SQL
       focus_table: Focus on this table
       inspect_schema: Inspect schema
+      reset_view: "Reset view (100%)"
+      fit: "Fit to view"
+      arrange: "Arrange tables"
+      show_types: "Show column types"
+      show_indexes: "Show indexes"
       layout: Layout
       zoom_in: Zoom in
       zoom_out: Zoom out
@@ -3179,6 +3267,10 @@ palette:
       name: Next tab
     prev_tab:
       name: Previous tab
+    move_tab_left:
+      name: Move tab left
+    move_tab_right:
+      name: Move tab right
     export_results:
       name: Export results
     open_connection_manager:
@@ -3187,6 +3279,8 @@ palette:
       name: Disconnect current
     refresh_schema:
       name: Refresh schema
+    export_connections:
+      name: "Export connections"
     focus_sidebar:
       name: Focus sidebar
     focus_editor:
@@ -3203,6 +3297,16 @@ palette:
       name: Toggle results panel
     toggle_tasks:
       name: Toggle tasks panel
+    clear_finished_tasks:
+      name: Clear finished tasks
+    toggle_notifications:
+      name: "Toggle notifications"
+    show_connections_view:
+      name: "Show connections view"
+    show_scripts_view:
+      name: "Show scripts view"
+    show_dashboards_view:
+      name: "Show dashboards view"
     open_settings:
       name: Open settings
     open_login_modal:
@@ -3215,10 +3319,16 @@ palette:
       name: Refresh MCP governance
     open_audit_viewer:
       name: Open audit viewer
+    open_last_error_in_audit:
+      name: "Open last error in audit"
+    open_toast_actions:
+      name: "Open toast actions…"
     open_saved_chart:
       name: "Open chart…"
     new_dashboard:
       name: "New dashboard…"
+    open_pane_actions:
+      name: "Open pane actions…"
     analyze_dump_file:
       name: "Analyze database dump…"
   category:
@@ -3302,8 +3412,15 @@ settings:
     editor:
       group: "Editor"
     vim_mode:
-      label: "Vim mode in code editors"
+      label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
+    vim_leader:
+      label: "Leader key"
+      hint: "Starts the Vim leader sequences in Normal and Visual modes, such as leader then a for the pane actions. Applies to open editors when saved."
+      option:
+        space: "Space"
+        comma: "Comma (,)"
+        backslash: "Backslash (\\)"
     restore_session:
       label: "Restore open tabs on startup"
     reopen_connections:
@@ -3435,6 +3552,8 @@ settings:
       prev_tab: Previous tab
       switch_to_tab: Switch to tab
       open_tab_menu: Open tab menu
+      move_tab_left: Move tab left
+      move_tab_right: Move tab right
       focus_sidebar: Focus sidebar
       focus_editor: Focus editor
       focus_results: Focus results
@@ -3451,6 +3570,8 @@ settings:
       select_last: Select last
       page_down: Page down
       page_up: Page up
+      next_panel_tab: Next panel tab
+      prev_panel_tab: Previous panel tab
       extend_select_next: Extend selection down
       extend_select_prev: Extend selection up
       toggle_selection: Toggle selection
@@ -3467,6 +3588,7 @@ settings:
       toggle_favorite: Toggle favorite
       run_query: Run query
       run_query_in_new_tab: Run query in new tab
+      explain_query: Explain query
       cancel_query: Cancel query
       open_history: Toggle history dropdown
       open_saved_queries: Open saved queries
@@ -3475,21 +3597,29 @@ settings:
       open_script_file: Open script file…
       toggle_comment: Toggle line comment
       export_results: Export results
+      clear_filter: Clear filter
+      next_result_tab: Next result tab
+      prev_result_tab: Previous result tab
+      close_result_tab: Close result tab
       results_next_page: Results next page
       results_prev_page: Results previous page
       focus_toolbar: Focus toolbar
       toggle_panel: Toggle panel
       results_delete_row: Delete row
       results_add_row: Add row
+      add_item: "Add item"
+      add_group: "Add group"
       results_duplicate_row: Duplicate row
       results_copy_row: Copy row
       results_copy_cell: Copy cell
       toggle_record_view: Toggle record view
       cycle_document_view: Cycle tree / table / JSON
+      cycle_result_view: "Cycle result view"
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
+      open_pane_actions: Open pane actions
       menu_up: Menu up
       menu_down: Menu down
       menu_select: Menu select
@@ -3504,11 +3634,23 @@ settings:
       toggle_editor: Toggle editor panel
       toggle_results: Toggle results panel
       toggle_tasks: Toggle tasks panel
+      cancel_task: Cancel task
+      clear_finished_tasks: Clear finished tasks
       toggle_sidebar: Toggle sidebar
       open_settings: Open settings
       open_login_modal: Open auth profile login
       open_sso_wizard: Open AWS SSO wizard
       open_audit_viewer: Open audit viewer
+      open_last_error_in_audit: "Open last error in audit"
+      open_toast_actions: "Open toast actions"
+      toggle_notifications: "Toggle notifications"
+      mark_notification_read: "Mark notification read"
+      mark_all_notifications_read: "Mark all notifications read"
+      clear_read_notifications: "Clear read notifications"
+      install_update: "Install update"
+      show_connections_view: "Show connections view"
+      show_scripts_view: "Show scripts view"
+      show_dashboards_view: "Show dashboards view"
       open_mcp_approvals: Open MCP approvals
       refresh_mcp_governance: Refresh MCP governance
       open_saved_chart: "Open chart…"
@@ -3554,6 +3696,26 @@ settings:
       toggle_console: Toggle console
       load_more: Load more
       edit_expiry: Edit expiry…
+      copy_preview: Copy preview
+      import_items: "Import…"
+      import_from_client: "Import from another client…"
+      reset_binding: "Reset binding"
+      reset_all_bindings: "Reset all bindings"
+      edit_binding_context: "Edit binding context"
+      filter_by_context: "Filter by context"
+      next_time_range: "Next time range"
+      prev_time_range: "Previous time range"
+      configure_panel: "Configure panel"
+      move_panel_left: "Move panel left"
+      move_panel_right: "Move panel right"
+      move_panel_up: "Move panel up"
+      move_panel_down: "Move panel down"
+      resize_panel_narrower: "Make panel narrower"
+      resize_panel_wider: "Make panel wider"
+      resize_panel_shorter: "Make panel shorter"
+      resize_panel_taller: "Make panel taller"
+      approve_execution: "Approve pending call"
+      reject_execution: "Reject pending call"
     context:
       global: Global
       sidebar: Sidebar
@@ -3581,6 +3743,16 @@ settings:
       modal: Modal Dialog
       key_value: Key-Value Browser
       settings: Settings Window
+      inspector: Inspector
+      notifications: Notifications
+      query_builder: "Query Builder"
+      document_builder: "Document Builder"
+      chart: "Chart"
+      dashboard: "Dashboard"
+      add_panel_picker: "Add Panel Picker"
+      mcp_approvals: "MCP Approvals"
+      migrate_wizard: "Migrate Wizard"
+      vim_normal: "Vim Normal"
     category:
       global: Global
       focus: Focus
@@ -4534,6 +4706,9 @@ tasks_panel:
   clear_finished: "Clear finished"
   cancel: "Cancel task"
   dismiss: "Dismiss"
+  show_output: "Show output"
+  hide_output: "Hide output"
+  collapse: "Hide the tasks panel"
   empty: No background tasks
   output_truncated: "… output truncated in panel"
 toast:
@@ -4541,6 +4716,7 @@ toast:
     copy: Copy
     show_details: Show details
     hide_details: Hide details
+    dismiss: Dismiss
 workspace:
   rail:
     connections: "Connections"
@@ -4669,7 +4845,7 @@ notifications:
     updates: Updates
     earlier: Earlier
   footer:
-    hint: Click a row to open it
+    hint: Click a row or press Enter to open it
     clear_read: Clear read
   empty:
     title: You are up to date

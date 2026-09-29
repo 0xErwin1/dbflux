@@ -24,7 +24,7 @@ pub mod point_inspector;
 pub mod spec;
 pub mod stats;
 
-pub use axis_bar::{AxisPill, axis_bar_element};
+pub use axis_bar::{AxisPickerOption, AxisPill, axis_bar_element, axis_picker_options};
 pub use data_source::{
     AuditAggregateSpec, AuditGroupBy, AuditSource, ChartDataPlan, ChartDataSource,
     ChartSourceDescription, ChartSourceError, InstanceMetricSource, MetricSource, TimeWindow,

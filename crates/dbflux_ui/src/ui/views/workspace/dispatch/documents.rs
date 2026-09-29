@@ -47,20 +47,51 @@ impl Workspace {
                 Some(true)
             }
 
+            Command::MoveTabLeft | Command::MoveTabRight => {
+                let forward = cmd == Command::MoveTabRight;
+                Some(
+                    self.tab_manager
+                        .update(cx, |mgr, cx| mgr.move_active_tab(forward, cx)),
+                )
+            }
+
             Command::OpenTabMenu => {
                 self.tab_bar
                     .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));
                 Some(true)
             }
 
-            // Context menu commands — route to tab bar if its menu is open,
-            // otherwise to the active document (DataGridPanel).
+            // The active document may answer this itself (with a menu of its
+            // own); otherwise the workspace lists the actions the focused
+            // pane offers.
+            Command::OpenPaneActions => {
+                if self.has_pane_actions_menu() {
+                    self.close_pane_actions_from_keyboard(window, cx);
+                    return Some(true);
+                }
+
+                // The tasks panel lists its own actions, so a document menu
+                // does not open under it.
+                let handled_by_document = self.focus_target != FocusTarget::BackgroundTasks
+                    && self.tab_manager.update(cx, |mgr, cx| {
+                        mgr.dispatch_active(Command::OpenPaneActions, window, cx)
+                    });
+
+                Some(handled_by_document || self.open_pane_actions(window, cx))
+            }
+
+            // Context menu commands — route to the pane-actions menu or the
+            // tab bar when one is open, otherwise to the active document
+            // (DataGridPanel). A document with no context menu to open lists
+            // its pane actions instead.
             Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown
             | Command::MenuSelect
             | Command::MenuBack => {
-                if self.tab_bar.read(cx).has_context_menu_open() {
+                if self.has_pane_actions_menu() {
+                    self.dispatch_pane_actions_menu(cmd, window, cx);
+                } else if self.tab_bar.read(cx).has_context_menu_open() {
                     self.tab_bar.update(cx, |tb, cx| match cmd {
                         Command::MenuDown => tb.context_menu_select_next(cx),
                         Command::MenuUp => tb.context_menu_select_prev(cx),
@@ -69,9 +100,13 @@ impl Workspace {
                         _ => {}
                     });
                 } else {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(cmd, window, cx);
-                    });
+                    let handled = self
+                        .tab_manager
+                        .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx));
+
+                    if !handled && cmd == Command::OpenContextMenu {
+                        self.open_pane_actions(window, cx);
+                    }
                 }
                 Some(true)
             }
@@ -116,13 +151,55 @@ impl Workspace {
             | Command::Redo
             | Command::ToggleColumnGroup
             | Command::StepOut
-            | Command::TriggerCompletion => Some(
+            | Command::TriggerCompletion
+            // The filter a table shows belongs to its document.
+            | Command::ClearFilter
+            // So do the result tabs of a query.
+            | Command::NextResultTab
+            | Command::PrevResultTab
+            | Command::CloseResultTab
+            // So do the tabs of a panel a document draws (the query
+            // history's Recent and Saved).
+            | Command::NextPanelTab
+            | Command::PrevPanelTab
+            // So do the rows of a side rail the document draws (the query
+            // builders).
+            | Command::AddItem
+            | Command::AddGroup
+            // So do the time range of a chart or dashboard and the panels of
+            // a dashboard.
+            | Command::NextTimeRange
+            | Command::PrevTimeRange
+            | Command::ConfigurePanel
+            | Command::MovePanelLeft
+            | Command::MovePanelRight
+            | Command::MovePanelUp
+            | Command::MovePanelDown
+            | Command::ResizePanelNarrower
+            | Command::ResizePanelWider
+            | Command::ResizePanelShorter
+            | Command::ResizePanelTaller => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),
 
-            // Closing a window belongs to the settings window.
-            Command::CloseWindow => Some(false),
+            // The decisions of the MCP approvals document.
+            #[cfg(feature = "mcp")]
+            Command::ApproveExecution | Command::RejectExecution => Some(
+                self.tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+            ),
+
+            // Closing a window and the list and key binding actions of its
+            // sections belong to the settings window; Import from another
+            // client belongs to the connection manager window.
+            Command::CloseWindow
+            | Command::ImportItems
+            | Command::ImportFromClient
+            | Command::ResetBinding
+            | Command::ResetAllBindings
+            | Command::EditBindingContext
+            | Command::FilterByContext => Some(false),
 
             _ => None,
         }

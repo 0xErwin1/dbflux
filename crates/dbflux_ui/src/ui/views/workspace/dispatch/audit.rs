@@ -12,6 +12,10 @@ impl Workspace {
                 self.open_audit_viewer(window, cx);
                 Some(true)
             }
+            Command::OpenLastErrorInAudit => {
+                self.open_last_error_in_audit(cx);
+                Some(true)
+            }
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => {
                 self.open_mcp_approvals(window, cx);

@@ -103,6 +103,27 @@ DBFlux 让两个产物随着同一个改动保持同步：本仓库中经过人�
 - 如果一个拉取请求同时包含内部改动与用户可见改动，请把它们拆成类型恰当的多个提交。
 - 安全修复：使用 `fix(security): ...`，或添加 `Security: ...` 尾部说明，使该改动归入 Security 一节。
 
+## 键盘覆盖
+
+DBFlux 中的每个操作都必须能用键盘触达：要么是绑定在该界面按键上下文中的命令，要么是键盘能打开的菜单中的条目（面板操作菜单，或表格、侧栏的 `m` 菜单）。两项检查可阻止只能用鼠标完成的操作被合入：
+
+- `python3 scripts/lint.py mouse-down` 会拒绝未列入 `scripts/mouse_down_allowlist.txt` 的左键 `on_mouse_down` 处理器。激活操作使用 `on_click`。
+- 键盘覆盖测试会渲染每个界面，并把每个点击即执行操作的元素与该界面的覆盖注册表（`dbflux_ui_base::keyboard_coverage`）逐一核对。注册表未列出的元素会让测试失败，失败信息会说明如何修复。
+
+添加交互元素时：
+
+1. 为它设置稳定的 `.id(...)`，并用 `.on_click(...)` 激活。
+2. 为它的操作提供键盘路径：绑定在该界面按键上下文中的 `Command`，或其面板操作、`m` 菜单中执行同一操作的条目。在对话框中，能获得焦点的控件可用 Tab 到达。
+3. 在绘制它的界面的注册表中登记该 id：文档使用 `crates/dbflux_ui_document/src/keyboard_coverage.rs`，设置窗口和连接管理器窗口使用 `crates/dbflux_ui_windows/src/keyboard_coverage.rs`，工作区外壳使用 `crates/dbflux_ui/src/ui/views/workspace/keyboard_coverage_tests.rs`，对话框使用其自身的测试模块。`KeyboardPath::MouseOnly("原因")` 仅用于窗口外框和指针手势。以 `gap:` 开头的原因记录一条缺失的键盘路径，使其保持可见。
+
+运行覆盖测试：
+
+```bash
+cargo nextest run --workspace _covered
+```
+
+在整个 workspace 上运行时，UI crate 会以应用发布时的 feature 编译，因此也会检查 MCP 界面和钩子的 Lua 模式。辅助模块自身的测试用 `cargo nextest run -p dbflux_ui_base keyboard_coverage` 运行。
+
 ## 问题反馈
 
 提交问题反馈前：

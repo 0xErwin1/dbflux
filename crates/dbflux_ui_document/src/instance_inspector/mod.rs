@@ -16,12 +16,13 @@ use crate::refresh::MIN_REFRESH_FLOOR_SECS;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::Modal;
+use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
 use dbflux_components::result_panel::{ResultPanel, ViewHandle};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::{
-    ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy, Value,
+    ExecutionContext, ExecutionSourceContext, LogErr, QueryRequest, QueryResult, RefreshPolicy,
+    Value,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::AsyncUpdateResultExt;
@@ -92,6 +93,10 @@ pub struct InspectorPanel {
     /// State while the kill-confirmation modal is visible.
     pending_kill_confirm: Option<PendingKillConfirm>,
 
+    /// Moves the keyboard into the kill confirmation and gives it back to
+    /// the table when it closes.
+    kill_confirm_focus: ModalFocus,
+
     /// Deferred first-fetch flag.
     ///
     /// Set on construction; drained on the first render pass after all parent
@@ -131,6 +136,7 @@ impl InspectorPanel {
             result_panel: None,
             _data_grid_subscription: None,
             pending_kill_confirm: None,
+            kill_confirm_focus: ModalFocus::new(cx),
             pending_initial_exec: false,
         }
     }
@@ -161,8 +167,13 @@ impl InspectorPanel {
         Some(self.profile_id)
     }
 
-    pub fn active_context(&self) -> ContextId {
-        ContextId::Global
+    /// The table's key context once the result has arrived, so the table
+    /// keys and its context menu (with the row actions) work in the panel.
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        match &self.data_grid {
+            Some(grid) => grid.read(cx).active_context(cx),
+            None => ContextId::Global,
+        }
     }
 
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
@@ -180,21 +191,70 @@ impl InspectorPanel {
 
     pub fn set_active_tab(&mut self, _active: bool) {}
 
+    /// Moves the keyboard to the table, or to the panel while the result has
+    /// not arrived.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_handle.focus(window, cx);
+        match &self.data_grid {
+            Some(grid) => grid.update(cx, |grid, cx| grid.focus_table(window, cx)),
+            None => self.focus_handle.focus(window, cx),
+        }
     }
 
+    /// Runs a keymap command: Enter and Escape answer an open row-action
+    /// confirmation, F5 fetches a fresh snapshot and every other command
+    /// goes to the table, whose context menu lists the row actions (`m`).
     pub fn dispatch_command(
         &mut self,
-        _cmd: Command,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        if self.pending_kill_confirm.is_some() {
+            match cmd {
+                Command::Execute => self.confirm_kill_action(cx),
+                Command::Cancel => self.cancel_kill_action(cx),
+                _ => return false,
+            }
+            return true;
+        }
+
+        if cmd == Command::RefreshSchema {
+            self.request_reexec(cx);
+            return true;
+        }
+
+        match &self.data_grid {
+            Some(grid) => grid.update(cx, |grid, cx| grid.dispatch_command(cmd, window, cx)),
+            None => false,
+        }
+    }
+
+    /// The panel's actions for the pane-actions menu: a fresh snapshot. The
+    /// row actions are in the table's own context menu (`m`).
+    pub(crate) fn pane_actions(&self) -> Vec<crate::pane::PaneAction> {
+        vec![
+            crate::pane::PaneAction::command(
+                "inspector-refresh",
+                dbflux_i18n::t!("document.chart.pane_actions.refresh"),
+                Command::RefreshSchema,
+                ContextId::Results,
+            )
+            .icon(AppIcon::RefreshCcw),
+        ]
     }
 
     pub fn metric_id(&self) -> &str {
         &self.metric_id
+    }
+
+    /// Shows `result` as if a fetch had returned it; the table is built on
+    /// the next render.
+    #[cfg(test)]
+    pub(crate) fn show_result_for_test(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        let result = Arc::new(result);
+        self.pending_grid_result = Some(result.clone());
+        self.result = Some(result);
+        cx.notify();
     }
 
     /// Returns `true` if the panel has received at least one successful result.
@@ -376,6 +436,7 @@ impl InspectorPanel {
 
     fn cancel_kill_action(&mut self, cx: &mut Context<Self>) {
         self.pending_kill_confirm = None;
+        self.kill_confirm_focus.restore(cx);
         cx.notify();
     }
 
@@ -383,6 +444,7 @@ impl InspectorPanel {
         let Some(confirm) = self.pending_kill_confirm.take() else {
             return;
         };
+        self.kill_confirm_focus.restore(cx);
 
         let profile_id = self.profile_id;
         let metric_id = self.metric_id.clone();
@@ -486,6 +548,7 @@ impl InspectorPanel {
                 })),
             );
 
+        // Enter confirms and Escape cancels, like the footer buttons.
         Modal::new(title)
             .id("kill-confirm-overlay")
             .danger()
@@ -493,6 +556,23 @@ impl InspectorPanel {
             .width(gpui::px(400.0))
             .body(Text::body(description))
             .footer(footer)
+            .focus_handle(self.kill_confirm_focus.handle())
+            .on_close({
+                let weak_self = cx.weak_entity();
+                move |_window, cx| {
+                    weak_self
+                        .update(cx, |this, cx| this.cancel_kill_action(cx))
+                        .log_err();
+                }
+            })
+            .on_confirm({
+                let weak_self = cx.weak_entity();
+                move |_window, cx| {
+                    weak_self
+                        .update(cx, |this, cx| this.confirm_kill_action(cx))
+                        .log_err();
+                }
+            })
     }
 }
 
@@ -550,6 +630,7 @@ impl Render for InspectorPanel {
                         action_label: action_label.clone(),
                         row_values: row_values.clone(),
                     });
+                    this.kill_confirm_focus.focus_on_next_render();
                     cx.notify();
                 }
             });
@@ -566,6 +647,10 @@ impl Render for InspectorPanel {
 
         if let Some(result_panel) = self.result_panel.as_ref().cloned() {
             let has_kill_confirm = self.pending_kill_confirm.is_some();
+
+            if has_kill_confirm {
+                self.kill_confirm_focus.apply_pending(window, cx);
+            }
 
             return div()
                 .size_full()
@@ -694,6 +779,9 @@ fn emit_kill_audit(
         log::warn!("[inspector kill] failed to record audit event: {}", e);
     }
 }
+
+#[cfg(test)]
+mod keyboard_tests;
 
 #[cfg(test)]
 mod tests {

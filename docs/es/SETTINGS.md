@@ -51,7 +51,8 @@ y permanece en English por ahora.
 
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
-| **Vim mode in code editors** | Off     | Edición modal en los editores de código: modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de [modo Vim](KEYBOARD.md#modo-vim-opcional) en la referencia de teclado. |
+| **Vim mode in editors**      | Off     | Edición modal en todos los editores de varias líneas (editor de código, editor de objetos, diálogos JSON, panel de valor, vista JSON y pipeline de colecciones; solo movimientos en los visores de solo lectura): modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de [modo Vim](KEYBOARD.md#modo-vim-opcional) en la referencia de teclado. |
+| **Leader key**               | Space   | La tecla que inicia las secuencias de líder de Vim en los modos Normal y Visual, como la líder y luego `a` para las acciones del panel: espacio, coma o barra invertida. Se aplica a los editores abiertos al guardar, y los atajos de líder que cambiaste en **Keybindings** la siguen. |
 
 ### Inicio y sesión
 
@@ -200,7 +201,8 @@ el editor de código fuera de los modos Normal y Visual de Vim.
 **Restablecer.** Un binding modificado muestra una flecha que restablece sus
 teclas y su contexto por defecto (`r` sobre un binding seleccionado hace lo
 mismo, y `Delete` quita su atajo). **Restablecer predeterminados** en el pie
-descarta todas las modificaciones. El pie también muestra cuántos bindings están
+descarta todas las modificaciones, como `Shift+R` desde la lista. `c` abre el
+filtro de contexto. El pie también muestra cuántos bindings están
 modificados.
 
 Los cambios se aplican al instante en todas las ventanas, sin reiniciar. Solo se

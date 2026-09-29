@@ -192,7 +192,7 @@ impl Fixture<'_> {
             let document = document.read(cx);
             document
                 .vim
-                .visual_cursor
+                .visual_cursor()
                 .unwrap_or_else(|| document.editor.input_state.read(cx).cursor())
         })
     }
@@ -904,7 +904,7 @@ fn disabling_vim_removes_registered_mark_anchors(cx: &mut TestAppContext) {
     editor.keys("m a");
     let document = editor.document.clone();
     editor.window.update(|_, cx| {
-        let handle = document.read(cx).vim.marks[0].expect("mark a was created");
+        let handle = document.read(cx).vim.mark(0).expect("mark a was created");
         document.update(cx, |document, cx| document.set_vim_enabled(false, cx));
         let input = document.read(cx).editor.input_state.clone();
         assert_eq!(input.read(cx).resolve_edit_anchor(handle), None);
@@ -2937,6 +2937,7 @@ fn visual_empty_and_read_only_keep_text_and_shortcuts(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn normal_mode_inserts_no_text_for_unbound_keys(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc", true);
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 
@@ -3025,7 +3026,7 @@ fn pending_display_clears_on_focus_and_tab_action(cx: &mut TestAppContext) {
         let document = editor.document.clone();
         editor
             .window
-            .update(|_, cx| document.read(cx).vim.pending_keys.clone())
+            .update(|_, cx| document.read(cx).vim.pending_keys().to_string())
     };
 
     editor.keys("3");
@@ -3089,17 +3090,75 @@ fn normal_mode_blocks_enter_tab_paste_and_deletion_keys(cx: &mut TestAppContext)
     editor.window.run_until_parked();
 
     assert_eq!(editor.text(), "abc\ndef");
-    assert!(
-        !editor.commands().contains(&Command::CycleFocusForward)
-            && !editor.commands().contains(&Command::CycleFocusBackward),
-        "Tab must not reach the workspace keymap in Normal mode: {:?}",
-        editor.commands()
-    );
     assert!(editor.editor_focused());
 
     editor.keys("enter");
     assert_eq!(editor.text(), "abc\ndef", "Enter must not insert a newline");
     assert_eq!(editor.cursor(), 4, "Enter moves down one line");
+}
+
+/// Normal and Visual modes are not text entry, so Tab and Shift+Tab reach
+/// the workspace pane cycle instead of indenting or being dropped.
+#[gpui::test]
+fn tab_outside_text_entry_cycles_the_workspace_panes(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\ndef", true);
+
+    editor.keys("tab shift-tab");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::CycleFocusForward, Command::CycleFocusBackward]
+    );
+
+    editor.keys("v l tab");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(
+        editor.commands().last(),
+        Some(&Command::CycleFocusForward),
+        "Visual mode cycles too"
+    );
+
+    editor.keys("escape i tab");
+    assert_eq!(
+        editor.text(),
+        "a  bc\ndef",
+        "Insert mode keeps Tab as indent"
+    );
+    assert_eq!(editor.commands().len(), 3);
+}
+
+/// Shift+F10 reaches the workspace as the pane-actions command from the
+/// editor text in Normal, Visual and Insert modes and without Vim, and
+/// leaves the buffer and the mode as they were.
+#[gpui::test]
+fn shift_f10_opens_the_pane_actions_in_every_editor_mode(
+    cx: &mut TestAppContext,
+    plain_cx: &mut TestAppContext,
+) {
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("shift-f10");
+    assert_eq!(editor.commands(), vec![Command::OpenPaneActions], "Normal");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("v shift-f10");
+    assert_eq!(editor.commands().len(), 2, "Visual");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+
+    editor.keys("escape i shift-f10");
+    assert_eq!(
+        editor.commands().last(),
+        Some(&Command::OpenPaneActions),
+        "Insert"
+    );
+    assert_eq!(editor.commands().len(), 3);
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "abc");
+
+    let mut plain = open_editor(plain_cx, "abc", false);
+    plain.keys("shift-f10");
+    assert_eq!(plain.commands(), vec![Command::OpenPaneActions], "no Vim");
+    assert_eq!(plain.text(), "abc");
 }
 
 #[gpui::test]
@@ -3531,6 +3590,30 @@ fn ctrl_shift_h_opens_replace_and_toggles_it_inside_the_panel(
         assert_eq!(editor.text(), "abc abc", "{setup}");
         assert!(editor.commands().is_empty(), "{setup}");
     }
+}
+
+/// With only the query field shown, Tab leaves the find panel through the
+/// workspace pane cycle; with the replace row shown it moves between the two
+/// fields.
+#[cfg(not(target_os = "macos"))]
+#[gpui::test]
+fn tab_in_the_find_panel_cycles_panes_unless_the_replace_row_is_shown(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc abc", false);
+    editor.open_native_search();
+
+    editor.keys("tab shift-tab");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::CycleFocusForward, Command::CycleFocusBackward]
+    );
+    assert!(editor.native_search_open());
+
+    editor.keys("ctrl-shift-h");
+    assert!(editor.native_replace_mode());
+
+    editor.keys("tab shift-tab");
+    assert_eq!(editor.commands().len(), 2, "the replace row keeps Tab");
+    assert_eq!(editor.text(), "abc abc");
 }
 
 #[gpui::test]
@@ -3986,7 +4069,7 @@ fn pending_command_tracks_raw_keys_and_clears_on_completion(cx: &mut TestAppCont
         let document = editor.document.clone();
         editor
             .window
-            .update(|_, cx| document.read(cx).vim.pending_keys.clone())
+            .update(|_, cx| document.read(cx).vim.pending_keys().to_string())
     };
     editor.keys("2 d 3");
     assert_eq!(pending(&mut editor), "2d3");
@@ -4000,4 +4083,125 @@ fn pending_command_tracks_raw_keys_and_clears_on_completion(cx: &mut TestAppCont
     assert_eq!(pending(&mut editor), "");
     editor.keys("2 ctrl-z");
     assert_eq!(pending(&mut editor), "");
+}
+
+/// The leader key starts a sequence in Normal and Visual modes: Space then
+/// `a` reaches the workspace as the pane-actions command, and the buffer and
+/// the mode stay as they were.
+#[gpui::test]
+fn leader_a_opens_the_pane_actions_in_normal_and_visual_modes(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("space a");
+    assert_eq!(editor.commands(), vec![Command::OpenPaneActions], "Normal");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.text(), "abc");
+
+    editor.keys("v space a");
+    assert_eq!(editor.commands().len(), 2, "Visual");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+    assert_eq!(editor.text(), "abc");
+}
+
+/// Space followed by a key no leader binding uses types nothing: Space is
+/// replayed to Vim, which has no command for it, and the second key runs as
+/// it would on its own.
+#[gpui::test]
+fn leader_then_an_unmapped_key_types_nothing_and_stays_in_normal_mode(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    let mut editor = open_editor(cx, "abc\ndef", true);
+
+    editor.keys("space j");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 4, "j still moves down after the leader");
+    assert!(editor.commands().is_empty());
+
+    editor.keys("space q");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert!(editor.commands().is_empty());
+}
+
+/// Insert mode keeps Space as typed text, so no leader sequence starts.
+#[gpui::test]
+fn insert_mode_types_the_leader_key(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("i space a escape");
+    assert_eq!(editor.text(), " aabc");
+    assert!(editor.commands().is_empty());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+/// A new leader takes over the sequences live: after switching to `,`,
+/// `, a` opens the pane actions and Space is no longer a prefix.
+#[gpui::test]
+fn a_new_leader_moves_the_leader_sequences(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    use dbflux_app::keymap::{KeyChord, Modifiers};
+    use dbflux_ui_base::keymap::{default_vim_leader, set_vim_leader};
+
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor
+        .window
+        .update(|_, cx| set_vim_leader(KeyChord::new(",", Modifiers::none()), cx));
+    editor.window.run_until_parked();
+
+    editor.keys(", a");
+    assert_eq!(editor.commands(), vec![Command::OpenPaneActions]);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("space l");
+    assert_eq!(
+        editor.commands().len(),
+        1,
+        "Space no longer starts a sequence"
+    );
+    assert_eq!(editor.cursor(), 1, "l moved right on its own");
+
+    editor
+        .window
+        .update(|_, cx| set_vim_leader(default_vim_leader(), cx));
+}
+
+/// `<leader> f` opens the editor's own find panel, as `/` does, without
+/// reaching the workspace.
+#[gpui::test]
+fn leader_f_opens_the_find_panel(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("space f");
+    assert!(editor.native_search_open());
+    assert!(editor.commands().is_empty());
+}
+
+/// Space alone waits for the next key only until GPUI's pending-key
+/// timeout; then it is replayed to Vim, which ignores it, and a later `a`
+/// is Vim's append again.
+#[gpui::test]
+fn the_leader_alone_times_out_without_typing(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("space");
+    editor
+        .window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    editor.window.run_until_parked();
+    assert_eq!(editor.text(), "abc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("a");
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Insert),
+        "a appends after the timeout"
+    );
+    assert!(editor.commands().is_empty());
 }

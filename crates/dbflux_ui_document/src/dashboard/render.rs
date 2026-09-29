@@ -36,7 +36,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, FocusShape, Icon, Text};
 use dbflux_components::tokens::{ChamferCut, DashboardMetrics};
 use gpui::prelude::*;
-use gpui::{Bounds, Context, IntoElement, KeyDownEvent, Pixels, Window, deferred, div, px};
+use gpui::{Bounds, Context, IntoElement, Pixels, Window, deferred, div, px};
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 use std::cell::Cell;
@@ -75,6 +75,7 @@ impl Render for DashboardDocument {
         let toolbar: gpui::AnyElement = builder::dashboard_toolbar(self, cx).into_any_element();
 
         let edit_mode = self.is_edit_mode();
+        let keyboard_in_dashboard = self.focus_handle.contains_focused(window, cx);
 
         // Per-panel children render in original `panel_slots` order; the visual
         // position is driven entirely by `grid_pos` via absolute positioning.
@@ -223,10 +224,11 @@ impl Render for DashboardDocument {
                 )
                 .into_any_element();
 
-                // Focus ring is an edit-mode affordance — in view mode the
-                // dashboard is read-only and no panel is "armed".
+                // The ring marks the selected panel in Edit mode, and in both
+                // modes while the keyboard is in the dashboard.
                 let ring_color = cx.theme().ring;
-                let is_focused = edit_mode && self.focused_panel_index == Some(panel_index);
+                let is_focused = self.focused_panel_index == Some(panel_index)
+                    && (edit_mode || keyboard_in_dashboard);
                 let on_card_mouse_down = cx.listener(move |this, _, _, cx| {
                     if this.is_edit_mode() {
                         this.focused_panel_index = Some(panel_index);
@@ -348,6 +350,9 @@ impl Render for DashboardDocument {
                             .flex()
                             .items_center()
                             .gap(DashboardMetrics::DIVIDER_GAP)
+                            .when(is_focused, |divider| {
+                                divider.border_1().border_color(ring_color)
+                            })
                             .cursor_pointer()
                             .text_color(theme.muted_foreground)
                             .on_click(on_toggle)
@@ -572,53 +577,10 @@ impl Render for DashboardDocument {
             .max(1);
         let grid_height_px = (grid_rows as f32) * DASHBOARD_ROW_PX;
 
-        // Wire keyboard navigation. The dashboard root tracks the document
-        // focus handle so on_key_down fires when the document is the active
-        // pane. Keys handled:
-        //   - Left / Right          : prev / next panel in visual order
-        //   - Up / Down              : move focus by one grid row
-        //   - Enter                 : open Configure popover for focused panel
-        //   - F2                    : start inline title edit on focused panel
-        //   - Delete / Backspace    : remove focused panel
-        // Escape runs the keymap's Cancel, which closes an open popover or
-        // menu (see `dispatch_command`).
+        // The keys reach the dashboard as keymap commands through the
+        // `Dashboard` key context (see `keyboard`); the root only tracks the
+        // document focus handle.
         let focus_handle = self.focus_handle.clone();
-        let on_key_down = cx.listener(
-            |this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                let key = event.keystroke.key.as_str();
-                let modifiers = event.keystroke.modifiers;
-                // Ignore keys when an inline title edit is in progress; the
-                // input owns the keyboard.
-                if this.editing_title_panel_index.is_some() || this.editing_dashboard_name {
-                    return;
-                }
-                if modifiers.platform || modifiers.alt || modifiers.shift || modifiers.control {
-                    return;
-                }
-                match key {
-                    "left" => this.move_panel_focus(-1, cx),
-                    "right" => this.move_panel_focus(1, cx),
-                    "up" => this.move_panel_focus_rows(-1, cx),
-                    "down" => this.move_panel_focus_rows(1, cx),
-                    "enter" => {
-                        if let Some(idx) = this.focused_panel_index {
-                            this.start_configure_panel(idx as usize, cx);
-                        }
-                    }
-                    "f2" if !this.is_read_only() => {
-                        if let Some(idx) = this.focused_panel_index {
-                            this.start_panel_title_edit(idx, window, cx);
-                        }
-                    }
-                    "delete" | "backspace" if !this.is_read_only() => {
-                        if let Some(idx) = this.focused_panel_index {
-                            this.remove_panel(idx, cx);
-                        }
-                    }
-                    _ => {}
-                }
-            },
-        );
 
         let is_empty = self.panel_slots.is_empty();
 
@@ -661,7 +623,6 @@ impl Render for DashboardDocument {
             .size_full()
             .bg(cx.theme().popover)
             .track_focus(&focus_handle)
-            .on_key_down(on_key_down)
             .child(toolbar)
             .child(
                 div()

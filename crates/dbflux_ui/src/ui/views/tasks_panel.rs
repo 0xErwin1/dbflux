@@ -18,9 +18,29 @@ pub struct CollapseTasksPanel;
 pub struct TasksPanel {
     app_state: Entity<AppStateEntity>,
     expanded_task_ids: HashSet<TaskId>,
+    /// The task the keyboard points at. `None` until the keyboard moves,
+    /// which points at the first row.
+    selected_task_id: Option<TaskId>,
+    /// Row of the selected task when it was chosen: the selection lands on
+    /// the row now there once that task leaves the list.
+    selected_index: usize,
+    scroll_handle: ScrollHandle,
     /// The workspace's keyboard focus is on the tasks panel.
     focused: bool,
     _timer: Option<Task<()>>,
+}
+
+/// What the keyboard can do with the selected task, for the pane actions
+/// menu of the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectedTaskActions {
+    /// The task has output to show under its row.
+    pub has_output: bool,
+    /// That output is shown.
+    pub output_shown: bool,
+    pub cancellable: bool,
+    /// The task is no longer running, so it can be dismissed.
+    pub finished: bool,
 }
 
 impl EventEmitter<CollapseTasksPanel> for TasksPanel {}
@@ -43,9 +63,129 @@ impl TasksPanel {
         Self {
             app_state,
             expanded_task_ids: HashSet::new(),
+            selected_task_id: None,
+            selected_index: 0,
+            scroll_handle: ScrollHandle::new(),
             focused: false,
             _timer: Some(timer),
         }
+    }
+
+    /// The tasks in the order the panel lists them: running ones first, then
+    /// the finished ones [`visible_finished_tasks`] keeps.
+    fn visible_tasks(&self, cx: &App) -> Vec<TaskSnapshot> {
+        let tasks = self.app_state.read(cx).tasks();
+
+        tasks
+            .running_tasks()
+            .into_iter()
+            .chain(visible_finished_tasks(tasks.recent_tasks(usize::MAX)))
+            .collect()
+    }
+
+    /// Row of the selected task in `tasks`, or of the row that took its
+    /// place when it left the list; `None` when the list is empty.
+    fn selected_position(&self, tasks: &[TaskSnapshot]) -> Option<usize> {
+        let last = tasks.len().checked_sub(1)?;
+
+        self.selected_task_id
+            .and_then(|task_id| tasks.iter().position(|task| task.id == task_id))
+            .or(Some(self.selected_index.min(last)))
+    }
+
+    fn move_selection(
+        &mut self,
+        target: impl FnOnce(usize, usize) -> usize,
+        cx: &mut Context<Self>,
+    ) {
+        let tasks = self.visible_tasks(cx);
+        let Some(current) = self.selected_position(&tasks) else {
+            return;
+        };
+
+        let index = target(current, tasks.len() - 1);
+        self.selected_index = index;
+        self.selected_task_id = Some(tasks[index].id);
+        self.scroll_handle.scroll_to_item(index);
+        cx.notify();
+    }
+
+    pub fn select_next(&mut self, cx: &mut Context<Self>) {
+        self.move_selection(|current, last| (current + 1).min(last), cx);
+    }
+
+    pub fn select_prev(&mut self, cx: &mut Context<Self>) {
+        self.move_selection(|current, _| current.saturating_sub(1), cx);
+    }
+
+    pub fn select_first(&mut self, cx: &mut Context<Self>) {
+        self.move_selection(|_, _| 0, cx);
+    }
+
+    pub fn select_last(&mut self, cx: &mut Context<Self>) {
+        self.move_selection(|_, last| last, cx);
+    }
+
+    /// The task the keyboard points at.
+    pub fn selected_task(&self, cx: &App) -> Option<TaskSnapshot> {
+        let tasks = self.visible_tasks(cx);
+        let index = self.selected_position(&tasks)?;
+
+        tasks.into_iter().nth(index)
+    }
+
+    pub fn selected_actions(&self, cx: &App) -> Option<SelectedTaskActions> {
+        let task = self.selected_task(cx)?;
+
+        Some(SelectedTaskActions {
+            has_output: has_output(&task),
+            output_shown: self.expanded_task_ids.contains(&task.id),
+            cancellable: task.is_cancellable,
+            finished: task.status != TaskStatus::Running,
+        })
+    }
+
+    /// Shows or hides the output of the selected task, like a click on its
+    /// row. Returns `false` when it has no output.
+    pub fn toggle_selected_output(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.selected_task(cx) {
+            Some(task) if has_output(&task) => {
+                self.toggle_task_expanded(task.id, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Cancels the selected task, like its cancel button. Returns `false`
+    /// when it cannot be cancelled.
+    pub fn cancel_selected(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.selected_task(cx) {
+            Some(task) if task.is_cancellable => {
+                self.cancel_task(task.id, task.kind, task.profile_id, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Removes the selected task from the list once it has finished, like
+    /// the dismiss button of a failed task. Returns `false` while it runs.
+    pub fn dismiss_selected(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.selected_task(cx) {
+            Some(task) if task.status != TaskStatus::Running => {
+                self.dismiss_task(task.id, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the list holds a task that is no longer running.
+    pub fn has_finished_tasks(&self, cx: &App) -> bool {
+        self.visible_tasks(cx)
+            .iter()
+            .any(|task| task.status != TaskStatus::Running)
     }
 
     pub fn set_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
@@ -147,7 +287,7 @@ impl TasksPanel {
     }
 
     /// Removes every task that is no longer running, failures included.
-    fn clear_finished(&mut self, cx: &mut Context<Self>) {
+    pub fn clear_finished(&mut self, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
             let finished: Vec<TaskId> = state
                 .tasks()
@@ -261,7 +401,13 @@ impl TasksPanel {
             )
     }
 
-    fn render_task_row(&mut self, task: &TaskSnapshot, cx: &mut Context<Self>) -> Div {
+    fn render_task_row(
+        &mut self,
+        task: &TaskSnapshot,
+        index: usize,
+        is_selected: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = cx.theme();
         let task_id = task.id;
         let task_kind = task.kind;
@@ -273,9 +419,7 @@ impl TasksPanel {
             _ => None,
         };
         let details_text = task.details.clone();
-        let has_details = details_text
-            .as_ref()
-            .is_some_and(|details| !details.trim().is_empty());
+        let has_details = has_output(task);
         let is_expanded = self.expanded_task_ids.contains(&task_id);
         let (status_icon, status_color) = Self::status_icon(&task.status, theme);
         let name_color = if is_running {
@@ -289,6 +433,7 @@ impl TasksPanel {
         let track = theme.secondary;
         let fill = theme.primary;
         let danger = theme.danger;
+        let selected_fill = ChromeColors::tint(theme).opacity(ShellMetrics::TASK_SELECTED_ALPHA);
 
         div()
             .w_full()
@@ -306,12 +451,18 @@ impl TasksPanel {
                     .border_b_1()
                     .border_color(row_divider)
                     .text_size(ShellMetrics::TASK_FONT)
-                    .when(has_details, |row| {
-                        row.cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_task_expanded(task_id, cx);
-                            }))
-                    })
+                    .when(is_selected, |row| row.bg(selected_fill))
+                    .when(has_details, |row| row.cursor_pointer())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected_task_id = Some(task_id);
+                        this.selected_index = index;
+
+                        if has_details {
+                            this.toggle_task_expanded(task_id, cx);
+                        } else {
+                            cx.notify();
+                        }
+                    }))
                     .child(div().flex_shrink_0().w(ShellMetrics::TASK_CHEVRON).when(
                         has_details,
                         |slot| {
@@ -468,6 +619,13 @@ impl TasksPanel {
     }
 }
 
+/// Whether a task has output the panel can show under its row.
+fn has_output(task: &TaskSnapshot) -> bool {
+    task.details
+        .as_ref()
+        .is_some_and(|details| !details.trim().is_empty())
+}
+
 /// Number of completed or cancelled tasks the panel lists under the running ones.
 const RECENT_FINISHED_TASK_LIMIT: usize = 5;
 
@@ -512,9 +670,14 @@ impl Render for TasksPanel {
         self.expanded_task_ids
             .retain(|task_id| visible_task_ids.contains(task_id));
 
+        let selected = self
+            .focused
+            .then(|| self.selected_position(&all_tasks))
+            .flatten();
+
         let mut task_rows: Vec<Div> = Vec::new();
-        for task in &all_tasks {
-            task_rows.push(self.render_task_row(task, cx));
+        for (index, task) in all_tasks.iter().enumerate() {
+            task_rows.push(self.render_task_row(task, index, selected == Some(index), cx));
         }
 
         let header = self.render_header(running_count, failed_count, finished_count, cx);
@@ -536,6 +699,7 @@ impl Render for TasksPanel {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
                     .when(all_tasks.is_empty(), |el| {
                         el.child(
                             div()

@@ -4,6 +4,10 @@ use dbflux_components::tokens::KeyValueMetrics;
 use gpui::*;
 
 use super::KeyValueFocusMode;
+use super::collection_panes::busiest_group;
+use super::decode::ViewAs;
+use super::key_tree::KeyListLayout;
+use dbflux_core::{KeyType, KeyValueFeatures};
 
 pub(super) struct KvContextMenu {
     pub target: KvMenuTarget,
@@ -25,7 +29,7 @@ pub(super) struct KvMenuItem {
     pub is_danger: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum KvMenuAction {
     CopyKey,
     RenameKey,
@@ -38,10 +42,29 @@ pub(super) enum KvMenuAction {
     CopyValue,
     EditValue,
     CopyAsCommand,
+    // Document-wide actions the toolbar and list offer to the pointer.
+    ToggleListLayout,
+    BulkDelete,
+    SearchWholeKeyspace,
+    StopScan,
+    AutoRefresh,
+    // Value panel actions the header, the large-value gate and the stream
+    // callout offer to the pointer.
+    ReloadValue,
+    PreviewValuePrefix,
+    LoadValueWithoutLimit,
+    ViewPendingEntries,
+    OpenClaimForm,
+    ConfirmClaim,
+    CloseClaimForm,
+    /// A choice of the string value's View as switch.
+    ViewAs(ViewAs),
+    /// The string value's decompression list, opened for the keyboard.
+    Decompression,
 }
 
 impl super::KeyValueDocument {
-    pub(super) fn build_key_menu_items(&self) -> Vec<KvMenuItem> {
+    pub(super) fn build_key_menu_items(&self, cx: &App) -> Vec<KvMenuItem> {
         let mut items = vec![
             KvMenuItem {
                 label: dbflux_i18n::t!("document.key_value.context_menu.copy_key").into(),
@@ -79,10 +102,200 @@ impl super::KeyValueDocument {
             items.retain(|item| item.action != KvMenuAction::CopyAsCommand);
         }
 
+        items.extend(self.document_menu_items(cx));
         items
     }
 
-    pub(super) fn build_value_menu_items(&self) -> Vec<KvMenuItem> {
+    /// The toolbar's and the key list's own buttons: the list / tree
+    /// layout, bulk delete, the auto-refresh interval and, while a filtered
+    /// scan reads page by page, Search whole keyspace and Stop.
+    fn document_menu_items(&self, cx: &App) -> Vec<KvMenuItem> {
+        let item = |key: &str, action, icon, is_danger| KvMenuItem {
+            label: dbflux_i18n::t!(key).into(),
+            action,
+            icon,
+            is_danger,
+        };
+
+        let mut items = Vec::new();
+
+        if self.is_filtered_scan(cx) && self.is_scanning() && !self.scan_complete() {
+            items.push(item(
+                "document.key_value.search.stop",
+                KvMenuAction::StopScan,
+                AppIcon::CircleX,
+                false,
+            ));
+
+            if self.scan_mode != super::pagination::ScanMode::WholeKeyspace {
+                items.push(item(
+                    "document.key_value.search.whole_keyspace",
+                    KvMenuAction::SearchWholeKeyspace,
+                    AppIcon::Layers,
+                    false,
+                ));
+            }
+        }
+
+        let layout_key = match self.list_layout {
+            KeyListLayout::List => "document.key_value.context_menu.show_as_tree",
+            KeyListLayout::Tree => "document.key_value.context_menu.show_as_list",
+        };
+        items.push(item(
+            layout_key,
+            KvMenuAction::ToggleListLayout,
+            AppIcon::Rows3,
+            false,
+        ));
+
+        items.push(item(
+            "document.data.context_menu.toolbar.auto_refresh",
+            KvMenuAction::AutoRefresh,
+            AppIcon::Clock,
+            false,
+        ));
+
+        if self.supports_bulk_delete(cx) {
+            items.push(item(
+                "document.key_value.bulk_delete.menu_item",
+                KvMenuAction::BulkDelete,
+                AppIcon::Delete,
+                true,
+            ));
+        }
+
+        items
+    }
+
+    /// The value panel's own buttons: reload, the large-value gate's preview
+    /// and load anyway, and the stream callout's pending entries and claim.
+    fn value_panel_menu_items(&self) -> Vec<KvMenuItem> {
+        let item = |label: String, action, icon| KvMenuItem {
+            label: label.into(),
+            action,
+            icon,
+            is_danger: false,
+        };
+
+        let mut items = Vec::new();
+
+        let Some(value) = &self.selected_value else {
+            return items;
+        };
+
+        items.push(item(
+            dbflux_i18n::t!("document.key_value.value.reload"),
+            KvMenuAction::ReloadValue,
+            AppIcon::RefreshCcw,
+        ));
+
+        if self.shows_string_body() {
+            for view in ViewAs::ALL
+                .into_iter()
+                .filter(|view| *view != self.value_view_as)
+            {
+                items.push(item(
+                    dbflux_i18n::t!(
+                        "document.key_value.context_menu.view_as",
+                        view = view.label()
+                    ),
+                    KvMenuAction::ViewAs(view),
+                    AppIcon::Eye,
+                ));
+            }
+
+            items.push(item(
+                dbflux_i18n::t!("document.key_value.context_menu.decompression"),
+                KvMenuAction::Decompression,
+                AppIcon::Boxes,
+            ));
+        }
+
+        if matches!(value.load_state, dbflux_core::KeyLoadState::TooLarge { .. }) {
+            let is_string = matches!(
+                self.selected_key_type(),
+                Some(KeyType::String | KeyType::Bytes | KeyType::Json) | None
+            );
+            if is_string && self.key_features.contains(KeyValueFeatures::VALUE_PREFIX) {
+                items.push(item(
+                    dbflux_i18n::t!(
+                        "document.key_value.gate.preview",
+                        size = super::metadata::format_size(super::decode::VALUE_PREVIEW_BYTES)
+                    ),
+                    KvMenuAction::PreviewValuePrefix,
+                    AppIcon::Eye,
+                ));
+            }
+
+            items.push(item(
+                dbflux_i18n::t!("document.key_value.render.gate.load_anyway"),
+                KvMenuAction::LoadValueWithoutLimit,
+                AppIcon::Download,
+            ));
+        }
+
+        if let Some(pane) = &self.stream_pane
+            && let Some(group) = busiest_group(&pane.groups)
+        {
+            items.push(item(
+                dbflux_i18n::t!("document.key_value.stream.view_pending"),
+                KvMenuAction::ViewPendingEntries,
+                AppIcon::Eye,
+            ));
+
+            let claim_open = pane
+                .claim
+                .as_ref()
+                .is_some_and(|claim| claim.group == group.name);
+
+            if claim_open {
+                items.push(item(
+                    dbflux_i18n::t!("document.key_value.stream.claim_confirm"),
+                    KvMenuAction::ConfirmClaim,
+                    AppIcon::ArrowLeftRight,
+                ));
+                items.push(item(
+                    dbflux_i18n::t!("document.key_value.context_menu.close_claim"),
+                    KvMenuAction::CloseClaimForm,
+                    AppIcon::X,
+                ));
+            } else {
+                items.push(item(
+                    dbflux_i18n::t!("document.key_value.stream.claim"),
+                    KvMenuAction::OpenClaimForm,
+                    AppIcon::ArrowLeftRight,
+                ));
+            }
+        }
+
+        items
+    }
+
+    /// Whether the value panel shows a string body, whose toolbar carries
+    /// the View as switch and the decompression list: a loaded value that is
+    /// neither a collection nor a sorted set or stream.
+    fn shows_string_body(&self) -> bool {
+        self.selected_value.as_ref().is_some_and(|value| {
+            !matches!(value.load_state, dbflux_core::KeyLoadState::TooLarge { .. })
+        }) && self.zset_pane.is_none()
+            && self.stream_pane.is_none()
+            && !self.is_structured_type()
+    }
+
+    /// The group the stream callout shows, which its buttons act on.
+    fn callout_group(&self) -> Option<String> {
+        let pane = self.stream_pane.as_ref()?;
+        busiest_group(&pane.groups).map(|group| group.name.clone())
+    }
+
+    pub(super) fn build_value_menu_items(&self, cx: &App) -> Vec<KvMenuItem> {
+        let mut items = self.member_menu_items();
+        items.extend(self.value_panel_menu_items());
+        items.extend(self.document_menu_items(cx));
+        items
+    }
+
+    fn member_menu_items(&self) -> Vec<KvMenuItem> {
         if self.is_stream_type() {
             vec![
                 KvMenuItem {
@@ -218,8 +431,8 @@ impl super::KeyValueDocument {
         cx: &mut Context<Self>,
     ) {
         let items = match target {
-            KvMenuTarget::Key => self.build_key_menu_items(),
-            KvMenuTarget::Value => self.build_value_menu_items(),
+            KvMenuTarget::Key => self.build_key_menu_items(cx),
+            KvMenuTarget::Value => self.build_value_menu_items(cx),
         };
 
         self.context_menu = Some(KvContextMenu {
@@ -353,6 +566,40 @@ impl super::KeyValueDocument {
             KvMenuAction::CopyAsCommand => {
                 self.handle_copy_as_command(target, cx);
             }
+            KvMenuAction::ToggleListLayout => {
+                let layout = match self.list_layout {
+                    KeyListLayout::List => KeyListLayout::Tree,
+                    KeyListLayout::Tree => KeyListLayout::List,
+                };
+                self.set_list_layout(layout, cx);
+            }
+            KvMenuAction::BulkDelete => self.open_bulk_delete(cx),
+            KvMenuAction::SearchWholeKeyspace => self.search_whole_keyspace(cx),
+            KvMenuAction::StopScan => self.stop_scan(cx),
+            KvMenuAction::AutoRefresh => {
+                self.refresh_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
+            KvMenuAction::ReloadValue => self.reload_selected_value(cx),
+            KvMenuAction::PreviewValuePrefix => self.preview_value_prefix(cx),
+            KvMenuAction::LoadValueWithoutLimit => self.load_selected_value_without_limit(cx),
+            KvMenuAction::ViewPendingEntries => {
+                if let Some(group) = self.callout_group() {
+                    self.view_pending_entries(group, cx);
+                }
+            }
+            KvMenuAction::OpenClaimForm => {
+                if let Some(group) = self.callout_group() {
+                    self.open_claim_form(group, window, cx);
+                }
+            }
+            KvMenuAction::ConfirmClaim => self.claim_pending_entries(cx),
+            KvMenuAction::CloseClaimForm => self.close_claim_form(cx),
+            KvMenuAction::ViewAs(view) => self.set_value_view_as(view, cx),
+            KvMenuAction::Decompression => {
+                self.compression_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
         }
 
         cx.notify();
@@ -379,6 +626,11 @@ mod tests {
         "document.key_value.context_menu.edit_value",
         "document.key_value.context_menu.new_key",
         "document.key_value.context_menu.rename",
+        "document.key_value.context_menu.show_as_tree",
+        "document.key_value.context_menu.show_as_list",
+        "document.key_value.context_menu.close_claim",
+        "document.key_value.context_menu.view_as",
+        "document.key_value.context_menu.decompression",
     ];
 
     #[test]

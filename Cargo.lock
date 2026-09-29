@@ -2837,6 +2837,7 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "dbflux_i18n",
+ "gpui-base",
  "gpui-component",
  "gpui-pre",
  "log",

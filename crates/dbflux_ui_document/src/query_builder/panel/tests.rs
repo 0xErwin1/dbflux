@@ -127,6 +127,7 @@ fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
         generate_preview: Box::new(no_op_preview),
         generate_mutation_preview: Box::new(|_spec| String::new()),
         sql_preview_state: None,
+        sql_preview_vim: None,
         pending_preview_sync: false,
         limit_input_state: None,
         offset_input_state: None,
@@ -177,6 +178,8 @@ fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
         pre_group_projection: None,
         sort_validation_error: None,
         incomplete_aggregate_row_count: 0,
+        rail: Default::default(),
+        rail_mark: Default::default(),
     }
 }
 

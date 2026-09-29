@@ -88,7 +88,7 @@ fn toggle_group<const N: usize>(
             })
             .child(thumb)
             .child(label)
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            .on_click(move |_, window, cx| {
                 on_toggle(&clicked, window, cx);
             })
     });
@@ -147,8 +147,15 @@ enum SchemaVizMenuAction {
     Separator,
     ZoomIn,
     ZoomOut,
+    ResetView,
+    FitToView,
     LayoutSubmenu,
+    Arrange,
     CopyAsSubmenu,
+    /// Carries whether the Types toggle is on, for its check mark.
+    ShowTypes(bool),
+    /// Carries whether the Indexes toggle is on, for its check mark.
+    ShowIndexes(bool),
     FocusOnTable,
     InspectTable,
     // Submenu actions
@@ -157,6 +164,13 @@ enum SchemaVizMenuAction {
     LayoutCompact,
     CopyAsDbml,
     CopyAsSql,
+}
+
+/// The toolbar's Types and Indexes toggles, as the context menu shows them.
+#[derive(Debug, Clone, Copy)]
+struct ViewToggles {
+    show_types: bool,
+    show_indexes: bool,
 }
 
 /// Context menu state following the app's standard pattern (see sidebar::ContextMenuState).
@@ -182,10 +196,30 @@ impl SchemaVizMenuAction {
                 MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.zoom_out"))
                     .icon(AppIcon::ZoomOut)
             }
+            SchemaVizMenuAction::ResetView => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.reset_view"))
+                    .icon(AppIcon::RefreshCcw)
+            }
+            SchemaVizMenuAction::FitToView => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.fit"))
+                    .icon(AppIcon::Maximize2)
+            }
             SchemaVizMenuAction::LayoutSubmenu => {
                 MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.layout"))
                     .icon(AppIcon::Layers)
                     .submenu()
+            }
+            SchemaVizMenuAction::Arrange => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.arrange"))
+                    .icon(AppIcon::Grid3x3)
+            }
+            SchemaVizMenuAction::ShowTypes(on) => {
+                let item = MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.show_types"));
+                if *on { item.icon(AppIcon::Check) } else { item }
+            }
+            SchemaVizMenuAction::ShowIndexes(on) => {
+                let item = MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.show_indexes"));
+                if *on { item.icon(AppIcon::Check) } else { item }
             }
             SchemaVizMenuAction::CopyAsSubmenu => {
                 MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.copy_as"))
@@ -230,8 +264,8 @@ impl SchemaVizMenuAction {
 }
 
 impl SchemaVizContextMenuState {
-    fn new(position: Point<Pixels>, has_selected_node: bool) -> Self {
-        let actions = Self::build_main_actions(has_selected_node);
+    fn new(position: Point<Pixels>, has_selected_node: bool, toggles: ViewToggles) -> Self {
+        let actions = Self::build_main_actions(has_selected_node, toggles);
         Self {
             selected_index: 0,
             actions,
@@ -240,13 +274,24 @@ impl SchemaVizContextMenuState {
         }
     }
 
-    fn build_main_actions(has_selected_node: bool) -> Vec<SchemaVizMenuAction> {
+    /// The camera and layout actions, the Types and Indexes toggles of the
+    /// toolbar, then the selected table's actions.
+    fn build_main_actions(
+        has_selected_node: bool,
+        toggles: ViewToggles,
+    ) -> Vec<SchemaVizMenuAction> {
         let mut actions = vec![
             SchemaVizMenuAction::ZoomIn,
             SchemaVizMenuAction::ZoomOut,
+            SchemaVizMenuAction::ResetView,
+            SchemaVizMenuAction::FitToView,
             SchemaVizMenuAction::Separator,
             SchemaVizMenuAction::LayoutSubmenu,
+            SchemaVizMenuAction::Arrange,
             SchemaVizMenuAction::CopyAsSubmenu,
+            SchemaVizMenuAction::Separator,
+            SchemaVizMenuAction::ShowTypes(toggles.show_types),
+            SchemaVizMenuAction::ShowIndexes(toggles.show_indexes),
         ];
 
         if has_selected_node {
@@ -1523,6 +1568,19 @@ impl SchemaVizDocument {
         cx.notify();
     }
 
+    /// The zoom readout's click: 100% zoom and the camera back at the origin.
+    fn reset_view(&mut self) {
+        self.zoom = 1.0;
+        self.pan_offset = Point::default();
+    }
+
+    /// The Arrange button: drops the tables moved by hand and lays them out
+    /// again.
+    fn arrange(&mut self) {
+        self.node_position_overrides.clear();
+        self.recompute_layout();
+    }
+
     fn recompute_layout(&mut self) {
         let Some(ref graph) = self.graph else {
             return;
@@ -2183,6 +2241,10 @@ impl SchemaVizDocument {
         self.context_menu = Some(SchemaVizContextMenuState::new(
             position,
             self.selected_node.is_some(),
+            ViewToggles {
+                show_types: self.show_types,
+                show_indexes: self.show_indexes,
+            },
         ));
         cx.notify();
     }
@@ -2555,6 +2617,29 @@ impl SchemaVizDocument {
                 self.zoom = (self.zoom / 1.25).max(0.25);
                 self.context_menu = None;
                 cx.notify();
+            }
+            SchemaVizMenuAction::ResetView => {
+                self.reset_view();
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::FitToView => {
+                self.fit_to_view(FIT_MAX_ZOOM);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::Arrange => {
+                self.arrange();
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::ShowTypes(on) => {
+                self.context_menu = None;
+                self.set_show_types(!on, cx);
+            }
+            SchemaVizMenuAction::ShowIndexes(on) => {
+                self.context_menu = None;
+                self.set_show_indexes(!on, cx);
             }
             SchemaVizMenuAction::FocusOnTable => {
                 self.context_menu = None;
@@ -2932,8 +3017,7 @@ impl SchemaVizDocument {
                         .build(window, cx)
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.zoom = 1.0;
-                        this.pan_offset = Point::default();
+                        this.reset_view();
                         cx.notify();
                     }))
                     .child(format!("{:.0}%", zoom * 100.0)),
@@ -2972,8 +3056,7 @@ impl SchemaVizDocument {
                 .icon(AppIcon::Grid3x3)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.node_position_overrides.clear();
-                    this.recompute_layout();
+                    this.arrange();
                     cx.notify();
                 })),
             )

@@ -6,11 +6,13 @@ use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
+use crate::vim::{VimBinding, VimHost};
 use dbflux_core::LogErr;
+use dbflux_core::keymap_types::Command;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::{Editor, EditorState};
+use gpui_component::input::EditorState;
 
 /// Event emitted when the user clicks "Import" with valid JSON.
 #[derive(Clone)]
@@ -42,6 +44,30 @@ pub struct ModalImportDashboard {
     focus: ModalFocus,
     validation_error: Option<String>,
     name_error: Option<String>,
+    vim: VimBinding,
+}
+
+impl VimHost for ModalImportDashboard {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.vim.for_input(input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.vim.for_input_mut(input)
+    }
+
+    /// `<leader> s` runs the dialog's own confirmation, as its primary button does.
+    fn vim_dialog_command(
+        &mut self,
+        _input: EntityId,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if command == Command::SaveQuery {
+            self.confirm(window, cx);
+        }
+    }
 }
 
 impl ModalImportDashboard {
@@ -59,14 +85,21 @@ impl ModalImportDashboard {
                 .placeholder(dbflux_i18n::t!("modals.import_dashboard.name_placeholder"))
         });
 
-        Self {
+        let vim = VimBinding::new(input.clone(), window, cx);
+
+        let mut modal = Self {
             visible: false,
             input,
             name_input,
             focus: ModalFocus::new(cx),
             validation_error: None,
             name_error: None,
-        }
+            vim,
+        };
+
+        let input = modal.vim.input_id();
+        VimBinding::follow_setting(&mut modal, input, cx);
+        modal
     }
 
     pub fn is_visible(&self) -> bool {
@@ -206,6 +239,22 @@ impl Render for ModalImportDashboard {
             return div().into_any_element();
         }
 
+        // Vim's listeners on the JSON editor's container. In Insert mode
+        // Escape leaves Insert mode instead of cancelling, and in Normal mode
+        // Enter moves down instead of confirming.
+        let input = self.vim.input_id();
+        let vim_editor_container = VimBinding::wire(self.vim.leader_scope(div(), cx), input, cx);
+        let vim_editor_container = VimBinding::capture_action::<crate::actions::Cancel, _>(
+            vim_editor_container,
+            input,
+            cx,
+        );
+        let vim_editor_container = VimBinding::capture_action::<crate::actions::Execute, _>(
+            vim_editor_container,
+            input,
+            cx,
+        );
+
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
@@ -235,7 +284,7 @@ impl Render for ModalImportDashboard {
             });
 
         // JSON editor — bordered container that fills the remaining space.
-        let editor = div()
+        let editor = vim_editor_container
             .flex()
             .flex_col()
             .gap(Spacing::XS)
@@ -252,14 +301,16 @@ impl Render for ModalImportDashboard {
                     .p(Spacing::SM)
                     .overflow_hidden()
                     .child(
-                        Editor::new(&self.input)
+                        self.vim
+                            .editor(false)
                             .w_full()
                             .h_full()
                             .font_family(AppFonts::MONO)
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),
-            );
+            )
+            .children(self.vim.render_indicator(cx));
 
         // Validation banner (only when there is an error).
         let validation_banner = validation_error.map(|err| {
@@ -443,5 +494,162 @@ mod tests {
             assert!(!en.is_empty() && en != key, "en missing for {key}");
             assert!(!es.is_empty() && es != key, "es missing for {key}");
         }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ImportDashboardConfirmed, ModalImportDashboard};
+    use crate::actions::RunCommand;
+    use gpui::{
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Stands in for the document behind the dialog: records every keymap
+    /// command that bubbles out of it.
+    struct Host {
+        modal: Entity<ModalImportDashboard>,
+        commands: Vec<SharedString>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, action: &RunCommand, _, _| {
+                    this.commands.push(action.command.clone());
+                }))
+                .child(self.modal.clone())
+        }
+    }
+
+    /// Opens the modal with the app's `Modal` bindings for Escape and Enter
+    /// and Vim mode on, and records every confirmation.
+    fn open(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Host>,
+        Entity<ModalImportDashboard>,
+        Rc<RefCell<usize>>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::actions::record_last_keystroke(cx);
+            crate::vim::set_vim_enabled(cx, true);
+            let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();
+            cx.bind_keys([
+                gpui::KeyBinding::new("escape", crate::actions::Cancel, Some("Modal")),
+                gpui::KeyBinding::new("enter", crate::actions::Execute, Some("Modal")),
+                gpui::KeyBinding::new(
+                    "space s",
+                    crate::vim::LeaderCommand::new("save_query"),
+                    Some(leader),
+                ),
+                gpui::KeyBinding::new(
+                    "space p",
+                    crate::vim::LeaderCommand::new("toggle_command_palette"),
+                    Some(leader),
+                ),
+            ]);
+        });
+
+        let confirmed = Rc::new(RefCell::new(0));
+        let (host, window) = cx.add_window_view({
+            let confirmed = confirmed.clone();
+            move |window, cx| {
+                let modal = cx.new(|cx| ModalImportDashboard::new(window, cx));
+                cx.subscribe(&modal, move |_, _, _: &ImportDashboardConfirmed, _| {
+                    *confirmed.borrow_mut() += 1;
+                })
+                .detach();
+                Host {
+                    modal,
+                    commands: Vec::new(),
+                }
+            }
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| modal.update(cx, |modal, cx| modal.open(window, cx)));
+        window.run_until_parked();
+
+        (host, modal, confirmed, window)
+    }
+
+    /// Enter in Normal mode is a motion: it never confirms the import, even
+    /// with valid JSON in the editor. Escape leaves Insert mode first and
+    /// cancels from Normal mode.
+    #[gpui::test]
+    fn enter_in_vim_normal_mode_does_not_confirm(cx: &mut TestAppContext) {
+        let (_host, modal, confirmed, window) = open(cx);
+        window.update(|window, cx| {
+            let input = modal.read(cx).input.clone();
+            input.update(cx, |state, cx| {
+                state.set_value("{\n\"widgets\": []\n}", window, cx);
+                state.set_selected_range(0..0, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(*confirmed.borrow(), 0, "Enter in Normal mode confirmed");
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+        assert_eq!(
+            window.update(|_, cx| modal.read(cx).input.read(cx).cursor()),
+            2,
+            "Enter moved down a line"
+        );
+
+        window.simulate_keystrokes("i");
+        window.simulate_input(" ");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| modal.read(cx).is_visible()),
+            "the first Escape only leaves Insert mode"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert_eq!(*confirmed.borrow(), 0);
+    }
+
+    /// `<leader> s` confirms the import, as the Import button does; `<leader>
+    /// p` (the command palette) does nothing in the dialog. Neither reaches
+    /// the document behind it.
+    #[gpui::test]
+    fn leader_s_confirms_and_other_leader_commands_stay_in_the_dialog(cx: &mut TestAppContext) {
+        let (host, modal, confirmed, window) = open(cx);
+        window.update(|window, cx| {
+            let input = modal.read(cx).input.clone();
+            input.update(cx, |state, cx| {
+                state.set_value("{\"widgets\": []}", window, cx);
+                state.set_selected_range(0..0, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("space p");
+        window.run_until_parked();
+        assert_eq!(*confirmed.borrow(), 0);
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+        window.simulate_keystrokes("space s");
+        window.run_until_parked();
+        assert_eq!(*confirmed.borrow(), 1, "the leader confirms the import");
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(
+            window.update(|_, cx| host.read(cx).commands.is_empty()),
+            "no leader command reaches the document behind the dialog"
+        );
     }
 }

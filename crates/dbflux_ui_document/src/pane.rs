@@ -84,6 +84,83 @@ pub struct DocumentSidePanel {
     pub content: AnyElement,
 }
 
+/// What running a [`PaneAction`] does.
+#[derive(Clone)]
+pub enum PaneActionRun {
+    /// Runs the command through the workspace, exactly as its key binding
+    /// does.
+    Command(Command),
+    /// Runs a document callback, for an action no command covers.
+    Callback(std::rc::Rc<dyn Fn(&mut Window, &mut App)>),
+}
+
+/// One entry of a pane's actions menu: a toolbar button or another control
+/// the pane otherwise offers only to the pointer.
+///
+/// The workspace lists a pane's entries in the menu `OpenPaneActions` opens
+/// (`m` in the pane's chrome) and runs the chosen one, so every document gets
+/// the menu by filling [`PaneHandle::pane_actions`], without the workspace
+/// knowing the document type.
+#[derive(Clone)]
+pub struct PaneAction {
+    /// Stable within the pane; keys the menu row's element id.
+    pub id: gpui::SharedString,
+    pub label: gpui::SharedString,
+    pub icon: Option<dbflux_components::icons::AppIcon>,
+    /// The keys that run the same action directly, shown beside the label.
+    pub shortcut: Option<gpui::SharedString>,
+    /// A disabled entry is listed but cannot be chosen, like a disabled
+    /// toolbar button.
+    pub enabled: bool,
+    pub run: PaneActionRun,
+}
+
+impl PaneAction {
+    /// An entry that runs `command`. Its shortcut is the keys the effective
+    /// keymap gives the command in `context`, so a rebinding shows here too.
+    pub fn command(
+        id: impl Into<gpui::SharedString>,
+        label: impl Into<gpui::SharedString>,
+        command: Command,
+        context: ContextId,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            shortcut: dbflux_ui_base::keymap::shortcut_label(context, command),
+            enabled: true,
+            run: PaneActionRun::Command(command),
+        }
+    }
+
+    /// An entry that runs `callback`, for an action without a command.
+    pub fn callback(
+        id: impl Into<gpui::SharedString>,
+        label: impl Into<gpui::SharedString>,
+        callback: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            shortcut: None,
+            enabled: true,
+            run: PaneActionRun::Callback(std::rc::Rc::new(callback)),
+        }
+    }
+
+    pub fn icon(mut self, icon: dbflux_components::icons::AppIcon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
 /// Callback a document supplies when it asks for an object editor tab, invoked
 /// with the object's key after every successful save.
 pub type ObjectSavedCallback = std::rc::Rc<dyn Fn(&str, &mut App)>;
@@ -252,6 +329,11 @@ pub struct PaneHandle {
     /// that never show one.
     pub side_panels: Option<Box<dyn Fn(&mut Window, &mut App) -> Vec<DocumentSidePanel>>>,
 
+    /// Returns the actions the document offers in its pane-actions menu right
+    /// now (see [`PaneAction`]). `None` for documents that offer none; the
+    /// workspace then opens no menu.
+    pub pane_actions: Option<Box<dyn Fn(&App) -> Vec<PaneAction>>>,
+
     /// Runs document-owned asynchronous teardown before the pane is removed.
     pub on_close: Option<Box<dyn Fn(&mut App)>>,
 
@@ -345,6 +427,7 @@ impl PaneHandle {
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
             side_panels: None,
+            pane_actions: None,
             on_close: None,
             save_for_close: None,
             apply_for_close: None,
@@ -557,6 +640,15 @@ impl PaneHandle {
         self.side_panels
             .as_ref()
             .map(|panels| panels(window, cx))
+            .unwrap_or_default()
+    }
+
+    /// The entries of the document's pane-actions menu right now; empty for
+    /// documents that offer none.
+    pub fn pane_actions(&self, cx: &App) -> Vec<PaneAction> {
+        self.pane_actions
+            .as_ref()
+            .map(|actions| actions(cx))
             .unwrap_or_default()
     }
 

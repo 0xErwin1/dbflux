@@ -188,13 +188,35 @@ enum FormFocus {
     SettingsConfirmDangerous,
     SettingsRequiresWhere,
     SettingsRequiresPreview,
+    /// The hook dropdown of a connection phase, above its extra hooks input.
+    SettingsPreConnectHook,
     SettingsPreConnectHookExtra,
+    SettingsPostConnectHook,
     SettingsPostConnectHookExtra,
+    SettingsPreDisconnectHook,
     SettingsPreDisconnectHookExtra,
+    SettingsPostDisconnectHook,
     SettingsPostDisconnectHookExtra,
     SettingsDriverField(u8),
+    // MCP tab fields
+    McpEnabled,
+    McpClientFilter,
+    /// A client of the (filtered) trusted client list.
+    McpClient(u8),
+    McpClientAllowed,
+    McpRole,
+    McpExtraRoles,
+    McpPolicy,
+    McpExtraPolicies,
+    /// A stop of the Main tab after the fields the ring names above: a
+    /// driver field without its own variant, then the transport controls
+    /// (see [`MainExtraStop`]), indexed in that order.
+    MainExtra(u8),
     // Actions (shared between tabs)
     TestConnection,
+    /// The Copy button of a failed connection test's banner, between Test
+    /// connection and Save while the banner shows.
+    CopyTestError,
     Save,
 }
 
@@ -224,6 +246,16 @@ enum AccessTabMode {
     Ssh,
     Proxy,
     ManagedSsm,
+}
+
+/// A Main-tab control the keyboard ring reaches through
+/// [`FormFocus::MainExtra`]: a field of the driver's main form that has no
+/// variant of its own, the SSL mode, or a certificate picker.
+#[derive(Clone, Debug)]
+pub(super) enum MainExtraStop {
+    DriverField(Box<FormFieldDef>),
+    SslMode,
+    SslCert(SslCertSlot),
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -1835,6 +1867,91 @@ impl ConnectionManagerWindow {
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
         form_renderer::is_field_enabled(field, &self.form.checkbox_states, &self.form.select_values)
+    }
+
+    /// The Main-tab controls after the named fields, in the order they are
+    /// drawn: the driver's own fields, then the SSL mode and the certificate
+    /// pickers the selected mode shows.
+    pub(super) fn main_extra_stops(&self) -> Vec<MainExtraStop> {
+        let Some(driver) = self.form.selected_driver.as_ref() else {
+            return Vec::new();
+        };
+
+        let form_def = driver.form_definition();
+        let mut stops: Vec<MainExtraStop> = form_def
+            .main_tab()
+            .map(|tab| {
+                tab.sections
+                    .iter()
+                    .flat_map(|section| section.fields.iter())
+                    .filter(|field| {
+                        field.id != "password"
+                            && Self::field_id_to_focus(&field.id, false).is_none()
+                            && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
+                    })
+                    .map(|field| MainExtraStop::DriverField(Box::new(field.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let metadata = driver.metadata();
+        if metadata.ssl_modes.is_some() {
+            stops.push(MainExtraStop::SslMode);
+
+            if let Some(cert_fields) = &metadata.ssl_cert_fields {
+                let mode = &self.form.selected_ssl_mode;
+
+                if dbflux_core::ssl_mode_id_requires_root_cert(mode) {
+                    stops.push(MainExtraStop::SslCert(SslCertSlot::CaCert));
+                }
+
+                if cert_fields.client_cert && dbflux_core::ssl_mode_id_is_cert_active(mode) {
+                    stops.push(MainExtraStop::SslCert(SslCertSlot::ClientCert));
+                    stops.push(MainExtraStop::SslCert(SslCertSlot::ClientKey));
+                }
+            }
+        }
+
+        stops
+    }
+
+    /// The ring stop of the Main-tab driver field `field_id` when it has no
+    /// variant of its own.
+    fn main_extra_focus_for_field(&self, field_id: &str) -> Option<FormFocus> {
+        self.main_extra_focus_where(
+            |stop| matches!(stop, MainExtraStop::DriverField(field) if field.id == field_id),
+        )
+    }
+
+    /// The ring stop of the SSL mode control.
+    fn main_extra_focus_for_ssl_mode(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::SslMode))
+    }
+
+    /// The ring stop of the certificate picker of `slot`.
+    fn main_extra_focus_for_ssl_cert(&self, slot: SslCertSlot) -> Option<FormFocus> {
+        self.main_extra_focus_where(
+            |stop| matches!(stop, MainExtraStop::SslCert(candidate) if *candidate == slot),
+        )
+    }
+
+    fn main_extra_focus_where(
+        &self,
+        matches: impl Fn(&MainExtraStop) -> bool,
+    ) -> Option<FormFocus> {
+        self.main_extra_stops()
+            .iter()
+            .position(matches)
+            .map(|index| FormFocus::MainExtra(index as u8))
+    }
+
+    /// The input that holds the path of a certificate slot.
+    pub(super) fn ssl_cert_input(&self, slot: SslCertSlot) -> &Entity<InputState> {
+        match slot {
+            SslCertSlot::CaCert => &self.form.ssl_ca_cert_input,
+            SslCertSlot::ClientCert => &self.form.ssl_client_cert_input,
+            SslCertSlot::ClientKey => &self.form.ssl_client_key_input,
+        }
     }
 
     /// Map a field ID to its FormFocus variant.
@@ -4491,5 +4608,167 @@ mod tests {
             en, es,
             "connection_manager.banner.connection_failed should differ between en and es"
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_coverage_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, View};
+    use crate::keyboard_coverage::CONNECTION_MANAGER;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+
+    fn open_manager(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<ConnectionManagerWindow>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        let (manager, window) =
+            cx.add_window_view(|window, cx| ConnectionManagerWindow::new(app_state, window, cx));
+        window.update(|window, cx| {
+            let handle = manager.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+        window.run_until_parked();
+
+        (manager, window)
+    }
+
+    /// In the driver list, I opens Import connections and Shift+I Import
+    /// from another client, as the buttons beside Cancel do; Escape returns
+    /// to the list. The driver filter still takes a typed I as text.
+    #[gpui::test]
+    fn i_and_shift_i_open_the_imports_from_the_driver_list(cx: &mut TestAppContext) {
+        let (import, import_external) = ("i", "shift-i");
+
+        let (manager, window) = open_manager(cx);
+        let view = |window: &mut VisualTestContext| window.update(|_, cx| manager.read(cx).view);
+        let external = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                manager
+                    .read(cx)
+                    .import_panel
+                    .read(cx)
+                    .external_source_selected()
+            })
+        };
+
+        window.simulate_keystrokes(import);
+        window.run_until_parked();
+        assert!(view(window) == View::Import, "the import panel shows");
+        assert!(!external(window), "I imports a DBFlux bundle");
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(view(window) == View::DriverSelect, "the driver list shows");
+
+        window.simulate_keystrokes(import_external);
+        window.run_until_parked();
+        assert!(view(window) == View::Import, "the import panel shows");
+        assert!(external(window), "Shift+I imports from another client");
+
+        window.simulate_keystrokes("escape");
+        window.update(|window, cx| {
+            let input = manager.read(cx).form.driver_filter_input.clone();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("i");
+        window.run_until_parked();
+        assert!(view(window) == View::DriverSelect, "the driver list shows");
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).current_driver_filter(cx)),
+            "i",
+            "I typed into the filter is text"
+        );
+    }
+
+    /// The driver list and every tab of a Postgres form. The keyboard tests
+    /// of the form (`form::tests`, `navigation`) prove the ring reaches each
+    /// control.
+    #[gpui::test]
+    fn the_connection_manager_is_covered(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        let (manager, window) =
+            cx.add_window_view(|window, cx| ConnectionManagerWindow::new(app_state, window, cx));
+        window.run_until_parked();
+        let capture = FrameCapture::observe(window);
+        let check = |window: &mut VisualTestContext, expected: &str| {
+            let checked = Coverage::new(CONNECTION_MANAGER).assert_covered(&capture.frame(window));
+            assert!(
+                checked.iter().any(|id| id.starts_with(expected)),
+                "{expected} in {checked:?}"
+            );
+        };
+
+        check(window, "cm-driver-card-");
+
+        window.update(|window, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.select_driver("postgres", window, cx)
+            })
+        });
+        window.run_until_parked();
+        check(window, "test-connection");
+
+        for (expected, tab, mode) in [
+            (
+                "access-method-dropdown",
+                ActiveTab::Access,
+                AccessTabMode::Direct,
+            ),
+            ("ssh-enabled", ActiveTab::Access, AccessTabMode::Ssh),
+            ("tab-access", ActiveTab::Access, AccessTabMode::Proxy),
+            ("conn-pre-hook", ActiveTab::Settings, AccessTabMode::Direct),
+            ("tab-mcp", ActiveTab::Mcp, AccessTabMode::Direct),
+        ] {
+            window.update(|_, cx| {
+                manager.update(cx, |manager, cx| {
+                    manager.active_tab = tab;
+                    manager.access.access_tab_mode = mode;
+                    cx.notify();
+                })
+            });
+            window.run_until_parked();
+            check(window, expected);
+        }
     }
 }

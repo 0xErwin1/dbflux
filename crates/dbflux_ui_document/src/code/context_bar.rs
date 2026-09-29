@@ -1,12 +1,14 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
+use dbflux_components::controls::Button;
 use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
 use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::ConnectionEnvironment;
 use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::keymap::{RunCommand, shortcut_label};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 /// `path` with a leading `home` directory written as `~`, the way the board
@@ -49,6 +51,16 @@ fn context_separator(theme: &gpui_component::theme::Theme) -> impl IntoElement {
     Icon::new(AppIcon::ChevronRight)
         .size(EditorMetrics::SEPARATOR_ICON)
         .color(theme.input)
+}
+
+/// Asks the workspace for the pane-actions menu, as `m` in the bar does: the
+/// command travels from the focused element up to the root that runs keymap
+/// commands.
+fn open_pane_actions(window: &mut Window, cx: &mut App) {
+    window.dispatch_action(
+        Box::new(RunCommand::new(Command::OpenPaneActions.action_id())),
+        cx,
+    );
 }
 
 fn context_slot_is_keyboard_focused(
@@ -1150,7 +1162,7 @@ impl CodeDocument {
     /// Returns the visible context-bar slots for the current document.
     fn visible_context_bar_slots(&self, cx: &App) -> Vec<ContextBarSlot> {
         if !self.supports_connection_context() {
-            return Vec::new();
+            return vec![ContextBarSlot::PaneActions];
         }
 
         let mut slots = vec![ContextBarSlot::Connection];
@@ -1186,7 +1198,8 @@ impl CodeDocument {
             ContextBarSlot::SourceQueryMode => Some(&self.source.source_query_mode_dropdown),
             ContextBarSlot::SourceTargets
             | ContextBarSlot::SourceStart
-            | ContextBarSlot::SourceEnd => None,
+            | ContextBarSlot::SourceEnd
+            | ContextBarSlot::PaneActions => None,
         }
     }
 
@@ -1298,10 +1311,18 @@ impl CodeDocument {
                             .source_query_mode_dropdown
                             .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                     }
+                    // The list takes the keyboard while open: its own keys
+                    // move and toggle, and Escape returns focus to this ring.
                     ContextBarSlot::SourceTargets => {
-                        self.source
-                            .source_targets
-                            .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
+                        self.source.source_targets.update(cx, |multi_select, cx| {
+                            if !multi_select.is_open() {
+                                multi_select.toggle_open(cx);
+                            }
+
+                            if multi_select.is_open() {
+                                multi_select.focus(window, cx);
+                            }
+                        });
                     }
                     ContextBarSlot::SourceStart => {
                         self.source
@@ -1313,6 +1334,7 @@ impl CodeDocument {
                             .source_end_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
+                    ContextBarSlot::PaneActions => open_pane_actions(window, cx),
                     _ => {
                         if let Some(current_dropdown) =
                             self.dropdown_for_slot(self.context_bar_slot).cloned()
@@ -1516,9 +1538,55 @@ impl CodeDocument {
         )
     }
 
+    /// The bar of a script editor, which has no connection context: only the
+    /// pane-actions button, so the bar still has a keyboard stop and the
+    /// toolbar menu a visible entry point.
+    fn render_script_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let focused = context_slot_is_keyboard_focused(
+            self.focus_mode,
+            self.context_bar_slot,
+            ContextBarSlot::PaneActions,
+        );
+
+        let mut button = Button::new(
+            "exec-context-pane-actions",
+            dbflux_i18n::t!("document.code.context_bar.pane_actions"),
+        )
+        .ghost()
+        .inline()
+        .trailing_icon(AppIcon::ChevronDown)
+        .focused(focused)
+        .tab_stop(false)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.focus_mode = SqlQueryFocus::ContextBar;
+            this.context_bar_slot = ContextBarSlot::PaneActions;
+            this.focus_handle.focus(window, cx);
+            cx.notify();
+            open_pane_actions(window, cx);
+        }));
+
+        if let Some(shortcut) = shortcut_label(ContextId::ContextBar, Command::OpenPaneActions) {
+            button = button.kbd(shortcut);
+        }
+
+        div()
+            .id("exec-context-bar")
+            .flex()
+            .items_center()
+            .min_h(EditorMetrics::BAR_HEIGHT)
+            .px(EditorMetrics::BAR_PADDING_X)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .child(button)
+            .into_any_element()
+    }
+
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         if !self.supports_connection_context() {
-            return div().id("exec-context-bar").into_any_element();
+            return self.render_script_context_bar(cx);
         }
 
         let theme = cx.theme();
