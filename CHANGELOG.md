@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.8.3] - 2026-09-29
+
+
+### Fixed
+
+* Make the text preview editable again (#778)
+
 ## [0.8.2] - 2026-09-27
 
 
