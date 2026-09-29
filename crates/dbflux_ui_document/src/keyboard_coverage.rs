@@ -436,13 +436,11 @@ pub(crate) const DASHBOARD: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ConfigurePanel),
         ),
         // A chart panel draws the chart's toolbar; the dashboard owns its
-        // refresh (F5 on the entered panel) but not the panel's own interval.
+        // refresh (F5 on the entered panel), and the pane actions of the
+        // opened panel (Enter, then M) list the panel's own interval.
         (
             "panel-card-*.chart-doc-refresh.*",
-            KeyboardPath::MouseOnly(
-                "gap: a dashboard chart panel's own auto-refresh interval has no key (the \
-                 dashboard's interval is in its pane actions)",
-            ),
+            KeyboardPath::Menu("chart-auto-refresh"),
         ),
     ],
 };

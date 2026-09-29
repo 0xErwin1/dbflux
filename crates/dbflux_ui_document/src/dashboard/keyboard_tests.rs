@@ -347,6 +347,71 @@ fn c_opens_the_configure_popover_driven_by_the_chart_keys(cx: &mut TestAppContex
     assert_eq!(popover(window), None);
 }
 
+/// An opened chart panel lists its own auto-refresh interval, which opens
+/// that panel's interval list with the keyboard in it, not the dashboard's.
+#[gpui::test]
+fn an_opened_chart_panel_lists_its_own_auto_refresh(cx: &mut TestAppContext) {
+    use crate::pane::PaneActionRun;
+
+    init_keyboard_runtime(cx);
+    let app_state = app_state(cx);
+
+    let chart_slot: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+        Default::default();
+    let (_host, dashboard, window) = dashboard_with_keyboard(
+        cx,
+        Uuid::nil(),
+        app_state,
+        Box::new({
+            let chart_slot = chart_slot.clone();
+            move |app_state, window, cx| {
+                let chart = cx.new(|cx| {
+                    let mut chart =
+                        ChartDocument::new(None, String::new(), app_state.clone(), window, cx);
+                    chart.set_embedded(true, cx);
+                    chart
+                });
+                chart_slot.replace(Some(chart.clone()));
+
+                vec![DashboardPanelSlot::Loaded {
+                    panel: chart,
+                    grid_pos: pos(0, 0, 12, 4),
+                    title_override: None,
+                }]
+            }
+        }),
+    );
+    let chart = chart_slot.borrow().clone().expect("chart panel built");
+
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert_eq!(
+        window.update(|_, cx| dashboard.read(cx).entered_panel()),
+        Some(0)
+    );
+
+    let auto_refresh = window
+        .update(|_, cx| dashboard.read(cx).pane_actions(&dashboard, cx))
+        .into_iter()
+        .find(|action| action.id == "chart-auto-refresh")
+        .expect("the opened panel lists its auto-refresh interval");
+    let PaneActionRun::Callback(open) = auto_refresh.run else {
+        panic!("the auto-refresh entry opens the interval list");
+    };
+
+    window.update(|window, cx| open(window, cx));
+    window.run_until_parked();
+
+    assert!(
+        window.update(|_, cx| chart.read(cx).refresh_dropdown_is_open(cx)),
+        "the panel's own interval list opens"
+    );
+    assert!(
+        !window.update(|_, cx| dashboard.read(cx).refresh_dropdown.read(cx).is_open()),
+        "the dashboard's interval list stays closed"
+    );
+}
+
 /// The pane actions list the selected panel's actions and the toolbar.
 #[gpui::test]
 fn the_pane_actions_list_the_panel_and_the_toolbar(cx: &mut TestAppContext) {

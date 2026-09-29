@@ -481,7 +481,7 @@ marca el panel elegido mientras el teclado está en el dashboard.
 | `Alt+l` / `Alt+h` | Cambiar entre View y Edit |
 | `]` / `[` | Rango de tiempo compartido siguiente / anterior, Personalizado incluido |
 | `F5` | Actualizar todos los panels, o solo el abierto |
-| `m` (o `Shift+F10`) | Acciones del panel: las del panel elegido, añadir panel, actualizar, intervalo de actualización automática, el rango de tiempo y los controles del rango personalizado, View / Edit o Guardar como editable. Con un panel de chart abierto, su tipo de chart y Stats |
+| `m` (o `Shift+F10`) | Acciones del panel: las del panel elegido, añadir panel, actualizar, intervalo de actualización automática, el rango de tiempo y los controles del rango personalizado, View / Edit o Guardar como editable. Con un panel de chart abierto, su propio intervalo de actualización automática, su tipo de chart y Stats |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Enfocar el panel en esa dirección |
 
 Un movimiento o cambio de tamaño que sale de la cuadrícula o cae sobre otro

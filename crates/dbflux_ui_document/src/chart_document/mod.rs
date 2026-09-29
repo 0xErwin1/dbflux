@@ -808,11 +808,36 @@ impl ChartDocument {
             .update(cx, |shell, cx| shell.open_axis_picker(pill, &columns, cx));
     }
 
-    /// The pane actions of a chart a dashboard panel shows: the chart type
-    /// and the stats. Its axis pickers live in the panel's Configure popover
-    /// and its time range, refresh and save in the dashboard.
+    /// The pane actions of a chart a dashboard panel shows: its own
+    /// auto-refresh interval (the one its toolbar shows), the chart type and
+    /// the stats. Its axis pickers live in the panel's Configure popover and
+    /// its time range, refresh and save in the dashboard.
     pub(crate) fn embedded_pane_actions(&self, cx: &App) -> Vec<PaneAction> {
-        chart_shell_pane_actions(&self.chart_shell, &[], ContextId::Chart, cx)
+        let refresh_dropdown = self.refresh_dropdown.clone();
+        let mut actions = vec![
+            PaneAction::callback(
+                "chart-auto-refresh",
+                dbflux_i18n::t!("document.chart.pane_actions.auto_refresh"),
+                move |window, cx| {
+                    refresh_dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                },
+            )
+            .icon(AppIcon::Clock),
+        ];
+
+        actions.extend(chart_shell_pane_actions(
+            &self.chart_shell,
+            &[],
+            ContextId::Chart,
+            cx,
+        ));
+        actions
+    }
+
+    /// Whether the auto-refresh interval list is open.
+    #[cfg(test)]
+    pub(crate) fn refresh_dropdown_is_open(&self, cx: &App) -> bool {
+        self.refresh_dropdown.read(cx).is_open()
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {

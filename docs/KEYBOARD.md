@@ -457,7 +457,7 @@ selected panel while the keyboard is in the dashboard.
 | `Alt+l` / `Alt+h` | Switch between View and Edit |
 | `]` / `[` | Next / previous shared time range, Custom included |
 | `F5` | Refresh every panel, or only the open one |
-| `m` (or `Shift+F10`) | Pane actions: the selected panel's actions, add panel, refresh, auto-refresh interval, the time range and the custom range controls, View / Edit or Save as editable. With a chart panel open, its chart type and Stats |
+| `m` (or `Shift+F10`) | Pane actions: the selected panel's actions, add panel, refresh, auto-refresh interval, the time range and the custom range controls, View / Edit or Save as editable. With a chart panel open, its own auto-refresh interval, its chart type and Stats |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Focus the panel in that direction |
 
 A move or resize that leaves the grid or lands on another panel is refused, as
