@@ -1,6 +1,6 @@
 # DBFlux
 
-**English** · [Español](README.es.md) · [한국어](README.ko.md) · [简体中文](README.zh_Hans.md)
+**English** · [Español](docs/es/README.md) · [한국어](docs/ko/README.md) · [简体中文](docs/zh_Hans/README.md)
 
 An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
@@ -300,3 +300,11 @@ nix-shell
 MIT & Apache-2.0. The DBFlux name and logo are covered by the [Trademark Policy](TRADEMARK.md), not by the code license.
 
 DBFlux collects no data. See the [Privacy Policy](PRIVACY.md).
+
+## Star History
+
+[![DBFlux star history](https://api.star-history.com/svg?repos=0xErwin1/dbflux&type=Date)](https://star-history.com/#0xErwin1/dbflux)
+
+## Contributors
+
+[![DBFlux contributors](https://contrib.rocks/image?repo=0xErwin1/dbflux)](https://github.com/0xErwin1/dbflux/graphs/contributors)

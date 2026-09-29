@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](README.md) · [Español](README.es.md) · **한국어** · [简体中文](README.zh_Hans.md)
+[English](../../README.md) · [Español](../es/README.md) · **한국어** · [简体中文](../zh_Hans/README.md)
 
 Rust + GPUI 데스크톱 클라이언트로 제공되는, 확장 가능한 키보드 우선 데이터 플랫폼입니다.
 
@@ -12,7 +12,7 @@ DBFlux는 관계형 및 비관계형 데이터베이스용 내장 드라이버�
 
 이 클라이언트는 성능, 깔끔한 UX, 키보드 우선 워크플로에 중점을 둡니다. 장기적인 목표는 사용하는 모든 데이터베이스를 다루는 하나의 완전한 오픈 소스 클라이언트입니다.
 
-![DBFlux](resources/dbflux.png)
+![DBFlux](../../resources/dbflux.png)
 
 ## 문서
 
@@ -25,23 +25,23 @@ DBFlux는 관계형 및 비관계형 데이터베이스용 내장 드라이버�
 
 | 목표                                     | 가이드                                                                                                                                                                                              |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 연결 만들기                              | [시작하기](docs/GETTING_STARTED.md)부터 시작하세요. SSH 터널, 프록시, AWS SSO, 값 소스는 [연결 — 고급 설정](docs/CONNECTIONS.md)을 사용하세요.                                   |
-| 쿼리 실행과 일반적인 워크플로 따라 하기  | 쿼리 작성, 결과 탐색, 차트 작성, 내보내기, 키보드 탐색은 [사용 가이드](docs/USAGE.md)를 따르세요.                                                                                                   |
-| 감사 이벤트 보기                         | [감사 뷰어 가이드](docs/AUDIT.md#audit-viewer)에서 감사 뷰어를 여세요.                                                                                                    |
-| MCP 사용                                 | [AI + MCP 통합 가이드](docs/MCP_AI_INTEGRATION.md)를 따르세요.                                                                                                                                      |
-| 드라이버 지원 현황과 제한 사항 확인      | 기능과 제한 사항의 공식 개요인 [드라이버 개요](docs/DRIVERS.md)를 사용하세요.                                                                                                                       |
+| 연결 만들기                              | [시작하기](GETTING_STARTED.md)부터 시작하세요. SSH 터널, 프록시, AWS SSO, 값 소스는 [연결 — 고급 설정](CONNECTIONS.md)을 사용하세요.                                   |
+| 쿼리 실행과 일반적인 워크플로 따라 하기  | 쿼리 작성, 결과 탐색, 차트 작성, 내보내기, 키보드 탐색은 [사용 가이드](USAGE.md)를 따르세요.                                                                                                   |
+| 감사 이벤트 보기                         | [감사 뷰어 가이드](AUDIT.md#audit-viewer)에서 감사 뷰어를 여세요.                                                                                                    |
+| MCP 사용                                 | [AI + MCP 통합 가이드](MCP_AI_INTEGRATION.md)를 따르세요.                                                                                                                                      |
+| 드라이버 지원 현황과 제한 사항 확인      | 기능과 제한 사항의 공식 개요인 [드라이버 개요](DRIVERS.md)를 사용하세요.                                                                                                                       |
 
 ### 추가 사용자 가이드
 
-- [Settings & Hooks](docs/SETTINGS.md) — 설정, 연결 훅, 접근 프로필
+- [Settings & Hooks](SETTINGS.md) — 설정, 연결 훅, 접근 프로필
 - [Data & Privacy](PRIVACY.md#your-data-on-this-machine) — 데이터와 비밀 저장, 백업, 재설정
-- [Lua Scripting](docs/LUA.md) — 훅을 위한 내장 Lua 런타임
+- [Lua Scripting](LUA.md) — 훅을 위한 내장 Lua 런타임
 
 ### 기여자
 
 - [Contributing](CONTRIBUTING.md) — 설정, 검사, 기여 워크플로
-- [Key Concepts](docs/CONCEPTS.md) — 계약과 하위 시스템 경계에 대한 짧은 개념 모델
-- [Driver Authoring](docs/DRIVER_AUTHORING.md) — 내장 Rust 드라이버 또는 외부 RPC 드라이버 선택 및 구현
+- [Key Concepts](CONCEPTS.md) — 계약과 하위 시스템 경계에 대한 짧은 개념 모델
+- [Driver Authoring](DRIVER_AUTHORING.md) — 내장 Rust 드라이버 또는 외부 RPC 드라이버 선택 및 구현
 - [Architecture](ARCHITECTURE.md) — 크레이트 경계와 크레이트 간 흐름을 포함하는 공식 아키텍처 및 크레이트 맵
 
 ### 번역
@@ -49,22 +49,22 @@ DBFlux는 관계형 및 비관계형 데이터베이스용 내장 드라이버�
 DBFlux는 [Hosted Weblate](https://hosted.weblate.org/engage/dbflux/)에서 번역됩니다.
 카탈로그는 `crates/dbflux_i18n/locales/`에 언어별 YAML 파일 하나씩으로 있으며,
 번역 업데이트는 Weblate에서 풀 리퀘스트로 들어옵니다.
-[번역 기여](docs/TRANSLATIONS.md)는 애플리케이션 UI, 문서, 웹 사이트라는
+[번역 기여](../TRANSLATIONS.md)는 애플리케이션 UI, 문서, 웹 사이트라는
 번역 가능한 모든 표면을 다룹니다.
 
 <a href="https://hosted.weblate.org/engage/dbflux/"><img src="https://hosted.weblate.org/widget/dbflux/multi-auto.svg" alt="Translation status"></a>
 
 ### 참조
 
-- [Charts](docs/CHARTS.md) — 차트 종류, 열 종류, 축 자동 감지
-- [Dashboards](docs/DASHBOARDS.md) — 대시보드, 저장된 차트, 인스턴스 지표, 검사기
-- [Audit](docs/AUDIT.md) — 감사 이벤트 스키마와 마스킹
-- [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
-- [RPC Services Config](docs/RPC_SERVICES_CONFIG.md)
-- [Release Process](docs/RELEASE.md)
-- [Code Style](CODE_STYLE.md)
-- [Agent Instructions](AGENTS.md)
-- [Claude Instructions](CLAUDE.md)
+- [Charts](CHARTS.md) — 차트 종류, 열 종류, 축 자동 감지
+- [Dashboards](DASHBOARDS.md) — 대시보드, 저장된 차트, 인스턴스 지표, 검사기
+- [Audit](AUDIT.md) — 감사 이벤트 스키마와 마스킹
+- [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md)
+- [RPC Services Config](RPC_SERVICES_CONFIG.md)
+- [Release Process](RELEASE.md)
+- [Code Style](../../CODE_STYLE.md)
+- [Agent Instructions](../../AGENTS.md)
+- [Claude Instructions](../../CLAUDE.md)
 
 ## 설치
 
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 모든 플랫폼의 패키지 — tarball, AUR, `.deb`, `.rpm`, AppImage, Nix, macOS DMG,
 Windows 인스톨러 — 는 [Releases](https://github.com/0xErwin1/dbflux/releases)
 페이지에 있습니다. 서명되지 않은 macOS 및 Windows 빌드에 대한 Gatekeeper와
-SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](docs/INSTALL.md)에 있습니다.
+SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](INSTALL.md)에 있습니다.
 
 ## 기능
 
@@ -95,9 +95,9 @@ SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](docs/INSTALL
 - HTTP를 통한 **TursoDB** 및 libSQL (`sqld`): 스키마 탐색, 타입이 지정된 CRUD, 편집기 탭별 대화형 트랜잭션을 지원합니다
 - 로그 그룹/스트림 탐색과 이벤트 스트리밍을 지원하는 **CloudWatch Logs**
 - 버킷 탐색, 개체 미리 보기/편집, 전체 CRUD, 사전 서명된 URL을 지원하는 **Amazon S3** — S3 호환 엔드포인트(Cloudflare R2, MinIO) 포함
-- **RPC를 통한 외부 드라이버** ([Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)을 통해 프로세스 외부 드라이버 등록)
+- **RPC를 통한 외부 드라이버** ([Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md)을 통해 프로세스 외부 드라이버 등록)
 
-전체 기능 매트릭스와 드라이버별 제한 사항은 [docs/DRIVERS.md](docs/DRIVERS.md)를 참조하세요.
+전체 기능 매트릭스와 드라이버별 제한 사항은 [docs/DRIVERS.md](DRIVERS.md)를 참조하세요.
 
 ### 사용자 인터페이스
 
@@ -136,7 +136,7 @@ SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](docs/INSTALL
 - 대시보드: 저장된 차트, 구분선, 검사기 패널을 공유 시간 범위가 있는 12열 그리드에 배치
 - 연결별 읽기 전용 인스턴스 개요 — 실시간 서버 지표와 표 형식 검사기, "편집 가능으로 저장" 지원; PostgreSQL, MySQL/MariaDB, MongoDB, Redis, SQL Server가 인스턴스 카탈로그를 제공
 - 업스트림 공급자 대시보드 탐색 및 가져오기 (CloudWatch)
-- 자세한 내용은 [docs/CHARTS.md](docs/CHARTS.md)와 [docs/DASHBOARDS.md](docs/DASHBOARDS.md)를 참조하세요.
+- 자세한 내용은 [docs/CHARTS.md](CHARTS.md)와 [docs/DASHBOARDS.md](DASHBOARDS.md)를 참조하세요.
 ### 연결 및 접근
 
 - 키, 비밀번호, 에이전트 인증을 지원하는 SSH 터널; 재사용 가능한 SSH 터널 프로필
@@ -149,13 +149,13 @@ SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](docs/INSTALL
 
 - AI 클라이언트를 위한 내장 Model Context Protocol(MCP) 서버 (`dbflux mcp`)
 - 거버넌스 계층: 작업 분류, 역할/정책 엔진, 신뢰할 수 있는 클라이언트, 쓰기/파괴적 작업에 대한 사람의 승인 흐름
-- [docs/MCP_AI_INTEGRATION.md](docs/MCP_AI_INTEGRATION.md) 문서를 참고하세요
+- [docs/MCP_AI_INTEGRATION.md](MCP_AI_INTEGRATION.md) 문서를 참고하세요
 
 ### 감사 및 스크립팅
 
-- 쿼리, 연결, 훅, 스크립트, MCP, 거버넌스, 설정 이벤트를 대상으로 하며 마스킹과 쿼리 지문 생성을 지원하는 SQLite 기반 감사 로그 — [docs/AUDIT.md](docs/AUDIT.md) 문서를 참고하세요
+- 쿼리, 연결, 훅, 스크립트, MCP, 거버넌스, 설정 이벤트를 대상으로 하며 마스킹과 쿼리 지문 생성을 지원하는 SQLite 기반 감사 로그 — [docs/AUDIT.md](AUDIT.md) 문서를 참고하세요
 - 중앙화된 사용자 대면 오류 보고: 실패는 상관 관계 ID와 '감사에서 보기' 작업이 있는 토스트로 표시되고, 상태 표시줄 오류 배지를 구동하며, 해당 감사 행과 연관됩니다
-- Lua, Python, Bash 스크립트는 문서로 실행되며 실시간 스트리밍 출력을 제공합니다 — [docs/LUA.md](docs/LUA.md) 문서를 참고하세요
+- Lua, Python, Bash 스크립트는 문서로 실행되며 실시간 스트리밍 출력을 제공합니다 — [docs/LUA.md](LUA.md) 문서를 참고하세요
 
 ### 키보드 탐색
 
@@ -303,3 +303,11 @@ nix-shell
 MIT & Apache-2.0. DBFlux라는 이름과 로고는 코드 라이선스가 아닌 [상표 정책](TRADEMARK.md)의 적용을 받습니다.
 
 DBFlux는 데이터를 수집하지 않습니다. [개인정보 처리방침](PRIVACY.md)을 참고하세요.
+
+## 스타 기록
+
+[![DBFlux 스타 기록](https://api.star-history.com/svg?repos=0xErwin1/dbflux&type=Date)](https://star-history.com/#0xErwin1/dbflux)
+
+## 기여자
+
+[![DBFlux 기여자](https://contrib.rocks/image?repo=0xErwin1/dbflux)](https://github.com/0xErwin1/dbflux/graphs/contributors)

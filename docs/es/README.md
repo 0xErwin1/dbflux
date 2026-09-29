@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](README.md) · **Español** · [한국어](README.ko.md) · [简体中文](README.zh_Hans.md)
+[English](../../README.md) · **Español** · [한국어](../ko/README.md) · [简体中文](../zh_Hans/README.md)
 
 Una plataforma de datos extensible y orientada al teclado, distribuida como un cliente de escritorio Rust + GPUI.
 
@@ -12,7 +12,7 @@ DBFlux es un cliente de escritorio de código abierto con drivers integrados par
 
 El cliente se enfoca en rendimiento, una UX limpia y flujos de trabajo orientados al teclado. El objetivo a largo plazo es un cliente totalmente open-source para cada base de datos con la que trabajes.
 
-![DBFlux](resources/dbflux.png)
+![DBFlux](../../resources/dbflux.png)
 
 ## Documentación
 
@@ -26,23 +26,23 @@ Elige el camino que corresponda a lo que quieres hacer.
 
 | Objetivo                                            | Guía                                                                                                                                                                                                       |
 | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Crear una conexión                                  | Comienza con [Primeros pasos](docs/GETTING_STARTED.md). Para túneles SSH, proxies, AWS SSO y value sources, usa [Conectando — Configuración avanzada](docs/CONNECTIONS.md). |
-| Ejecutar queries y seguir flujos de trabajo comunes | Sigue la [Guía de uso](docs/USAGE.md) para hacer queries, navegar resultados, graficar, exportar y usar la navegación por teclado.                                                                         |
-| Ver eventos de auditoría                            | Abre el visor de auditoría con la [guía del visor de auditoría](docs/AUDIT.md#audit-viewer).                                                                                      |
-| Usar MCP                                            | Sigue la [Guía de integración de IA + MCP](docs/MCP_AI_INTEGRATION.md).                                                                                                                                    |
-| Revisar el soporte y las limitaciones de drivers    | Usa [Vista general de drivers](docs/DRIVERS.md), la vista canónica de capacidades y limitaciones.                                                                                                          |
+| Crear una conexión                                  | Comienza con [Primeros pasos](GETTING_STARTED.md). Para túneles SSH, proxies, AWS SSO y value sources, usa [Conectando — Configuración avanzada](CONNECTIONS.md). |
+| Ejecutar queries y seguir flujos de trabajo comunes | Sigue la [Guía de uso](USAGE.md) para hacer queries, navegar resultados, graficar, exportar y usar la navegación por teclado.                                                                         |
+| Ver eventos de auditoría                            | Abre el visor de auditoría con la [guía del visor de auditoría](AUDIT.md#audit-viewer).                                                                                      |
+| Usar MCP                                            | Sigue la [Guía de integración de IA + MCP](MCP_AI_INTEGRATION.md).                                                                                                                                    |
+| Revisar el soporte y las limitaciones de drivers    | Usa [Vista general de drivers](DRIVERS.md), la vista canónica de capacidades y limitaciones.                                                                                                          |
 
 ### Más guías de usuario
 
-- [Ajustes y hooks](docs/SETTINGS.md) — ajustes, hooks de conexión y perfiles de acceso
+- [Ajustes y hooks](SETTINGS.md) — ajustes, hooks de conexión y perfiles de acceso
 - [Datos y privacidad](PRIVACY.md#your-data-on-this-machine) — almacenamiento de datos y secretos, backup y reseteo
-- [Scripting con Lua](docs/LUA.md) — el runtime de Lua embebido para hooks
+- [Scripting con Lua](LUA.md) — el runtime de Lua embebido para hooks
 
 ### Contribuidores
 
 - [Contribuir](CONTRIBUTING.md) — configuración, checks y flujo de contribución
-- [Conceptos clave](docs/CONCEPTS.md) — el modelo mental breve para contratos y límites de subsistemas
-- [Autoría de drivers](docs/DRIVER_AUTHORING.md) — elige e implementa un driver Rust integrado o un driver externo por RPC
+- [Conceptos clave](CONCEPTS.md) — el modelo mental breve para contratos y límites de subsistemas
+- [Autoría de drivers](DRIVER_AUTHORING.md) — elige e implementa un driver Rust integrado o un driver externo por RPC
 - [Arquitectura](ARCHITECTURE.md) — el mapa canónico de arquitectura y crates, incluyendo límites de crates y flujos cross-crate
 
 ### Traducciones
@@ -55,15 +55,15 @@ las actualizaciones de traducción llegan como pull requests desde Weblate.
 
 ### Referencia
 
-- [Charts](docs/CHARTS.md) — tipos de chart, tipos de columna y auto-detección de ejes
-- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, métricas de instancia e inspectors
-- [Auditoría](docs/AUDIT.md) — esquema de eventos de auditoría y redacción
-- [Protocolo RPC de drivers](docs/DRIVER_RPC_PROTOCOL.md)
-- [Configuración de servicios RPC](docs/RPC_SERVICES_CONFIG.md)
-- [Proceso de release](docs/RELEASE.md)
-- [Estilo de código](CODE_STYLE.md)
-- [Instrucciones para agentes](AGENTS.md)
-- [Instrucciones para Claude](CLAUDE.md)
+- [Charts](CHARTS.md) — tipos de chart, tipos de columna y auto-detección de ejes
+- [Dashboards](DASHBOARDS.md) — dashboards, saved charts, métricas de instancia e inspectors
+- [Auditoría](AUDIT.md) — esquema de eventos de auditoría y redacción
+- [Protocolo RPC de drivers](DRIVER_RPC_PROTOCOL.md)
+- [Configuración de servicios RPC](RPC_SERVICES_CONFIG.md)
+- [Proceso de release](RELEASE.md)
+- [Estilo de código](../../CODE_STYLE.md)
+- [Instrucciones para agentes](../../AGENTS.md)
+- [Instrucciones para Claude](../../CLAUDE.md)
 
 ## Instalación
 
@@ -75,7 +75,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 Los paquetes para cada plataforma — tarball, AUR, `.deb`, `.rpm`, AppImage, Nix, DMG de
 macOS e instalador de Windows — están en la página de [Releases](https://github.com/0xErwin1/dbflux/releases).
 La guía completa, incluyendo los pasos de Gatekeeper y SmartScreen para los builds sin firmar
-de macOS y Windows, está en [Instalar DBFlux](docs/INSTALL.md).
+de macOS y Windows, está en [Instalar DBFlux](INSTALL.md).
 
 ## Funcionalidades
 
@@ -94,9 +94,9 @@ de macOS y Windows, está en [Instalar DBFlux](docs/INSTALL.md).
 - **TursoDB** y libSQL (`sqld`) sobre HTTP, con descubrimiento de esquema, CRUD tipado y transacciones interactivas por pestaña del editor
 - **CloudWatch Logs** con navegación de log groups/streams y streaming de eventos
 - **Amazon S3** con navegación de buckets, preview/edición de objetos, CRUD completo y URLs presignadas, incluyendo endpoints compatibles con S3 (Cloudflare R2, MinIO)
-- **Drivers externos por RPC** (registra drivers fuera de proceso vía el [Protocolo RPC de drivers](docs/DRIVER_RPC_PROTOCOL.md))
+- **Drivers externos por RPC** (registra drivers fuera de proceso vía el [Protocolo RPC de drivers](DRIVER_RPC_PROTOCOL.md))
 
-Ver [docs/DRIVERS.md](docs/DRIVERS.md) para una matriz de capacidades completa y limitaciones por driver.
+Ver [docs/DRIVERS.md](DRIVERS.md) para una matriz de capacidades completa y limitaciones por driver.
 
 ### Interfaz de usuario
 
@@ -135,7 +135,7 @@ Ver [docs/DRIVERS.md](docs/DRIVERS.md) para una matriz de capacidades completa y
 - Dashboards: organiza charts guardados, dividers y paneles de inspector en una grilla de 12 columnas con un rango de tiempo compartido
 - Instance Overview de solo lectura por conexión — métricas de servidor en vivo e inspectors tabulares, con "Save as editable"; PostgreSQL, MySQL/MariaDB, MongoDB, Redis y SQL Server incluyen catálogos de instancia
 - Navega e importa dashboards de proveedores upstream (CloudWatch)
-- Ver [docs/CHARTS.md](docs/CHARTS.md) y [docs/DASHBOARDS.md](docs/DASHBOARDS.md) para más detalles
+- Ver [docs/CHARTS.md](CHARTS.md) y [docs/DASHBOARDS.md](DASHBOARDS.md) para más detalles
 
 ### Conectividad y acceso
 
@@ -149,13 +149,13 @@ Ver [docs/DRIVERS.md](docs/DRIVERS.md) para una matriz de capacidades completa y
 
 - Servidor Model Context Protocol (MCP) integrado (`dbflux mcp`) para clientes de IA
 - Capa de gobernanza: clasificación de operaciones, motor de roles/políticas, clientes confiables y flujo de aprobación humana para operaciones de escritura/destructivas
-- Ver [docs/MCP_AI_INTEGRATION.md](docs/MCP_AI_INTEGRATION.md)
+- Ver [docs/MCP_AI_INTEGRATION.md](MCP_AI_INTEGRATION.md)
 
 ### Auditoría y scripting
 
-- Log de auditoría respaldado por SQLite para queries, conexiones, hooks, scripts, MCP, gobernanza y eventos de configuración, con redacción y fingerprinting de queries — ver [docs/AUDIT.md](docs/AUDIT.md)
+- Log de auditoría respaldado por SQLite para queries, conexiones, hooks, scripts, MCP, gobernanza y eventos de configuración, con redacción y fingerprinting de queries — ver [docs/AUDIT.md](AUDIT.md)
 - Reporte de errores centralizado orientado al usuario: los fallos aparecen como un toast con un correlation id y una acción "View in Audit", activan un badge de error en la status bar, y se correlacionan con su fila de auditoría
-- Scripts Lua, Python y Bash se ejecutan como documentos con salida en streaming en vivo — ver [docs/LUA.md](docs/LUA.md)
+- Scripts Lua, Python y Bash se ejecutan como documentos con salida en streaming en vivo — ver [docs/LUA.md](LUA.md)
 
 ### Navegación por teclado
 
@@ -297,3 +297,11 @@ nix-shell
 ## Licencia
 
 MIT & Apache-2.0
+
+## Historial de estrellas
+
+[![Historial de estrellas de DBFlux](https://api.star-history.com/svg?repos=0xErwin1/dbflux&type=Date)](https://star-history.com/#0xErwin1/dbflux)
+
+## Colaboradores
+
+[![Colaboradores de DBFlux](https://contrib.rocks/image?repo=0xErwin1/dbflux)](https://github.com/0xErwin1/dbflux/graphs/contributors)
