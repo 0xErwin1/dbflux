@@ -779,6 +779,7 @@ mod vim_tests {
     /// the space.
     #[gpui::test]
     fn leader_sequences_reach_the_host_from_the_value_editor(cx: &mut TestAppContext) {
+        let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
         let (host, panel, window) = open_panel_with_host(cx, true);
         let host_commands =
             |window: &mut VisualTestContext| window.update(|_, cx| host.read(cx).commands.clone());

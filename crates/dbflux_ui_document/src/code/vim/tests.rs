@@ -2937,6 +2937,7 @@ fn visual_empty_and_read_only_keep_text_and_shortcuts(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn normal_mode_inserts_no_text_for_unbound_keys(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc", true);
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 
@@ -4089,6 +4090,7 @@ fn pending_command_tracks_raw_keys_and_clears_on_completion(cx: &mut TestAppCont
 /// the mode stay as they were.
 #[gpui::test]
 fn leader_a_opens_the_pane_actions_in_normal_and_visual_modes(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc", true);
 
     editor.keys("space a");
@@ -4107,6 +4109,7 @@ fn leader_a_opens_the_pane_actions_in_normal_and_visual_modes(cx: &mut TestAppCo
 /// it would on its own.
 #[gpui::test]
 fn leader_then_an_unmapped_key_types_nothing_and_stays_in_normal_mode(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc\ndef", true);
 
     editor.keys("space j");
@@ -4124,6 +4127,7 @@ fn leader_then_an_unmapped_key_types_nothing_and_stays_in_normal_mode(cx: &mut T
 /// Insert mode keeps Space as typed text, so no leader sequence starts.
 #[gpui::test]
 fn insert_mode_types_the_leader_key(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc", true);
 
     editor.keys("i space a escape");
@@ -4136,6 +4140,7 @@ fn insert_mode_types_the_leader_key(cx: &mut TestAppContext) {
 /// `, a` opens the pane actions and Space is no longer a prefix.
 #[gpui::test]
 fn a_new_leader_moves_the_leader_sequences(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     use dbflux_app::keymap::{KeyChord, Modifiers};
     use dbflux_ui_base::keymap::{default_vim_leader, set_vim_leader};
 
@@ -4167,6 +4172,7 @@ fn a_new_leader_moves_the_leader_sequences(cx: &mut TestAppContext) {
 /// reaching the workspace.
 #[gpui::test]
 fn leader_f_opens_the_find_panel(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc", true);
 
     editor.keys("space f");
@@ -4179,6 +4185,7 @@ fn leader_f_opens_the_find_panel(cx: &mut TestAppContext) {
 /// is Vim's append again.
 #[gpui::test]
 fn the_leader_alone_times_out_without_typing(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     let mut editor = open_editor(cx, "abc", true);
 
     editor.keys("space");

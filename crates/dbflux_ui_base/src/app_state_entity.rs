@@ -574,6 +574,7 @@ mod vim_setting_tests {
     /// save, which is how editors outside the code editor learn about it.
     #[gpui::test]
     fn the_vim_setting_is_published_and_followed(cx: &mut TestAppContext) {
+        let _keymap_state = crate::keymap::keymap_state_test_guard();
         let app_state = cx.update(|cx| {
             cx.new(|_| {
                 AppStateEntity::new_with_storage_runtime(
@@ -609,6 +610,7 @@ mod vim_setting_tests {
     /// that is not one key falls back to Space.
     #[gpui::test]
     fn the_vim_leader_is_published_to_the_keymap(cx: &mut TestAppContext) {
+        let _keymap_state = crate::keymap::keymap_state_test_guard();
         use crate::keymap::{default_vim_leader, init_keymap, set_vim_leader, vim_leader};
         use dbflux_app::keymap::{KeyChord, Modifiers};
 

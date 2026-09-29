@@ -1144,6 +1144,7 @@ fn assert_element_bindings(
 /// with the tree focused under the Results panel, and so does `d d`.
 #[test]
 fn document_tree_bindings_run_the_same_actions_as_before() {
+    let _keymap_state = keymap_state_test_guard();
     let stack = element_stack(
         root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]),
         &[document_tree::CONTEXT],
@@ -1745,11 +1746,11 @@ fn document_tree_search_field_types_the_tree_letters(cx: &mut gpui::TestAppConte
 
 /// A rebinding reaches the effective keymap and the generated native
 /// bindings at once, a key sequence works, and resetting it restores the
-/// default key. This is the only test that changes the process-wide
-/// overrides; it touches a binding no other test relies on and restores the
-/// defaults at the end.
+/// default key. It changes the process-wide overrides, so it holds the
+/// keymap state guard and restores the defaults at the end.
 #[gpui::test]
 fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
     use dbflux_components::components::document_tree::{
         DocumentTree, DocumentTreeEvent, DocumentTreeState,
     };
@@ -2444,6 +2445,7 @@ fn runs_ahead_of_vim(action: &dyn Action, command: Command) -> bool {
 /// the same leader action, which its Vim wrapper hands to the dialog.
 #[test]
 fn default_leader_sequences_run_their_commands_where_the_leader_is_active() {
+    let _keymap_state = keymap_state_test_guard();
     let keymap = native_keymap();
     let stack = leader_stack();
 
@@ -2507,6 +2509,7 @@ fn the_leader_placeholder_reads_leader() {
 /// the default keys and stores the leader placeholder.
 #[gpui::test]
 fn changing_the_leader_moves_default_and_user_leader_bindings(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
     cx.update(init_keymap);
 
     let comma = KeyChord::new(",", Modifiers::none());

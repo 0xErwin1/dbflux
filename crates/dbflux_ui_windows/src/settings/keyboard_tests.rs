@@ -191,6 +191,7 @@ fn arrows_switch_the_hook_execution_mode(cx: &mut TestAppContext) {
 /// the test restores the defaults at the end.
 #[gpui::test]
 fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
     use dbflux_ui_base::keymap::{effective_keymap, keymap_overrides};
 
@@ -292,6 +293,7 @@ fn proxies_focus(
 /// without its binding does nothing, and a rebound key takes over.
 #[gpui::test]
 fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     use super::proxies_section::ProxyFocus;
     use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
     use dbflux_ui_base::keymap::{apply_keymap_overrides, keymap_overrides};
@@ -357,6 +359,7 @@ fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppConte
 /// focus and Shift+R drops every override, as the Reset to defaults button.
 #[gpui::test]
 fn keybindings_keys_open_the_context_filter_and_reset_everything(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
     use dbflux_ui_base::keymap::{apply_keymap_overrides, keymap_overrides};
 
@@ -420,6 +423,7 @@ fn the_about_links_open_from_the_keyboard(cx: &mut TestAppContext) {
 /// changes.
 #[gpui::test]
 fn recording_a_leader_binding_keeps_it_relative_to_the_leader(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
     use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
     use dbflux_ui_base::keymap::{
         apply_keymap_overrides, default_vim_leader, effective_keymap, keymap_overrides,

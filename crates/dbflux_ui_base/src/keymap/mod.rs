@@ -36,7 +36,7 @@ use gpui::{
     KeyBindingMetaIndex, KeyContext, Keystroke, SharedString,
 };
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock};
 
 pub use dbflux_components::actions::RunCommand;
 
@@ -318,6 +318,47 @@ pub fn set_vim_leader(leader: KeyChord, cx: &mut App) {
 pub fn apply_keymap_overrides(overrides: KeymapOverrides, cx: &mut App) {
     install_keymap_overrides(overrides);
     refresh_derived_keybindings(cx);
+}
+
+/// Serializes the tests that share the process-wide keymap state.
+static KEYMAP_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Test support, never used by the app: exclusive access to the process-wide
+/// keymap state (the leader and the overrides) for one test.
+///
+/// `cargo test` runs the tests of one binary on threads of the same process,
+/// so a test that changes the leader or the overrides, or asserts on bindings
+/// that depend on them, holds this guard for its whole body. Dropping the
+/// guard, also while a failed assertion unwinds, restores the default leader
+/// and no overrides. It does not regenerate a test app's native GPUI
+/// bindings, which end with that app.
+#[doc(hidden)]
+pub fn keymap_state_test_guard() -> KeymapStateTestGuard {
+    KeymapStateTestGuard {
+        _lock: KEYMAP_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    }
+}
+
+/// See [`keymap_state_test_guard`].
+#[doc(hidden)]
+#[must_use = "the keymap state is shared again as soon as the guard drops"]
+pub struct KeymapStateTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for KeymapStateTestGuard {
+    fn drop(&mut self) {
+        let mut effective = EFFECTIVE_KEYMAP
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let leader = default_vim_leader();
+
+        effective.keymap = Arc::new(default_keymap().with_leader(&leader));
+        effective.overrides = KeymapOverrides::new();
+        effective.leader = leader;
+    }
 }
 
 // ============================================================================
