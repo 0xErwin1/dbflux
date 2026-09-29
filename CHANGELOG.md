@@ -14,6 +14,8 @@ All notable changes to DBFlux will be documented in this file.
 
 * **MongoDB extended JSON dates** — `{"$date": "<RFC 3339>"}` in the query bar, in aggregation pipelines and in document edits is now stored as a date. An invalid date string there now fails with an error instead of being saved as a nested object.
 
+## [0.8.3] - 2026-09-29
+
 ### Fixed
 
 * **Editing in the object browser preview** — The text preview of an object's own content accepts typing again, so its Save and Discard buttons work; a decoded view (gzip, MessagePack and similar) stays read-only.
