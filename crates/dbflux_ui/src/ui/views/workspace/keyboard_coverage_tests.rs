@@ -10,6 +10,11 @@
 //! `pane_actions::tests::m_in_the_editor_chrome_lists_the_toolbar_and_runs_the_chosen_entry`
 //! (the pane actions menu) and the toast actions test in `pane_actions`
 //! (Ctrl+Shift+Y).
+//!
+//! The reachability tests at the end prove, for the document tabs whose own
+//! tests host them outside the workspace, that the workspace hands them the
+//! keyboard (Ctrl+Shift+1 to the sidebar, then Ctrl+L into the document, or
+//! the tab's own chord) and that their menu key opens their menu.
 
 use crate::keymap::{Command, ContextId};
 use crate::ui::views::workspace::Workspace;
@@ -363,4 +368,185 @@ fn the_notifications_popover_is_covered(cx: &mut TestAppContext) {
     );
 
     harness.assert_covered(&toast_menu);
+}
+
+/// Opens the pane `build` makes as the active tab, then moves the keyboard
+/// from the sidebar into it with Ctrl+L, as a user would.
+fn open_tab_and_enter_it(
+    harness: &mut Harness<'_>,
+    build: impl FnOnce(
+        Entity<AppStateEntity>,
+        &mut gpui::Window,
+        &mut gpui::App,
+    ) -> dbflux_ui_document::pane::PaneHandle,
+) {
+    let workspace = harness.workspace.clone();
+    harness.window.update(|window, cx| {
+        let app_state = workspace.read(cx).app_state.clone();
+        let pane = build(app_state, window, cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.tab_manager.update(cx, |manager, cx| {
+                manager.open(crate::ui::document::Tab::Pane(Box::new(pane)), cx)
+            });
+        });
+    });
+    harness.window.run_until_parked();
+
+    harness.keys("ctrl-shift-1 ctrl-l");
+    let target = harness
+        .window
+        .update(|_, cx| harness.workspace.read(cx).focus_target);
+    assert_eq!(
+        target,
+        crate::keymap::FocusTarget::Document,
+        "Ctrl+L moves from the sidebar into the document"
+    );
+}
+
+impl Harness<'_> {
+    fn active_context(&mut self) -> ContextId {
+        let workspace = self.workspace.clone();
+        self.window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)))
+    }
+}
+
+#[gpui::test]
+fn ctrl_shift_a_opens_the_audit_viewer_and_ctrl_e_its_export_menu(cx: &mut TestAppContext) {
+    let mut harness = open_workspace(cx);
+
+    harness.keys("ctrl-shift-a");
+    assert_eq!(harness.active_context(), ContextId::Audit);
+
+    harness.keys("ctrl-e");
+    assert_eq!(
+        harness.active_context(),
+        ContextId::ContextMenu,
+        "Ctrl+E opens the export menu"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_reaches_a_dashboard_and_m_lists_its_actions(cx: &mut TestAppContext) {
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::saved_chart::SavedChartRefreshPolicy;
+    use dbflux_ui_document::DashboardDocument;
+
+    let mut harness = open_workspace(cx);
+    open_tab_and_enter_it(&mut harness, |app_state, window, cx| {
+        let time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+        let dashboard = cx.new(|cx| {
+            DashboardDocument::new(
+                uuid::Uuid::nil(),
+                "Dashboard".to_string(),
+                Vec::new(),
+                time_range,
+                None,
+                SavedChartRefreshPolicy::Off,
+                false,
+                app_state,
+                cx,
+            )
+        });
+        DashboardDocument::into_pane(dashboard, cx)
+    });
+    assert_eq!(harness.active_context(), ContextId::Dashboard);
+
+    harness.keys("m");
+    let entries = harness.pane_actions_menu_entries();
+    assert!(
+        entries.iter().any(|entry| entry == "dashboard-refresh"),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_reaches_the_bucket_list_and_m_lists_its_actions(cx: &mut TestAppContext) {
+    use dbflux_ui_document::BucketsTableDocument;
+
+    let mut harness = open_workspace(cx);
+    open_tab_and_enter_it(&mut harness, |app_state, window, cx| {
+        let buckets =
+            cx.new(|cx| BucketsTableDocument::new(uuid::Uuid::new_v4(), app_state, window, cx));
+        BucketsTableDocument::into_pane(buckets, cx)
+    });
+
+    harness.keys("m");
+    let entries = harness.pane_actions_menu_entries();
+    assert!(
+        entries.iter().any(|entry| entry == "buckets-new"),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_reaches_the_object_browser_and_m_lists_its_actions(cx: &mut TestAppContext) {
+    use dbflux_ui_document::ObjectBrowserDocument;
+
+    let mut harness = open_workspace(cx);
+    open_tab_and_enter_it(&mut harness, |app_state, window, cx| {
+        let browser = cx.new(|cx| {
+            ObjectBrowserDocument::new(
+                uuid::Uuid::new_v4(),
+                "my-bucket".to_string(),
+                app_state,
+                window,
+                cx,
+            )
+        });
+        ObjectBrowserDocument::into_pane(browser, cx)
+    });
+
+    harness.keys("m");
+    let entries = harness.pane_actions_menu_entries();
+    assert!(
+        entries.iter().any(|entry| entry == "object-browser-upload"),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_reaches_the_key_value_browser_and_o_opens_new_key(cx: &mut TestAppContext) {
+    use dbflux_ui_document::KeyValueDocument;
+
+    let mut harness = open_workspace(cx);
+    open_tab_and_enter_it(&mut harness, |app_state, window, cx| {
+        let document = cx.new(|cx| {
+            KeyValueDocument::new(uuid::Uuid::nil(), "0".to_string(), app_state, window, cx)
+        });
+        KeyValueDocument::into_pane(document, cx)
+    });
+    assert_eq!(harness.active_context(), ContextId::Results);
+
+    harness.keys("o");
+    assert_eq!(
+        harness.active_context(),
+        ContextId::FormNavigation,
+        "O opens the New key dialog"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_reaches_a_schema_diff_and_m_lists_its_actions(cx: &mut TestAppContext) {
+    use dbflux_core::{ConnectionProfile, DbConfig};
+    use dbflux_ui_document::schema_diff::SchemaDiffDocument;
+
+    let mut harness = open_workspace(cx);
+    open_tab_and_enter_it(&mut harness, |app_state, window, cx| {
+        let profile = ConnectionProfile::new("test", DbConfig::default_sqlite());
+        let profile_id = profile.id;
+        app_state.update(cx, |state, _| state.add_profile_in_folder(profile, None));
+
+        let diff = cx.new(|cx| {
+            SchemaDiffDocument::new(profile_id, Some("db".into()), app_state, window, cx)
+        });
+        SchemaDiffDocument::into_pane(diff, cx)
+    });
+
+    harness.keys("m");
+    let entries = harness.pane_actions_menu_entries();
+    assert!(
+        entries.iter().any(|entry| entry == "schema-diff-compute"),
+        "{entries:?}"
+    );
 }
