@@ -3698,6 +3698,7 @@ settings:
       edit_expiry: 编辑过期时间…
       copy_preview: 复制预览
       import_items: "导入…"
+      import_from_client: "从其他客户端导入…"
       reset_binding: "重置快捷键"
       reset_all_bindings: "重置所有快捷键"
       edit_binding_context: "编辑快捷键上下文"

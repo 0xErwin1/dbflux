@@ -191,9 +191,11 @@ impl Workspace {
             ),
 
             // Closing a window and the list and key binding actions of its
-            // sections belong to the settings window.
+            // sections belong to the settings window; Import from another
+            // client belongs to the connection manager window.
             Command::CloseWindow
             | Command::ImportItems
+            | Command::ImportFromClient
             | Command::ResetBinding
             | Command::ResetAllBindings
             | Command::EditBindingContext

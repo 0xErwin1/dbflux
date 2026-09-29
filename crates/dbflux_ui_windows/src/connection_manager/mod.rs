@@ -4616,13 +4616,95 @@ mod keyboard_coverage_tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow};
+    use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, View};
     use crate::keyboard_coverage::CONNECTION_MANAGER;
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+
+    fn open_manager(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<ConnectionManagerWindow>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        let (manager, window) =
+            cx.add_window_view(|window, cx| ConnectionManagerWindow::new(app_state, window, cx));
+        window.update(|window, cx| {
+            let handle = manager.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+        window.run_until_parked();
+
+        (manager, window)
+    }
+
+    /// In the driver list, I opens Import connections and Shift+I Import
+    /// from another client, as the buttons beside Cancel do; Escape returns
+    /// to the list. The driver filter still takes a typed I as text.
+    #[gpui::test]
+    fn i_and_shift_i_open_the_imports_from_the_driver_list(cx: &mut TestAppContext) {
+        let (import, import_external) = ("i", "shift-i");
+
+        let (manager, window) = open_manager(cx);
+        let view = |window: &mut VisualTestContext| window.update(|_, cx| manager.read(cx).view);
+        let external = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                manager
+                    .read(cx)
+                    .import_panel
+                    .read(cx)
+                    .external_source_selected()
+            })
+        };
+
+        window.simulate_keystrokes(import);
+        window.run_until_parked();
+        assert!(view(window) == View::Import, "the import panel shows");
+        assert!(!external(window), "I imports a DBFlux bundle");
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(view(window) == View::DriverSelect, "the driver list shows");
+
+        window.simulate_keystrokes(import_external);
+        window.run_until_parked();
+        assert!(view(window) == View::Import, "the import panel shows");
+        assert!(external(window), "Shift+I imports from another client");
+
+        window.simulate_keystrokes("escape");
+        window.update(|window, cx| {
+            let input = manager.read(cx).form.driver_filter_input.clone();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("i");
+        window.run_until_parked();
+        assert!(view(window) == View::DriverSelect, "the driver list shows");
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).current_driver_filter(cx)),
+            "i",
+            "I typed into the filter is text"
+        );
+    }
 
     /// The driver list and every tab of a Postgres form. The keyboard tests
     /// of the form (`form::tests`, `navigation`) prove the ring reaches each

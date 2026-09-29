@@ -3698,6 +3698,7 @@ settings:
       edit_expiry: Edit expiry…
       copy_preview: Copy preview
       import_items: "Import…"
+      import_from_client: "Import from another client…"
       reset_binding: "Reset binding"
       reset_all_bindings: "Reset all bindings"
       edit_binding_context: "Edit binding context"

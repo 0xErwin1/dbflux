@@ -833,7 +833,10 @@ mueven entre sus dos enlaces y `Enter` abre uno. Estas teclas, como las de
 navegación, aparecen en los contextos Settings Window y Form Navigation de
 **Settings → Keybindings** y se pueden reasignar ahí.
 
-En el Connection Manager, `Ctrl+s` / `Cmd+s` guarda la conexión desde cualquier
+En la lista de drivers del Connection Manager, `i` abre Importar conexiones y
+`Shift+i` abre Importar desde otro cliente, como los botones junto a Cancelar;
+escritas en el filtro de drivers, siguen siendo texto. En el Connection Manager, `Ctrl+s` /
+`Cmd+s` guarda la conexión desde cualquier
 parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como**
 y del método de autenticación SSH. `Down` / `Up` se mueven como `j` / `k`;
 mientras se edita un campo lo dejan por el campo siguiente o anterior, y

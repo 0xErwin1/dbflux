@@ -937,6 +937,20 @@ fn connection_manager_layer() -> KeymapLayer {
         OUTSIDE_TEXT_FIELDS,
     );
 
+    // The picker's Import connections and Import from another client, as in
+    // the settings lists. They stay out of text fields, so the driver filter
+    // still takes the letter as text.
+    layer.bind_with_predicate(
+        KeyChord::new("i", Modifiers::none()),
+        Command::ImportItems,
+        OUTSIDE_TEXT_FIELDS,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("i", Modifiers::shift()),
+        Command::ImportFromClient,
+        OUTSIDE_TEXT_FIELDS,
+    );
+
     // Save the connection from anywhere in the form, fields included.
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
 

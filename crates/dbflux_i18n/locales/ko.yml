@@ -3698,6 +3698,7 @@ settings:
       edit_expiry: 만료 편집…
       copy_preview: 미리보기 복사
       import_items: "가져오기…"
+      import_from_client: "다른 클라이언트에서 가져오기…"
       reset_binding: "단축키 재설정"
       reset_all_bindings: "모든 단축키 재설정"
       edit_binding_context: "단축키 컨텍스트 편집"

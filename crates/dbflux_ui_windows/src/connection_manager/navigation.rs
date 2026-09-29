@@ -1001,6 +1001,14 @@ impl ConnectionManagerWindow {
                 window.focus(&self.focus_handle, cx);
                 true
             }
+            Command::ImportItems => {
+                self.open_import(window, cx);
+                true
+            }
+            Command::ImportFromClient => {
+                self.open_import_external(window, cx);
+                true
+            }
             _ if count == 0 => {
                 matches!(command, Command::Cancel) && {
                     cx.emit(DismissEvent);

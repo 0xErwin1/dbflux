@@ -3698,6 +3698,7 @@ settings:
       edit_expiry: Editar expiración…
       copy_preview: Copiar vista previa
       import_items: "Importar…"
+      import_from_client: "Importar desde otro cliente…"
       reset_binding: "Restablecer atajo"
       reset_all_bindings: "Restablecer todos los atajos"
       edit_binding_context: "Editar contexto del atajo"

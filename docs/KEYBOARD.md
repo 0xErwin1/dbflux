@@ -797,8 +797,10 @@ page, `j` / `k` move between its two links and `Enter` opens one. These keys,
 like the navigation keys, are listed under the Settings Window and Form
 Navigation contexts in **Settings → Keybindings** and can be rebound there.
 
-In the Connection Manager, `Ctrl+s` / `Cmd+s` saves the connection from
-anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
+In the Connection Manager's driver list, `i` opens Import connections and
+`Shift+i` opens Import from another client, as the buttons beside Cancel do;
+typed into the driver filter, they stay text. In the Connection Manager,
+`Ctrl+s` / `Cmd+s` saves the connection from anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
 of the SSH authentication method. `Down` / `Up` move like `j` / `k`; while a
 field is being edited they leave it for the next or previous field, and
 `Ctrl+l` / `Ctrl+h` leave it for the next or previous tab. `PageDown` /

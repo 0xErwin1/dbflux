@@ -242,7 +242,8 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
     contexts: &[ContextId::ConnectionManager, ContextId::FormNavigation],
     entries: &[
         // The driver list: arrows, H, J, K, L move over the cards, Enter
-        // configures the driver under the cursor, Escape closes the window.
+        // configures the driver under the cursor, Escape closes the window,
+        // I and Shift+I open the two imports.
         (
             "cm-driver-card-*",
             KeyboardPath::Command(Command::SelectNext),
@@ -254,13 +255,11 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
         ("cm-driver-cancel", KeyboardPath::Command(Command::Cancel)),
         (
             "cm-driver-import",
-            KeyboardPath::MouseOnly("gap: no key opens Import connections from the driver list"),
+            KeyboardPath::Command(Command::ImportItems),
         ),
         (
             "cm-driver-import-external",
-            KeyboardPath::MouseOnly(
-                "gap: no key opens Import from another client from the driver list",
-            ),
+            KeyboardPath::Command(Command::ImportFromClient),
         ),
         // The form: Ctrl+L and Ctrl+H switch tabs, Escape goes back to the
         // driver list (or closes an edited profile), Ctrl+S saves.

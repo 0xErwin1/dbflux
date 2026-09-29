@@ -256,6 +256,10 @@ pub enum Command {
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
     ImportItems,
+    /// Imports connections from another client (DBeaver, Beekeeper Studio
+    /// and the others DBFlux reads), as the connection manager's Import from
+    /// another client button does.
+    ImportFromClient,
     /// Puts the selected key binding back to its default keys.
     ResetBinding,
     /// Drops every key binding override.
@@ -502,6 +506,7 @@ impl Command {
             Command::EditExpiry => "Edit expiry…",
             Command::CopyPreview => "Copy preview",
             Command::ImportItems => "Import…",
+            Command::ImportFromClient => "Import from another client…",
             Command::ResetBinding => "Reset binding",
             Command::ResetAllBindings => "Reset all bindings",
             Command::EditBindingContext => "Edit binding context",
@@ -698,6 +703,7 @@ impl Command {
             Command::EditExpiry => "edit_expiry",
             Command::CopyPreview => "copy_preview",
             Command::ImportItems => "import_items",
+            Command::ImportFromClient => "import_from_client",
             Command::ResetBinding => "reset_binding",
             Command::ResetAllBindings => "reset_all_bindings",
             Command::EditBindingContext => "edit_binding_context",
@@ -898,6 +904,7 @@ impl Command {
             Command::EditExpiry,
             Command::CopyPreview,
             Command::ImportItems,
+            Command::ImportFromClient,
             Command::ResetBinding,
             Command::ResetAllBindings,
             Command::EditBindingContext,
@@ -1099,6 +1106,7 @@ impl Command {
             Command::EditExpiry => "Actions",
             Command::CopyPreview => "Actions",
             Command::ImportItems
+            | Command::ImportFromClient
             | Command::ResetBinding
             | Command::ResetAllBindings
             | Command::EditBindingContext
