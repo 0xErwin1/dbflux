@@ -75,7 +75,6 @@ impl DocumentPreviewModal {
             state.focus(window, cx);
         });
 
-        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -201,5 +200,68 @@ mod tests {
         let en = dbflux_i18n::t!("modals.document_preview.title", locale = "en");
         let es = dbflux_i18n::t!("modals.document_preview.title", locale = "es");
         assert_ne!(en, es);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::DocumentPreviewModal;
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, Window, div,
+    };
+
+    struct Host {
+        modal: Entity<DocumentPreviewModal>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.modal.clone())
+        }
+    }
+
+    /// Opening the preview puts the keyboard in its text buffer: text typed
+    /// through the window reaches the editor without a click first, and
+    /// Escape still closes the dialog from there.
+    #[gpui::test]
+    fn typing_right_after_opening_reaches_the_editor(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.bind_keys([gpui::KeyBinding::new(
+                "escape",
+                crate::actions::Cancel,
+                Some(dbflux_core::keymap_types::ContextId::DocumentPreviewModal.as_gpui_context()),
+            )]);
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| DocumentPreviewModal::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, String::new(), window, cx);
+            });
+        });
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.simulate_input("typed");
+        window.run_until_parked();
+
+        let value = window.update(|_, cx| modal.read(cx).input.read(cx).value().to_string());
+        assert_eq!(value, "typed", "typing reaches the editor without a click");
+
+        window.simulate_keystrokes("escape");
+
+        assert!(
+            !window.update(|_, cx| modal.read(cx).is_visible()),
+            "Escape closes the preview while its buffer has focus"
+        );
     }
 }

@@ -2120,6 +2120,82 @@ mod tests {
             .log_err();
     }
 
+    fn open_driver_picker(cx: &mut TestAppContext) -> WindowHandle<ConnectionManagerWindow> {
+        init_form_test_runtime(cx);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        cx.run_until_parked();
+
+        window
+    }
+
+    /// Letters bound to navigation in the connection manager reach a focused
+    /// text field as text.
+    #[::core::prelude::v1::test]
+    fn navigation_letters_type_into_the_driver_filter() {
+        let mut cx = TestAppContext::single();
+        let window = open_driver_picker(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager
+                    .form
+                    .driver_filter_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            })
+            .expect("the filter focuses");
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes(window.into(), "j k h l /");
+
+        let filter = window
+            .update(&mut cx, |manager, _, cx| manager.current_driver_filter(cx))
+            .expect("window is open");
+        assert_eq!(filter, "jkhl/");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// With no text field focused, `j` and `k` still move through the drivers.
+    #[::core::prelude::v1::test]
+    fn navigation_letters_move_the_driver_selection_outside_text_fields() {
+        let mut cx = TestAppContext::single();
+        let window = open_driver_picker(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("the picker focuses");
+        cx.run_until_parked();
+
+        let selected = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.driver_focus.index())
+                .expect("window is open")
+        };
+
+        cx.simulate_keystrokes(window.into(), "j");
+        assert_ne!(selected(&mut cx), 0, "`j` moves the selection");
+
+        cx.simulate_keystrokes(window.into(), "k");
+        assert_eq!(selected(&mut cx), 0, "`k` moves it back");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
     #[::core::prelude::v1::test]
     fn new_profile_password_save_success_persists_and_closes_the_real_window() {
         let mut cx = TestAppContext::single();

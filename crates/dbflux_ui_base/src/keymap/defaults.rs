@@ -603,15 +603,36 @@ fn command_palette_layer() -> KeymapLayer {
 fn connection_manager_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::ConnectionManager);
 
+    // Bare printable keys stay out of the window's text fields, so typing
+    // them inserts text instead of navigating. The arrows need no predicate:
+    // a focused text field binds them itself at a deeper context.
+    const OUTSIDE_TEXT_FIELDS: &str = "ConnectionManager && !Input";
+
     // Vertical navigation (j/k without Ctrl, plus arrow keys for the picker).
-    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
-    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind_with_predicate(
+        KeyChord::new("j", Modifiers::none()),
+        Command::SelectNext,
+        OUTSIDE_TEXT_FIELDS,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("k", Modifiers::none()),
+        Command::SelectPrev,
+        OUTSIDE_TEXT_FIELDS,
+    );
     layer.bind(KeyChord::new("down", Modifiers::none()), Command::FocusDown);
     layer.bind(KeyChord::new("up", Modifiers::none()), Command::FocusUp);
 
     // Horizontal navigation within row (h/l without Ctrl, plus arrows).
-    layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
-    layer.bind(KeyChord::new("l", Modifiers::none()), Command::FocusRight);
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::none()),
+        Command::FocusLeft,
+        OUTSIDE_TEXT_FIELDS,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("l", Modifiers::none()),
+        Command::FocusRight,
+        OUTSIDE_TEXT_FIELDS,
+    );
     layer.bind(KeyChord::new("left", Modifiers::none()), Command::FocusLeft);
     layer.bind(
         KeyChord::new("right", Modifiers::none()),
@@ -629,7 +650,11 @@ fn connection_manager_layer() -> KeymapLayer {
     );
 
     // Filter focus shortcut used by the New-Connection picker.
-    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
+    layer.bind_with_predicate(
+        KeyChord::new("/", Modifiers::none()),
+        Command::FocusSearch,
+        OUTSIDE_TEXT_FIELDS,
+    );
 
     // Save the connection from anywhere in the form, fields included.
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
