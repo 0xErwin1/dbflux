@@ -94,7 +94,6 @@ impl CellEditorModal {
             state.focus(window, cx);
         });
 
-        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -294,5 +293,87 @@ mod keyboard_tests {
             !window.update(|_, cx| modal.read(cx).is_visible()),
             "Escape closes the editor through its own key context"
         );
+    }
+
+    /// Opening the editor puts the keyboard in its text buffer: text typed
+    /// through the window reaches the editor without a click first, and
+    /// Escape still closes the dialog from there.
+    #[gpui::test]
+    fn typing_right_after_opening_reaches_the_editor(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.bind_keys([gpui::KeyBinding::new(
+                "escape",
+                crate::actions::Cancel,
+                Some(dbflux_core::keymap_types::ContextId::CellEditorModal.as_gpui_context()),
+            )]);
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, String::new(), false, None, window, cx);
+            });
+        });
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.simulate_input("typed");
+        window.run_until_parked();
+
+        let value = window.update(|_, cx| modal.read(cx).input.read(cx).value().to_string());
+        assert_eq!(value, "typed", "typing reaches the editor without a click");
+
+        window.simulate_keystrokes("escape");
+
+        assert!(
+            !window.update(|_, cx| modal.read(cx).is_visible()),
+            "Escape closes the editor while its buffer has focus"
+        );
+    }
+
+    /// The save shortcut still reaches the dialog while its buffer has focus.
+    #[gpui::test]
+    fn the_save_shortcut_saves_from_the_focused_editor(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.bind_keys([gpui::KeyBinding::new(
+                "ctrl-s",
+                crate::actions::SaveEdit,
+                Some(dbflux_core::keymap_types::ContextId::CellEditorModal.as_gpui_context()),
+            )]);
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        let saved = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+        let _subscription = window.update(|_, cx| {
+            let saved = saved.clone();
+            cx.subscribe(&modal, move |_, event: &super::CellEditorSaveEvent, _| {
+                *saved.borrow_mut() = Some(event.value.clone());
+            })
+        });
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, String::new(), false, None, window, cx);
+            });
+        });
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.simulate_input("typed");
+        window.simulate_keystrokes("ctrl-s");
+        window.run_until_parked();
+
+        assert_eq!(saved.borrow().as_deref(), Some("typed"));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }
