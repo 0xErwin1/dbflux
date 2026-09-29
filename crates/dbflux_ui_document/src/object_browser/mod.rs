@@ -1364,6 +1364,89 @@ mod tests {
         );
     }
 
+    /// The listing with a folder and an object, and its row menu. The test
+    /// above proves `m` opens the row menu and the pane actions.
+    #[gpui::test]
+    fn the_object_browser_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::OBJECT_BROWSER;
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    ObjectBrowserDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.apply_prefix_page("", Ok(page(&["logs/"], &["a.txt"])), cx);
+                doc.focus(window, cx);
+            })
+        });
+        window.run_until_parked();
+
+        let menu = |window: &mut gpui::VisualTestContext| -> Vec<String> {
+            window.update(|_, cx| {
+                let doc_ref = doc.read(cx);
+                let row_menu = doc_ref
+                    .context_menu
+                    .as_ref()
+                    .map(|menu| {
+                        menu.items
+                            .iter()
+                            .map(|item| format!("{:?}", item.action))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                doc_ref
+                    .pane_actions(&doc)
+                    .into_iter()
+                    .map(|action| action.id.to_string())
+                    .chain(row_menu)
+                    .collect()
+            })
+        };
+
+        let capture = FrameCapture::observe(window);
+
+        window.simulate_keystrokes("m");
+        window.run_until_parked();
+        let entries = menu(window);
+        let checked = Coverage::new(OBJECT_BROWSER)
+            .with_menu_entries(entries)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked
+                .iter()
+                .any(|id| id.starts_with("object-browser-menu-item-")),
+            "{checked:?}"
+        );
+    }
+
     /// A freshly listed level puts the cursor on its first row, so Enter
     /// works before any click, and a later page keeps the cursor in place.
     #[gpui::test]

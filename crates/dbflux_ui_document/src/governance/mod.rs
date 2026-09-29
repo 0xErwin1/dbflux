@@ -1004,6 +1004,47 @@ mod tests {
         (view, app_state, pending.id, window)
     }
 
+    /// Two pending calls, the first selected. `keymap_keys_move_over_the_pending_calls`
+    /// proves the keys, and the workspace test `the_approvals_keys_reach_the_approvals_tab`
+    /// the way in.
+    #[gpui::test]
+    fn the_approvals_tab_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::MCP_APPROVALS;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let (view, app_state, _pending_id, window) = approvals_view_with_one_pending_call(cx);
+        app_state.update(window, |state, _| {
+            state
+                .request_mcp_execution(
+                    "agent-b".to_string(),
+                    "conn-b".to_string(),
+                    "update_records".to_string(),
+                    ExecutionClassification::Write,
+                    serde_json::json!({ "table": "items" }),
+                )
+                .expect("queue a second pending execution")
+        });
+        window.update(|_, cx| view.update(cx, |view, cx| view.refresh(cx)));
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            view.read(cx)
+                .pane_actions(&view)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(MCP_APPROVALS)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "mcp-approval-approve"),
+            "{checked:?}"
+        );
+    }
+
     #[gpui::test]
     fn refresh_selects_the_call_a_notification_asked_for(cx: &mut gpui::TestAppContext) {
         let (view, app_state, first_id, window) = approvals_view_with_one_pending_call(cx);

@@ -1194,6 +1194,71 @@ mod tests {
     /// Escape takes the keyboard out of the buffer, where the Results keys
     /// reach the tab; Enter hands it back. The pane actions list Discard,
     /// which restores the baseline like its button.
+    /// An edited object with the keyboard out of the text. The test below
+    /// proves Escape and the pane actions.
+    #[gpui::test]
+    fn the_object_editor_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::OBJECT_EDITOR;
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ObjectEditorDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        "notes.md".to_string(),
+                        Rc::new(|_key: &str, _cx: &mut gpui::App| {}),
+                        app_state,
+                        cx,
+                    )
+                });
+                doc.update(cx, |doc, cx| {
+                    doc.install_buffer_for_test("baseline", window, cx);
+                    doc.type_for_test("edited", window, cx);
+                });
+                doc
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| doc.update(cx, |doc, cx| doc.focus(window, cx)));
+        window.run_until_parked();
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            doc.read(cx)
+                .pane_actions(&doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(OBJECT_EDITOR)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "object-editor-save"),
+            "{checked:?}"
+        );
+    }
+
     #[gpui::test]
     fn escape_leaves_the_buffer_and_the_pane_actions_discard(cx: &mut gpui::TestAppContext) {
         use crate::keyboard_test_support::{host_document, init_keyboard_runtime};

@@ -343,6 +343,41 @@ mod tests {
         }
     }
 
+    /// The picker in both modes. The tests below prove the rail keys.
+    #[gpui::test]
+    fn the_schema_diff_is_covered(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::SCHEMA_DIFF;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let (document, _snapshot_id, window) = open(cx);
+        let capture = FrameCapture::observe(window);
+
+        let mut checked = Vec::new();
+        for step in ["", "l enter"] {
+            if !step.is_empty() {
+                keys(window, step);
+            }
+
+            let menu: Vec<String> = window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .pane_actions(&document)
+                    .into_iter()
+                    .map(|action| action.id.to_string())
+                    .collect()
+            });
+            checked.extend(
+                Coverage::new(SCHEMA_DIFF)
+                    .with_menu_entries(menu)
+                    .assert_covered(&capture.frame(window)),
+            );
+        }
+        assert!(
+            checked.iter().any(|id| id.starts_with("snap-")),
+            "{checked:?}"
+        );
+    }
+
     #[gpui::test]
     fn the_cursor_picks_the_mode_and_the_snapshot(cx: &mut TestAppContext) {
         let (document, snapshot_id, window) = open(cx);

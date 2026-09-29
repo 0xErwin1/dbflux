@@ -204,3 +204,54 @@ fn enter_confirms_a_pending_console_command(cx: &mut TestAppContext) {
         "Enter runs the command rather than cancelling it"
     );
 }
+
+/// The key list with keys, a selected string key and its value panel.
+/// `the_key_menu_lists_the_toolbar_actions` proves `m` opens the menu.
+#[gpui::test]
+fn the_key_value_browser_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::KEY_VALUE;
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, ValueRepr};
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (_host, document, window) = open(cx);
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("user:1");
+            entry.key_type = Some(KeyType::String);
+            document.keys = vec![
+                entry.clone(),
+                KeyEntry::new("user:2"),
+                KeyEntry::new("jobs"),
+            ];
+            document.rebuild_key_rows();
+            document.selected_index = Some(0);
+            document.selected_value = Some(KeyGetResult {
+                entry,
+                value: b"hello".to_vec(),
+                repr: ValueRepr::Text,
+                load_state: KeyLoadState::Loaded,
+            });
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    let menu: Vec<String> = window.update(|_, cx| {
+        let document = document.read(cx);
+        document
+            .build_key_menu_items(cx)
+            .into_iter()
+            .chain(document.build_value_menu_items(cx))
+            .map(|item| format!("{:?}", item.action))
+            .collect()
+    });
+
+    let capture = FrameCapture::observe(window);
+    let checked = Coverage::new(KEY_VALUE)
+        .with_menu_entries(menu)
+        .assert_covered(&capture.frame(window));
+    assert!(
+        checked.iter().any(|id| id == "kv-reload-value"),
+        "{checked:?}"
+    );
+}

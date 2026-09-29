@@ -2681,4 +2681,42 @@ mod tests {
             .count();
         assert_eq!(copy_buttons, 2, "each expanded row reports its own action");
     }
+
+    /// Two events, one expanded, under the audit keymap. The keyboard tests
+    /// above prove the toolbar ring, the export menu and the row menu.
+    #[gpui::test]
+    fn the_audit_viewer_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::AUDIT;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let (document, _app_state, window) = new_audit_document(cx, None);
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.events = vec![detailed_event(1), detailed_event(2)];
+                document.expanded_event_ids = [1].into_iter().collect();
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            document
+                .read(cx)
+                .menu_items_for_row(0)
+                .into_iter()
+                .filter_map(|item| item.action)
+                .map(|action| format!("{action:?}"))
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(AUDIT)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "audit-detail-copy-json"),
+            "{checked:?}"
+        );
+    }
 }

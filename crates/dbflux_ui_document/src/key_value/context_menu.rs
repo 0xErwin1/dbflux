@@ -28,7 +28,7 @@ pub(super) struct KvMenuItem {
     pub is_danger: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum KvMenuAction {
     CopyKey,
     RenameKey,

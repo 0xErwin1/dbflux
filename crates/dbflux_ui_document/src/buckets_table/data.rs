@@ -1082,6 +1082,65 @@ pub(in crate::buckets_table) mod tests {
         assert!(!window.update(|_, cx| document.read(cx).show_details));
     }
 
+    /// A bucket list with a selected bucket and its details strip. The
+    /// keyboard tests above prove its keys and `m`.
+    #[gpui::test]
+    fn the_bucket_list_is_covered(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_coverage::BUCKETS;
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| BucketsTableDocument::new(uuid::Uuid::new_v4(), app_state, window, cx))
+            },
+            |document, _| document.active_context(),
+            BucketsTableDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            document.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![bucket_row("exports"), bucket_row("logs")]);
+                doc.select_bucket("exports".to_string(), cx);
+                doc.focus_handle.focus(window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("space");
+        window.run_until_parked();
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            document
+                .read(cx)
+                .pane_actions(&document)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let checked = Coverage::new(BUCKETS)
+            .with_menu_entries(menu)
+            .assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "buckets-browse"),
+            "{checked:?}"
+        );
+    }
+
     pub(in crate::buckets_table) fn new_test_entity(
         cx: &mut gpui::TestAppContext,
     ) -> gpui::Entity<BucketsTableDocument> {

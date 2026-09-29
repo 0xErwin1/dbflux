@@ -3592,6 +3592,49 @@ mod keyboard_tests {
         assert_eq!(phase(&wizard, window), WizardPhase::TablesMapping);
     }
 
+    /// The Source & Target, Mapping and Options steps.
+    /// `the_wizard_steps_are_driven_by_keys` proves every step's keys.
+    #[gpui::test]
+    fn the_wizard_steps_are_covered(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::MIGRATE_WIZARD;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let (wizard, target_id, window) = open_wizard(cx);
+        let capture = FrameCapture::observe(window);
+        let check = |window: &mut VisualTestContext| {
+            let menu: Vec<String> = window.update(|_, cx| {
+                wizard
+                    .read(cx)
+                    .pane_actions(&wizard, cx)
+                    .into_iter()
+                    .map(|action| action.id.to_string())
+                    .collect()
+            });
+            Coverage::new(MIGRATE_WIZARD)
+                .with_menu_entries(menu)
+                .assert_covered(&capture.frame(window))
+        };
+
+        let checked = check(window);
+        assert!(
+            checked.iter().any(|id| id.starts_with("table:")),
+            "{checked:?}"
+        );
+
+        choose_target_by_keys(&wizard, target_id, window);
+        window.simulate_keystrokes("alt-l");
+        window.run_until_parked();
+        let checked = check(window);
+        assert!(
+            checked.iter().any(|id| id == "migrate-bulk-skip"),
+            "{checked:?}"
+        );
+
+        window.simulate_keystrokes("alt-l");
+        window.run_until_parked();
+        check(window);
+    }
+
     /// The pane actions list Continue on the first step, enabled once the
     /// step is ready.
     #[gpui::test]

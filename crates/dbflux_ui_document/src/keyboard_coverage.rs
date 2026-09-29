@@ -443,3 +443,302 @@ pub(crate) const DASHBOARD: SurfaceRegistry = SurfaceRegistry {
         ),
     ],
 };
+
+const VIEW_AS_GAP: &str =
+    "gap: no key switches the value's View as (Auto, Text, JSON, Hex, MessagePack)";
+
+/// The key-value browser: key list, toolbar and value panel. Its `m` menu
+/// (`KeyValueDocument::build_key_menu_items`) lists the toolbar and value
+/// panel buttons; menu entry ids are the `KvMenuAction` names.
+pub(crate) const KEY_VALUE: SurfaceRegistry = SurfaceRegistry {
+    name: "key-value browser",
+    contexts: &[
+        ContextId::KeyValue,
+        ContextId::Results,
+        ContextId::ContextMenu,
+    ],
+    entries: &[
+        ("kv-key-row-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "kv-folder-row-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
+        ("kv-new-key", KeyboardPath::Command(Command::ResultsAddRow)),
+        ("kv-rename-key", KeyboardPath::Command(Command::Rename)),
+        ("kv-delete-key", KeyboardPath::Command(Command::Delete)),
+        (
+            "kv-console-header",
+            KeyboardPath::Command(Command::ToggleConsole),
+        ),
+        (
+            "refresh-action",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        ("kv-auto-refresh.*", KeyboardPath::Menu("AutoRefresh")),
+        ("kv-copy-key", KeyboardPath::Menu("CopyKey")),
+        ("kv-copy-command", KeyboardPath::Menu("CopyAsCommand")),
+        ("kv-edit-value", KeyboardPath::Menu("EditValue")),
+        // Double click edits the value, as the Edit button does.
+        ("kv-value-text", KeyboardPath::Menu("EditValue")),
+        ("kv-reload-value", KeyboardPath::Menu("ReloadValue")),
+        (
+            "segmented-key-list-layout-*",
+            KeyboardPath::Menu("ToggleListLayout"),
+        ),
+        (
+            "kv-compression.*",
+            KeyboardPath::MouseOnly("gap: no key picks the value's decompression"),
+        ),
+        ("seg-ctl-item-auto", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
+        ("seg-ctl-item-text", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
+        ("seg-ctl-item-json", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
+        ("seg-ctl-item-hex", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
+        ("seg-ctl-item-msgpack", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
+    ],
+};
+
+/// The object browser of a bucket: its listing, toolbar and preview. The
+/// row menu (`m`) lists the row's actions and the listing's buttons; with no
+/// row selected the same buttons are the pane actions. Row menu entry ids
+/// are the `ObjectMenuAction` names.
+pub(crate) const OBJECT_BROWSER: SurfaceRegistry = SurfaceRegistry {
+    name: "object browser",
+    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    entries: &[
+        ("object-row-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "object-browser-context-menu.*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
+        (
+            "object-browser-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        // A breadcrumb segment: H goes up one level.
+        (
+            "object-path-copy",
+            KeyboardPath::Menu("object-browser-copy-path"),
+        ),
+        ("object-path-*", KeyboardPath::Command(Command::ColumnLeft)),
+        (
+            "object-browser-upload",
+            KeyboardPath::Menu("object-browser-upload"),
+        ),
+        (
+            "object-browser-new-folder",
+            KeyboardPath::Menu("object-browser-new-folder"),
+        ),
+        (
+            "object-browser-load-more",
+            KeyboardPath::Menu("object-browser-load-more"),
+        ),
+        (
+            "seg-ctl-item-object-browser-mode-*",
+            KeyboardPath::Menu("object-browser-toggle-tree"),
+        ),
+    ],
+};
+
+/// The bucket list of an object store. Its pane actions (`m`) list Browse,
+/// Calculate size, New bucket and Refresh.
+pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
+    name: "bucket list",
+    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    entries: &[
+        ("bucket-row-*", KeyboardPath::Command(Command::SelectNext)),
+        ("buckets-browse", KeyboardPath::Command(Command::Execute)),
+        ("buckets-new", KeyboardPath::Command(Command::ResultsAddRow)),
+        (
+            "buckets-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "buckets-calculate-size",
+            KeyboardPath::Menu("buckets-calculate-size"),
+        ),
+    ],
+};
+
+/// An object editor tab. Its pane actions (`m`, once Escape leaves the
+/// text) list Save, Discard, Find, the interpretation, Reload and Load
+/// anyway.
+pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
+    name: "object editor",
+    contexts: &[
+        ContextId::Results,
+        ContextId::TextInput,
+        ContextId::ContextMenu,
+    ],
+    entries: &[
+        (
+            "object-editor-save",
+            KeyboardPath::Command(Command::SaveQuery),
+        ),
+        (
+            "object-editor-discard",
+            KeyboardPath::Menu("object-editor-discard"),
+        ),
+        (
+            "object-editor-find",
+            KeyboardPath::Menu("object-editor-find"),
+        ),
+    ],
+};
+
+/// The audit viewer: its toolbar ring (`f`), filters, event rows and their
+/// expanded details, and the row menu (`m`).
+pub(crate) const AUDIT: SurfaceRegistry = SurfaceRegistry {
+    name: "audit viewer",
+    contexts: &[ContextId::Audit, ContextId::ContextMenu],
+    entries: &[
+        (
+            "audit-event-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        ("audit-detail-copy-json", KeyboardPath::Menu("CopyJson")),
+        (
+            "audit-detail-filter-correlation",
+            KeyboardPath::Menu("FilterByCorrelation"),
+        ),
+        (
+            "audit-detail-open-approval",
+            KeyboardPath::Menu("OpenApproval"),
+        ),
+        (
+            "audit-export-trigger",
+            KeyboardPath::Command(Command::ExportResults),
+        ),
+        (
+            "seg-ctl-item-audit-view-*",
+            KeyboardPath::Command(Command::NextPanelTab),
+        ),
+        (
+            "refresh-action",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        // The toolbar ring (F, then H and L or the arrows, Enter or Space)
+        // walks the time presets, the custom range, the timezone, the level,
+        // category and outcome filters, the auto-refresh interval and Clear.
+        (
+            "seg-ctl-item-time-preset-*",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "audit-timestamp-mode.*",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "audit-level.*",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "audit-category.*",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "audit-outcome.*",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "audit-auto-refresh.*",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "audit-clear-btn",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+    ],
+};
+
+/// The MCP approvals tab: the pending calls and the decision buttons.
+#[cfg(feature = "mcp")]
+pub(crate) const MCP_APPROVALS: SurfaceRegistry = SurfaceRegistry {
+    name: "MCP approvals",
+    contexts: &[ContextId::McpApprovals, ContextId::ContextMenu],
+    entries: &[
+        ("pending-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "mcp-approval-approve",
+            KeyboardPath::Command(Command::ApproveExecution),
+        ),
+        (
+            "mcp-approval-reject",
+            KeyboardPath::Command(Command::RejectExecution),
+        ),
+        (
+            "mcp-approvals-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+    ],
+};
+
+/// The schema diff tab. Every control is a field of a rail row
+/// (`schema_diff::keyboard`): J and K reach the row, H and L the field,
+/// Enter presses it and Space checks a change. The pane actions (`m`) list
+/// Compute, Preview DDL, Apply and the modes.
+pub(crate) const SCHEMA_DIFF: SurfaceRegistry = SurfaceRegistry {
+    name: "schema diff",
+    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    entries: &[
+        ("mode-*", KeyboardPath::Command(Command::Execute)),
+        ("ref-db-*", KeyboardPath::Command(Command::Execute)),
+        ("ref-conn-*", KeyboardPath::Command(Command::Execute)),
+        ("snap-*", KeyboardPath::Command(Command::Execute)),
+        ("chk-*", KeyboardPath::Command(Command::ExpandCollapse)),
+        (
+            "compute-diff",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        ("preview-ddl", KeyboardPath::Menu("schema-diff-preview")),
+        ("apply-ddl", KeyboardPath::Menu("schema-diff-apply")),
+    ],
+};
+
+/// The migrate wizard: the step rail, each step's controls and the footer.
+/// Alt+L / Alt+H continue and go back, and the pane actions (`m`) list the
+/// footer buttons.
+pub(crate) const MIGRATE_WIZARD: SurfaceRegistry = SurfaceRegistry {
+    name: "migrate wizard",
+    contexts: &[ContextId::MigrateWizard, ContextId::ContextMenu],
+    entries: &[
+        // The source and target trees: H and L switch tree, J and K move,
+        // Enter chooses, Space checks a table.
+        ("migrate-tree-*.*", KeyboardPath::Command(Command::Execute)),
+        // Mapping rows: L moves to the Mode or Columns field, Enter opens it.
+        ("migrate-mode-*.*", KeyboardPath::Command(Command::Execute)),
+        (
+            "migrate-transform-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "migrate-bulk-existing",
+            KeyboardPath::Menu("migrate-set-all-existing"),
+        ),
+        (
+            "migrate-bulk-truncate",
+            KeyboardPath::Menu("migrate-set-all-truncate"),
+        ),
+        (
+            "migrate-bulk-skip",
+            KeyboardPath::Menu("migrate-set-all-skip"),
+        ),
+        (
+            "migrate-wizard-continue",
+            KeyboardPath::Command(Command::NextPanelTab),
+        ),
+        (
+            "migrate-wizard-back",
+            KeyboardPath::Command(Command::PrevPanelTab),
+        ),
+        (
+            "migrate-wizard-cancel",
+            KeyboardPath::Menu("migrate-cancel-run"),
+        ),
+        ("migrate-wizard-close", KeyboardPath::Menu("migrate-close")),
+        // A finished step of the step rail: Alt+H steps back to it.
+        (
+            "wizard-rail-*",
+            KeyboardPath::Command(Command::PrevPanelTab),
+        ),
+    ],
+};
