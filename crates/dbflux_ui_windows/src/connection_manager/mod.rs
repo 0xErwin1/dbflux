@@ -4610,3 +4610,83 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod keyboard_coverage_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow};
+    use crate::keyboard_coverage::CONNECTION_MANAGER;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+
+    /// The driver list and every tab of a Postgres form. The keyboard tests
+    /// of the form (`form::tests`, `navigation`) prove the ring reaches each
+    /// control.
+    #[gpui::test]
+    fn the_connection_manager_is_covered(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        let (manager, window) =
+            cx.add_window_view(|window, cx| ConnectionManagerWindow::new(app_state, window, cx));
+        window.run_until_parked();
+        let capture = FrameCapture::observe(window);
+        let check = |window: &mut VisualTestContext, expected: &str| {
+            let checked = Coverage::new(CONNECTION_MANAGER).assert_covered(&capture.frame(window));
+            assert!(
+                checked.iter().any(|id| id.starts_with(expected)),
+                "{expected} in {checked:?}"
+            );
+        };
+
+        check(window, "cm-driver-card-");
+
+        window.update(|window, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.select_driver("postgres", window, cx)
+            })
+        });
+        window.run_until_parked();
+        check(window, "test-connection");
+
+        for (expected, tab, mode) in [
+            (
+                "access-method-dropdown",
+                ActiveTab::Access,
+                AccessTabMode::Direct,
+            ),
+            ("ssh-enabled", ActiveTab::Access, AccessTabMode::Ssh),
+            ("tab-access", ActiveTab::Access, AccessTabMode::Proxy),
+            ("conn-pre-hook", ActiveTab::Settings, AccessTabMode::Direct),
+            ("tab-mcp", ActiveTab::Mcp, AccessTabMode::Direct),
+        ] {
+            window.update(|_, cx| {
+                manager.update(cx, |manager, cx| {
+                    manager.active_tab = tab;
+                    manager.access.access_tab_mode = mode;
+                    cx.notify();
+                })
+            });
+            window.run_until_parked();
+            check(window, expected);
+        }
+    }
+}

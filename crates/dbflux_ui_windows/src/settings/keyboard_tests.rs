@@ -477,3 +477,49 @@ fn recording_a_leader_binding_keeps_it_relative_to_the_leader(cx: &mut TestAppCo
         apply_keymap_overrides(dbflux_app::keymap::KeymapOverrides::new(), cx);
     });
 }
+
+/// Every section of the settings window. The tests above prove the
+/// navigation, section keys and form rings.
+#[gpui::test]
+fn every_settings_section_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SETTINGS;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+    let capture = FrameCapture::observe(window);
+
+    let sections = [
+        SettingsSectionId::General,
+        SettingsSectionId::Audit,
+        SettingsSectionId::Keybindings,
+        SettingsSectionId::Updates,
+        SettingsSectionId::Proxies,
+        SettingsSectionId::SshTunnels,
+        SettingsSectionId::AuthProfiles,
+        SettingsSectionId::Services,
+        SettingsSectionId::Hooks,
+        SettingsSectionId::Drivers,
+        SettingsSectionId::About,
+        #[cfg(feature = "mcp")]
+        SettingsSectionId::McpClients,
+        #[cfg(feature = "mcp")]
+        SettingsSectionId::McpRoles,
+        #[cfg(feature = "mcp")]
+        SettingsSectionId::McpPolicies,
+    ];
+
+    for section in sections {
+        window.update(|window, cx| {
+            settings.update(cx, |settings, cx| {
+                settings.set_active_section(section, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id.starts_with("settings-nav-")),
+            "{section:?}: {checked:?}"
+        );
+    }
+}
