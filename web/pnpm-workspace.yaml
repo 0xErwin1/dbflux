@@ -1,5 +1,11 @@
 packages:
   - '.'
+overrides:
+  # Security advisories: override only the GHSA-affected ranges, so future
+  # unrelated undici/js-yaml/sharp majors keep resolving as declared.
+  'undici@>=7.0.0 <7.29.1': ^7.29.1
+  'sharp@0.35.2': ^0.35.4
+  'js-yaml@>=4.0.0 <4.3.2': ^4.3.2
 allowBuilds:
   esbuild: true
   workerd: true
