@@ -28,7 +28,9 @@ export const VERSIONS_DIR = join(WEB, '.versions');
 const WANTED_REPOSITORY_PATH =
   /^(ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|TRADEMARK\.md|PRIVACY\.md|crates\/dbflux_driver_[^/]+\/README\.md|examples\/custom_driver\/README\.md)$/;
 
-const wantedPath = (path: string) => isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
+const MIRRORED_ASSET = 'resources/dbflux.png';
+const wantedPath = (path: string) =>
+  path === MIRRORED_ASSET || isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
 
 const git = (args: string[]) =>
   execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -115,14 +117,22 @@ export function fetchDocs(versions: ReadonlyArray<DocsVersionRef>): Materialized
     for (const path of files) {
       const target = join(VERSIONS_DIR, id, path);
       mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, git(['show', `${ref}:${path}`]));
+      writeFileSync(
+        target,
+        path === MIRRORED_ASSET
+          ? execFileSync('git', ['show', `${ref}:${path}`], {
+              cwd: REPO,
+              maxBuffer: 64 * 1024 * 1024,
+            })
+          : git(['show', `${ref}:${path}`]),
+      );
     }
 
     const version = workspaceVersion(ref);
     const { commit, date } = buildOf(ref);
 
     const localesByPath = new Map<string, string[]>();
-    for (const file of files) {
+    for (const file of files.filter((path) => path !== MIRRORED_ASSET)) {
       const source = splitContentEntryId(contentEntryId(`${id}/${file}`));
       const locales = localesByPath.get(source.path) ?? [];
       if (!locales.includes(source.locale)) locales.push(source.locale);
