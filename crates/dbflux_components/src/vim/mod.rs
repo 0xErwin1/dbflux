@@ -17,8 +17,9 @@ pub const VIM_MODE_KEY: &str = "vim_mode";
 /// Runs a keymap command from a Vim leader sequence (`<leader> a`).
 ///
 /// The editor's Vim wrapper takes it and runs the command as a
-/// `RunCommand` of its own, so the sequence's last key never reaches Vim or
-/// the editor, even when nothing handles the command.
+/// `RunCommand` of its own, or inside a dialog hands it to the dialog
+/// (`VimHost::vim_dialog_command`), so the sequence's last key never reaches
+/// Vim or the editor, even when nothing handles the command.
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
 #[action(namespace = dbflux, no_json)]
 pub struct LeaderCommand {

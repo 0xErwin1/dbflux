@@ -1588,9 +1588,9 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
             ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
-            // A leader binding dispatches to the workspace, which must not act
-            // on the document behind a dialog's editor.
-            ContextId::VimNormal => "VimNormal && !Modal",
+            // An editor inside a dialog takes the leader too: the Vim wrapper
+            // hands its commands to the dialog, never to the document behind.
+            ContextId::VimNormal => "VimNormal",
             context => context.as_gpui_context(),
         }
     }

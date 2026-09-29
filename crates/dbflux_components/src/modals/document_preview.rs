@@ -3,7 +3,7 @@ use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::icons::AppIcon;
 use crate::modals::Modal;
 use crate::vim::{VimBinding, VimHost};
-use dbflux_core::keymap_types::ContextId;
+use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::*;
 use gpui_component::input::EditorState;
 
@@ -144,6 +144,19 @@ impl VimHost for DocumentPreviewModal {
     fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
         self.vim.for_input_mut(input)
     }
+
+    /// `<leader> s` runs the dialog's own save, as its primary button does.
+    fn vim_dialog_command(
+        &mut self,
+        _input: EntityId,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if command == Command::SaveQuery {
+            self.save(window, cx);
+        }
+    }
 }
 
 impl EventEmitter<DocumentPreviewSaveEvent> for DocumentPreviewModal {}
@@ -242,19 +255,43 @@ mod keyboard_tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use super::DocumentPreviewModal;
+    use super::{DocumentPreviewModal, DocumentPreviewSaveEvent};
+    use crate::actions::RunCommand;
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, Window, div,
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, SharedString, Styled as _, TestAppContext, Window, div,
     };
 
+    /// Stands in for the document behind the dialog: records every keymap
+    /// command that bubbles out of it and every saved document.
     struct Host {
         modal: Entity<DocumentPreviewModal>,
+        commands: Vec<SharedString>,
+        saved: Vec<String>,
     }
 
     impl Render for Host {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(self.modal.clone())
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, action: &RunCommand, _, _| {
+                    this.commands.push(action.command.clone());
+                }))
+                .child(self.modal.clone())
+        }
+    }
+
+    fn host(window: &mut Window, cx: &mut Context<Host>) -> Host {
+        let modal = cx.new(|cx| DocumentPreviewModal::new(window, cx));
+        cx.subscribe(&modal, |host, _, event: &DocumentPreviewSaveEvent, _| {
+            host.saved.push(event.document_json.clone());
+        })
+        .detach();
+
+        Host {
+            modal,
+            commands: Vec::new(),
+            saved: Vec::new(),
         }
     }
 
@@ -272,9 +309,7 @@ mod keyboard_tests {
             )]);
         });
 
-        let (host, window) = cx.add_window_view(|window, cx| Host {
-            modal: cx.new(|cx| DocumentPreviewModal::new(window, cx)),
-        });
+        let (host, window) = cx.add_window_view(host);
         let modal = window.update(|_, cx| host.read(cx).modal.clone());
 
         window.update(|window, cx| {
@@ -316,9 +351,7 @@ mod keyboard_tests {
             )]);
         });
 
-        let (host, window) = cx.add_window_view(|window, cx| Host {
-            modal: cx.new(|cx| DocumentPreviewModal::new(window, cx)),
-        });
+        let (host, window) = cx.add_window_view(host);
         let modal = window.update(|_, cx| host.read(cx).modal.clone());
 
         window.update(|window, cx| {
@@ -341,5 +374,46 @@ mod keyboard_tests {
         window.simulate_keystrokes("escape");
         window.run_until_parked();
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// `<leader> s` saves the document through the dialog's own save and
+    /// closes it; nothing reaches the document behind the dialog.
+    #[gpui::test]
+    fn leader_s_saves_the_document(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::actions::record_last_keystroke(cx);
+            crate::vim::set_vim_enabled(cx, true);
+            let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();
+            cx.bind_keys([gpui::KeyBinding::new(
+                "space s",
+                crate::vim::LeaderCommand::new("save_query"),
+                Some(leader),
+            )]);
+        });
+
+        let (host, window) = cx.add_window_view(host);
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, "{}".to_string(), window, cx);
+                modal.input.update(cx, |state, cx| state.focus(window, cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("space s");
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).saved.clone()),
+            vec!["{}".to_string()]
+        );
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(
+            window.update(|_, cx| host.read(cx).commands.is_empty()),
+            "Save never reaches the document behind the dialog"
+        );
     }
 }

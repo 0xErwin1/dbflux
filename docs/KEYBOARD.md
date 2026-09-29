@@ -299,8 +299,12 @@ the find panel has focus.
 
 A command the editor's document does not offer does nothing, and the key after
 the leader never reaches Vim. The sequences apply to every editor with Vim
-mode except the ones inside a dialog, which keep their own keys. They are
-listed under **Vim Normal** in **Settings → Keybindings**, where they can be
+mode. Inside a dialog (the cell editor, the document preview, Import
+dashboard) they belong to the dialog: `Leader s` saves or confirms it, as its
+primary button does, `Leader f` opens the editor's find panel, and a command
+the dialog has no use for, such as running the query or opening the command
+palette, does nothing and never reaches the document behind the dialog. They
+are listed under **Vim Normal** in **Settings → Keybindings**, where they can be
 changed like any other binding. Recording keys that start with the leader key
 stores the leader itself, shown as `Leader`, so the binding moves with the
 leader.

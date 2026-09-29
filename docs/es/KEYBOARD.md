@@ -316,8 +316,12 @@ tecla líder escribe como siempre.
 
 Un comando que el documento del editor no ofrece no hace nada, y la tecla que
 sigue a la líder nunca llega a Vim. Las secuencias funcionan en todos los
-editores con modo Vim salvo los que están dentro de un diálogo, que conservan
-sus propias teclas. Aparecen en **Vim Normal** en **Settings → Keybindings**,
+editores con modo Vim. Dentro de un diálogo (el editor de celda, la vista
+previa del documento, Importar dashboard) pertenecen al diálogo: `Leader s` lo
+guarda o lo confirma, como su botón principal, `Leader f` abre el panel de
+búsqueda del editor, y un comando que el diálogo no usa, como ejecutar la
+consulta o abrir la paleta de comandos, no hace nada y nunca llega al
+documento que está detrás del diálogo. Aparecen en **Vim Normal** en **Settings → Keybindings**,
 donde se cambian como cualquier otro atajo. Al grabar teclas que empiezan por
 la tecla líder se guarda la propia líder, mostrada como `Leader`, así que el
 atajo sigue a la tecla líder cuando esta cambia.

@@ -2439,8 +2439,9 @@ fn runs_ahead_of_vim(action: &dyn Action, command: Command) -> bool {
 }
 
 /// With the default leader, Space waits for its second key where the
-/// leader is active, each default sequence runs its command ahead of Vim, and
-/// neither a dialog nor an editor without the context sees them.
+/// leader is active, each default sequence runs its command ahead of Vim, an
+/// editor without the context does not see them, and a dialog's editor gets
+/// the same leader action, which its Vim wrapper hands to the dialog.
 #[test]
 fn default_leader_sequences_run_their_commands_where_the_leader_is_active() {
     let keymap = native_keymap();
@@ -2486,9 +2487,12 @@ fn default_leader_sequences_run_their_commands_where_the_leader_is_active() {
             "Input",
         ],
     );
+    let action = top_action(&keymap, "space s", &in_dialog)
+        .unwrap_or_else(|| panic!("`space s` is bound in a dialog's editor"));
     assert!(
-        top_action(&keymap, "space a", &in_dialog).is_none(),
-        "a dialog's editor keeps the workspace commands out"
+        runs_ahead_of_vim(action.as_ref(), Command::SaveQuery),
+        "a dialog's editor takes the leader action, never a workspace RunCommand, got {}",
+        action.name()
     );
 }
 

@@ -68,6 +68,29 @@ pub trait VimHost: 'static + Sized {
     /// The text of `input` changed without an `InputEvent::Change`: an IME
     /// composition left behind by a cancelled `r`.
     fn vim_text_changed(&mut self, _input: EntityId, _cx: &mut Context<Self>) {}
+
+    /// A leader command typed in `input` while the editor sits inside a
+    /// dialog. The dialog runs what the command means to it, such as Save
+    /// confirming the dialog. The default does nothing, and so does a dialog
+    /// for every command it gives no meaning to: a leader command typed in a
+    /// dialog never reaches the document behind it.
+    fn vim_dialog_command(
+        &mut self,
+        _input: EntityId,
+        _command: Command,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+}
+
+/// Whether the keyboard is inside a dialog: a `Modal` key context sits on
+/// the path to the focused element.
+fn in_dialog(window: &Window) -> bool {
+    window
+        .context_stack()
+        .iter()
+        .any(|context| context.contains(crate::modals::MODAL_KEY_CONTEXT))
 }
 
 /// Which history action a Normal-mode undo shortcut runs.
@@ -552,9 +575,11 @@ impl VimBinding {
     }
 
     /// Runs the command of a leader sequence. Focus search opens the editor's
-    /// own find panel, as `/` does; any other command goes up to the host as
-    /// a `RunCommand` that Vim leaves alone, and does nothing when no host
-    /// handles it. A half-typed count or operator is dropped either way.
+    /// own find panel, as `/` does. Inside a dialog every other command goes
+    /// to the dialog ([`VimHost::vim_dialog_command`]) and stops there;
+    /// elsewhere it goes up to the host as a `RunCommand` that Vim leaves
+    /// alone, and does nothing when no host handles it. A half-typed count
+    /// or operator is dropped either way.
     fn leader_command<H: VimHost>(
         host: &mut H,
         input: EntityId,
@@ -574,6 +599,13 @@ impl VimBinding {
                 binding
                     .input
                     .update(cx, |state, cx| state.open_search(false, cx));
+            }
+            return;
+        }
+
+        if in_dialog(window) {
+            if let Some(command) = Command::from_action_id(&action.command) {
+                host.vim_dialog_command(input, command, window, cx);
             }
             return;
         }

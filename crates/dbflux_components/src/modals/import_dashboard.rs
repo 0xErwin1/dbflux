@@ -8,6 +8,7 @@ use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
 use crate::vim::{VimBinding, VimHost};
 use dbflux_core::LogErr;
+use dbflux_core::keymap_types::Command;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -53,6 +54,19 @@ impl VimHost for ModalImportDashboard {
 
     fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
         self.vim.for_input_mut(input)
+    }
+
+    /// `<leader> s` runs the dialog's own confirmation, as its primary button does.
+    fn vim_dialog_command(
+        &mut self,
+        _input: EntityId,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if command == Command::SaveQuery {
+            self.confirm(window, cx);
+        }
     }
 }
 
@@ -489,20 +503,29 @@ mod keyboard_tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::{ImportDashboardConfirmed, ModalImportDashboard};
+    use crate::actions::RunCommand;
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, Window, div,
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
     };
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    /// Stands in for the document behind the dialog: records every keymap
+    /// command that bubbles out of it.
     struct Host {
         modal: Entity<ModalImportDashboard>,
+        commands: Vec<SharedString>,
     }
 
     impl Render for Host {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(self.modal.clone())
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, action: &RunCommand, _, _| {
+                    this.commands.push(action.command.clone());
+                }))
+                .child(self.modal.clone())
         }
     }
 
@@ -511,6 +534,7 @@ mod keyboard_tests {
     fn open(
         cx: &mut TestAppContext,
     ) -> (
+        Entity<Host>,
         Entity<ModalImportDashboard>,
         Rc<RefCell<usize>>,
         &mut VisualTestContext,
@@ -519,9 +543,20 @@ mod keyboard_tests {
             gpui_component::init(cx);
             crate::actions::record_last_keystroke(cx);
             crate::vim::set_vim_enabled(cx, true);
+            let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();
             cx.bind_keys([
                 gpui::KeyBinding::new("escape", crate::actions::Cancel, Some("Modal")),
                 gpui::KeyBinding::new("enter", crate::actions::Execute, Some("Modal")),
+                gpui::KeyBinding::new(
+                    "space s",
+                    crate::vim::LeaderCommand::new("save_query"),
+                    Some(leader),
+                ),
+                gpui::KeyBinding::new(
+                    "space p",
+                    crate::vim::LeaderCommand::new("toggle_command_palette"),
+                    Some(leader),
+                ),
             ]);
         });
 
@@ -534,7 +569,10 @@ mod keyboard_tests {
                     *confirmed.borrow_mut() += 1;
                 })
                 .detach();
-                Host { modal }
+                Host {
+                    modal,
+                    commands: Vec::new(),
+                }
             }
         });
         let modal = window.update(|_, cx| host.read(cx).modal.clone());
@@ -542,7 +580,7 @@ mod keyboard_tests {
         window.update(|window, cx| modal.update(cx, |modal, cx| modal.open(window, cx)));
         window.run_until_parked();
 
-        (modal, confirmed, window)
+        (host, modal, confirmed, window)
     }
 
     /// Enter in Normal mode is a motion: it never confirms the import, even
@@ -550,7 +588,7 @@ mod keyboard_tests {
     /// cancels from Normal mode.
     #[gpui::test]
     fn enter_in_vim_normal_mode_does_not_confirm(cx: &mut TestAppContext) {
-        let (modal, confirmed, window) = open(cx);
+        let (_host, modal, confirmed, window) = open(cx);
         window.update(|window, cx| {
             let input = modal.read(cx).input.clone();
             input.update(cx, |state, cx| {
@@ -583,5 +621,35 @@ mod keyboard_tests {
         window.run_until_parked();
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
         assert_eq!(*confirmed.borrow(), 0);
+    }
+
+    /// `<leader> s` confirms the import, as the Import button does; `<leader>
+    /// p` (the command palette) does nothing in the dialog. Neither reaches
+    /// the document behind it.
+    #[gpui::test]
+    fn leader_s_confirms_and_other_leader_commands_stay_in_the_dialog(cx: &mut TestAppContext) {
+        let (host, modal, confirmed, window) = open(cx);
+        window.update(|window, cx| {
+            let input = modal.read(cx).input.clone();
+            input.update(cx, |state, cx| {
+                state.set_value("{\"widgets\": []}", window, cx);
+                state.set_selected_range(0..0, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("space p");
+        window.run_until_parked();
+        assert_eq!(*confirmed.borrow(), 0);
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+        window.simulate_keystrokes("space s");
+        window.run_until_parked();
+        assert_eq!(*confirmed.borrow(), 1, "the leader confirms the import");
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(
+            window.update(|_, cx| host.read(cx).commands.is_empty()),
+            "no leader command reaches the document behind the dialog"
+        );
     }
 }

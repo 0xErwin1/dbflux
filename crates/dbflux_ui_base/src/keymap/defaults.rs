@@ -71,7 +71,8 @@ fn leader(key: &str) -> KeySequence {
 /// Leader sequences of an editor in Vim's Normal or Visual mode. The editor
 /// opens its own find panel for Focus search; every other command goes to
 /// the workspace, which hands it to the active document, and a document
-/// without the command ignores it.
+/// without the command ignores it. Inside a dialog the command goes to the
+/// dialog instead (Save confirms it) and never reaches the workspace.
 fn vim_normal_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::VimNormal);
 
