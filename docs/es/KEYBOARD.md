@@ -66,7 +66,7 @@ Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y na
 | `q` / `e`                                     | Cambiar de pestaña del sidebar (Connections / Scripts) |
 | `/`                                           | Enfocar búsqueda                                       |
 | `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior                       |
-| `h` / `l`                                     | Colapsar / expandir nodo                               |
+| `h` / `l`                                     | Colapsar / expandir nodo (`l` en una conexión desconectada la conecta) |
 | `Space`                                       | Expandir / colapsar                                    |
 | `g` / `Shift+g` (o `Home` / `End`)            | Primer / último elemento                               |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                                  |

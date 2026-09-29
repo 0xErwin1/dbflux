@@ -1923,17 +1923,8 @@ impl Sidebar {
     }
 
     fn handle_chevron_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
-            let is_connected = self
-                .app_state
-                .read(cx)
-                .connections()
-                .contains_key(&profile_id);
-
-            if !is_connected {
-                self.connect_to_profile(profile_id, cx);
-                return;
-            }
+        if self.connect_if_disconnected_profile(item_id, cx) {
+            return;
         }
 
         self.toggle_item_expansion(item_id, cx);

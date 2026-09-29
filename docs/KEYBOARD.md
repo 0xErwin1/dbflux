@@ -65,7 +65,7 @@ The shell's clickable items all have a key, and none of them joins the `Tab` cyc
 | `q` / `e` | Switch sidebar tab (Connections / Scripts) |
 | `/` | Focus search |
 | `j` / `k` (or `Down` / `Up`) | Select next / previous |
-| `h` / `l` | Collapse / expand node |
+| `h` / `l` | Collapse / expand node (`l` on a disconnected connection connects it) |
 | `Space` | Expand / collapse |
 | `g` / `Shift+g` (or `Home` / `End`) | First / last item |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |

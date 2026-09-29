@@ -174,9 +174,19 @@ impl Sidebar {
         }
     }
 
+    /// Expands the selected row. A disconnected connection has nothing to
+    /// expand yet, so it is connected instead, as its chevron does, and opens
+    /// once the connection is up.
     pub fn expand(&mut self, cx: &mut Context<Self>) {
         let tree = self.active_tree_state().clone();
         let entry = tree.read(cx).selected_entry().cloned();
+
+        if let Some(entry) = &entry
+            && self.connect_if_disconnected_profile(entry.item().id.as_ref(), cx)
+        {
+            return;
+        }
+
         if let Some(entry) = entry
             && entry.is_folder()
             && !entry.is_expanded()
@@ -184,6 +194,31 @@ impl Sidebar {
             let item_id = entry.item().id.to_string();
             self.set_expanded(&item_id, true, cx);
         }
+    }
+
+    /// Starts connecting `item_id` when it is a connection row that is not
+    /// connected, and reports whether it did. Expanding such a row, by its
+    /// chevron or by `l`, connects it; the connected row then opens.
+    pub(super) fn connect_if_disconnected_profile(
+        &mut self,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        if self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id)
+        {
+            return false;
+        }
+
+        self.connect_to_profile(profile_id, cx);
+        true
     }
 
     pub(super) fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
@@ -1147,6 +1182,106 @@ impl Sidebar {
                 }) => !state.needs_schema_routines(profile_id, &database, Some(&schema)),
                 _ => true,
             }
+        });
+    }
+}
+
+#[cfg(test)]
+mod keyboard_expand_tests {
+    use crate::Sidebar;
+    use crate::table_loading::object_tree_adapter_tests::{
+        AdapterFakeConnection, connect_profile, register_per_database_driver, snapshot_naming,
+        test_app_state,
+    };
+    use dbflux_core::SchemaNodeId;
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use std::sync::atomic::Ordering;
+    use uuid::Uuid;
+
+    fn profile_row_expanded(
+        sidebar: &Entity<Sidebar>,
+        profile_id: Uuid,
+        cx: &mut VisualTestContext,
+    ) -> Option<bool> {
+        let item_id = SchemaNodeId::Profile { profile_id }.to_string().into();
+
+        sidebar.update(cx, |sidebar, cx| {
+            let tree = sidebar.tree_state.read(cx);
+            tree.index_of(&item_id)
+                .and_then(|index| tree.entry(index))
+                .map(|entry| entry.is_expanded())
+        })
+    }
+
+    /// `l` on a disconnected connection connects it through the same path as
+    /// Enter and the row's chevron, and the row opens once connected.
+    #[gpui::test]
+    async fn expanding_a_disconnected_connection_connects_it(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let (connect_calls, _) = register_per_database_driver(&state, cx);
+
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "expand-test",
+            dbflux_core::DbConfig::default_postgres(),
+        );
+        let profile_id = Uuid::new_v4();
+        profile.id = profile_id;
+        state.update(cx, |state, _| {
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.select_first(cx);
+            sidebar.expand(cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(connect_calls.load(Ordering::SeqCst), 1);
+        state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+        });
+        assert_eq!(profile_row_expanded(&sidebar, profile_id, cx), Some(true));
+    }
+
+    /// `h` on an open, connected connection collapses the row and leaves the
+    /// connection up.
+    #[gpui::test]
+    async fn collapsing_a_connected_connection_keeps_it_connected(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let main = dbflux_core::DatabaseInfo {
+            name: "main".into(),
+            is_current: true,
+        };
+
+        let connection = AdapterFakeConnection::lazy();
+        *connection.databases.lock().expect("fake databases") = vec![main.clone()];
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            connection,
+            Some(snapshot_naming(vec![main])),
+        );
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        sidebar.update(cx, |sidebar, cx| sidebar.select_first(cx));
+        assert_eq!(profile_row_expanded(&sidebar, profile_id, cx), Some(true));
+
+        sidebar.update(cx, |sidebar, cx| sidebar.collapse(cx));
+        cx.run_until_parked();
+
+        assert_eq!(profile_row_expanded(&sidebar, profile_id, cx), Some(false));
+        state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
         });
     }
 }
