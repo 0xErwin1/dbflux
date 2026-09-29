@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](README.md) · [Español](README.es.md) · [한국어](README.ko.md) · **简体中文**
+[English](../../README.md) · [Español](../es/README.md) · [한국어](../ko/README.md) · **简体中文**
 
 一个可扩展、以键盘操作为先的数据平台，以 Rust + GPUI 桌面客户端的形式交付。
 
@@ -12,7 +12,7 @@ DBFlux 是一个开源桌面客户端，为关系型与非关系型数据库提�
 
 客户端关注性能、简洁的 UX 与以键盘为先的工作流。长期目标是让每一个你使用的数据库，都由一个完全开源的客户端来承载。
 
-![DBFlux](resources/dbflux.png)
+![DBFlux](../../resources/dbflux.png)
 
 ## 文档
 
@@ -24,42 +24,42 @@ DBFlux 是一个开源桌面客户端，为关系型与非关系型数据库提�
 
 | 目标                   | 指南                                                                                                                                                         |
 |------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 创建连接               | 从[快速开始](docs/GETTING_STARTED.md)开始。SSH 隧道、代理、AWS SSO 与值来源参见[连接数据库 — 高级配置](docs/CONNECTIONS.md)。 |
-| 执行查询并掌握常用流程 | 按[使用指南](docs/USAGE.md)执行查询、浏览结果、绘制图表、导出结果并使用键盘导航。                                                                            |
-| 查看审计事件           | 按[审计查看器指南](docs/AUDIT.md#audit-viewer)打开审计查看器。                                                                    |
-| 使用 MCP               | 参见[AI + MCP 集成指南](docs/MCP_AI_INTEGRATION.md)。                                                                                                        |
-| 查看驱动支持与限制     | 参见[驱动概览](docs/DRIVERS.md)，它是能力与限制的权威说明。                                                                                                  |
+| 创建连接               | 从[快速开始](GETTING_STARTED.md)开始。SSH 隧道、代理、AWS SSO 与值来源参见[连接数据库 — 高级配置](CONNECTIONS.md)。 |
+| 执行查询并掌握常用流程 | 按[使用指南](USAGE.md)执行查询、浏览结果、绘制图表、导出结果并使用键盘导航。                                                                            |
+| 查看审计事件           | 按[审计查看器指南](AUDIT.md#audit-viewer)打开审计查看器。                                                                    |
+| 使用 MCP               | 参见[AI + MCP 集成指南](MCP_AI_INTEGRATION.md)。                                                                                                        |
+| 查看驱动支持与限制     | 参见[驱动概览](DRIVERS.md)，它是能力与限制的权威说明。                                                                                                  |
 
 ### 更多用户指南
 
-- [设置与 Hooks](docs/SETTINGS.md) — 设置项、连接 Hook 与认证配置文件
+- [设置与 Hooks](SETTINGS.md) — 设置项、连接 Hook 与认证配置文件
 - [数据与隐私](PRIVACY.md#your-data-on-this-machine) — 数据与密钥的存储、备份与重置
-- [Lua 脚本](docs/LUA.md) — 用于 Hook 的内嵌 Lua 运行时
+- [Lua 脚本](LUA.md) — 用于 Hook 的内嵌 Lua 运行时
 
 ### 贡献者
 
 - [贡献指南](CONTRIBUTING.md) — 环境搭建、检查项与贡献流程
-- [核心概念](docs/CONCEPTS.md) — 关于契约与子系统边界的简明心智模型
-- [驱动开发](docs/DRIVER_AUTHORING.md) — 选择并实现内置 Rust 驱动或外部 RPC 驱动
+- [核心概念](CONCEPTS.md) — 关于契约与子系统边界的简明心智模型
+- [驱动开发](DRIVER_AUTHORING.md) — 选择并实现内置 Rust 驱动或外部 RPC 驱动
 - [架构](ARCHITECTURE.md) — 权威的架构与 crate 地图，包含 crate 边界与跨 crate 流程
 
 ### 翻译
 
-DBFlux 的翻译工作在 [Hosted Weblate](https://hosted.weblate.org/engage/dbflux/) 上进行。翻译目录位于 `crates/dbflux_i18n/locales/`，每种语言一个 YAML 文件，翻译更新以来自 Weblate 的拉取请求形式送达。[贡献翻译](docs/TRANSLATIONS.md)涵盖了所有可翻译的界面：应用 UI、文档与网站。
+DBFlux 的翻译工作在 [Hosted Weblate](https://hosted.weblate.org/engage/dbflux/) 上进行。翻译目录位于 `crates/dbflux_i18n/locales/`，每种语言一个 YAML 文件，翻译更新以来自 Weblate 的拉取请求形式送达。[贡献翻译](TRANSLATIONS.md)涵盖了所有可翻译的界面：应用 UI、文档与网站。
 
 <a href="https://hosted.weblate.org/engage/dbflux/"><img src="https://hosted.weblate.org/widget/dbflux/multi-auto.svg" alt="Translation status"></a>
 
 ### 参考
 
-- [图表](docs/CHARTS.md) — 图表类型、列类型与轴的自动检测
-- [仪表盘](docs/DASHBOARDS.md) — 仪表盘、已保存图表、实例指标与检查器
-- [审计](docs/AUDIT.md) — 审计事件 schema 与脱敏
-- [驱动 RPC 协议](docs/DRIVER_RPC_PROTOCOL.md)
-- [RPC 服务配置](docs/RPC_SERVICES_CONFIG.md)
-- [发布流程](docs/RELEASE.md)
-- [代码风格](CODE_STYLE.md)
-- [Agent 说明](AGENTS.md)
-- [Claude 说明](CLAUDE.md)
+- [图表](CHARTS.md) — 图表类型、列类型与轴的自动检测
+- [仪表盘](DASHBOARDS.md) — 仪表盘、已保存图表、实例指标与检查器
+- [审计](AUDIT.md) — 审计事件 schema 与脱敏
+- [驱动 RPC 协议](DRIVER_RPC_PROTOCOL.md)
+- [RPC 服务配置](RPC_SERVICES_CONFIG.md)
+- [发布流程](RELEASE.md)
+- [代码风格](../../CODE_STYLE.md)
+- [Agent 说明](../../AGENTS.md)
+- [Claude 说明](../../CLAUDE.md)
 
 ## 安装
 
@@ -68,7 +68,7 @@ DBFlux 的翻译工作在 [Hosted Weblate](https://hosted.weblate.org/engage/dbf
 curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash
 ```
 
-各平台都有对应的安装包 — tarball、AUR、`.deb`、`.rpm`、AppImage、Nix、macOS DMG 与 Windows 安装程序 — 都放在 [Releases](https://github.com/0xErwin1/dbflux/releases) 页面。完整指南（包括未签名的 macOS 与 Windows 构建所需的 Gatekeeper 与 SmartScreen 步骤）见[安装 DBFlux](docs/INSTALL.md)。
+各平台都有对应的安装包 — tarball、AUR、`.deb`、`.rpm`、AppImage、Nix、macOS DMG 与 Windows 安装程序 — 都放在 [Releases](https://github.com/0xErwin1/dbflux/releases) 页面。完整指南（包括未签名的 macOS 与 Windows 构建所需的 Gatekeeper 与 SmartScreen 步骤）见[安装 DBFlux](INSTALL.md)。
 
 ## 功能
 
@@ -87,9 +87,9 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - **TursoDB** 与 libSQL（`sqld`），基于 HTTP，支持 Schema 发现、类型化增删改查以及按编辑器标签页隔离的交互式事务
 - **CloudWatch Logs**，支持日志组 / 流浏览与事件流
 - **Amazon S3**，支持存储桶浏览、对象预览 / 编辑、完整增删改查与预签名 URL，并兼容 S3 端点（Cloudflare R2、MinIO）
-- **基于 RPC 的外部驱动**（通过[驱动 RPC 协议](docs/DRIVER_RPC_PROTOCOL.md)注册进程外驱动）
+- **基于 RPC 的外部驱动**（通过[驱动 RPC 协议](DRIVER_RPC_PROTOCOL.md)注册进程外驱动）
 
-完整能力矩阵与各驱动限制参见 [docs/DRIVERS.md](docs/DRIVERS.md)。
+完整能力矩阵与各驱动限制参见 [docs/DRIVERS.md](DRIVERS.md)。
 
 ### 用户界面
 
@@ -128,7 +128,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - 仪表盘：在 12 列网格上排布已保存图表、分隔线与检查器面板，共享同一时间范围
 - 每个连接的只读实例概览 — 实时服务器指标与表格化检查器，支持「另存为可编辑」；PostgreSQL、MySQL/MariaDB、MongoDB、Redis 与 SQL Server 均随附实例目录
 - 浏览并导入上游提供商的仪表盘（CloudWatch）
-- 详见 [docs/CHARTS.md](docs/CHARTS.md) 与 [docs/DASHBOARDS.md](docs/DASHBOARDS.md)
+- 详见 [docs/CHARTS.md](CHARTS.md) 与 [docs/DASHBOARDS.md](DASHBOARDS.md)
 
 ### 连接与访问
 
@@ -142,13 +142,13 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 
 - 内置 Model Context Protocol（MCP）服务器（`dbflux mcp`），供 AI 客户端使用
 - 治理层：操作分类、角色 / 策略引擎、受信客户端，以及对写入 / 破坏性操作的人工审批流程
-- 参见 [docs/MCP_AI_INTEGRATION.md](docs/MCP_AI_INTEGRATION.md)
+- 参见 [docs/MCP_AI_INTEGRATION.md](MCP_AI_INTEGRATION.md)
 
 ### 审计与脚本
 
-- 基于 SQLite 的审计日志，记录查询、连接、Hook、脚本、MCP、治理与配置事件，支持脱敏与查询指纹 — 参见 [docs/AUDIT.md](docs/AUDIT.md)
+- 基于 SQLite 的审计日志，记录查询、连接、Hook、脚本、MCP、治理与配置事件，支持脱敏与查询指纹 — 参见 [docs/AUDIT.md](AUDIT.md)
 - 集中式的用户错误上报：失败以 Toast 提示呈现，附带关联 ID 与「在审计中查看」操作，驱动状态栏的错误徽标，并与对应的审计记录相关联
-- Lua、Python 与 Bash 脚本以文档形式执行，输出实时流式呈现 — 参见 [docs/LUA.md](docs/LUA.md)
+- Lua、Python 与 Bash 脚本以文档形式执行，输出实时流式呈现 — 参见 [docs/LUA.md](LUA.md)
 
 ### 键盘导航
 
@@ -276,3 +276,11 @@ nix-shell
 ## 许可证
 
 MIT 与 Apache-2.0
+
+## 星标历史
+
+[![DBFlux 星标历史](https://api.star-history.com/svg?repos=0xErwin1/dbflux&type=Date)](https://star-history.com/#0xErwin1/dbflux)
+
+## 贡献者
+
+[![DBFlux 贡献者](https://contrib.rocks/image?repo=0xErwin1/dbflux)](https://github.com/0xErwin1/dbflux/graphs/contributors)
