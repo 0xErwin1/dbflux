@@ -653,7 +653,8 @@ search field, `Enter` returns the keyboard to the tree with the matches kept, so
 macOS, where `Option` with a letter types a character.
 
 `m` opens the menu of the selected key or member. After the key or member
-actions it lists the value panel's buttons (reload the value, preview the first
+actions it lists the value panel's buttons (reload the value, the other View
+as choices and the decompression list of a string value, preview the first
 bytes or load a large value anyway, and a stream's pending entries and claim
 form) and the toolbar's (show the keys as a tree or a list, the auto-refresh
 interval, bulk delete, and Stop or Search whole keyspace while a filtered scan

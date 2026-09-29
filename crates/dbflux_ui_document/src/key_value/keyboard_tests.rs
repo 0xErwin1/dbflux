@@ -255,3 +255,66 @@ fn the_key_value_browser_is_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+/// The value menu (M in the value panel) of a string value lists the View
+/// as choices not shown and the decompression list: the first shows the
+/// value as hex, the second opens the list with the keyboard in it.
+#[gpui::test]
+fn the_value_menu_switches_view_as_and_opens_the_decompression(cx: &mut TestAppContext) {
+    use super::KeyValueFocusMode;
+    use super::decode::ViewAs;
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, ValueRepr};
+
+    let (_host, document, window) = open(cx);
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("user:1");
+            entry.key_type = Some(KeyType::String);
+            document.keys = vec![entry.clone()];
+            document.rebuild_key_rows();
+            document.selected_index = Some(0);
+            document.selected_value = Some(KeyGetResult {
+                entry,
+                value: b"hello".to_vec(),
+                repr: ValueRepr::Text,
+                load_state: KeyLoadState::Loaded,
+            });
+            document.focus_mode = KeyValueFocusMode::ValuePanel;
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    let run_entry = |action: KvMenuAction, window: &mut VisualTestContext| {
+        let index = window
+            .update(|_, cx| document.read(cx).build_value_menu_items(cx))
+            .iter()
+            .position(|item| item.action == action)
+            .unwrap_or_else(|| panic!("the value menu lists {action:?}"));
+
+        keys(window, "m");
+        for _ in 0..index {
+            keys(window, "j");
+        }
+        keys(window, "enter");
+    };
+
+    run_entry(KvMenuAction::ViewAs(ViewAs::Hex), window);
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).value_view_as),
+        ViewAs::Hex
+    );
+    assert!(
+        !window
+            .update(|_, cx| document.read(cx).build_value_menu_items(cx))
+            .iter()
+            .any(|item| item.action == KvMenuAction::ViewAs(ViewAs::Hex)),
+        "the view shown is not listed"
+    );
+
+    run_entry(KvMenuAction::Decompression, window);
+    assert!(
+        window.update(|_, cx| document.read(cx).compression_dropdown.read(cx).is_open()),
+        "the entry opens the decompression list"
+    );
+}

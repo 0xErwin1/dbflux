@@ -2146,6 +2146,8 @@ document:
       show_as_tree: "키를 트리로 표시"
       show_as_list: "키를 목록으로 표시"
       close_claim: "클레임 양식 닫기"
+      view_as: "값을 %{view}(으)로 보기"
+      decompression: "압축 해제 방식 선택…"
       new_key: 새 키…
       rename: 이름 바꾸기
     history_modal:

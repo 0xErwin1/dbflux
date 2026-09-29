@@ -445,9 +445,6 @@ pub(crate) const DASHBOARD: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
-const VIEW_AS_GAP: &str =
-    "gap: no key switches the value's View as (Auto, Text, JSON, Hex, MessagePack)";
-
 /// The key-value browser: key list, toolbar and value panel. Its `m` menu
 /// (`KeyValueDocument::build_key_menu_items`) lists the toolbar and value
 /// panel buttons; menu entry ids are the `KvMenuAction` names.
@@ -486,15 +483,14 @@ pub(crate) const KEY_VALUE: SurfaceRegistry = SurfaceRegistry {
             "segmented-key-list-layout-*",
             KeyboardPath::Menu("ToggleListLayout"),
         ),
-        (
-            "kv-compression.*",
-            KeyboardPath::MouseOnly("gap: no key picks the value's decompression"),
-        ),
-        ("seg-ctl-item-auto", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
-        ("seg-ctl-item-text", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
-        ("seg-ctl-item-json", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
-        ("seg-ctl-item-hex", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
-        ("seg-ctl-item-msgpack", KeyboardPath::MouseOnly(VIEW_AS_GAP)),
+        // The string value's toolbar: its View as switch and decompression
+        // list are entries of the value menu (`m` in the value panel).
+        ("kv-compression.*", KeyboardPath::Menu("Decompression")),
+        ("seg-ctl-item-auto", KeyboardPath::Menu("ViewAs(*")),
+        ("seg-ctl-item-text", KeyboardPath::Menu("ViewAs(*")),
+        ("seg-ctl-item-json", KeyboardPath::Menu("ViewAs(*")),
+        ("seg-ctl-item-hex", KeyboardPath::Menu("ViewAs(*")),
+        ("seg-ctl-item-msgpack", KeyboardPath::Menu("ViewAs(*")),
     ],
 };
 

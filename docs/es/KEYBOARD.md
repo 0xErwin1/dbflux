@@ -685,6 +685,7 @@ y de expiración, salvo en macOS, donde `Option` con una letra escribe un carác
 
 `m` abre el menú de la clave o el miembro seleccionado. Después de las acciones
 de la clave o el miembro lista los botones del panel de valor (recargar el valor,
+las demás opciones de Ver como y la lista de descompresión de un valor de texto,
 previsualizar los primeros bytes o cargar igual un valor grande, y las entradas
 pendientes y el formulario de claim de un stream) y los de la barra (mostrar las
 claves como árbol o lista, el intervalo de actualización automática, el borrado

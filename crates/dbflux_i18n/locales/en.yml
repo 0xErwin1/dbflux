@@ -2146,6 +2146,8 @@ document:
       show_as_tree: "Show keys as a tree"
       show_as_list: "Show keys as a list"
       close_claim: "Close the claim form"
+      view_as: "View the value as %{view}"
+      decompression: "Choose the decompression…"
       new_key: New key…
       rename: Rename
     history_modal:

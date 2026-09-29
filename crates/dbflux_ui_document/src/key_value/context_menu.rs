@@ -5,6 +5,7 @@ use gpui::*;
 
 use super::KeyValueFocusMode;
 use super::collection_panes::busiest_group;
+use super::decode::ViewAs;
 use super::key_tree::KeyListLayout;
 use dbflux_core::{KeyType, KeyValueFeatures};
 
@@ -56,6 +57,10 @@ pub(super) enum KvMenuAction {
     OpenClaimForm,
     ConfirmClaim,
     CloseClaimForm,
+    /// A choice of the string value's View as switch.
+    ViewAs(ViewAs),
+    /// The string value's decompression list, opened for the keyboard.
+    Decompression,
 }
 
 impl super::KeyValueDocument {
@@ -184,6 +189,28 @@ impl super::KeyValueDocument {
             AppIcon::RefreshCcw,
         ));
 
+        if self.shows_string_body() {
+            for view in ViewAs::ALL
+                .into_iter()
+                .filter(|view| *view != self.value_view_as)
+            {
+                items.push(item(
+                    dbflux_i18n::t!(
+                        "document.key_value.context_menu.view_as",
+                        view = view.label()
+                    ),
+                    KvMenuAction::ViewAs(view),
+                    AppIcon::Eye,
+                ));
+            }
+
+            items.push(item(
+                dbflux_i18n::t!("document.key_value.context_menu.decompression"),
+                KvMenuAction::Decompression,
+                AppIcon::Boxes,
+            ));
+        }
+
         if matches!(value.load_state, dbflux_core::KeyLoadState::TooLarge { .. }) {
             let is_string = matches!(
                 self.selected_key_type(),
@@ -242,6 +269,17 @@ impl super::KeyValueDocument {
         }
 
         items
+    }
+
+    /// Whether the value panel shows a string body, whose toolbar carries
+    /// the View as switch and the decompression list: a loaded value that is
+    /// neither a collection nor a sorted set or stream.
+    fn shows_string_body(&self) -> bool {
+        self.selected_value.as_ref().is_some_and(|value| {
+            !matches!(value.load_state, dbflux_core::KeyLoadState::TooLarge { .. })
+        }) && self.zset_pane.is_none()
+            && self.stream_pane.is_none()
+            && !self.is_structured_type()
     }
 
     /// The group the stream callout shows, which its buttons act on.
@@ -557,6 +595,11 @@ impl super::KeyValueDocument {
             }
             KvMenuAction::ConfirmClaim => self.claim_pending_entries(cx),
             KvMenuAction::CloseClaimForm => self.close_claim_form(cx),
+            KvMenuAction::ViewAs(view) => self.set_value_view_as(view, cx),
+            KvMenuAction::Decompression => {
+                self.compression_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
         }
 
         cx.notify();
@@ -586,6 +629,8 @@ mod tests {
         "document.key_value.context_menu.show_as_tree",
         "document.key_value.context_menu.show_as_list",
         "document.key_value.context_menu.close_claim",
+        "document.key_value.context_menu.view_as",
+        "document.key_value.context_menu.decompression",
     ];
 
     #[test]

@@ -2146,6 +2146,8 @@ document:
       show_as_tree: "以树形显示键"
       show_as_list: "以列表显示键"
       close_claim: "关闭认领表单"
+      view_as: "将值查看为 %{view}"
+      decompression: "选择解压方式…"
       new_key: 新建键…
       rename: 重命名
     history_modal:
