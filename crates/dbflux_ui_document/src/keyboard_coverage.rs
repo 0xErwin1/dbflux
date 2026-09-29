@@ -134,17 +134,18 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "row-inspector-delete",
             KeyboardPath::Command(Command::ResultsDeleteRow),
         ),
+        ("row-inspector-pin", KeyboardPath::Menu("pin-row-inspector")),
+        // The value panel's buttons are Toolbar entries of the table menu,
+        // which `m` also opens from inside the panel.
+        ("value-panel-format-*", KeyboardPath::Menu("value-format-*")),
+        ("value-panel-wrap", KeyboardPath::Menu("value-wrap")),
         (
-            "row-inspector-pin",
-            KeyboardPath::MouseOnly("gap: no key pins the row inspector to its row"),
+            "value-panel-format",
+            KeyboardPath::Menu("value-pretty-print"),
         ),
-        (
-            "value-panel-*",
-            KeyboardPath::MouseOnly(
-                "gap: the value panel's format, wrap, transform, revert and save buttons have \
-                 no key inside the island (Enter edits, Escape leaves)",
-            ),
-        ),
+        ("value-panel-compact", KeyboardPath::Menu("value-compact")),
+        ("value-panel-revert", KeyboardPath::Menu("value-revert")),
+        ("value-panel-save", KeyboardPath::Menu("value-save")),
         // The footer's view switch (Grid / JSON / Chart): Shift+T, and the
         // Toolbar submenu's Show entries.
         (

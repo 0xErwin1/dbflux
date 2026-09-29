@@ -1638,7 +1638,8 @@ fn document_preview_modal_layer() -> KeymapLayer {
 /// Keys of a side panel the keyboard moved into from its document (the
 /// value panel, row inspector, document panel and query builder): Ctrl+H or
 /// Escape go back to the document, J and K scroll, Enter edits the value
-/// panel's text.
+/// panel's text, M opens the document's menu, whose Toolbar entry lists the
+/// panel's buttons.
 fn inspector_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Inspector);
 
@@ -1667,6 +1668,15 @@ fn inspector_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
     layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenContextMenu,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenContextMenu,
+    );
 
     layer
 }

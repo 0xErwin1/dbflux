@@ -84,7 +84,17 @@ fn the_side_islands_are_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 
-    keys(window, "v ctrl-space");
+    // A changed value enables Revert and Save.
+    keys(window, "ctrl-l enter");
+    window.simulate_input("x");
+    keys(window, "escape");
+    let checked = assert_covered(&panel, &capture, window);
+    assert!(
+        checked.iter().any(|id| id == "value-panel-save"),
+        "{checked:?}"
+    );
+
+    keys(window, "ctrl-h v ctrl-space");
     let checked = assert_covered(&panel, &capture, window);
     assert!(
         checked.iter().any(|id| id == "row-inspector-copy"),

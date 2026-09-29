@@ -6265,6 +6265,118 @@ mod tests {
         );
     }
 
+    /// Opens the table menu with `m` and runs the Toolbar submenu's `action`.
+    fn run_toolbar_entry(
+        panel: &gpui::Entity<DataGridPanel>,
+        action: super::context_menu::toolbar::ToolbarAction,
+        window: &mut VisualTestContext,
+    ) {
+        use dbflux_app::keymap::ContextId;
+
+        window.simulate_keystrokes("m");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).active_context(cx)),
+            ContextId::ContextMenu,
+            "`m` opens the table menu"
+        );
+
+        let index = window
+            .update(|_, cx| panel.read(cx).toolbar_actions(cx))
+            .iter()
+            .position(|listed| *listed == action)
+            .unwrap_or_else(|| panic!("the Toolbar submenu lists {action:?}"));
+
+        let mut keys = vec!["k", "l"];
+        keys.extend(std::iter::repeat_n("j", index));
+        keys.push("enter");
+        for key in keys {
+            window.simulate_keystrokes(key);
+            window.run_until_parked();
+        }
+    }
+
+    /// `m` opens the table menu from inside the value panel, and its Toolbar
+    /// submenu runs the panel's buttons: another format, then Revert.
+    #[gpui::test]
+    fn the_value_panel_buttons_run_from_the_table_menu(cx: &mut TestAppContext) {
+        use super::context_menu::toolbar::ToolbarAction;
+        use super::value_panel::ValuePanelButton;
+
+        let (panel, window) = rail_keys::host_table_grid_with_rail(cx);
+        let buttons = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                panel
+                    .read(cx)
+                    .inspector
+                    .value_panel
+                    .as_ref()
+                    .map(|value_panel| value_panel.read(cx).buttons(cx))
+                    .unwrap_or_default()
+            })
+        };
+
+        for keys in ["j", "v", "ctrl-l"] {
+            window.simulate_keystrokes(keys);
+            window.run_until_parked();
+        }
+
+        let other_format = buttons(window)
+            .into_iter()
+            .find(|button| matches!(button, ValuePanelButton::Format(_)))
+            .expect("the value panel offers the formats not shown");
+
+        run_toolbar_entry(&panel, ToolbarAction::ValuePanel(other_format), window);
+        assert!(
+            !buttons(window).contains(&other_format),
+            "the entry reads the value in that format"
+        );
+
+        // The menu hands the keyboard back to the grid; Ctrl+L, Enter, a
+        // typed character and Escape change the value from the panel.
+        window.simulate_keystrokes("ctrl-l");
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        window.simulate_input("x");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(buttons(window).contains(&ValuePanelButton::Revert));
+
+        run_toolbar_entry(
+            &panel,
+            ToolbarAction::ValuePanel(ValuePanelButton::Revert),
+            window,
+        );
+        assert!(
+            !buttons(window).contains(&ValuePanelButton::Revert),
+            "Revert puts the stored value back"
+        );
+    }
+
+    /// The Toolbar submenu pins and unpins the open row inspector, as its
+    /// pin button does.
+    #[gpui::test]
+    fn the_table_menu_pins_the_row_inspector(cx: &mut TestAppContext) {
+        use super::context_menu::toolbar::ToolbarAction;
+        use crate::keyboard_test_support::init_keyboard_runtime;
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let (panel, window) = host_grid_with_rail(cx, app_state);
+
+        for keys in ["j", "ctrl-space"] {
+            window.simulate_keystrokes(keys);
+            window.run_until_parked();
+        }
+        assert!(window.update(|_, cx| panel.read(cx).row_inspector_is_open()));
+
+        run_toolbar_entry(&panel, ToolbarAction::PinRowInspector, window);
+        assert!(window.update(|_, cx| panel.read(cx).inspector.pinned));
+
+        run_toolbar_entry(&panel, ToolbarAction::PinRowInspector, window);
+        assert!(!window.update(|_, cx| panel.read(cx).inspector.pinned));
+    }
+
     #[gpui::test]
     fn filtered_empty_table_runtime_keeps_header_and_active_filter(cx: &mut TestAppContext) {
         init_test_runtime(cx);

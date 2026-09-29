@@ -1506,6 +1506,12 @@ document:
         view_schema: "显示结构"
         view_aggregate: "显示聚合"
         show_view: "显示%{view}"
+        value_format: "将值按 %{format} 读取"
+        value_wrap: "切换值的自动换行"
+        value_pretty_print: "格式化值"
+        value_compact: "压缩值"
+        value_revert: "还原值"
+        value_save: "保存值"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON

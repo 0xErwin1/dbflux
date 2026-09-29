@@ -4,7 +4,8 @@
 //! panel and the query builder share the workspace inspector rail. Ctrl+L
 //! (`Command::FocusRight`) moves the keyboard from the grid into whichever of
 //! them is open, and the grid then reports `ContextId::Inspector`: J and K
-//! scroll the panel, Enter edits the value panel's text, and Ctrl+H or Escape
+//! scroll the panel, Enter edits the value panel's text, M opens the grid's
+//! menu (its Toolbar entry lists the panel's buttons), and Ctrl+H or Escape
 //! go back to the grid. The panels are the grid's own entities, so the grid
 //! routes these keys itself and the workspace stays unaware of their kinds.
 //!
@@ -306,6 +307,13 @@ impl DataGridPanel {
                 Some(true)
             }
             Command::FocusRight => Some(true),
+            // The grid's menu takes the keyboard out of the panel; its
+            // Toolbar entry lists the panel's buttons.
+            Command::OpenContextMenu => {
+                self.focus.side_island = None;
+                self.focus._side_island_blur = None;
+                None
+            }
             Command::Execute => {
                 if island == SideIsland::ValuePanel
                     && let Some(panel) = self.inspector.value_panel.clone()

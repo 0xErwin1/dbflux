@@ -10,11 +10,13 @@ use crate::DataViewMode;
 use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
+use crate::data_grid_panel::value_panel::ValuePanelButton;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
 use crate::result_view::ResultViewMode;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::AxisPill;
 use dbflux_components::common::time_range::state::TimeRange;
+use dbflux_components::components::value_format::ValueFormat;
 use dbflux_components::composites::{MenuItem, menu_row, render_separator};
 use dbflux_components::icons::AppIcon;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
@@ -76,6 +78,10 @@ pub(crate) enum ToolbarAction {
     ConflictReload,
     /// Apply anyway in the commit conflict panel.
     ConflictApply,
+    /// The pin button of the open row inspector.
+    PinRowInspector,
+    /// A button of the open value panel.
+    ValuePanel(ValuePanelButton),
     /// Maximize or restore in the embedded panel's header.
     ToggleMaximize,
     /// Hide in the embedded panel's header.
@@ -144,6 +150,21 @@ impl ToolbarAction {
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => "view-aggregate",
             ToolbarAction::ConflictReload => "conflict-reload",
             ToolbarAction::ConflictApply => "conflict-apply",
+            ToolbarAction::PinRowInspector => "pin-row-inspector",
+            ToolbarAction::ValuePanel(ValuePanelButton::Format(ValueFormat::Json)) => {
+                "value-format-json"
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Format(ValueFormat::Xml)) => {
+                "value-format-xml"
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Format(ValueFormat::Text)) => {
+                "value-format-text"
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Wrap) => "value-wrap",
+            ToolbarAction::ValuePanel(ValuePanelButton::PrettyPrint) => "value-pretty-print",
+            ToolbarAction::ValuePanel(ValuePanelButton::Compact) => "value-compact",
+            ToolbarAction::ValuePanel(ValuePanelButton::Revert) => "value-revert",
+            ToolbarAction::ValuePanel(ValuePanelButton::Save) => "value-save",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
         }
@@ -175,6 +196,13 @@ impl ToolbarAction {
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => AppIcon::Braces,
             ToolbarAction::ConflictReload => AppIcon::RefreshCcw,
             ToolbarAction::ConflictApply => AppIcon::Check,
+            ToolbarAction::PinRowInspector => AppIcon::Pin,
+            ToolbarAction::ValuePanel(ValuePanelButton::Format(_)) => AppIcon::Braces,
+            ToolbarAction::ValuePanel(ValuePanelButton::Wrap) => AppIcon::ScrollText,
+            ToolbarAction::ValuePanel(ValuePanelButton::PrettyPrint)
+            | ToolbarAction::ValuePanel(ValuePanelButton::Compact) => AppIcon::Braces,
+            ToolbarAction::ValuePanel(ValuePanelButton::Revert) => AppIcon::RotateCcw,
+            ToolbarAction::ValuePanel(ValuePanelButton::Save) => AppIcon::Save,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
         }
@@ -299,6 +327,22 @@ impl DataGridPanel {
                     actions.push(ToolbarAction::ApplyCustomRange);
                 }
             }
+        }
+
+        if self.row_inspector_is_open() && self.inspector.row_inspector_content.is_some() {
+            actions.push(ToolbarAction::PinRowInspector);
+        }
+
+        if self.inspector.value_panel_open
+            && let Some(value_panel) = &self.inspector.value_panel
+        {
+            actions.extend(
+                value_panel
+                    .read(cx)
+                    .buttons(cx)
+                    .into_iter()
+                    .map(ToolbarAction::ValuePanel),
+            );
         }
 
         if self.chrome.show_panel_controls {
@@ -462,6 +506,31 @@ impl DataGridPanel {
             ToolbarAction::ConflictApply => {
                 dbflux_i18n::t!("document.collection.conflict.apply")
             }
+            ToolbarAction::PinRowInspector if self.inspector.pinned => {
+                dbflux_i18n::t!("document.data.row_inspector.action.unpin")
+            }
+            ToolbarAction::PinRowInspector => {
+                dbflux_i18n::t!("document.data.row_inspector.action.pin")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Format(format)) => dbflux_i18n::t!(
+                "document.data.context_menu.toolbar.value_format",
+                format = format.label()
+            ),
+            ToolbarAction::ValuePanel(ValuePanelButton::Wrap) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_wrap")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::PrettyPrint) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_pretty_print")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Compact) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_compact")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Revert) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_revert")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::Save) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_save")
+            }
             ToolbarAction::ToggleMaximize if self.chrome.is_maximized => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.restore")
             }
@@ -618,6 +687,15 @@ impl DataGridPanel {
             ToolbarAction::CollectionView(tab) => self.set_collection_tab(tab, cx),
             ToolbarAction::ConflictReload => self.reload_conflicting_document(window, cx),
             ToolbarAction::ConflictApply => self.apply_conflicting_commit(cx),
+            ToolbarAction::PinRowInspector => self.handle_row_inspector_event(
+                crate::data_grid_panel::row_inspector::RowInspectorContentEvent::TogglePin,
+                cx,
+            ),
+            ToolbarAction::ValuePanel(button) => {
+                if let Some(value_panel) = self.inspector.value_panel.clone() {
+                    value_panel.update(cx, |value_panel, cx| value_panel.press(button, window, cx));
+                }
+            }
             ToolbarAction::ToggleMaximize => self.request_toggle_maximize(cx),
             ToolbarAction::HidePanel => self.request_hide(cx),
         }
@@ -1032,6 +1110,12 @@ mod tests {
             "view_schema",
             "view_aggregate",
             "show_view",
+            "value_format",
+            "value_wrap",
+            "value_pretty_print",
+            "value_compact",
+            "value_revert",
+            "value_save",
         ];
 
         for key in keys {

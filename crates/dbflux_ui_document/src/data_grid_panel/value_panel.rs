@@ -52,6 +52,21 @@ pub struct ValuePanelTarget {
     pub editable: bool,
 }
 
+/// A button of the panel, run from the keyboard through the grid's Toolbar
+/// submenu (see `ValuePanelContent::buttons`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValuePanelButton {
+    /// A format of the header's selector.
+    Format(ValueFormat),
+    /// The header's word-wrap toggle.
+    Wrap,
+    /// The footer's Format: pretty-prints the value.
+    PrettyPrint,
+    Compact,
+    Revert,
+    Save,
+}
+
 /// Emitted when the user saves. `DataGridPanel` routes it into the shared
 /// cell-save path.
 #[derive(Clone, Debug)]
@@ -296,6 +311,52 @@ impl ValuePanelContent {
             state.set_value(text, window, cx);
         });
         cx.notify();
+    }
+
+    /// The buttons the panel shows enabled right now, the format shown
+    /// excepted: the other formats and the wrap toggle, then for an editable
+    /// value Format and Compact (structured formats) and, once the value
+    /// changed, Revert and Save.
+    pub(crate) fn buttons(&self, cx: &App) -> Vec<ValuePanelButton> {
+        let mut buttons: Vec<ValuePanelButton> = ValueFormat::ALL
+            .into_iter()
+            .filter(|format| *format != self.format)
+            .map(ValuePanelButton::Format)
+            .collect();
+        buttons.push(ValuePanelButton::Wrap);
+
+        if !self.target.editable {
+            return buttons;
+        }
+
+        if self.format.is_structured() {
+            buttons.push(ValuePanelButton::PrettyPrint);
+            buttons.push(ValuePanelButton::Compact);
+        }
+
+        if self.is_modified(cx) {
+            buttons.push(ValuePanelButton::Revert);
+            buttons.push(ValuePanelButton::Save);
+        }
+
+        buttons
+    }
+
+    /// Runs what `button` runs when clicked.
+    pub(crate) fn press(
+        &mut self,
+        button: ValuePanelButton,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match button {
+            ValuePanelButton::Format(format) => self.set_format(format, window, cx),
+            ValuePanelButton::Wrap => self.toggle_word_wrap(window, cx),
+            ValuePanelButton::PrettyPrint => self.apply_transform(format_value, window, cx),
+            ValuePanelButton::Compact => self.apply_transform(compact_value, window, cx),
+            ValuePanelButton::Revert => self.revert(window, cx),
+            ValuePanelButton::Save => self.save(cx),
+        }
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) {

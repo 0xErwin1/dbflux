@@ -1506,6 +1506,12 @@ document:
         view_schema: "스키마 보기"
         view_aggregate: "집계 보기"
         show_view: "%{view} 보기"
+        value_format: "값을 %{format}(으)로 읽기"
+        value_wrap: "값 줄 바꿈 전환"
+        value_pretty_print: "값 서식 지정"
+        value_compact: "값 압축"
+        value_revert: "값 되돌리기"
+        value_save: "값 저장"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다

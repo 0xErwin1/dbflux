@@ -1506,6 +1506,12 @@ document:
         view_schema: "Mostrar Esquema"
         view_aggregate: "Mostrar Agregación"
         show_view: "Mostrar %{view}"
+        value_format: "Leer el valor como %{format}"
+        value_wrap: "Ajustar o no las líneas del valor"
+        value_pretty_print: "Formatear el valor"
+        value_compact: "Compactar el valor"
+        value_revert: "Revertir el valor"
+        value_save: "Guardar el valor"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido

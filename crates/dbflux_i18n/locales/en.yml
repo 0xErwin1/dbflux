@@ -1506,6 +1506,12 @@ document:
         view_schema: "Show Schema"
         view_aggregate: "Show Aggregate"
         show_view: "Show %{view}"
+        value_format: "Read the value as %{format}"
+        value_wrap: "Wrap or unwrap the value lines"
+        value_pretty_print: "Format the value"
+        value_compact: "Compact the value"
+        value_revert: "Revert the value"
+        value_save: "Save the value"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
