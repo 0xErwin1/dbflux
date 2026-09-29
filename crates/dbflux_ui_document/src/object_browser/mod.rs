@@ -382,6 +382,20 @@ impl ObjectBrowserDocument {
         }
     }
 
+    /// Key context entries the workspace adds while this tab owns the
+    /// keyboard: the preview buffer's Vim mode while the buffer has it.
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(SharedString, SharedString)> {
+        if self.focus_mode != ObjectBrowserFocusMode::Editor {
+            return Vec::new();
+        }
+
+        self.editor
+            .as_ref()
+            .and_then(|editor| editor.vim.key_context_entry(cx))
+            .into_iter()
+            .collect()
+    }
+
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
         self.focus_mode = ObjectBrowserFocusMode::Listing;
@@ -1200,8 +1214,9 @@ mod tests {
     // `gpui::*` glob, whose `test` attribute macro would shadow the plain
     // `#[test]` attribute.
     use super::{
-        ImagePreview, ObjectAction, ObjectBrowserDocument, ObjectMetadataState, ObjectTreeNodeId,
-        PreviewContentState, PreviewGate, PreviewKind, context_menu,
+        ImagePreview, ObjectAction, ObjectBrowserDocument, ObjectBrowserFocusMode,
+        ObjectMetadataState, ObjectTreeNodeId, PendingTextBody, PreviewContentState, PreviewGate,
+        PreviewKind, TextSource, context_menu,
     };
     use crate::buckets_table::OperationTiming;
     use crate::types::DocumentState;
@@ -2152,6 +2167,157 @@ mod tests {
         assert!(window.update(|_, cx| doc.read(cx).pending_navigation_for_test().is_some()));
 
         (doc, window)
+    }
+
+    /// Opens `text` from `source` in the preview of a keymap-hosted browser
+    /// with Vim mode on, and gives the buffer the keyboard.
+    fn open_vim_preview<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        text: &str,
+        source: TextSource,
+    ) -> (
+        gpui::Entity<ObjectBrowserDocument>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        use crate::keyboard_test_support::{host_document_with_side_panels, init_keyboard_runtime};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document_with_side_panels(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    ObjectBrowserDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+            Some(|doc: &mut ObjectBrowserDocument, window, cx| {
+                doc.preview_side_panel(window, cx)
+                    .map(|panel| panel.content)
+                    .into_iter()
+                    .collect()
+            }),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.focus(window, cx);
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_text_editor(
+                PendingTextBody {
+                    key: "logs/app.log".to_string(),
+                    body: crate::object_text::TextBody {
+                        text: text.to_string(),
+                        line_ending: crate::object_text::LineEnding::Lf,
+                        byte_len: text.len() as u64,
+                    },
+                    content_type: Some("text/plain".to_string()),
+                    source,
+                },
+                window,
+                cx,
+            );
+        });
+        window.run_until_parked();
+        doc.update_in(window, |doc, window, cx| doc.focus_editor(window, cx));
+        window.run_until_parked();
+
+        (doc, window)
+    }
+
+    fn preview_cursor(
+        doc: &gpui::Entity<ObjectBrowserDocument>,
+        window: &mut gpui::VisualTestContext,
+    ) -> Option<usize> {
+        window.update(|_, cx| {
+            doc.read(cx)
+                .editor
+                .as_ref()
+                .map(|editor| editor.input.read(cx).cursor())
+        })
+    }
+
+    fn preview_text(
+        doc: &gpui::Entity<ObjectBrowserDocument>,
+        window: &mut gpui::VisualTestContext,
+    ) -> Option<String> {
+        window.update(|_, cx| doc.read(cx).editor_text_for_test(cx))
+    }
+
+    /// With Vim mode on, an object's own text takes full Vim: `j` moves down
+    /// instead of reaching the listing, `x` deletes, `i` enters Insert mode
+    /// where typing edits the buffer, and Escape in Normal mode goes back to
+    /// the listing as before.
+    #[gpui::test]
+    fn vim_edits_an_editable_preview_buffer(cx: &mut gpui::TestAppContext) {
+        use dbflux_app::keymap::ContextId;
+
+        let (doc, window) = open_vim_preview(cx, "abc\ndef", TextSource::Raw);
+
+        window.simulate_keystrokes("j x");
+        window.run_until_parked();
+        assert_eq!(preview_cursor(&doc, window), Some(4));
+        assert_eq!(preview_text(&doc, window).as_deref(), Some("abc\nef"));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("Z");
+        window.run_until_parked();
+        assert_eq!(preview_text(&doc, window).as_deref(), Some("abc\nZef"));
+        assert!(window.update(|_, cx| doc.read(cx).editor_is_dirty()));
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| doc.read(cx).focus_mode == ObjectBrowserFocusMode::Editor),
+            "the first Escape leaves Insert mode, not the preview"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::Results,
+            "Escape in Normal mode returns to the listing"
+        );
+    }
+
+    /// A decoded view takes Vim motions only: `j` moves, while `x` and
+    /// typing in Insert mode leave the buffer unchanged.
+    #[gpui::test]
+    fn vim_only_moves_through_a_decoded_preview_buffer(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = open_vim_preview(
+            cx,
+            "abc\ndef",
+            TextSource::Decoded(dbflux_core::Encoding::Gzip),
+        );
+
+        window.simulate_keystrokes("j x");
+        window.run_until_parked();
+        assert_eq!(preview_cursor(&doc, window), Some(4));
+        assert_eq!(preview_text(&doc, window).as_deref(), Some("abc\ndef"));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("Z");
+        window.run_until_parked();
+        assert_eq!(preview_text(&doc, window).as_deref(), Some("abc\ndef"));
+        assert!(!window.update(|_, cx| doc.read(cx).editor_is_dirty()));
     }
 
     /// Presses and releases `key`: a focused button clicks on the release.

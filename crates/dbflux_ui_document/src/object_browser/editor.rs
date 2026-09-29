@@ -35,6 +35,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::DbError;
 use dbflux_ui_base::keymap::modifiers_from_gpui;
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -42,7 +43,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::{Editor as GpuiEditor, EditorState};
+use gpui_component::input::EditorState;
 
 /// Diameter of the dirty indicator inside the "modified" pill.
 const DIRTY_DOT: Pixels = px(7.0);
@@ -57,6 +58,29 @@ pub(super) struct PendingTextBody {
     /// What produced this text — the object's raw bytes, or a value decoded
     /// from them. Drives whether the installed buffer is editable.
     pub(super) source: TextSource,
+}
+
+impl VimHost for ObjectBrowserDocument {
+    fn vim(&self) -> Option<&VimBinding> {
+        self.editor.as_ref().map(|editor| &editor.vim)
+    }
+
+    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
+        self.editor.as_mut().map(|editor| &mut editor.vim)
+    }
+
+    /// A decoded view renders through `ReadOnlyEditor`, so typing never
+    /// changes it; Vim's own edits (`x`, `dd`, `c`) must not either. An
+    /// object's own text takes every Vim edit.
+    fn vim_read_only(&self, _cx: &App) -> bool {
+        self.editor
+            .as_ref()
+            .is_none_or(|editor| !editor.is_editable())
+    }
+
+    fn vim_accepts_focus(&self) -> bool {
+        self.focus_mode == ObjectBrowserFocusMode::Editor
+    }
 }
 
 /// The editable buffer for one object.
@@ -74,6 +98,8 @@ pub(super) struct ObjectEditor {
     /// back — a decoded view never writes its re-encoded form over the
     /// object's real bytes.
     pub(super) source: TextSource,
+    /// Vim mode for this buffer; a new buffer gets a new binding.
+    pub(super) vim: VimBinding,
     _subscription: Subscription,
 }
 
@@ -233,14 +259,17 @@ impl ObjectBrowserDocument {
         }
 
         let input = build_text_input(&pending.key, &pending.body.text, window, cx);
+        let vim = VimBinding::new(input.clone(), window, cx);
 
         let subscription = cx.subscribe_in(
             &input,
             window,
-            |this, input, event: &InputEvent, _window, cx| {
+            |this, input, event: &InputEvent, window, cx| {
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
+
+                VimBinding::input_changed(this, window, cx);
 
                 let value = input.read(cx).value().to_string();
 
@@ -265,12 +294,15 @@ impl ObjectBrowserDocument {
             dirty: false,
             saving: false,
             source: pending.source,
+            vim,
             _subscription: subscription,
         });
 
         input.update(cx, |state, cx| {
             state.set_value(&pending.body.text, window, cx);
         });
+
+        VimBinding::follow_setting(self, cx);
 
         self.preview_content = PreviewContentState::Text;
         cx.notify();
@@ -625,45 +657,45 @@ impl ObjectBrowserDocument {
         let is_editable = editor.is_editable();
 
         // The editor element re-applies its read-only flag to the buffer on
-        // every render, so the flag must follow the buffer's editability. Only
-        // a decoded view goes through `ReadOnlyEditor`, which also reports it
-        // read-only to accessibility and UI automation.
-        let buffer = if is_editable {
-            GpuiEditor::new(&editor.input)
+        // every render, so the flag must follow the buffer's editability and
+        // the Vim mode. Only a decoded view goes through `ReadOnlyEditor`,
+        // which also reports it read-only to accessibility and UI automation;
+        // it stays enabled so Vim motions and yanks still move through it.
+        let text = if is_editable {
+            editor
+                .vim
+                .editor(false)
                 .appearance(false)
-                .readonly(false)
                 .w_full()
                 .h_full()
                 .into_any_element()
         } else {
             ReadOnlyEditor::new(&editor.input)
                 .appearance(false)
-                .disabled(true)
                 .w_full()
                 .h_full()
                 .into_any_element()
         };
 
-        div()
+        let buffer = div()
             .flex_1()
-            .flex()
-            .flex_col()
             .min_h_0()
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .bg(theme.background)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.focus_editor(window, cx);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .child(buffer),
+            .overflow_hidden()
+            .bg(theme.background)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.focus_editor(window, cx);
+                    cx.stop_propagation();
+                }),
             )
+            .child(text);
+        let indicator = editor.vim.render_indicator(cx);
+        let wrapper = div().flex_1().flex().flex_col().min_h_0();
+
+        VimBinding::capture_run_command(VimBinding::wire(wrapper, cx), cx)
+            .child(buffer)
+            .children(indicator)
             .child(self.render_editor_footer(is_dirty, is_saving, is_editable, position, cx))
             .into_any_element()
     }
