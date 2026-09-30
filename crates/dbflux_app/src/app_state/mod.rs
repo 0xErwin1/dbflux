@@ -72,6 +72,8 @@ pub struct AppState {
     general_settings: GeneralSettings,
     update_settings: crate::updates::UpdateSettings,
     update_check: crate::updates::UpdateCheckState,
+    #[cfg(feature = "telemetry")]
+    telemetry: Option<crate::telemetry::TelemetryScheduler>,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
@@ -126,6 +128,36 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Explicit foreground initialization only; constructor/startup neither
+    /// reads endpoint configuration nor constructs a blocking HTTP client.
+    #[cfg(feature = "telemetry")]
+    pub fn initialize_telemetry(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        if self.telemetry.is_none() {
+            self.telemetry = Some(crate::telemetry::TelemetryScheduler::new(
+                self.storage_runtime.telemetry(),
+                config,
+                crate::telemetry::BuildIdentity::compiled(),
+                Arc::new(self.audit_service.clone()),
+                now,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry(&self) -> Option<&crate::telemetry::TelemetryScheduler> {
+        self.telemetry.as_ref()
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_mut(&mut self) -> Option<&mut crate::telemetry::TelemetryScheduler> {
+        self.telemetry.as_mut()
+    }
+
     /// Writes a profile's secret-kind field values to the OS keyring under
     /// per-field references. The matching SQLite rows store only the reference.
     ///

@@ -230,6 +230,8 @@ impl AppState {
             general_settings,
             update_settings,
             update_check: crate::updates::UpdateCheckState::default(),
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
             driver_overrides,
             driver_settings,
             hook_definitions,

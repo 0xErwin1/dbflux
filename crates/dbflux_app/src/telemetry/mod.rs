@@ -1,0 +1,1097 @@
+//! Split-phase telemetry: persist on the storage owner, then move only an owned
+//! job to a background executor. No SQLite connection crosses that boundary.
+
+use chrono::{DateTime, Utc};
+use dbflux_core::observability::{
+    EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
+};
+use dbflux_core::release_channel::ReleaseChannel;
+use dbflux_storage::repositories::telemetry::{TelemetryRepository, TelemetryRepositoryError};
+use dbflux_telemetry::transport::{Endpoint, Transport, TransportError};
+use dbflux_telemetry::{
+    Acknowledgement, Architecture, Build, Channel, Decision, Feature, Level, Platform,
+    TelemetryState,
+};
+use std::collections::HashSet;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryError {
+    Storage,
+    InvalidConfiguration,
+    UnsupportedBuild,
+    Audit,
+}
+impl std::fmt::Display for TelemetryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "telemetry: {self:?}")
+    }
+}
+impl std::error::Error for TelemetryError {}
+
+#[derive(Clone, Default)]
+pub struct TelemetryConfig {
+    endpoint: Option<Endpoint>,
+}
+impl TelemetryConfig {
+    /// HTTP requires all three: a debug build, the exact opt-in flag and an
+    /// explicitly isolated configuration supplied by the caller.
+    pub fn from_values(
+        endpoint: Option<&str>,
+        allow_loopback: Option<&str>,
+        isolated: bool,
+    ) -> Result<Self, TelemetryError> {
+        Ok(Self {
+            endpoint: endpoint
+                .map(|endpoint| {
+                    Endpoint::parse(Some(endpoint), isolated && allow_loopback == Some("1"))
+                        .map_err(|_| TelemetryError::InvalidConfiguration)
+                })
+                .transpose()?,
+        })
+    }
+    /// This reader exists only when the app's optional telemetry module exists.
+    /// Construction/startup never invokes it implicitly.
+    pub fn from_environment(isolated: bool) -> Result<Self, TelemetryError> {
+        let endpoint = std::env::var("DBFLUX_TELEMETRY_ENDPOINT")
+            .map(Some)
+            .or_else(|error| match error {
+                std::env::VarError::NotPresent => Ok(None),
+                _ => Err(TelemetryError::InvalidConfiguration),
+            })?;
+        let allow = std::env::var("DBFLUX_TELEMETRY_ALLOW_LOOPBACK_HTTP").ok();
+        Self::from_values(endpoint.as_deref(), allow.as_deref(), isolated)
+    }
+}
+
+#[derive(Clone)]
+pub struct BuildIdentity {
+    build: Build,
+    platform: Platform,
+    architecture: Architecture,
+}
+impl BuildIdentity {
+    pub fn published(
+        version: &str,
+        channel: ReleaseChannel,
+        platform: Platform,
+        architecture: Architecture,
+    ) -> Result<Self, TelemetryError> {
+        let version_info =
+            semver::Version::parse(version).map_err(|_| TelemetryError::UnsupportedBuild)?;
+        let admitted = match channel {
+            ReleaseChannel::Stable => version_info.pre.is_empty(),
+            ReleaseChannel::Rc => version_info
+                .pre
+                .as_str()
+                .strip_prefix("rc.")
+                .is_some_and(|number| number.parse::<u64>().is_ok()),
+            ReleaseChannel::Nightly => {
+                version_info.pre.as_str() == "nightly"
+                    || version_info.pre.as_str().starts_with("nightly.")
+            }
+        };
+        if !admitted || version.len() > 256 || ReleaseChannel::from_version(version) != channel {
+            return Err(TelemetryError::UnsupportedBuild);
+        }
+        Ok(Self {
+            build: Build {
+                version: version.into(),
+                channel: match channel {
+                    ReleaseChannel::Stable => Channel::Stable,
+                    ReleaseChannel::Rc => Channel::Rc,
+                    ReleaseChannel::Nightly => Channel::Nightly,
+                },
+            },
+            platform,
+            architecture,
+        })
+    }
+    /// Use the exact compiled identity, never substitute a fixture release.
+    pub fn compiled() -> Result<Self, TelemetryError> {
+        let platform = match std::env::consts::OS {
+            "linux" => Platform::Linux,
+            "macos" => Platform::Darwin,
+            "windows" => Platform::Windows,
+            _ => return Err(TelemetryError::UnsupportedBuild),
+        };
+        let architecture = match std::env::consts::ARCH {
+            "x86_64" => Architecture::Amd64,
+            "aarch64" => Architecture::Arm64,
+            _ => return Err(TelemetryError::UnsupportedBuild),
+        };
+        Self::published(
+            env!("CARGO_PKG_VERSION"),
+            ReleaseChannel::current(),
+            platform,
+            architecture,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    NoEndpoint,
+    UnsupportedBuild,
+    Busy,
+    NotDue,
+}
+pub enum Preparation {
+    Job(DeliveryJob),
+    Skipped(SkipReason),
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionDisposition {
+    Applied,
+    Stale,
+}
+
+const QUEUED: u8 = 0;
+const DISPATCHING: u8 = 1;
+const FINISHED: u8 = 2;
+const CANCELLED: u8 = 3;
+struct Lease {
+    id: Uuid,
+    basic: bool,
+    phase: Arc<AtomicU8>,
+}
+impl Lease {
+    fn cancel_queued(&self) {
+        self.phase
+            .compare_exchange(QUEUED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+    }
+}
+
+/// Move this value (not the scheduler) to the background executor. Dropping an
+/// unstarted job releases its lease. Every completed attempt must be returned to
+/// `complete`, including failures; otherwise the scheduler remains busy.
+pub struct DeliveryJob {
+    id: Uuid,
+    correlation: Uuid,
+    payload: String,
+    level: Level,
+    endpoint: Endpoint,
+    phase: Arc<AtomicU8>,
+    audit: Arc<dyn EventSink>,
+}
+impl Drop for DeliveryJob {
+    fn drop(&mut self) {
+        self.phase
+            .compare_exchange(QUEUED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+        // Only this job can own DISPATCHING. Unwind ends its blocking call;
+        // release that lease rather than leaving the owner permanently busy.
+        self.phase
+            .compare_exchange(DISPATCHING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+    }
+}
+impl DeliveryJob {
+    pub fn payload(&self) -> &str {
+        &self.payload
+    }
+    pub fn delivery_id(&self) -> Uuid {
+        self.id
+    }
+    pub fn correlation_id(&self) -> Uuid {
+        self.correlation
+    }
+    /// Blocking, bounded attempt. Transport construction also stays off the
+    /// foreground thread. No endpoint or underlying diagnostic is logged.
+    pub fn attempt(self) -> DeliveryCompletion {
+        self.attempt_with(Utc::now(), |dispatch| {
+            let transport = Transport::new(self.endpoint.clone())?;
+            // Construction/audit can race with Off/reset; check immediately
+            // before I/O. Once this transition wins, the 10s request may finish.
+            if !dispatch() {
+                return Ok(None);
+            }
+            transport.attempt(&self.payload).map(Some)
+        })
+    }
+    fn attempt_with(
+        &self,
+        now: DateTime<Utc>,
+        send: impl FnOnce(&dyn Fn() -> bool) -> Result<Option<Acknowledgement>, TransportError>,
+    ) -> DeliveryCompletion {
+        let started_attempt = self.phase.load(Ordering::SeqCst) != CANCELLED;
+        let mut result = if !started_attempt {
+            AttemptOutcome::Cancelled
+        } else if self
+            .record(now, "attempt", "attempt", EventOutcome::Pending)
+            .is_err()
+        {
+            AttemptOutcome::AuditFailure
+        } else {
+            let dispatch = || {
+                self.phase
+                    .compare_exchange(QUEUED, DISPATCHING, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            };
+            match send(&dispatch) {
+                Ok(Some(acknowledgement)) => AttemptOutcome::Acknowledged(acknowledgement),
+                Ok(None) => AttemptOutcome::Cancelled,
+                Err(error) => AttemptOutcome::Transport(error),
+            }
+        };
+        // No attempt event is emitted for an already cancelled, unstarted job.
+        if started_attempt {
+            let outcome = match result {
+                AttemptOutcome::Acknowledged(_) => EventOutcome::Success,
+                AttemptOutcome::Cancelled => EventOutcome::Cancelled,
+                _ => EventOutcome::Failure,
+            };
+            if self
+                .record(Utc::now(), "outcome", result.code(), outcome)
+                .is_err()
+            {
+                result = AttemptOutcome::AuditFailure;
+            }
+            // Do not resurrect a cancelled queued lease after Off/reset.
+            if self.phase.load(Ordering::SeqCst) != CANCELLED {
+                self.phase.store(FINISHED, Ordering::SeqCst);
+            }
+        }
+        DeliveryCompletion {
+            id: self.id,
+            correlation: self.correlation,
+            phase: self.phase.clone(),
+            result,
+        }
+    }
+    fn record(
+        &self,
+        now: DateTime<Utc>,
+        phase: &str,
+        code: &str,
+        outcome: EventOutcome,
+    ) -> Result<(), TelemetryError> {
+        let details = serde_json::json!({ "payload": self.payload, "level": if self.level == Level::Basic { "basic" } else { "off" }, "phase": phase, "code": code, "attempt_id": self.correlation });
+        let event = EventRecord::new(
+            now.timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::System,
+            outcome,
+        )
+        .with_action("telemetry.delivery")
+        .with_summary("Telemetry delivery")
+        .with_correlation_id(self.correlation.to_string())
+        .with_details_json(details.to_string());
+        let stored = self.audit.record(event).map_err(|_| {
+            log::error!("telemetry.audit_failure");
+            TelemetryError::Audit
+        })?;
+        // AuditService returns the input with no ID when disabled. A trait Ok
+        // alone is not durability evidence, nor is a truncated/redacted body.
+        if stored.id.is_none()
+            || stored
+                .details_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .as_ref()
+                != Some(&details)
+        {
+            log::error!("telemetry.audit_failure");
+            return Err(TelemetryError::Audit);
+        }
+        Ok(())
+    }
+}
+enum AttemptOutcome {
+    Acknowledged(Acknowledgement),
+    Transport(TransportError),
+    AuditFailure,
+    Cancelled,
+}
+impl AttemptOutcome {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Acknowledged(ack) => match ack.decision {
+                Decision::Stored => "stored",
+                Decision::Duplicate => "duplicate",
+            },
+            Self::Cancelled => "cancelled",
+            Self::AuditFailure => "audit_failure",
+            Self::Transport(error) => match error {
+                TransportError::MissingEndpoint => "missing_endpoint",
+                TransportError::InvalidEndpoint => "invalid_endpoint",
+                TransportError::InvalidPayload => "invalid_payload",
+                TransportError::ClientConfiguration => "client_configuration",
+                TransportError::BadRequest => "bad_request",
+                TransportError::Conflict => "conflict",
+                TransportError::RateLimited => "rate_limited",
+                TransportError::Unavailable => "unavailable",
+                TransportError::UnexpectedStatus => "unexpected_status",
+                TransportError::BadResponse => "bad_response",
+                TransportError::Timeout => "timeout",
+                TransportError::Network => "network",
+            },
+        }
+    }
+}
+pub struct DeliveryCompletion {
+    id: Uuid,
+    correlation: Uuid,
+    phase: Arc<AtomicU8>,
+    result: AttemptOutcome,
+}
+impl DeliveryCompletion {
+    pub fn delivery_id(&self) -> Uuid {
+        self.id
+    }
+    pub fn correlation_id(&self) -> Uuid {
+        self.correlation
+    }
+    pub fn code(&self) -> &'static str {
+        self.result.code()
+    }
+}
+
+pub struct TelemetryScheduler {
+    repository: TelemetryRepository,
+    state: TelemetryState,
+    config: TelemetryConfig,
+    identity: Result<BuildIdentity, TelemetryError>,
+    audit: Arc<dyn EventSink>,
+    lease: Option<Lease>,
+    // Nonretryable responses retain their frozen queue but are not dispatched
+    // again during this session. A restart may make one new diagnostic attempt.
+    suppressed: HashSet<Uuid>,
+}
+impl Drop for TelemetryScheduler {
+    fn drop(&mut self) {
+        // Already-dispatched requests keep their bounded transport deadline.
+        if let Some(lease) = &self.lease {
+            lease.cancel_queued();
+        }
+    }
+}
+impl TelemetryScheduler {
+    pub fn new(
+        repository: TelemetryRepository,
+        config: TelemetryConfig,
+        identity: Result<BuildIdentity, TelemetryError>,
+        audit: Arc<dyn EventSink>,
+        now: DateTime<Utc>,
+    ) -> Result<Self, TelemetryError> {
+        let state = repository
+            .update(now, |_| Ok(()))
+            .map_err(|_| TelemetryError::Storage)?;
+        Ok(Self {
+            repository,
+            state,
+            config,
+            identity,
+            audit,
+            lease: None,
+            suppressed: HashSet::new(),
+        })
+    }
+    /// Last successfully committed state on this owner; no mutable cache access.
+    pub fn state(&self) -> &TelemetryState {
+        &self.state
+    }
+    fn update(
+        &mut self,
+        now: DateTime<Utc>,
+        change: impl FnOnce(&mut TelemetryState) -> Result<(), TelemetryRepositoryError>,
+    ) -> Result<(), TelemetryError> {
+        self.state = self
+            .repository
+            .update(now, change)
+            .map_err(|_| TelemetryError::Storage)?;
+        Ok(())
+    }
+    pub fn disclosure_dismissed(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        self.update(now, |state| {
+            state.dismiss_disclosure();
+            Ok(())
+        })
+    }
+    pub fn set_basic(&mut self, enabled: bool, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        self.update(now, |state| {
+            state.set_level(if enabled { Level::Basic } else { Level::Off });
+            Ok(())
+        })?;
+        if !enabled
+            && let Some(lease) = &self.lease
+            && lease.basic
+        {
+            lease.cancel_queued();
+        }
+        Ok(())
+    }
+    pub fn reset(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        self.update(now, |state| {
+            state.rotate(now);
+            Ok(())
+        })?;
+        if let Some(lease) = &self.lease {
+            lease.cancel_queued();
+        }
+        self.suppressed.clear();
+        Ok(())
+    }
+    pub fn increment(
+        &mut self,
+        feature: Feature,
+        now: DateTime<Utc>,
+    ) -> Result<(), TelemetryError> {
+        self.update(now, |state| {
+            state.increment(feature);
+            Ok(())
+        })
+    }
+    pub fn prepare(
+        &mut self,
+        now: DateTime<Utc>,
+        system_locale: &str,
+    ) -> Result<Preparation, TelemetryError> {
+        let Some(endpoint) = self.config.endpoint.clone() else {
+            return Ok(Preparation::Skipped(SkipReason::NoEndpoint));
+        };
+        let Ok(identity) = self.identity.clone() else {
+            return Ok(Preparation::Skipped(SkipReason::UnsupportedBuild));
+        };
+        if self
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease.phase.load(Ordering::SeqCst) != CANCELLED)
+        {
+            return Ok(Preparation::Skipped(SkipReason::Busy));
+        }
+        self.lease = None;
+        self.update(now, |state| {
+            state
+                .schedule(
+                    now,
+                    &identity.build,
+                    identity.platform,
+                    identity.architecture,
+                    system_locale,
+                    None,
+                )
+                .map_err(|_| TelemetryRepositoryError::Update)
+        })?;
+        self.suppressed.retain(|id| {
+            self.state
+                .pending()
+                .iter()
+                .any(|delivery| delivery.id() == *id)
+        });
+        let Some(delivery) = self
+            .state
+            .pending()
+            .iter()
+            .find(|delivery| delivery.ready(now) && !self.suppressed.contains(&delivery.id()))
+        else {
+            return Ok(Preparation::Skipped(SkipReason::NotDue));
+        };
+        let payload = delivery.json().to_owned();
+        let basic = serde_json::from_str::<serde_json::Value>(&payload)
+            .map_err(|_| TelemetryError::Storage)?["event"]
+            == "basic";
+        let phase = Arc::new(AtomicU8::new(QUEUED));
+        let id = delivery.id();
+        self.lease = Some(Lease {
+            id,
+            basic,
+            phase: phase.clone(),
+        });
+        Ok(Preparation::Job(DeliveryJob {
+            id,
+            correlation: Uuid::new_v4(),
+            payload,
+            level: self.state.level(),
+            endpoint,
+            phase,
+            audit: self.audit.clone(),
+        }))
+    }
+    /// Apply to the CURRENT transaction state, not the preparation snapshot.
+    /// Off/reset can remove the ID while a bounded dispatched request finishes.
+    pub fn complete(
+        &mut self,
+        completion: DeliveryCompletion,
+        now: DateTime<Utc>,
+    ) -> Result<CompletionDisposition, TelemetryError> {
+        if !self.lease.as_ref().is_some_and(|lease| {
+            lease.id == completion.id && Arc::ptr_eq(&lease.phase, &completion.phase)
+        }) {
+            return Ok(CompletionDisposition::Stale);
+        }
+        let mut found = false;
+        let committed = self.update(now, |state| {
+            found = state
+                .pending()
+                .iter()
+                .any(|delivery| delivery.id() == completion.id);
+            if found {
+                match &completion.result {
+                    AttemptOutcome::Acknowledged(ack) => state
+                        .acknowledge(completion.id, ack, now)
+                        .map_err(|_| TelemetryRepositoryError::Update)?,
+                    AttemptOutcome::Transport(error) if error.retryable() => {
+                        state.retry_later(completion.id, now)
+                    }
+                    AttemptOutcome::AuditFailure => state.retry_later(completion.id, now),
+                    _ => {}
+                }
+            }
+            Ok(())
+        });
+        // A failed commit leaves the durable queue intact. Release the finished
+        // lease so the next trigger can retry identical bytes (duplicate ACK is
+        // safe), rather than losing the consumed completion and staying busy.
+        self.lease = None;
+        committed?;
+        if found
+            && let AttemptOutcome::Transport(error) = completion.result
+            && !error.retryable()
+        {
+            self.suppressed.insert(completion.id);
+        }
+        if matches!(completion.result, AttemptOutcome::AuditFailure) {
+            return Err(TelemetryError::Audit);
+        }
+        Ok(if found {
+            CompletionDisposition::Applied
+        } else {
+            CompletionDisposition::Stale
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .expect("clock")
+            .with_timezone(&Utc)
+    }
+    fn fixture(
+        config: TelemetryConfig,
+    ) -> (
+        TelemetryScheduler,
+        dbflux_audit::AuditService,
+        StorageRuntime,
+    ) {
+        // Never use the default app database. Both repositories use this exact
+        // UUID-named scratch directory, including the actual persisted audit.
+        let directory =
+            std::env::temp_dir().join(format!("dbflux-telemetry-test-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).expect("exclusive scratch directory");
+        let storage =
+            StorageRuntime::for_path(directory.join("fixture.sqlite")).expect("scratch storage");
+        let audit = dbflux_audit::AuditService::new_sqlite(storage.dbflux_db_path())
+            .expect("scratch audit");
+        let scheduler = TelemetryScheduler::new(
+            storage.telemetry(),
+            config,
+            BuildIdentity::published(
+                "1.2.3",
+                ReleaseChannel::Stable,
+                Platform::Linux,
+                Architecture::Amd64,
+            ),
+            Arc::new(audit.clone()),
+            now(),
+        )
+        .expect("scheduler");
+        (scheduler, audit, storage)
+    }
+    fn configured() -> (
+        TelemetryScheduler,
+        dbflux_audit::AuditService,
+        StorageRuntime,
+    ) {
+        fixture(
+            TelemetryConfig::from_values(Some("https://example.invalid/v1/events"), None, false)
+                .expect("config"),
+        )
+    }
+    fn job(scheduler: &mut TelemetryScheduler, time: DateTime<Utc>) -> DeliveryJob {
+        let Preparation::Job(job) = scheduler.prepare(time, "es_AR").expect("prepare") else {
+            panic!("expected job");
+        };
+        job
+    }
+    fn acknowledged(job: &DeliveryJob) -> DeliveryCompletion {
+        job.attempt_with(now(), |dispatch| {
+            assert!(dispatch());
+            Ok(Some(
+                Acknowledgement::parse(
+                    200,
+                    br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
+                )
+                .expect("ack"),
+            ))
+        })
+    }
+    #[test]
+    fn telemetry_prepare_persists_frozen_job_only_after_disclosure() {
+        let (mut scheduler, _, storage) = configured();
+        assert!(matches!(
+            scheduler.prepare(now(), "es_AR").expect("undisclosed"),
+            Preparation::Skipped(SkipReason::NotDue)
+        ));
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let job = job(&mut scheduler, now());
+        assert_eq!(scheduler.state().pending()[0].json(), job.payload());
+        let persisted = storage
+            .telemetry()
+            .update(now(), |_| Ok(()))
+            .expect("reload current");
+        assert_eq!(persisted.pending()[0].json(), job.payload());
+        assert!(matches!(
+            scheduler.prepare(now(), "es_AR").expect("single flight"),
+            Preparation::Skipped(SkipReason::Busy)
+        ));
+    }
+    #[test]
+    fn telemetry_dropping_owner_cancels_unstarted_job() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        drop(scheduler);
+        let completion = queued.attempt_with(now(), |_| panic!("owner dropped before dispatch"));
+        assert_eq!(completion.code(), "cancelled");
+    }
+    #[test]
+    fn telemetry_owned_jobs_and_completions_are_send() {
+        fn require_send<T: Send>() {}
+        require_send::<DeliveryJob>();
+        require_send::<DeliveryCompletion>();
+    }
+    #[test]
+    fn telemetry_build_and_injected_configuration_are_strict() {
+        assert!(
+            BuildIdentity::published(
+                "0.9.0-dev.0",
+                ReleaseChannel::current(),
+                Platform::Linux,
+                Architecture::Amd64
+            )
+            .is_err()
+        );
+        if env!("CARGO_PKG_VERSION") == "0.9.0-dev.0" {
+            assert!(BuildIdentity::compiled().is_err());
+        }
+        assert!(
+            BuildIdentity::published(
+                "1.2.3",
+                ReleaseChannel::Rc,
+                Platform::Linux,
+                Architecture::Amd64
+            )
+            .is_err()
+        );
+        assert!(
+            BuildIdentity::published(
+                "1.2.3-rc.1",
+                ReleaseChannel::Rc,
+                Platform::Linux,
+                Architecture::Amd64
+            )
+            .is_ok()
+        );
+        assert!(
+            BuildIdentity::published(
+                "1.2.3-nightly+abc1234",
+                ReleaseChannel::Nightly,
+                Platform::Linux,
+                Architecture::Amd64
+            )
+            .is_ok()
+        );
+        let endpoint = Some("http://127.0.0.1:12345/v1/events");
+        assert!(TelemetryConfig::from_values(endpoint, Some("1"), false).is_err());
+        assert!(TelemetryConfig::from_values(endpoint, None, true).is_err());
+        assert_eq!(
+            TelemetryConfig::from_values(endpoint, Some("1"), true).is_ok(),
+            cfg!(debug_assertions)
+        );
+        assert!(
+            TelemetryConfig::from_values(Some("https://example.invalid"), None, false).is_err()
+        );
+        let (mut scheduler, _, _) = configured();
+        scheduler.identity = BuildIdentity::compiled();
+        if scheduler.identity.is_err() {
+            scheduler.disclosure_dismissed(now()).expect("dismiss");
+            assert!(matches!(
+                scheduler.prepare(now(), "en"),
+                Ok(Preparation::Skipped(SkipReason::UnsupportedBuild))
+            ));
+            assert!(scheduler.state().pending().is_empty());
+        }
+    }
+    #[test]
+    fn telemetry_audit_roundtrip_preserves_full_ping_and_basic_payloads() {
+        let (mut scheduler, audit, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+        for feature in [
+            Feature::QueryRun,
+            Feature::VisualQueryBuilder,
+            Feature::DashboardOpen,
+            Feature::ScriptRun,
+            Feature::McpTool,
+            Feature::SchemaInspect,
+        ] {
+            scheduler.increment(feature, now()).expect("increment");
+        }
+        let mut payloads = Vec::new();
+        for _ in 0..2 {
+            let job = job(&mut scheduler, now());
+            let completion = acknowledged(&job);
+            assert_eq!(completion.code(), "stored");
+            payloads.push((job.payload().to_owned(), job.correlation_id().to_string()));
+            scheduler.complete(completion, now()).expect("complete");
+        }
+        // Reopen the real scratch-backed service, rather than trusting record's
+        // return value or an in-memory recording fake.
+        drop(audit);
+        let reopened =
+            dbflux_audit::AuditService::new_sqlite(storage.dbflux_db_path()).expect("reopen audit");
+        assert!(reopened.redact_sensitive());
+        let events = reopened
+            .query_extended(&dbflux_audit::query::AuditQueryFilter::default())
+            .expect("persisted events");
+        assert_eq!(events.len(), 4);
+        for (payload, correlation) in &payloads {
+            let related: Vec<_> = events
+                .iter()
+                .filter(|event| event.correlation_id.as_ref() == Some(correlation))
+                .collect();
+            assert_eq!(related.len(), 2);
+            let mut phases = HashSet::new();
+            for event in related {
+                assert_eq!(event.category.as_deref(), Some("system"));
+                assert_eq!(event.action.as_deref(), Some("telemetry.delivery"));
+                assert_eq!(event.summary.as_deref(), Some("Telemetry delivery"));
+                let details_json = event.details_json.as_deref().expect("details");
+                assert!(details_json.len() < 64 * 1024);
+                assert!(!details_json.contains("example.invalid"));
+                let details: serde_json::Value =
+                    serde_json::from_str(details_json).expect("details JSON");
+                assert_eq!(details["payload"].as_str(), Some(payload.as_str()));
+                phases.insert(details["phase"].as_str().expect("phase").to_string());
+            }
+            assert_eq!(
+                phases,
+                HashSet::from(["attempt".to_string(), "outcome".to_string()])
+            );
+        }
+        let basic: serde_json::Value = serde_json::from_str(&payloads[1].0).expect("basic JSON");
+        assert_eq!(basic["system_language"], "es");
+        assert_eq!(basic["country"], "ZZ");
+        assert_eq!(basic["features"].as_object().expect("six counts").len(), 6);
+        assert!(
+            basic["features"]
+                .as_object()
+                .expect("counts")
+                .values()
+                .all(|value| value == 1)
+        );
+    }
+    #[test]
+    fn telemetry_retries_are_identical_and_current_counters_survive_ack() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+        scheduler
+            .increment(Feature::QueryRun, now())
+            .expect("initial count");
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping ack");
+        let first = job(&mut scheduler, now());
+        let payload = first.payload().to_owned();
+        // Independent foreground transaction represents usage arriving after
+        // queueing; completion must not write the scheduler's old snapshot.
+        storage
+            .telemetry()
+            .update(now(), |state| {
+                state.increment(Feature::QueryRun);
+                Ok(())
+            })
+            .expect("concurrent count");
+        let failed = first.attempt_with(now(), |dispatch| {
+            assert!(dispatch());
+            Err(TransportError::Timeout)
+        });
+        scheduler.complete(failed, now()).expect("backoff");
+        assert!(matches!(
+            scheduler.prepare(now(), "fr_FR"),
+            Ok(Preparation::Skipped(SkipReason::NotDue))
+        ));
+        let later = now() + chrono::Duration::minutes(3);
+        let retry = job(&mut scheduler, later);
+        assert_eq!(retry.payload(), payload);
+        assert_ne!(retry.correlation_id(), first.correlation_id());
+        let duplicate = retry.attempt_with(later, |dispatch| {
+            assert!(dispatch());
+            Ok(Some(
+                Acknowledgement::parse(
+                    200,
+                    br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"duplicate"}"#,
+                )
+                .expect("duplicate ack"),
+            ))
+        });
+        scheduler
+            .complete(duplicate, later)
+            .expect("duplicate completion");
+        let next = job(&mut scheduler, later + chrono::Duration::days(7));
+        let next_payload: serde_json::Value =
+            serde_json::from_str(next.payload()).expect("next basic");
+        assert_eq!(next_payload["features"]["query_run"], 1);
+    }
+    #[test]
+    fn telemetry_off_cancels_queued_basic_and_clears_counters() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping");
+        let queued = job(&mut scheduler, now());
+        scheduler
+            .increment(Feature::QueryRun, now())
+            .expect("new count");
+        scheduler.set_basic(false, now()).expect("off");
+        let unchanged = scheduler.state().clone();
+        let completion = queued.attempt_with(now(), |_| panic!("cancelled job must not dispatch"));
+        assert_eq!(completion.code(), "cancelled");
+        assert_eq!(
+            scheduler.complete(completion, now()).expect("stale ack"),
+            CompletionDisposition::Stale
+        );
+        assert_eq!(scheduler.state(), &unchanged);
+        scheduler.set_basic(true, now()).expect("on again");
+        let basic = job(&mut scheduler, now());
+        let value: serde_json::Value = serde_json::from_str(basic.payload()).expect("basic");
+        assert!(value["features"].as_object().expect("counts").is_empty());
+    }
+    #[test]
+    fn telemetry_off_and_reset_allow_bounded_inflight_ack_without_stale_write() {
+        for reset in [false, true] {
+            let (mut scheduler, _, _) = configured();
+            scheduler.disclosure_dismissed(now()).expect("dismiss");
+            scheduler.set_basic(true, now()).expect("basic");
+            let ping = job(&mut scheduler, now());
+            scheduler
+                .complete(acknowledged(&ping), now())
+                .expect("ping");
+            let basic = job(&mut scheduler, now());
+            let completion = basic.attempt_with(now(), |dispatch| {
+                assert!(dispatch());
+                if reset {
+                    scheduler.reset(now()).expect("reset while dispatched");
+                } else {
+                    scheduler
+                        .set_basic(false, now())
+                        .expect("off while dispatched");
+                }
+                assert!(matches!(
+                    scheduler.prepare(now(), "en"),
+                    Ok(Preparation::Skipped(SkipReason::Busy))
+                ));
+                Ok(Some(
+                    Acknowledgement::parse(
+                        200,
+                        br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
+                    )
+                    .expect("ack"),
+                ))
+            });
+            let unchanged = scheduler.state().clone();
+            assert_eq!(
+                scheduler
+                    .complete(completion, now())
+                    .expect("stale completion"),
+                CompletionDisposition::Stale
+            );
+            assert_eq!(scheduler.state(), &unchanged);
+            let next = scheduler.prepare(now(), "en").expect("next");
+            if reset {
+                let Preparation::Job(job) = next else {
+                    panic!("basic after reset");
+                };
+                let payload: serde_json::Value =
+                    serde_json::from_str(job.payload()).expect("payload");
+                assert_eq!(
+                    payload["event"], "basic",
+                    "reset must preserve acknowledged ping history"
+                );
+            } else {
+                assert!(matches!(next, Preparation::Skipped(SkipReason::NotDue)));
+            }
+        }
+    }
+    #[test]
+    fn telemetry_checks_lease_again_immediately_before_dispatch() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        let completion = queued.attempt_with(now(), |dispatch| {
+            scheduler.reset(now()).expect("reset during construction");
+            assert!(!dispatch());
+            Ok(None)
+        });
+        assert_eq!(completion.code(), "cancelled");
+        let events = audit
+            .query_extended(&dbflux_audit::query::AuditQueryFilter::default())
+            .expect("audit");
+        assert_eq!(events.len(), 2, "attempt plus cancelled outcome");
+        assert_eq!(
+            scheduler.complete(completion, now()).expect("cancelled"),
+            CompletionDisposition::Stale
+        );
+    }
+    #[test]
+    fn telemetry_disabled_audit_is_fail_closed_before_io() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        audit.set_enabled(false);
+        let completion = queued.attempt_with(now(), |_| panic!("no durable attempt, no I/O"));
+        assert_eq!(completion.code(), "audit_failure");
+        assert_eq!(
+            scheduler.complete(completion, now()),
+            Err(TelemetryError::Audit)
+        );
+        assert_eq!(scheduler.state().pending().len(), 1);
+    }
+    #[test]
+    fn telemetry_failed_outcome_audit_does_not_acknowledge() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        let completion = queued.attempt_with(now(), |dispatch| {
+            assert!(dispatch());
+            audit.set_enabled(false);
+            Ok(Some(
+                Acknowledgement::parse(
+                    200,
+                    br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
+                )
+                .expect("ack"),
+            ))
+        });
+        assert_eq!(completion.code(), "audit_failure");
+        assert_eq!(
+            scheduler.complete(completion, now()),
+            Err(TelemetryError::Audit)
+        );
+        assert_eq!(scheduler.state().pending()[0].json(), queued.payload());
+    }
+    #[test]
+    fn telemetry_background_unwind_releases_dispatch_lease() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        let payload = queued.payload().to_owned();
+        let worker = std::thread::spawn(move || {
+            queued.attempt_with(now(), |dispatch| {
+                assert!(dispatch());
+                panic!("injected executor unwind");
+            })
+        });
+        assert!(worker.join().is_err());
+        let replacement = job(&mut scheduler, now());
+        assert_eq!(replacement.payload(), payload);
+        // Successful owned execution also uses the actual scratch AuditService
+        // from a background thread, returning no storage handle to the owner.
+        let completion = std::thread::spawn(move || acknowledged(&replacement))
+            .join()
+            .expect("background job");
+        scheduler
+            .complete(completion, now())
+            .expect("foreground completion");
+        assert!(scheduler.state().pending().is_empty());
+    }
+    #[test]
+    fn telemetry_completion_storage_failure_releases_lease_without_acknowledging() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        let completion = acknowledged(&queued);
+        let connection = storage.dbflux_db();
+        connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("injected transaction contention");
+        assert_eq!(
+            scheduler.complete(completion, now()),
+            Err(TelemetryError::Storage)
+        );
+        connection
+            .execute_batch("ROLLBACK")
+            .expect("end injected contention");
+        let retry = job(&mut scheduler, now());
+        assert_eq!(retry.payload(), queued.payload());
+    }
+    #[test]
+    fn telemetry_old_cancelled_completion_cannot_release_new_lease() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let old = job(&mut scheduler, now());
+        scheduler.reset(now()).expect("cancel old queue");
+        let new = job(&mut scheduler, now());
+        assert_ne!(old.delivery_id(), new.delivery_id());
+        let stale = old.attempt_with(now(), |_| panic!("cancelled old job"));
+        assert_eq!(
+            scheduler.complete(stale, now()).expect("stale"),
+            CompletionDisposition::Stale
+        );
+        assert!(matches!(
+            scheduler.prepare(now(), "en"),
+            Ok(Preparation::Skipped(SkipReason::Busy))
+        ));
+        scheduler
+            .complete(acknowledged(&new), now())
+            .expect("new completion");
+    }
+    #[test]
+    fn telemetry_dropped_job_releases_lease_and_permanent_failure_is_not_retried() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        let payload = queued.payload().to_owned();
+        drop(queued);
+        let replacement = job(&mut scheduler, now());
+        assert_eq!(replacement.payload(), payload);
+        let completion = replacement.attempt_with(now(), |dispatch| {
+            assert!(dispatch());
+            Err(TransportError::Conflict)
+        });
+        assert_eq!(completion.code(), "conflict");
+        scheduler
+            .complete(completion, now())
+            .expect("permanent rejection");
+        assert!(matches!(
+            scheduler.prepare(now() + chrono::Duration::days(1), "en"),
+            Ok(Preparation::Skipped(SkipReason::NotDue))
+        ));
+        assert_eq!(scheduler.state().pending().len(), 1);
+    }
+    #[test]
+    fn telemetry_default_endpoint_is_unavailable() {
+        let (mut scheduler, _, _) = fixture(TelemetryConfig::default());
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        assert!(matches!(
+            scheduler.prepare(now(), "en").expect("no endpoint"),
+            Preparation::Skipped(SkipReason::NoEndpoint)
+        ));
+        assert!(scheduler.state().pending().is_empty());
+    }
+}

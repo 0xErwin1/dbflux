@@ -17,6 +17,8 @@ pub mod portability;
 pub mod proxy;
 pub mod remote_dashboard_cache;
 pub mod rpc_services;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod updates;
 
 pub use access_manager::AppAccessManager;
