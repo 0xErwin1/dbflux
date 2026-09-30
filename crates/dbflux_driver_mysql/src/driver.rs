@@ -3897,7 +3897,8 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
 
     for row in rows {
         let key_name: String = row.get("Key_name").unwrap_or_default();
-        let column_name: String = row.get("Column_name").unwrap_or_default();
+        let column_name: Option<String> = row.get("Column_name").flatten();
+        let expression: Option<String> = row.get("Expression").flatten();
         let non_unique: i32 = row.get("Non_unique").unwrap_or(1);
 
         let entry = indexes_map
@@ -3909,7 +3910,9 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
                 is_primary: false,
             });
 
-        entry.columns.push(column_name);
+        if let Some(key_part) = index_key_part_label(column_name, expression) {
+            entry.columns.push(key_part);
+        }
     }
 
     // Mark PRIMARY as primary
@@ -3918,6 +3921,12 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
     }
 
     Ok(indexes_map.into_values().collect())
+}
+
+/// A functional key part (MySQL 8.0.13+) has a NULL column name and carries its
+/// definition in `Expression`; it is shown parenthesised, as MySQL writes it in DDL.
+fn index_key_part_label(column_name: Option<String>, expression: Option<String>) -> Option<String> {
+    column_name.or_else(|| expression.map(|expression| format!("({})", expression)))
 }
 
 // Code generators
@@ -4523,9 +4532,9 @@ mod tests {
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
         MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
-        initial_database_from_opts, inject_password_into_mysql_uri, may_open_transaction,
-        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
-        plan_mysql_semantic_request, resolve_write_privilege,
+        index_key_part_label, initial_database_from_opts, inject_password_into_mysql_uri,
+        may_open_transaction, mysql_routine_type_to_kind, mysql_text_literal,
+        normalize_mysql_tcp_host, plan_mysql_semantic_request, resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -4641,6 +4650,19 @@ mod tests {
             dialect.qualified_table(Some("main"), "user`table"),
             "`main`.`user``table`"
         );
+    }
+
+    #[test]
+    fn index_key_part_label_uses_expression_for_functional_key_part() {
+        assert_eq!(
+            index_key_part_label(None, Some("lower(`email`)".to_string())),
+            Some("(lower(`email`))".to_string())
+        );
+        assert_eq!(
+            index_key_part_label(Some("email".to_string()), None),
+            Some("email".to_string())
+        );
+        assert_eq!(index_key_part_label(None, None), None);
     }
 
     #[test]
