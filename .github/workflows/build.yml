@@ -100,6 +100,14 @@ jobs:
             sudo apt-get install -y libfuse2t64
           fi
 
+          # zsync provides zsyncmake, which appimagetool shells out to when -u
+          # update information is passed. appimagetool runs on this runner (with
+          # APPIMAGE_EXTRACT_AND_RUN=1), not inside the ubuntu:22.04 compile
+          # container, so the dependency belongs here; upstream treats a missing
+          # zsyncmake as a warning, so we install it explicitly and fail closed
+          # on verification below instead.
+          sudo apt-get install -y zsync
+
           sudo apt-get install -y gettext imagemagick
 
       - name: Setup Rust cache
@@ -281,8 +289,73 @@ jobs:
           ln -sf "usr/share/applications/$APP_ID.desktop" "AppDir/$APP_ID.desktop"
           ln -sf "usr/share/icons/hicolor/scalable/apps/$APP_ID.svg" "AppDir/$APP_ID.svg"
 
+          # External AppImage updates: stable and nightly embed a zsync update
+          # source; RC releases embed nothing and stay manual. appimagetool has
+          # no UPDATE_INFORMATION env support, so the info is passed as an
+          # argument, and only when non-empty (a bare -u '' is not accepted).
+          UPDATE_INFO=$(bash scripts/appimage-update-info.sh "${{ inputs.channel }}" "${{ matrix.rpm_arch }}")
+          tool_args=(AppDir "dbflux-${{ matrix.rpm_arch }}.AppImage")
+          if [ -n "$UPDATE_INFO" ]; then
+            tool_args=(-u "$UPDATE_INFO" "${tool_args[@]}")
+          fi
+
+          # appimagetool 1.9.1 generates the .zsync sidecar next to the image
+          # (only when zsyncmake is on PATH, hence the apt install above) and
+          # defaults its target URL to the relative basename of the destination,
+          # which is exactly this same-arch image.
           APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage \
-            AppDir dbflux-${{ matrix.rpm_arch }}.AppImage
+            "${tool_args[@]}"
+
+      - name: Verify AppImage update metadata
+        run: |
+          set -euo pipefail
+          IMAGE="dbflux-${{ matrix.rpm_arch }}.AppImage"
+          ZSYNC="${IMAGE}.zsync"
+          INFO=$(bash scripts/appimage-update-info.sh "${{ inputs.channel }}" "${{ matrix.rpm_arch }}")
+
+          # The image's own runtime prints the embedded string; the flag is
+          # handled before any payload launch. Querying the appimagetool
+          # runtime instead would report the tool, not this image.
+          EMBEDDED=$(./"$IMAGE" --appimage-updateinformation)
+
+          if [ "${{ inputs.channel }}" = "rc" ]; then
+            if [ -n "$EMBEDDED" ]; then
+              echo "::error::RC AppImage must not embed update information, found: $EMBEDDED"
+              exit 1
+            fi
+            # The sidecar is not expected on RC; do not assume or require it.
+            exit 0
+          fi
+
+          if [ ! -s "$ZSYNC" ]; then
+            echo "::error::Expected zsync sidecar $ZSYNC is missing or empty."
+            exit 1
+          fi
+          if [ "$EMBEDDED" != "$INFO" ]; then
+            echo "::error::Embedded update information does not match the expected update information."
+            echo "  expected: $INFO"
+            echo "  embedded: $EMBEDDED"
+            exit 1
+          fi
+
+          # zsync 0.6.2 control file: 'zsync:' is the protocol header, 'URL:'
+          # carries the target (appimagetool passes the relative basename of
+          # the destination, i.e. this same-arch image) and 'Length:' its size.
+          grep -q "^zsync: " "$ZSYNC" || {
+            echo "::error::$ZSYNC is not a zsync control file."; exit 1; }
+          grep -Fqx "URL: $IMAGE" "$ZSYNC" || {
+            echo "::error::$ZSYNC does not target the relative image URL $IMAGE."; exit 1; }
+          grep -Fqx "Filename: $IMAGE" "$ZSYNC" || {
+            echo "::error::$ZSYNC does not name $IMAGE as its target."; exit 1; }
+          ZSYNC_LENGTH=$(sed -n 's/^Length: //p' "$ZSYNC" | head -n 1)
+          ACTUAL_LENGTH=$(stat -c %s "$IMAGE")
+          if [ -z "$ZSYNC_LENGTH" ] || [ "${ZSYNC_LENGTH#0x}" != "$ZSYNC_LENGTH" ]; then
+            echo "::error::$ZSYNC has no parsable Length: header."; exit 1
+          fi
+          if [ "$((ZSYNC_LENGTH))" -ne "$ACTUAL_LENGTH" ]; then
+            echo "::error::$ZSYNC Length ($ZSYNC_LENGTH) does not match $IMAGE size ($ACTUAL_LENGTH)."
+            exit 1
+          fi
 
       - name: Verify produced AppImage on Ubuntu 22.04
         run: |
@@ -393,6 +466,7 @@ jobs:
             dbflux-${{ matrix.rpm_arch }}.AppImage
             dbflux-${{ matrix.rpm_arch }}.AppImage.sha256
             dbflux-${{ matrix.rpm_arch }}.AppImage.asc
+            dbflux-${{ matrix.rpm_arch }}.AppImage.zsync
             *.deb
             *.deb.asc
             dbflux_${{ matrix.arch }}.deb.sha256
@@ -411,6 +485,11 @@ jobs:
           cp dbflux-${{ matrix.rpm_arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-${{ matrix.rpm_arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-${{ matrix.rpm_arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          # RC ships no sidecar; stable/nightly sidecars are fail-closed by the
+          # verify step, so this conditional cannot mask a missing output.
+          if [ "${{ inputs.channel }}" != "rc" ]; then
+            cp dbflux-${{ matrix.rpm_arch }}.AppImage.zsync /tmp/artifacts/linux-${{ matrix.arch }}/
+          fi
           cp *.deb /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/

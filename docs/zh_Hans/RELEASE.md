@@ -157,6 +157,16 @@ PNG、各渠道目录中的应用内 PNG 与组合标识 `wordmark.svg`，以及
 `web/public/brand/` 中的网站副本。缺少 `rsvg-convert`、`icotool`、`png2icns`
 或带 `fonttools` 与 `uharfbuzz` 的 Python 时，脚本会在 Nix shell 中重新运行自身。
 
+### AppImage 外部更新信息
+
+stable 和 nightly 的 AppImage 会内嵌外部更新信息，并随构建生成 `.zsync`
+sidecar，与最终签名的镜像一同发布。stable 通过 GitHub 的 `latest` release
+解析，nightly 通过滚动的 `nightly` tag 解析；每个渠道只通告自己的 tag，
+因此更新不会把安装迁移到其他渠道。RC 发布不内嵌更新信息，保持手动更新。
+sidecar 与内嵌字符串由 appimagetool（`-u`）在构建时生成，并由 `build.yml`
+以 fail-closed 方式验证；更新由 AppImageUpdate 之类的外部工具执行——
+DBFlux 自身不会自更新。
+
 ## 切出流程：`main` → `release/vX.Y`
 
 1. 确认你在 `main` 上、工作树干净、且与 `origin/main` 同步。

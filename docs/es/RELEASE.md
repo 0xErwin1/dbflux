@@ -233,6 +233,18 @@ en `web/public/brand/`. Se vuelve a ejecutar dentro de una shell de Nix cuando
 faltan `rsvg-convert`, `icotool`, `png2icns` o Python con `fonttools` y
 `uharfbuzz`.
 
+### Información de actualización externa del AppImage
+
+Los AppImage stable y nightly embeben información de actualización externa y
+se publican con un sidecar `.zsync` generado, junto a la imagen final firmada.
+Stable resuelve a través del release `latest` de GitHub y nightly a través del
+tag rodante `nightly`; cada canal solo anuncia su propio tag, así que una
+actualización nunca mueve una instalación entre canales. Los releases RC no
+embeben información de actualización y siguen siendo manuales. El sidecar y la
+cadena embebida se generan con appimagetool (`-u`) durante el build y se
+verifican de forma fail-closed en `build.yml`; la actualización la realiza una
+herramienta externa como AppImageUpdate — DBFlux mismo no se autoactualiza.
+
 ## Procedimiento de Corte: `main` → `release/vX.Y`
 
 1. Verifica que estás en `main`, árbol limpio, actualizado con `origin/main`.
