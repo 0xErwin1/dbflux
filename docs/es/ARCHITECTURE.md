@@ -250,6 +250,9 @@ crates/
         focus.rs            # Internal focus management
         live_output.rs      # Document-owned streamed script output buffer
         render.rs           # Toolbar, editor, and live output rendering
+      console/              # NativeConsole: reusable command console docked under a document
+        mod.rs              # Entity, execution, audit, history recall, render
+        format.rs           # Dangerous-command gate, result formatting, recall list
       key_value/            # Redis/key-value-specific document tab
         mod.rs              # KeyValueDocument entity
         pane.rs             # KeyValueDocument::into_pane constructor
@@ -916,6 +919,16 @@ consultas de documentos guardadas usan la migración
   específico de Redis con renderizado por tipo (String, Hash, List, Set,
   SortedSet, Stream), paginación, mutations y menú contextual. Se integra con el
   workspace vía un `PaneHandle` construido en `key_value/pane.rs`.
+- **Native console**: `crates/dbflux_ui_document/src/console/` es una consola de
+  comandos que un document acopla bajo su contenido cuando el driver de la
+  conexión anuncia `DriverCapabilities::NATIVE_CONSOLE`;
+  `DriverMetadata::native_console()` deriva su prompt y su ejemplo del lenguaje
+  de consulta. Los comandos se ejecutan mediante `Connection::execute` tras la
+  validación y la detección de comandos peligrosos del `LanguageService` del
+  driver, llevan el techo confirmado tras una confirmación, emiten las mismas
+  filas de auditoría `query_execute` que el editor y quedan en el historial de
+  consultas compartido. La alojan el document clave-valor y el `DataDocument`
+  de colección.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provee `SchemaGraph`
   (nodos de tabla y aristas de clave foránea), algoritmos de layout (LeftRight,
   Snowflake, Compact), exportación a DBML y

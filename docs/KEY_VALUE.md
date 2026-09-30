@@ -37,9 +37,13 @@ value of the selected key on the right, and a command console underneath.
   the keys and their values to a JSON Lines file. Keys are deleted in batches
   with `UNLINK` and the deletion is recorded in the audit log.
 - **Console.** `` Ctrl+` `` opens a console that runs commands against the open
-  database and keeps a history (`Up`/`Down`). Dangerous commands go through the
-  same confirmation as the editor (see
-  [Dangerous-query confirmation](EDITOR.md#dangerous-query-confirmation)).
+  database. Dangerous commands go through the same confirmation as the editor
+  (see [Dangerous-query confirmation](EDITOR.md#dangerous-query-confirmation)),
+  every command is recorded in the audit log like an editor query, and
+  successful commands join the query history. `Up`/`Down` walk through that
+  history for the connection, together with the commands the console refused
+  or that failed in this session. Document collections offer the same console
+  (see [Document Collections](DOCUMENTS.md)).
 
 In the sidebar, each database of a key-value connection shows its key count,
 and databases with no keys fold into a single "N empty databases" row.

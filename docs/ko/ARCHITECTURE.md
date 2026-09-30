@@ -225,6 +225,9 @@ crates/
         focus.rs            # 내부 포커스 관리
         live_output.rs      # 문서가 소유한 스트리밍 스크립트 출력 버퍼
         render.rs           # 도구 모음, 편집기, 실시간 출력 렌더링
+      console/              # NativeConsole: 문서 아래에 붙는 재사용 가능한 명령 콘솔
+        mod.rs              # 엔티티, 실행, 감사, 기록 불러오기, 렌더링
+        format.rs           # 위험 명령 게이트, 결과 서식, 불러오기 목록
       key_value/            # Redis/키-값 전용 문서 탭
         mod.rs              # KeyValueDocument 엔티티
         pane.rs             # KeyValueDocument::into_pane 생성자
@@ -644,6 +647,7 @@ crates/
 - **데이터 테이블**: `crates/dbflux_components/src/components/data_table/` — 정렬, 선택, phantom scroller 패턴을 통한 가로 스크롤, 키보드 탐색, 열 크기 조정, CRUD 작업이 있는 상황에 맞는 메뉴를 갖춘 사용자 정의 가상화 테이블입니다.
 - **문서 트리**: `crates/dbflux_components/src/components/document_tree/` — 키보드 탐색(j/k/h/l), 검색(Ctrl+F 또는 /), 접을 수 있는 노드, 뷰 모드(Keys Only, Keys+Preview, Full Values)를 갖춘 문서 데이터베이스용 계층적 JSON/BSON 뷰어입니다.
 - **키-값 뷰**: `crates/dbflux_ui_document/src/key_value/` — 타입별 렌더링(String, Hash, List, Set, SortedSet, Stream), 페이지 나누기, 변경, 상황에 맞는 메뉴를 갖춘 Redis 전용 문서 탭입니다. `key_value/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
+- **네이티브 콘솔**: `crates/dbflux_ui_document/src/console/`는 연결의 드라이버가 `DriverCapabilities::NATIVE_CONSOLE`을 알릴 때 문서가 내용 아래에 붙이는 명령 콘솔입니다. `DriverMetadata::native_console()`은 쿼리 언어에서 프롬프트와 예시를 도출합니다. 명령은 드라이버 `LanguageService`의 검증과 위험 명령 감지를 거친 뒤 `Connection::execute`로 실행되고, 확인 후에는 확인된 상한을 함께 가지며, 편집기와 같은 `query_execute` 감사 행을 남기고 공유 쿼리 기록에 들어갑니다. 키-값 문서와 컬렉션 `DataDocument`가 이 콘솔을 호스팅합니다.
 - **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다.
 - 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다.

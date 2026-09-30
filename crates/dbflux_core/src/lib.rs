@@ -144,11 +144,11 @@ pub use driver::{
     DriverLimits, DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile,
     ExecutionClassification, ExportFieldHint, FieldEquals, FieldExportTransform, FormFieldDef,
     FormFieldKind, FormSection, FormSectionIcon, FormTab, FormValues, Icon, IsolationLevel,
-    MutationCapabilities, OperationClassifier, OrderByMode, PaginationStyle, QueryCapabilities,
-    QueryLanguage, RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
-    TransactionCapabilities, TransferFamily, WhereOperator, field, field_file_path, field_password,
-    field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked, when_field_equals,
-    when_unchecked, with_default, with_help,
+    MutationCapabilities, NativeConsoleProfile, OperationClassifier, OrderByMode, PaginationStyle,
+    QueryCapabilities, QueryLanguage, RefreshTrigger, SelectOption, SslCertFields, SslModeOption,
+    SyntaxInfo, TransactionCapabilities, TransferFamily, WhereOperator, field, field_file_path,
+    field_password, field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked,
+    when_field_equals, when_unchecked, with_default, with_help,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

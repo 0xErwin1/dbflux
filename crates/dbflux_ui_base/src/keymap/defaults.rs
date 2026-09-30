@@ -206,6 +206,14 @@ fn global_layer() -> KeymapLayer {
     // "minimize window" shortcut on macOS.
     layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);
 
+    // The native console of the active document, where its connection has
+    // one. A global chord, so it also closes the console from its input. The
+    // key-value document binds the same keys on itself.
+    layer.bind(
+        KeyChord::new("`", Modifiers::ctrl()),
+        Command::ToggleConsole,
+    );
+
     bind_workspace_commands(&mut layer);
 
     layer

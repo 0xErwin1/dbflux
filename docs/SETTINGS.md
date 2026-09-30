@@ -162,7 +162,7 @@ The names are the context names shown by the context filter (`Global`,
 `Sidebar`, `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), the window
 names `Workspace`, `SettingsWindow` and `ConnectionManagerWindow`, and the
 panel names `ActivityRail`, `CommandSearch`, `SidebarPanel`, `CodeEditor`,
-`ResultPanel`, `RowInspector`, `KeyValueConsole`, `DocumentQueryBar`,
+`ResultPanel`, `RowInspector`, `KeyValueConsole`, `NativeConsole`, `DocumentQueryBar`,
 `DocumentSchema`, `DocumentAggregate`, `DashboardsPanel` and `SettingsSection`. The values are
 `vim_mode` (`normal`, `insert`, `replace`, `visual`, `visual_line`,
 `visual_block`, present only with Vim editing on), `language` (`sql`, `mongo`,

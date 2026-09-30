@@ -44,9 +44,15 @@ consola de comandos debajo.
   Lines. Las claves se eliminan en lotes con `UNLINK` y la eliminación queda
   registrada en el registro de auditoría.
 - **Consola.** `` Ctrl+` `` abre una consola que ejecuta comandos contra la base de
-  datos abierta y guarda un historial (`Arriba`/`Abajo`). Los comandos
-  peligrosos pasan por la misma confirmación que el editor (ver
-  [Confirmación de queries peligrosas](EDITOR.md#confirmación-de-queries-peligrosas)).
+  datos abierta. Los comandos peligrosos pasan por la misma confirmación que el
+  editor (ver
+  [Confirmación de queries peligrosas](EDITOR.md#confirmación-de-queries-peligrosas)),
+  cada comando queda registrado en el registro de auditoría como una query del
+  editor, y los comandos exitosos se suman al historial de consultas.
+  `Up`/`Down` recorren ese historial de la conexión, junto con los comandos que
+  la consola rechazó o que fallaron en esta sesión. Las colecciones de
+  documentos ofrecen la misma consola (ver
+  [Colecciones de documentos](DOCUMENTS.md)).
 
 En la barra lateral, cada base de datos de una conexión clave-valor muestra su
 conteo de claves, y las bases de datos sin claves se agrupan en una sola fila

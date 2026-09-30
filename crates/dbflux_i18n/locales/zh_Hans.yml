@@ -1317,6 +1317,23 @@ document:
       native_picker_fallback: "原生文件选择器不可用 — 脚本已改存到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
     title:
       untitled: 未命名
+  console:
+    title: "命令"
+    subtitle: "在 %{database} 上运行，危险命令会先确认"
+    placeholder: "输入命令并按 Enter"
+    placeholder_example: "输入命令（例如 %{example}）并按 Enter"
+    binary: "<%{count} 字节二进制数据>"
+    empty: "（空）"
+    affected: "（影响 %{count} 条）"
+    result_set: "-- 结果集 %{index} --"
+    more_lines: "… 还有 %{count} 行"
+    cancelled: "未执行。"
+    run_anyway: "仍然运行"
+    cancel: "取消"
+    destructive_title: "运行破坏性命令？"
+    destructive_body: "此命令可能删除数据，且无法撤销。"
+    connection_inactive: "连接已关闭。请重新连接后再运行命令。"
+    connecting: "仍在连接 %{database}，请稍后再试。"
   dashboard:
     pane_actions:
       open_panel: "打开面板"
@@ -1966,17 +1983,7 @@ document:
       toast_deleted: "已删除匹配 %{pattern} 的 %{count} 个键"
       toast_exported: "键已导出到 %{path}"
     console:
-      title: "命令"
-      subtitle: "在 %{database} 上运行，危险命令会先确认"
-      placeholder: "输入命令并按 Enter"
-      binary: "<%{count} 字节二进制数据>"
-      empty: "（空）"
-      more_lines: "… 还有 %{count} 行"
-      cancelled: "未执行。"
-      run_anyway: "仍然运行"
       cancel: "取消"
-      destructive_title: "运行破坏性命令？"
-      destructive_body: "此命令可能删除数据，且无法撤销。"
     expiry:
       title: "过期"
       mode:

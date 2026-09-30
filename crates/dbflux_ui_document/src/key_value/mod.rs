@@ -32,7 +32,6 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use bulk_delete::BulkDeleteState;
 use collection_panes::{StreamPane, ZSetPane};
-use console::ConsoleState;
 use context_menu::KvContextMenu;
 use dbflux_app::keymap::ContextId;
 use dbflux_components::components::document_tree::{DocumentTree, DocumentTreeState};
@@ -153,7 +152,8 @@ pub struct KeyValueDocument {
     bulk_delete_generation: u64,
     pending_bulk_delete_input: bool,
     bulk_actions_open: bool,
-    console: ConsoleState,
+    console: Option<Entity<crate::console::NativeConsole>>,
+    _console_subscription: Option<Subscription>,
 
     // Inline rename
     rename_input: Option<Entity<InputState>>,
@@ -365,7 +365,8 @@ impl KeyValueDocument {
             })
             .unwrap_or_default();
 
-        let console = ConsoleState::new(window, cx);
+        let (console, console_subscription) =
+            Self::build_console(profile_id, &database, app_state.clone(), window, cx).unzip();
 
         let title = {
             let state = app_state.read(cx);
@@ -440,6 +441,7 @@ impl KeyValueDocument {
             pending_bulk_delete_input: false,
             bulk_actions_open: false,
             console,
+            _console_subscription: console_subscription,
             rename_input: None,
             renaming_index: None,
             editing_member_index: None,

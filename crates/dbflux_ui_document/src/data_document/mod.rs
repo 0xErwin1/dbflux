@@ -1,11 +1,12 @@
 mod pane;
 
+use super::console::{NativeConsole, NativeConsoleEvent, NativeConsoleTarget};
 use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 use super::handle::DocumentEvent;
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::result_panel::{ResultPanel, ResultPanelEvent};
-use dbflux_core::{CollectionRef, QueryResult, RefreshPolicy, TableRef};
+use dbflux_core::{CollectionRef, ExecutionClassification, QueryResult, RefreshPolicy, TableRef};
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
 use std::sync::Arc;
@@ -21,6 +22,8 @@ pub struct DataDocument {
     /// Chrome host: owns the mode bar and delegates content rendering to
     /// the inner `data_grid` entity via `ViewHandle`.
     result_panel: Entity<ResultPanel>,
+    /// Native command console of a collection whose driver offers one.
+    console: Option<Entity<NativeConsole>>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -50,11 +53,92 @@ impl DataDocument {
         cx: &mut Context<Self>,
     ) -> Self {
         let title = collection.qualified_name();
+        let database = collection.database.clone();
         let data_grid = cx.new(|cx| {
-            DataGridPanel::new_for_collection(profile_id, collection, app_state, window, cx)
+            DataGridPanel::new_for_collection(profile_id, collection, app_state.clone(), window, cx)
         });
 
-        Self::new_with_grid(title, DataSourceKind::Collection, data_grid, window, cx)
+        let mut document =
+            Self::new_with_grid(title, DataSourceKind::Collection, data_grid, window, cx);
+        document.attach_console(profile_id, database, app_state, window, cx);
+        document
+    }
+
+    /// Docks the native console under the collection when the connection's
+    /// driver advertises one. Commands run against the collection's database.
+    fn attach_console(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.connection.metadata().native_console())
+        else {
+            return;
+        };
+
+        let target = NativeConsoleTarget {
+            profile_id,
+            database: Some(database.clone()),
+            label: database,
+        };
+
+        let console = cx.new(|cx| {
+            NativeConsole::new(target, profile, ContextId::Global, app_state, window, cx)
+        });
+
+        let subscription = cx.subscribe_in(&console, window, Self::on_console_event);
+        self._subscriptions.push(subscription);
+        self.console = Some(console);
+    }
+
+    fn on_console_event(
+        &mut self,
+        _console: &Entity<NativeConsole>,
+        event: &NativeConsoleEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            NativeConsoleEvent::InputFocused => cx.emit(DocumentEvent::RequestFocus),
+            // A write may have changed the documents on screen.
+            NativeConsoleEvent::Executed {
+                succeeded,
+                classification,
+            } => {
+                let read_only = matches!(
+                    classification,
+                    ExecutionClassification::Metadata | ExecutionClassification::Read
+                );
+
+                if *succeeded && !read_only {
+                    self.data_grid
+                        .update(cx, |grid, cx| grid.refresh(window, cx));
+                }
+            }
+        }
+    }
+
+    /// Shows or hides the console, handing focus back to the document when
+    /// it closes. Returns false when there is no console.
+    fn toggle_console(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(console) = self.console.clone() else {
+            return false;
+        };
+
+        let open = console.update(cx, |console, cx| console.toggle(window, cx));
+        if !open {
+            self.focus_handle.focus(window, cx);
+        }
+
+        cx.notify();
+        true
     }
 
     #[allow(dead_code)]
@@ -110,6 +194,7 @@ impl DataDocument {
             source_kind,
             data_grid,
             result_panel,
+            console: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: vec![grid_sub, panel_sub],
         }
@@ -295,6 +380,14 @@ impl DataDocument {
 
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
+        if self
+            .console
+            .as_ref()
+            .is_some_and(|console| console.read(cx).input_has_focus())
+        {
+            return ContextId::TextInput;
+        }
+
         self.data_grid.read(cx).active_context(cx)
     }
 
@@ -306,6 +399,29 @@ impl DataDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if cmd == Command::ToggleConsole {
+            return self.toggle_console(window, cx);
+        }
+
+        // A command waiting for confirmation answers Enter and Escape, as
+        // its Run anyway and Cancel buttons do. In the console's input, Enter
+        // already answers through the input itself.
+        if matches!(cmd, Command::Execute | Command::Cancel)
+            && let Some(console) = self.console.clone().filter(|console| {
+                let console = console.read(cx);
+                console.has_pending() && !(cmd == Command::Execute && console.input_has_focus())
+            })
+        {
+            console.update(cx, |console, cx| {
+                if cmd == Command::Execute {
+                    console.confirm_pending(cx);
+                } else {
+                    console.cancel_pending(cx);
+                }
+            });
+            return true;
+        }
+
         self.data_grid
             .update(cx, |grid, cx| grid.dispatch_command(cmd, window, cx))
     }
@@ -318,10 +434,20 @@ impl Render for DataDocument {
         // Render through the ResultPanel, which provides the chrome row
         // (mode bar + filter bar segment + refresh dropdown) and hosts the
         // DataGridPanel as its inner child view via ViewHandle.
+        let Some(console) = self.console.clone() else {
+            return div()
+                .size_full()
+                .track_focus(&self.focus_handle)
+                .child(self.result_panel.clone());
+        };
+
         div()
             .size_full()
+            .flex()
+            .flex_col()
             .track_focus(&self.focus_handle)
-            .child(self.result_panel.clone())
+            .child(div().flex_1().min_h_0().child(self.result_panel.clone()))
+            .child(console)
     }
 }
 

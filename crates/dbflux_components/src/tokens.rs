@@ -1295,7 +1295,7 @@ impl InspectorMetrics {
 
 /// Geometry of the key-value browser (P1KvHash, P1KvString, P2KvZset,
 /// P2KvStream, P2KvFilter): toolbars, the key list, the value pane, the
-/// expiry popover, the bulk-delete confirmation and the command console.
+/// expiry popover and the bulk-delete confirmation.
 pub struct KeyValueMetrics;
 
 impl KeyValueMetrics {
@@ -1451,17 +1451,23 @@ impl KeyValueMetrics {
     /// Bulk delete confirmation: 560 px wide, 30 px match rows.
     pub const BULK_MODAL_WIDTH: Pixels = px(560.0);
     pub const BULK_ROW_HEIGHT: Pixels = px(30.0);
-    /// Command console: 32 px header, 14 px sides, 10 px gap, 12 px chevron,
-    /// 14 px icon, 12.5 px mono at 21 px lines, 168 px of transcript.
-    pub const CONSOLE_HEADER_HEIGHT: Pixels = px(32.0);
-    pub const CONSOLE_PADDING_X: Pixels = px(14.0);
-    pub const CONSOLE_PADDING_BOTTOM: Pixels = px(10.0);
-    pub const CONSOLE_GAP: Pixels = px(10.0);
-    pub const CONSOLE_CHEVRON: Pixels = px(12.0);
-    pub const CONSOLE_ICON: Pixels = px(14.0);
-    pub const CONSOLE_FONT: Pixels = px(12.5);
-    pub const CONSOLE_LINE_HEIGHT: Pixels = px(21.0);
-    pub const CONSOLE_TRANSCRIPT_HEIGHT: Pixels = px(168.0);
+}
+
+/// Geometry of the native command console docked under a document.
+pub struct ConsoleMetrics;
+
+impl ConsoleMetrics {
+    /// 32 px header, 14 px sides, 10 px gap, 12 px chevron, 14 px icon,
+    /// 12.5 px mono at 21 px lines, 168 px of transcript.
+    pub const HEADER_HEIGHT: Pixels = px(32.0);
+    pub const PADDING_X: Pixels = px(14.0);
+    pub const PADDING_BOTTOM: Pixels = px(10.0);
+    pub const GAP: Pixels = px(10.0);
+    pub const CHEVRON: Pixels = px(12.0);
+    pub const ICON: Pixels = px(14.0);
+    pub const FONT: Pixels = px(12.5);
+    pub const LINE_HEIGHT: Pixels = px(21.0);
+    pub const TRANSCRIPT_HEIGHT: Pixels = px(168.0);
 }
 
 /// Geometry of the extracted navigation helpers: breadcrumb, empty state and
