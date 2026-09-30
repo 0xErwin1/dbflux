@@ -285,6 +285,7 @@ jobs:
             artifacts/linux-*/*.AppImage
             artifacts/linux-*/*.AppImage.sha256
             artifacts/linux-*/*.AppImage.asc
+            artifacts/linux-*/*.AppImage.zsync
             artifacts/linux-*/*.deb
             artifacts/linux-*/*.deb.sha256
             artifacts/linux-*/*.deb.asc

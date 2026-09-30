@@ -142,6 +142,17 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
 
 그 옆의 macOS `.icns` 파일들(`dbflux.icns`, `dbflux-nightly.icns`)은 `libicns`의 `png2icns`로 같은 방식으로 빌드되며, 512와 1024 px 크기를 추가하고, 번들에는 `AppIcon.icns`로 들어갑니다.
 
+### AppImage 외부 업데이트 정보
+
+stable과 nightly AppImage는 외부 업데이트 정보를 내장하고, 생성된 `.zsync`
+sidecar가 최종 서명된 이미지 옆에 함께 게시됩니다. stable은 GitHub의
+`latest` 릴리스로, nightly는 롤링 `nightly` 태그로 해석합니다. 각 채널은
+자신의 태그만 광고하므로 업데이트가 설치를 채널 간에 옮기는 일은 없습니다.
+RC 릴리스는 업데이트 정보를 내장하지 않으며 수동으로 유지됩니다. sidecar와
+내장 문자열은 빌드 시 appimagetool(`-u`)이 생성하고 `build.yml`이
+fail-closed 방식으로 검증합니다. 업데이트는 AppImageUpdate 같은 외부
+도구가 수행하며 DBFlux 자신은 자체 업데이트하지 않습니다.
+
 ## 생성 절차: `main` → `release/vX.Y`
 
 1. `main`에 있고, 트리가 깨끗하며, `origin/main`과 최신 상태인지 확인합니다.

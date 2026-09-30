@@ -167,6 +167,18 @@ PNGs under `packaging/icons/<size>/apps/`, the in-app PNGs and the lockup
 `web/public/brand/`. It re-runs itself in a Nix shell when `rsvg-convert`,
 `icotool`, `png2icns`, or Python with `fonttools` and `uharfbuzz` are missing.
 
+### AppImage external update information
+
+Stable and nightly AppImages embed external update information and ship with a
+generated `.zsync` sidecar, published next to the final signed image. Stable
+resolves through GitHub's `latest` release and nightly through the rolling
+`nightly` tag; each channel only advertises its own tag, so an update never
+moves an install across channels. RC releases embed no update information and
+stay manual. The sidecar and the embedded string are produced by appimagetool
+(`-u`) during the build and verified fail-closed by `build.yml`; the update is
+performed by an external tool such as AppImageUpdate — DBFlux itself does not
+self-update.
+
 ## Cut Procedure: `main` → `release/vX.Y`
 
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
