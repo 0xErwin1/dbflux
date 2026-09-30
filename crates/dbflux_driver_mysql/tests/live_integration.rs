@@ -157,6 +157,49 @@ fn mysql_schema_introspection() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_table_details_lists_functional_index_with_its_expression() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE functional_index_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                INDEX idx_email_lower ((LOWER(email)))
+            )",
+        ))?;
+
+        let table = connection.table_details("testdb", None, "functional_index_users")?;
+
+        let indexes = table.indexes.as_ref().expect("indexes should be loaded");
+        let index_data = match indexes {
+            dbflux_core::IndexData::Relational(v) => v,
+            _ => panic!("expected relational index data"),
+        };
+
+        let functional_index = index_data
+            .iter()
+            .find(|index| index.name == "idx_email_lower")
+            .expect("functional index should be listed");
+
+        assert_eq!(functional_index.columns.len(), 1);
+        assert!(
+            functional_index.columns[0].starts_with('(')
+                && functional_index.columns[0].ends_with(')')
+                && functional_index.columns[0].to_lowercase().contains("lower")
+                && functional_index.columns[0].contains("email"),
+            "expected parenthesised LOWER(email) expression, got {:?}",
+            functional_index.columns[0]
+        );
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // CRUD operations
 // ---------------------------------------------------------------------------
