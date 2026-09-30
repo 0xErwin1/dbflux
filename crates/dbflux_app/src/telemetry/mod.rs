@@ -168,8 +168,8 @@ impl Lease {
 }
 
 /// Move this value (not the scheduler) to the background executor. Dropping an
-/// unstarted job releases its lease. Every completed attempt must be returned to
-/// `complete`, including failures; otherwise the scheduler remains busy.
+/// unstarted job releases its lease. A finished attempt transfers release
+/// responsibility to its completion until the foreground owner consumes it.
 pub struct DeliveryJob {
     id: Uuid,
     correlation: Uuid,
@@ -340,6 +340,16 @@ pub struct DeliveryCompletion {
     phase: Arc<AtomicU8>,
     result: AttemptOutcome,
 }
+impl Drop for DeliveryCompletion {
+    fn drop(&mut self) {
+        // A failed weak-owner update or cancelled foreground task can discard
+        // a finished result. This Arc belongs to exactly this lease generation;
+        // it cannot cancel a replacement even when the durable ID is unchanged.
+        self.phase
+            .compare_exchange(FINISHED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+    }
+}
 impl DeliveryCompletion {
     pub fn delivery_id(&self) -> Uuid {
         self.id
@@ -395,6 +405,9 @@ impl TelemetryScheduler {
     /// Last successfully committed state on this owner; no mutable cache access.
     pub fn state(&self) -> &TelemetryState {
         &self.state
+    }
+    pub fn is_disclosure_dismissed(&self) -> bool {
+        self.state.disclosure_dismissed()
     }
     fn update(
         &mut self,
@@ -551,7 +564,7 @@ impl TelemetryScheduler {
         self.lease = None;
         committed?;
         if found
-            && let AttemptOutcome::Transport(error) = completion.result
+            && let AttemptOutcome::Transport(error) = &completion.result
             && !error.retryable()
         {
             self.suppressed.insert(completion.id);
@@ -638,23 +651,55 @@ mod tests {
     #[test]
     fn telemetry_prepare_persists_frozen_job_only_after_disclosure() {
         let (mut scheduler, _, storage) = configured();
+        assert!(!scheduler.is_disclosure_dismissed());
         assert!(matches!(
             scheduler.prepare(now(), "es_AR").expect("undisclosed"),
             Preparation::Skipped(SkipReason::NotDue)
         ));
         scheduler.disclosure_dismissed(now()).expect("dismiss");
+        assert!(scheduler.is_disclosure_dismissed());
         let job = job(&mut scheduler, now());
         assert_eq!(scheduler.state().pending()[0].json(), job.payload());
         let persisted = storage
             .telemetry()
             .update(now(), |_| Ok(()))
             .expect("reload current");
+        assert!(persisted.disclosure_dismissed());
         assert_eq!(persisted.pending()[0].json(), job.payload());
         assert!(matches!(
             scheduler.prepare(now(), "es_AR").expect("single flight"),
             Preparation::Skipped(SkipReason::Busy)
         ));
     }
+    #[test]
+    fn telemetry_later_build_startup_preserves_disclosure_and_prepares_without_welcome() {
+        let (mut scheduler, audit, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let first = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&first), now())
+            .expect("complete");
+        drop(first);
+        drop(scheduler);
+        let mut restarted = TelemetryScheduler::new(
+            storage.telemetry(),
+            TelemetryConfig::from_values(Some("https://example.invalid/v1/events"), None, false)
+                .expect("config"),
+            BuildIdentity::published(
+                "1.2.4",
+                ReleaseChannel::Stable,
+                Platform::Linux,
+                Architecture::Amd64,
+            ),
+            Arc::new(audit),
+            now(),
+        )
+        .expect("restart");
+        assert!(restarted.is_disclosure_dismissed());
+        let later = job(&mut restarted, now());
+        assert!(later.payload().contains("1.2.4"));
+    }
+
     #[test]
     fn telemetry_dropping_owner_cancels_unstarted_job() {
         let (mut scheduler, _, _) = configured();
@@ -1020,6 +1065,111 @@ mod tests {
             .expect("foreground completion");
         assert!(scheduler.state().pending().is_empty());
     }
+    #[test]
+    fn telemetry_dropped_owner_update_releases_finished_completion_lease() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+        let payload = queued.payload().to_owned();
+        let id = queued.delivery_id();
+        let phase = queued.phase.clone();
+        let completion = std::thread::spawn(move || acknowledged(&queued))
+            .join()
+            .expect("background attempt");
+        assert_eq!(phase.load(Ordering::SeqCst), FINISHED);
+        // A failed weak-entity update drops its uncalled closure after await,
+        // including the completion it would have passed to the surviving owner.
+        let owner_update = move || completion;
+        drop(owner_update);
+        let retry = job(&mut scheduler, now());
+        assert_eq!(retry.delivery_id(), id);
+        assert_eq!(retry.payload(), payload);
+        assert!(!Arc::ptr_eq(&phase, &retry.phase));
+        assert_eq!(scheduler.state().pending().len(), 1);
+        scheduler
+            .complete(acknowledged(&retry), now())
+            .expect("retry completion");
+        assert!(scheduler.state().pending().is_empty());
+        assert!(matches!(
+            scheduler.prepare(now(), "en"),
+            Ok(Preparation::Skipped(SkipReason::NotDue))
+        ));
+    }
+
+    #[test]
+    fn telemetry_old_completion_drop_cannot_cancel_replacement_after_reset() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let old = job(&mut scheduler, now());
+        scheduler.reset(now()).expect("reset old identity");
+        let replacement = job(&mut scheduler, now());
+        let stale = old.attempt_with(now(), |_| panic!("cancelled before transport"));
+        assert!(!Arc::ptr_eq(&stale.phase, &replacement.phase));
+        drop(stale);
+        assert_eq!(replacement.phase.load(Ordering::SeqCst), QUEUED);
+        assert!(matches!(
+            scheduler.prepare(now(), "en"),
+            Ok(Preparation::Skipped(SkipReason::Busy))
+        ));
+        scheduler
+            .complete(acknowledged(&replacement), now())
+            .expect("replacement completion");
+        assert!(scheduler.state().pending().is_empty());
+    }
+
+    #[test]
+    fn telemetry_stale_finished_completion_drop_cannot_cancel_same_id_generation() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let current = job(&mut scheduler, now());
+        // Model a delayed finished result from a previous attempt of the same
+        // immutable delivery. Only the per-attempt Arc distinguishes leases.
+        let old_phase = Arc::new(AtomicU8::new(FINISHED));
+        let stale = DeliveryCompletion {
+            id: current.delivery_id(),
+            correlation: Uuid::new_v4(),
+            phase: old_phase.clone(),
+            result: AttemptOutcome::Cancelled,
+        };
+        assert!(!Arc::ptr_eq(&stale.phase, &current.phase));
+        drop(stale);
+        assert_eq!(old_phase.load(Ordering::SeqCst), CANCELLED);
+        assert_eq!(current.phase.load(Ordering::SeqCst), QUEUED);
+        assert!(matches!(
+            scheduler.prepare(now(), "en"),
+            Ok(Preparation::Skipped(SkipReason::Busy))
+        ));
+        scheduler
+            .complete(acknowledged(&current), now())
+            .expect("current completion");
+        assert!(scheduler.state().pending().is_empty());
+    }
+
+    #[test]
+    fn telemetry_successful_completion_does_not_cancel_next_delivery() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let ping = job(&mut scheduler, now());
+        let completion = acknowledged(&ping);
+        let old_phase = completion.phase.clone();
+        assert_eq!(
+            scheduler
+                .complete(completion, now())
+                .expect("ping completion"),
+            CompletionDisposition::Applied
+        );
+        assert!(scheduler.state().pending().is_empty());
+        scheduler.set_basic(true, now()).expect("basic");
+        let basic = job(&mut scheduler, now());
+        assert!(!Arc::ptr_eq(&old_phase, &basic.phase));
+        drop(ping);
+        assert_eq!(basic.phase.load(Ordering::SeqCst), QUEUED);
+        scheduler
+            .complete(acknowledged(&basic), now())
+            .expect("basic completion");
+        assert!(scheduler.state().pending().is_empty());
+    }
+
     #[test]
     fn telemetry_completion_storage_failure_releases_lease_without_acknowledging() {
         let (mut scheduler, _, storage) = configured();

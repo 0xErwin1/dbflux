@@ -55,9 +55,17 @@ fn highlights_per_section(kind: &SectionKind) -> usize {
 /// First-run welcome: the running release's highlights and the two update
 /// preferences. Enter or "Get started" closes it; Settings › Updates reopens
 /// it.
+#[cfg(feature = "telemetry")]
+pub struct TelemetryDisclosureDismissed;
+
+#[cfg(feature = "telemetry")]
+impl EventEmitter<TelemetryDisclosureDismissed> for WelcomeDialog {}
+
 pub struct WelcomeDialog {
     app_state: Entity<AppStateEntity>,
     visible: bool,
+    #[cfg(feature = "telemetry")]
+    disclosure_rendered: bool,
     release: Option<&'static ChangelogRelease>,
     focus: ModalFocus,
     highlights_scroll: ScrollHandle,
@@ -68,6 +76,8 @@ impl WelcomeDialog {
         Self {
             app_state,
             visible: false,
+            #[cfg(feature = "telemetry")]
+            disclosure_rendered: false,
             release: None,
             focus: ModalFocus::new(cx),
             highlights_scroll: ScrollHandle::new(),
@@ -88,16 +98,33 @@ impl WelcomeDialog {
             .and_then(|current| changelog::release_for_version(changelog::bundled(), &current));
         self.highlights_scroll.set_offset(Point::default());
         self.visible = true;
+        #[cfg(feature = "telemetry")]
+        {
+            self.disclosure_rendered = false;
+        }
         self.focus.focus_on_next_render();
         cx.notify();
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        #[cfg(feature = "telemetry")]
+        if self.visible && self.disclosure_rendered {
+            cx.emit(TelemetryDisclosureDismissed);
+        }
+        self.hide(cx);
+    }
+
+    /// Switching dialogs is not a user acknowledgement of the disclosure.
+    pub fn hide(&mut self, cx: &mut Context<Self>) {
         if !self.visible {
             return;
         }
 
         self.visible = false;
+        #[cfg(feature = "telemetry")]
+        {
+            self.disclosure_rendered = false;
+        }
         self.focus.restore(cx);
         cx.notify();
     }
@@ -320,11 +347,29 @@ impl Render for WelcomeDialog {
             .child(self.render_whats_new_column(cx))
             .child(self.render_updates_column(cx));
 
+        #[cfg(feature = "telemetry")]
+        {
+            self.disclosure_rendered = true;
+        }
+
         let card = div()
             .flex()
             .flex_col()
             .min_h_0()
             .child(self.render_header(cx))
+            .when(cfg!(feature = "telemetry"), |card| {
+                #[cfg(feature = "telemetry")]
+                let card = card.child(
+                    div()
+                        .flex_shrink_0()
+                        .px(COLUMN_PADDING_X)
+                        .py(Spacing::XS)
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "updates.welcome.telemetry_disclosure"
+                        ))),
+                );
+                card
+            })
             .child(columns)
             .child(self.render_footer(cx));
 
@@ -377,6 +422,46 @@ mod tests {
         assert_scrolls_by_wheel_and_keys(&handle, window);
     }
 
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn welcome_disclosure_requires_rendered_user_dismissal(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let (dialog, window) = cx.add_window_view(move |_, cx| WelcomeDialog::new(app_state, cx));
+        let acknowledgements = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let acknowledgements = acknowledgements.clone();
+            cx.subscribe(
+                &dialog,
+                move |_, _: &super::TelemetryDisclosureDismissed, _| {
+                    acknowledgements.set(acknowledgements.get() + 1);
+                },
+            )
+        });
+        dialog.update(window, |dialog, cx| {
+            dialog.close(cx);
+            dialog.open(cx);
+            dialog.close(cx);
+        });
+        window.run_until_parked();
+        assert_eq!(acknowledgements.get(), 0);
+
+        dialog.update(window, |dialog, cx| dialog.open(cx));
+        window.run_until_parked();
+        assert!(dialog.read_with(window, |dialog, _| dialog.disclosure_rendered));
+        dialog.update(window, |dialog, cx| dialog.hide(cx));
+        window.run_until_parked();
+        assert_eq!(acknowledgements.get(), 0);
+
+        dialog.update(window, |dialog, cx| dialog.open(cx));
+        window.run_until_parked();
+        dialog.update(window, |dialog, cx| {
+            dialog.close(cx);
+            dialog.close(cx);
+        });
+        window.run_until_parked();
+        assert_eq!(acknowledgements.get(), 1);
+    }
+
     #[test]
     fn highlights_follow_the_board_counts() {
         assert_eq!(highlights_per_section(&SectionKind::Added), 4);
@@ -398,6 +483,8 @@ mod tests {
             "updates.welcome.change_later",
             "updates.welcome.get_started",
             "updates.welcome.full_changelog",
+            "updates.welcome.telemetry_disclosure",
+            "updates.welcome.telemetry_save_failed",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
@@ -406,6 +493,13 @@ mod tests {
                     format!("{locale}.{key}"),
                     "{key} missing in {locale}"
                 );
+                if locale != "en" {
+                    assert_ne!(
+                        value,
+                        dbflux_i18n::t!(key, locale = "en"),
+                        "English fallback for {key} in {locale}"
+                    );
+                }
             }
         }
     }

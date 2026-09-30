@@ -617,6 +617,10 @@ impl TelemetryState {
                 .unwrap_or(DateTime::<Utc>::MAX_UTC);
         }
     }
+    pub fn disclosure_dismissed(&self) -> bool {
+        self.disclosure_dismissed
+    }
+
     pub fn dismiss_disclosure(&mut self) {
         self.disclosure_dismissed = true;
     }

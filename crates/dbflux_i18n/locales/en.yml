@@ -4821,6 +4821,8 @@ updates:
   welcome:
     title: Welcome to DBFlux
     tagline: A keyboard-first client for SQL, documents, key-value, time series and object storage.
+    telemetry_save_failed: Could not save the telemetry disclosure acknowledgement.
+    telemetry_disclosure: "This build includes telemetry, but sends only when an endpoint is configured. By default, after you dismiss this notice, it sends one minimal version ping per installation and build with OS, architecture and a random rotating identifier. Basic is a separate opt-in for weekly OS language, country and feature counts. No queries, results or credentials are sent. The full payload is recorded in local Audit."
     whats_new: What is new
     updates: Updates
     notify: Tell me when a new version is out

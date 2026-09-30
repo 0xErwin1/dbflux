@@ -316,6 +316,13 @@ pub(super) struct PendingOpenRoutine {
     pub body: String,
 }
 
+#[cfg(feature = "telemetry")]
+#[derive(Default)]
+struct TelemetryWake {
+    pending: std::cell::Cell<bool>,
+    waker: std::cell::RefCell<Option<std::task::Waker>>,
+}
+
 pub struct Workspace {
     app_state: Entity<AppStateEntity>,
     sidebar: Entity<Sidebar>,
@@ -397,6 +404,10 @@ pub struct Workspace {
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
     _background_purge_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    _telemetry_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    telemetry_wake: std::rc::Rc<TelemetryWake>,
 
     /// Pending login modal open request from a settings window auth-profile
     /// login flow. Consumed in render() to call `login_modal.open_manual`.
@@ -478,6 +489,18 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::updates::WhatsNewDialog::new(app_state.clone(), cx));
         let welcome_dialog =
             cx.new(|cx| crate::ui::overlays::updates::WelcomeDialog::new(app_state.clone(), cx));
+
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(
+            &welcome_dialog,
+            |this,
+             _,
+             _: &crate::ui::overlays::updates::welcome::TelemetryDisclosureDismissed,
+             cx| {
+                this.dismiss_telemetry_disclosure(cx);
+            },
+        )
+        .detach();
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
@@ -1622,6 +1645,10 @@ impl Workspace {
             pane_actions_menu: None,
             last_user_error: None,
             _background_purge_task: None,
+            #[cfg(feature = "telemetry")]
+            _telemetry_task: None,
+            #[cfg(feature = "telemetry")]
+            telemetry_wake: std::rc::Rc::new(TelemetryWake::default()),
             pending_login_modal_open: None,
         };
 

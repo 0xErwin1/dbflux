@@ -4821,6 +4821,8 @@ updates:
   welcome:
     title: Te damos la bienvenida a DBFlux
     tagline: Un cliente pensado para el teclado para SQL, documentos, clave-valor, series temporales y almacenamiento de objetos.
+    telemetry_save_failed: No se pudo guardar la confirmación del aviso de telemetría.
+    telemetry_disclosure: "Esta compilación incluye telemetría, pero solo envía datos si hay un destino configurado. Por defecto, después de cerrar este aviso, envía un único aviso mínimo de versión por instalación y compilación, con sistema operativo, arquitectura y un identificador aleatorio que rota. Basic requiere una activación independiente para enviar semanalmente el idioma del sistema, el país y los recuentos de funciones. No se envían consultas, resultados ni credenciales. El contenido completo queda registrado en la auditoría local."
     whats_new: Novedades
     updates: Actualizaciones
     notify: Avisarme cuando salga una nueva versión
