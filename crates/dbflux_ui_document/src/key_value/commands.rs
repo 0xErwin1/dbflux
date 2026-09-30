@@ -299,7 +299,7 @@ impl super::KeyValueDocument {
                 true
             }
             Command::Cancel => {
-                if self.console.pending.is_some() {
+                if self.console_has_pending(cx) {
                     self.cancel_console_command(cx);
                 } else if self.bulk_actions_open {
                     self.bulk_actions_open = false;
@@ -326,6 +326,12 @@ impl super::KeyValueDocument {
                 true
             }
             Command::Execute => {
+                // In the console's input, Enter already answers through the
+                // input itself.
+                if self.focus_mode != KeyValueFocusMode::TextInput && self.console_has_pending(cx) {
+                    self.confirm_console_command(cx);
+                    return true;
+                }
                 if self.pending_key_delete.is_some() {
                     self.confirm_delete_key(cx);
                     return true;

@@ -59,6 +59,13 @@ Driver de documentos MongoDB para DBFlux.
   (`showPrivileges: true`) en busca de privilegios o roles que otorguen
   escritura, con `hello` forzando el veredicto a read-only cuando la conexión
   es directa a un nodo no writable (por ejemplo, un secundario).
+- **Consola de comandos nativa (`NATIVE_CONSOLE`)**: una pestaña de colección
+  acopla una consola que ejecuta un comando de shell a la vez mediante
+  `Connection::execute` contra la base de datos de la colección, con la
+  validación y la detección de comandos peligrosos del language service, las
+  filas de auditoría y el historial de consultas que usa el editor. Un comando
+  peligroso confirmado lleva el techo confirmado, así que un script escrito en
+  la consola sigue las mismas reglas de techo que uno ejecutado desde el editor.
 
 ### Instance Metrics
 

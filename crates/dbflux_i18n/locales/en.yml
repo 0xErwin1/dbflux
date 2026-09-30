@@ -1317,6 +1317,23 @@ document:
       native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
     title:
       untitled: Untitled
+  console:
+    title: "Command"
+    subtitle: "runs against %{database}, dangerous commands ask first"
+    placeholder: "Type a command and press Enter"
+    placeholder_example: "Type a command such as %{example} and press Enter"
+    binary: "<%{count} bytes of binary data>"
+    empty: "(empty)"
+    affected: "(%{count} affected)"
+    result_set: "-- result set %{index} --"
+    more_lines: "… %{count} more lines"
+    cancelled: "Not run."
+    run_anyway: "Run anyway"
+    cancel: "Cancel"
+    destructive_title: "Run a destructive command?"
+    destructive_body: "This command can delete data and cannot be undone."
+    connection_inactive: "The connection is closed. Connect again to run commands."
+    connecting: "Still connecting to %{database}. Try again in a moment."
   dashboard:
     pane_actions:
       open_panel: "Open panel"
@@ -1966,17 +1983,7 @@ document:
       toast_deleted: "Deleted %{count} keys matching %{pattern}"
       toast_exported: "Keys exported to %{path}"
     console:
-      title: "Command"
-      subtitle: "runs against %{database}, dangerous commands ask first"
-      placeholder: "Type a command and press Enter"
-      binary: "<%{count} bytes of binary data>"
-      empty: "(empty)"
-      more_lines: "… %{count} more lines"
-      cancelled: "Not run."
-      run_anyway: "Run anyway"
       cancel: "Cancel"
-      destructive_title: "Run a destructive command?"
-      destructive_body: "This command can delete data and cannot be undone."
     expiry:
       title: "Expiry"
       mode:

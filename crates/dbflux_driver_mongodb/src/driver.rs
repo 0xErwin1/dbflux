@@ -121,7 +121,8 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
             | DriverCapabilities::CHART_AUTHORING.bits()
-            | DriverCapabilities::SCRIPT_EXECUTION.bits(),
+            | DriverCapabilities::SCRIPT_EXECUTION.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),

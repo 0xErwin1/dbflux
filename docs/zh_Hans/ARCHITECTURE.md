@@ -225,6 +225,9 @@ crates/
         focus.rs            # 内部焦点管理
         live_output.rs      # 文档自有的流式脚本输出缓冲区
         render.rs           # 工具栏、编辑器与实时输出渲染
+      console/              # NativeConsole：停靠在文档下方的可复用命令控制台
+        mod.rs              # 实体、执行、审计、历史回溯、渲染
+        format.rs           # 危险命令关卡、结果格式化、回溯列表
       key_value/            # Redis/键值专用的文档标签页
         mod.rs              # KeyValueDocument 实体
         pane.rs             # KeyValueDocument::into_pane 构造函数
@@ -645,6 +648,7 @@ crates/
 - **数据表格**：`crates/dbflux_components/src/components/data_table/` 自研的虚拟化表格，支持排序、选区、基于虚拟滚动条模式的横向滚动、键盘导航、列宽调整，以及带 CRUD 操作的右键菜单。
 - **文档树**：`crates/dbflux_components/src/components/document_tree/` 面向文档数据库的层级式 JSON/BSON 查看器，支持键盘导航（j/k/h/l）、搜索（Ctrl+F 或 /）、可折叠节点，以及多种视图模式（仅键、键+预览、完整值）。
 - **键值视图**：`crates/dbflux_ui_document/src/key_value/` Redis 专用的文档标签页，按类型渲染（String、Hash、List、Set、SortedSet、Stream），支持分页、变更与右键菜单。通过 `key_value/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
+- **原生控制台**：`crates/dbflux_ui_document/src/console/` 是一个命令控制台，当连接的驱动声明 `DriverCapabilities::NATIVE_CONSOLE` 时，文档会把它停靠在内容下方；`DriverMetadata::native_console()` 根据查询语言推导其提示符与示例。命令先经过驱动 `LanguageService` 的校验与危险命令检测，再通过 `Connection::execute` 运行；确认后会携带已确认的上限，产生与编辑器相同的 `query_execute` 审计记录，并进入共享的查询历史。键值文档和集合的 `DataDocument` 都承载该控制台。
 - **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
 - 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。

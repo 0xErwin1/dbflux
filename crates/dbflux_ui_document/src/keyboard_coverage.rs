@@ -465,10 +465,6 @@ pub(crate) const KEY_VALUE: SurfaceRegistry = SurfaceRegistry {
         ("kv-rename-key", KeyboardPath::Command(Command::Rename)),
         ("kv-delete-key", KeyboardPath::Command(Command::Delete)),
         (
-            "kv-console-header",
-            KeyboardPath::Command(Command::ToggleConsole),
-        ),
-        (
             "refresh-action",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
@@ -491,6 +487,34 @@ pub(crate) const KEY_VALUE: SurfaceRegistry = SurfaceRegistry {
         ("seg-ctl-item-json", KeyboardPath::Menu("ViewAs(*")),
         ("seg-ctl-item-hex", KeyboardPath::Menu("ViewAs(*")),
         ("seg-ctl-item-msgpack", KeyboardPath::Menu("ViewAs(*")),
+    ],
+};
+
+/// The native command console docked under a document (`crate::console`).
+/// Ctrl+` toggles it (bound globally, and on the key-value document itself);
+/// with the document focused, Enter runs a command waiting for confirmation
+/// and Escape drops it, as the Run anyway and Cancel buttons do.
+pub(crate) const NATIVE_CONSOLE: SurfaceRegistry = SurfaceRegistry {
+    name: "native console",
+    contexts: &[
+        ContextId::KeyValue,
+        ContextId::Global,
+        ContextId::Results,
+        ContextId::TextInput,
+    ],
+    entries: &[
+        (
+            "native-console-header",
+            KeyboardPath::Command(Command::ToggleConsole),
+        ),
+        (
+            "native-console-run-anyway",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "native-console-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
     ],
 };
 

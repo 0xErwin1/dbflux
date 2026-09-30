@@ -17,6 +17,7 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - Connection modes: manual (host/port/user/password/database) and URI mode. URI mode accepts `redis://` and `rediss://` connection strings.
 - Multiple logical databases via `SELECT <db>` (`MULTIPLE_DATABASES`). The active database index is tracked on the connection.
 - Authentication with optional username + password (`AUTHENTICATION`).
+- Native command console (`NATIVE_CONSOLE`): the key browser docks a console that runs one command at a time through `Connection::execute` against the open database, with the language service's validation and dangerous-command detection, the audit rows and the query history the editor uses.
 - Reports its client identity to the server via `CLIENT SETNAME` on connect (`dbflux/<version>`, visible in `CLIENT LIST`); best-effort, since some managed providers restrict `CLIENT` commands.
 - Best-effort write-privilege probe on connect (`probe_write_privilege`): tries `ACL WHOAMI` + `ACL DRYRUN` first, and falls back to a short-TTL namespaced `SET ... NX` / `DEL` when `ACL` is unavailable (older server or restricted managed provider); a replica's `READONLY` reply or a `NOPERM` denial resolves to a read-only connection.
 - TLS/SSL with three modes (`off`, `on`, `verify`):

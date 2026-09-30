@@ -103,6 +103,7 @@ crates/dbflux_ui_document/src/audit/render.rs:render_timeline: drag start
 crates/dbflux_ui_document/src/buckets_table/render.rs:render: focus on press
 crates/dbflux_ui_document/src/buckets_table/render.rs:render_toolbar: cursor sync
 crates/dbflux_ui_document/src/code/render.rs:render_editor: focus on press
+crates/dbflux_ui_document/src/console/mod.rs:render_body: cursor sync
 crates/dbflux_ui_document/src/dashboard/builder.rs:panel_header: drag start
 crates/dbflux_ui_document/src/dashboard/builder.rs:panel_header: propagation guard
 crates/dbflux_ui_document/src/dashboard/builder.rs:panel_resize_bottom: resize grip
@@ -118,7 +119,6 @@ crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_export_backdrop: 
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_filter_row: cursor sync
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_filter_row: cursor sync
 crates/dbflux_ui_document/src/history_panel.rs:render: focus on press
-crates/dbflux_ui_document/src/key_value/console.rs:render_console: cursor sync
 crates/dbflux_ui_document/src/key_value/render.rs:render: focus on press
 crates/dbflux_ui_document/src/key_value/render.rs:render_filter_row: cursor sync
 crates/dbflux_ui_document/src/key_value/render_list.rs:render_folder_row: propagation guard

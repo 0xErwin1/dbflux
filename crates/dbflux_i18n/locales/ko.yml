@@ -1317,6 +1317,23 @@ document:
       native_picker_fallback: "기본 파일 선택기를 사용할 수 없습니다 — 대신 스크립트를 %{path}에 저장했습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
     title:
       untitled: 제목 없음
+  console:
+    title: "명령"
+    subtitle: "%{database}에서 실행되며 위험한 명령은 먼저 확인합니다"
+    placeholder: "명령을 입력하고 Enter를 누르세요"
+    placeholder_example: "%{example} 같은 명령을 입력하고 Enter를 누르세요"
+    binary: "<바이너리 데이터 %{count}바이트>"
+    empty: "(비어 있음)"
+    affected: "(%{count}개 영향받음)"
+    result_set: "-- 결과 집합 %{index} --"
+    more_lines: "… %{count}줄 더"
+    cancelled: "실행하지 않았습니다."
+    run_anyway: "그래도 실행"
+    cancel: "취소"
+    destructive_title: "파괴적인 명령을 실행할까요?"
+    destructive_body: "이 명령은 데이터를 삭제할 수 있으며 되돌릴 수 없습니다."
+    connection_inactive: "연결이 닫혀 있습니다. 명령을 실행하려면 다시 연결하세요."
+    connecting: "아직 %{database}에 연결하는 중입니다. 잠시 후 다시 시도하세요."
   dashboard:
     pane_actions:
       open_panel: "패널 열기"
@@ -1966,17 +1983,7 @@ document:
       toast_deleted: "%{pattern}과 일치하는 키 %{count}개를 삭제했습니다"
       toast_exported: "키를 %{path}(으)로 내보냈습니다"
     console:
-      title: "명령"
-      subtitle: "%{database}에서 실행되며 위험한 명령은 먼저 확인합니다"
-      placeholder: "명령을 입력하고 Enter를 누르세요"
-      binary: "<바이너리 데이터 %{count}바이트>"
-      empty: "(비어 있음)"
-      more_lines: "… %{count}줄 더"
-      cancelled: "실행하지 않았습니다."
-      run_anyway: "그래도 실행"
       cancel: "취소"
-      destructive_title: "파괴적인 명령을 실행할까요?"
-      destructive_body: "이 명령은 데이터를 삭제할 수 있으며 되돌릴 수 없습니다."
     expiry:
       title: "만료"
       mode:

@@ -155,7 +155,7 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), 창 이름 `Workspace`,
 `SettingsWindow`, `ConnectionManagerWindow`, 그리고 패널 이름 `ActivityRail`,
 `CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
-`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`KeyValueConsole`, `NativeConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
 `DashboardsPanel`,
 `SettingsSection`을 쓸 수 있습니다. 값으로는 `vim_mode`(`normal`, `insert`,
 `replace`, `visual`, `visual_line`, `visual_block`, Vim 편집이 켜져 있을 때만),

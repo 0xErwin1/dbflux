@@ -168,7 +168,7 @@ Los nombres son los de los contextos que muestra el filtro de contexto
 los nombres de ventana `Workspace`, `SettingsWindow` y
 `ConnectionManagerWindow`, y los nombres de panel `ActivityRail`,
 `CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
-`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`KeyValueConsole`, `NativeConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
 `DashboardsPanel` y
 `SettingsSection`. Los valores son `vim_mode` (`normal`, `insert`, `replace`,
 `visual`, `visual_line`, `visual_block`, presente solo con la edición Vim

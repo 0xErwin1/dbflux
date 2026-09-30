@@ -17,8 +17,11 @@ pub const COMMAND_SEARCH: &str = "CommandSearch";
 pub const RESULT_PANEL: &str = "ResultPanel";
 /// The row inspector beside a grid.
 pub const ROW_INSPECTOR: &str = "RowInspector";
-/// The command console of a key-value document.
+/// The command console of a key-value document. Kept beside
+/// [`NATIVE_CONSOLE`] so predicates written against it still match.
 pub const KEY_VALUE_CONSOLE: &str = "KeyValueConsole";
+/// The native command console docked under a document.
+pub const NATIVE_CONSOLE: &str = "NativeConsole";
 /// The filter, sort and projection bar of a document collection.
 pub const DOCUMENT_QUERY_BAR: &str = "DocumentQueryBar";
 /// The sampled schema view of a document collection.
@@ -39,6 +42,7 @@ pub const ALL: &[&str] = &[
     RESULT_PANEL,
     ROW_INSPECTOR,
     KEY_VALUE_CONSOLE,
+    NATIVE_CONSOLE,
     DOCUMENT_QUERY_BAR,
     DOCUMENT_SCHEMA,
     DOCUMENT_AGGREGATE,

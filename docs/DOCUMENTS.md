@@ -59,3 +59,11 @@ in the order the page returns them.
   server after the page loaded, a card says whether your change can apply on
   top, shows the exact update, and offers **Reload document** or **Apply my
   change**.
+- Drivers that offer a native console (MongoDB) dock it under the collection:
+  `` Ctrl+` `` shows or hides it. It runs one shell command at a time, such as
+  `db.orders.find({"status": "paid"})`, against the collection's database and
+  prints documents as one JSON object per line. Commands go through the same
+  validation and dangerous-query confirmation as the editor, are recorded in
+  the audit log and join the query history, which `Up`/`Down` walk through. A
+  command that writes refreshes the documents on screen. The console shows at
+  most 200 lines of a result; use the editor for larger results.

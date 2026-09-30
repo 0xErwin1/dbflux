@@ -1317,6 +1317,23 @@ document:
       native_picker_fallback: "Selector de archivos nativo no disponible — el script se guardó en %{path}. Instala xdg-desktop-portal, zenity o kdialog para tener un selector de guardado."
     title:
       untitled: Sin título
+  console:
+    title: "Comando"
+    subtitle: "se ejecuta en %{database}; los comandos peligrosos piden confirmación"
+    placeholder: "Escribe un comando y pulsa Enter"
+    placeholder_example: "Escribe un comando como %{example} y pulsa Enter"
+    binary: "<%{count} bytes de datos binarios>"
+    empty: "(vacío)"
+    affected: "(%{count} afectados)"
+    result_set: "-- conjunto de resultados %{index} --"
+    more_lines: "… %{count} líneas más"
+    cancelled: "No se ejecutó."
+    run_anyway: "Ejecutar igualmente"
+    cancel: "Cancelar"
+    destructive_title: "¿Ejecutar un comando destructivo?"
+    destructive_body: "Este comando puede eliminar datos y no se puede deshacer."
+    connection_inactive: "La conexión está cerrada. Vuelve a conectar para ejecutar comandos."
+    connecting: "Todavía se está conectando a %{database}. Inténtalo de nuevo en un momento."
   dashboard:
     pane_actions:
       open_panel: "Abrir panel"
@@ -1966,17 +1983,7 @@ document:
       toast_deleted: "Se eliminaron %{count} claves que coinciden con %{pattern}"
       toast_exported: "Claves exportadas a %{path}"
     console:
-      title: "Comando"
-      subtitle: "se ejecuta en %{database}; los comandos peligrosos piden confirmación"
-      placeholder: "Escribe un comando y pulsa Enter"
-      binary: "<%{count} bytes de datos binarios>"
-      empty: "(vacío)"
-      more_lines: "… %{count} líneas más"
-      cancelled: "No se ejecutó."
-      run_anyway: "Ejecutar igualmente"
       cancel: "Cancelar"
-      destructive_title: "¿Ejecutar un comando destructivo?"
-      destructive_body: "Este comando puede eliminar datos y no se puede deshacer."
     expiry:
       title: "Caducidad"
       mode:

@@ -202,7 +202,8 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
-            | DriverCapabilities::CHART_AUTHORING.bits(),
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits(),
     ),
     default_port: Some(6379),
     uri_scheme: "redis".into(),

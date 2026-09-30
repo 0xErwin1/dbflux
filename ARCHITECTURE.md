@@ -225,6 +225,9 @@ crates/
         focus.rs            # Internal focus management
         live_output.rs      # Document-owned streamed script output buffer
         render.rs           # Toolbar, editor, and live output rendering
+      console/              # NativeConsole: reusable command console docked under a document
+        mod.rs              # Entity, execution, audit, history recall, render
+        format.rs           # Dangerous-command gate, result formatting, recall list
       key_value/            # Redis/key-value-specific document tab
         mod.rs              # KeyValueDocument entity
         pane.rs             # KeyValueDocument::into_pane constructor
@@ -654,6 +657,7 @@ A right-rail builder composes SELECT/UPDATE/DELETE statements without writing SQ
 - **Data table**: `crates/dbflux_components/src/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
 - **Document tree**: `crates/dbflux_components/src/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
 - **Key-value view**: `crates/dbflux_ui_document/src/key_value/` Redis-specific document tab with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu. Integrates with the workspace via a `PaneHandle` constructed in `key_value/pane.rs`.
+- **Native console**: `crates/dbflux_ui_document/src/console/` is a command console that a document docks under its content when the connection's driver advertises `DriverCapabilities::NATIVE_CONSOLE`; `DriverMetadata::native_console()` derives its prompt and example from the query language. Commands run through `Connection::execute` after the driver's `LanguageService` validation and dangerous-command detection, carry the confirmed ceiling after a confirmation, emit the same `query_execute` audit rows as the editor and land in the shared query history. The key-value document and the collection `DataDocument` host it.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
 - Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor.

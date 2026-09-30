@@ -16,6 +16,7 @@
 - 연결 모드: 수동(호스트/포트/사용자/비밀번호/데이터베이스)과 URI 모드. URI 모드는 `redis://`와 `rediss://` 연결 문자열을 받습니다.
 - `SELECT <db>`를 통한 여러 논리 데이터베이스(`MULTIPLE_DATABASES`). 활성 데이터베이스 인덱스는 연결에서 추적됩니다.
 - 선택적인 사용자 이름 + 비밀번호를 통한 인증(`AUTHENTICATION`).
+- 네이티브 명령 콘솔(`NATIVE_CONSOLE`): 키 브라우저에는 `Connection::execute`를 통해 열린 데이터베이스에 대해 명령을 한 번에 하나씩 실행하는 콘솔이 붙으며, 편집기가 쓰는 것과 같은 언어 서비스의 검증과 위험 명령 감지, 감사 행, 쿼리 기록을 사용합니다.
 - 연결 시 `CLIENT SETNAME`으로 서버에 클라이언트 식별자를 보고합니다(`dbflux/<version>`, `CLIENT LIST`에서 확인 가능). 일부 관리형 공급자가 `CLIENT` 명령을 제한하므로 최선의 시도로 수행됩니다.
 - 연결 시 최선의 시도로 수행하는 쓰기 권한 프로브(`probe_write_privilege`): 먼저 `ACL WHOAMI` + `ACL DRYRUN`을 시도하고, `ACL`을 사용할 수 없으면(구버전 서버 또는 제한된 관리형 공급자) 짧은 TTL의 네임스페이스가 지정된 `SET ... NX` / `DEL`로 대체합니다. 복제본의 `READONLY` 응답이나 `NOPERM` 거부는 읽기 전용 연결로 해석됩니다.
 - 세 가지 모드(`off`, `on`, `verify`)를 갖춘 TLS/SSL:

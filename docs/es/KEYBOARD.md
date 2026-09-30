@@ -40,6 +40,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
 | `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
 | `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
+| `` Ctrl+` ``                                     | Mostrar u ocultar la consola de comandos del documento activo, cuando su conexión tiene una (bases de datos clave-valor, colecciones de documentos) |
 | `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
 | `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Ocultar o mostrar los resultados de un documento de consulta, dejando solo el editor |
 | `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
@@ -699,7 +700,8 @@ masivo, y Detener o Buscar en todo el keyspace mientras un escaneo filtrado lee
 página por página). En los diálogos Nueva clave y Añadir miembro, `Tab` y
 `Shift+Tab` recorren los campos como `j` y `k` y no salen del diálogo. Cuando la
 consola pide confirmar un comando peligroso, `Enter` en su campo vacío lo ejecuta
-y `Escape` lo cancela.
+y `Escape` lo cancela. La consola de una colección de documentos responde a las
+mismas teclas.
 
 ## Almacenamiento de objetos
 

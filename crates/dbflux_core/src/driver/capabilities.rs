@@ -649,6 +649,12 @@ bitflags! {
         /// routing JS-looking input to the script engine instead of the
         /// driver's normal query parser.
         const SCRIPT_EXECUTION = 1 << 61;
+
+        /// Driver commands can run one at a time from a native command
+        /// console embedded in its documents, through `Connection::execute`
+        /// and the driver's `LanguageService`. The console's presentation
+        /// comes from [`DriverMetadata::native_console`].
+        const NATIVE_CONSOLE = 1 << 62;
     }
 }
 
@@ -694,6 +700,11 @@ mod capability_bits_tests {
     #[test]
     fn script_execution_bit_value() {
         assert_eq!(DriverCapabilities::SCRIPT_EXECUTION.bits(), 1u64 << 61);
+    }
+
+    #[test]
+    fn native_console_bit_value() {
+        assert_eq!(DriverCapabilities::NATIVE_CONSOLE.bits(), 1u64 << 62);
     }
 
     #[test]
@@ -761,6 +772,7 @@ mod capability_bits_tests {
             DriverCapabilities::OBJECT_STORAGE,
             DriverCapabilities::OBJECT_PREFIX_DELETE,
             DriverCapabilities::SCRIPT_EXECUTION,
+            DriverCapabilities::NATIVE_CONSOLE,
         ];
 
         let mut seen_bits: u64 = 0;
@@ -778,6 +790,44 @@ mod capability_bits_tests {
             );
             seen_bits |= bits;
         }
+    }
+}
+
+#[cfg(test)]
+mod native_console_tests {
+    use super::*;
+
+    fn metadata(language: QueryLanguage, capabilities: DriverCapabilities) -> DriverMetadata {
+        DriverMetadataBuilder::new("test", "Test", DatabaseCategory::KeyValue, language)
+            .capabilities(capabilities)
+            .build()
+    }
+
+    #[test]
+    fn drivers_without_the_capability_have_no_console() {
+        let metadata = metadata(QueryLanguage::RedisCommands, DriverCapabilities::KV_GET);
+
+        assert_eq!(metadata.native_console(), None);
+    }
+
+    #[test]
+    fn the_console_profile_follows_the_query_language() {
+        let redis = metadata(
+            QueryLanguage::RedisCommands,
+            DriverCapabilities::NATIVE_CONSOLE,
+        )
+        .native_console()
+        .expect("console profile");
+        assert_eq!(redis.prompt("0"), "0>");
+        assert_eq!(redis.example_command, "PING");
+
+        let custom = metadata(
+            QueryLanguage::Custom("rpc".to_string()),
+            DriverCapabilities::NATIVE_CONSOLE,
+        )
+        .native_console()
+        .expect("an external driver still gets a console");
+        assert_eq!(custom.example_command, "");
     }
 }
 
@@ -2091,6 +2141,13 @@ impl DriverMetadata {
         self.category == DatabaseCategory::LogStream
     }
 
+    /// Presentation of the native command console, or `None` when the driver
+    /// does not advertise [`DriverCapabilities::NATIVE_CONSOLE`].
+    pub fn native_console(&self) -> Option<NativeConsoleProfile> {
+        self.supports(DriverCapabilities::NATIVE_CONSOLE)
+            .then(|| NativeConsoleProfile::for_language(&self.query_language))
+    }
+
     /// Editor presentation profile for this driver.
     ///
     /// Returns the driver's `editor_profile` override when set, otherwise a
@@ -2100,6 +2157,41 @@ impl DriverMetadata {
         self.editor_profile
             .clone()
             .unwrap_or_else(|| EditorLanguageProfile::from_language(&self.query_language))
+    }
+}
+
+/// Presentation of a driver's native command console.
+///
+/// Derived from the driver's [`QueryLanguage`] so external drivers that
+/// advertise [`DriverCapabilities::NATIVE_CONSOLE`] get a working console
+/// without shipping extra metadata over RPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeConsoleProfile {
+    /// Printed after the context name in the prompt (`0>` for database `0`).
+    pub prompt_terminator: &'static str,
+
+    /// A harmless command shown in the empty input. Empty when the language
+    /// has no obvious one.
+    pub example_command: &'static str,
+}
+
+impl NativeConsoleProfile {
+    pub fn for_language(language: &QueryLanguage) -> Self {
+        let example_command = match language {
+            QueryLanguage::RedisCommands => "PING",
+            QueryLanguage::MongoQuery => "db.collection.find({})",
+            _ => "",
+        };
+
+        Self {
+            prompt_terminator: ">",
+            example_command,
+        }
+    }
+
+    /// The prompt for commands run against `context` (usually a database).
+    pub fn prompt(&self, context: &str) -> String {
+        format!("{context}{}", self.prompt_terminator)
     }
 }
 

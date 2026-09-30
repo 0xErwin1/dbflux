@@ -39,6 +39,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
 | `Ctrl+m` | Open tab context menu |
+| `` Ctrl+` `` | Show or hide the command console of the active document, where its connection has one (key-value databases, document collections) |
 | `Ctrl+,` / `Cmd+,` | Open settings |
 | `Ctrl+Shift+E` / `Cmd+Shift+E` | Hide or show the results of a query document, leaving the editor alone |
 | `Ctrl+Shift+R` / `Cmd+Shift+R` | Maximize the results of a query document over the editor, or restore the split |
@@ -667,7 +668,8 @@ interval, bulk delete, and Stop or Search whole keyspace while a filtered scan
 reads page by page). In the New key and Add member dialogs `Tab` and `Shift+Tab`
 move through the fields like `j` and `k` and stay in the dialog. When the
 console asks to confirm a dangerous command, `Enter` in its empty field runs it
-and `Escape` cancels it.
+and `Escape` cancels it. The console of a document collection answers the same
+keys.
 
 ## Object storage
 

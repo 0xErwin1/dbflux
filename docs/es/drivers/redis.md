@@ -22,6 +22,11 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
 - Múltiples databases lógicas mediante `SELECT <db>` (`MULTIPLE_DATABASES`). El
   índice de la database activa se rastrea en la conexión.
 - Autenticación con username + password opcionales (`AUTHENTICATION`).
+- Consola de comandos nativa (`NATIVE_CONSOLE`): el navegador de claves acopla
+  una consola que ejecuta un comando a la vez mediante `Connection::execute`
+  contra la database abierta, con la validación y la detección de comandos
+  peligrosos del language service, las filas de auditoría y el historial de
+  consultas que usa el editor.
 - Reporta su identidad de cliente al servidor vía `CLIENT SETNAME` al conectar
   (`dbflux/<version>`, visible en `CLIENT LIST`); best-effort, ya que algunos
   proveedores managed restringen los comandos `CLIENT`.
