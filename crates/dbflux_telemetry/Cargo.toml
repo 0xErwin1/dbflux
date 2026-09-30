@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

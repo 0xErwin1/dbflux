@@ -1,5 +1,7 @@
 //! Bounded collector protocol and pure database-local scheduling state.
 
+pub mod transport;
+
 use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::{
     Deserialize, Serialize,
@@ -389,6 +391,39 @@ struct WireEvent {
 enum EventKind {
     Ping,
     Basic,
+}
+
+/// Validate the actual frozen bytes without reserializing or repairing them.
+pub(crate) fn validate_payload(json: &str) -> Result<(), ProtocolError> {
+    let value = strict_json(json.as_bytes(), 4096)?;
+    wire_uuid(&value["install_id"])?;
+    wire_uuid(&value["delivery_id"])?;
+    wire_time(&value["sent_at"])?;
+    let keys = value.as_object().ok_or(ProtocolError)?.len();
+    let wire: WireEvent = serde_json::from_value(value).map_err(|_| ProtocolError)?;
+    if !valid_build(&Build {
+        version: wire.version,
+        channel: wire.channel,
+    }) {
+        return Err(ProtocolError);
+    }
+    match wire.event {
+        EventKind::Ping if keys == 9 => Ok(()),
+        EventKind::Basic if keys == 12 => {
+            let language = wire.system_language.ok_or(ProtocolError)?;
+            let country = wire.country.ok_or(ProtocolError)?;
+            let features = wire.features.ok_or(ProtocolError)?;
+            if normalize_system_language(&language) != language
+                || country.len() != 2
+                || !country.bytes().all(|byte| byte.is_ascii_uppercase())
+                || features.values().any(|count| *count > 10_000)
+            {
+                return Err(ProtocolError);
+            }
+            Ok(())
+        }
+        _ => Err(ProtocolError),
+    }
 }
 
 fn valid_build(build: &Build) -> bool {
