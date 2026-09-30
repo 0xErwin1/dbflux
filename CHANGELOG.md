@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Native console** — PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, Redshift, ClickHouse, Turso, MongoDB and Redis offer a console that runs one native command at a time and prints the result as text. It is docked under tables, document collections and the key-value browser (Ctrl+` shows or hides it), and Open console in a database's sidebar menu opens one in its own tab. Commands go through the editor's validation and dangerous-query confirmation, are recorded in the audit log, join the query history (Up and Down walk it) and complete like the editor. Drivers that enforce a row limit apply the editor row limit to console commands. See the new Console page of the documentation.
+
 ## [0.8.5] - 2026-09-30
 
 ### Added
