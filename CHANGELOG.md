@@ -61,6 +61,7 @@ All notable changes to DBFlux will be documented in this file.
 ### Fixed
 
 * **MySQL functional indexes no longer crash DBFlux** — On MySQL 8 and Aurora MySQL 3, loading the details of a table with a functional index, such as `INDEX ((lower(email)))`, no longer aborts the app. The index lists its expression, for example ``(lower(`email`))``.
+* **MCP connections with AWS SSO auth profiles** — The MCP server now lists AWS auth profiles from `~/.aws` the way the app does, so a Managed (SSM) connection that uses an AWS SSO profile no longer fails with "Managed access requires an auth profile".
 * **Point inspector and Show in tree in table charts** — The chart of a table or collection tab now shows the point inspector for the point under the pointer or the point picked with H and L: the series, time and value, and every column of the row behind it. Show in tree, from the inspector or the table menu's Toolbar entry, selects that row in the table and scrolls to it, leaving a chart-only view for the table. Before, the inspector never appeared. Charts of query editor results still show no inspector.
 * **Row actions in the keyboard menu** — The context menu of a result row opened with M or Shift+F10 now lists the driver's row actions, such as Kill session in an instance inspector, which only a right click showed before.
 * **Tab in the find panel** — Tab and Shift+Tab no longer get stuck in the editor's find panel when the replace field is hidden: they move focus between panes. With the replace field shown they still switch between the two fields.
