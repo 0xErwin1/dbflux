@@ -2769,6 +2769,7 @@ dependencies = [
  "dbflux_ssh",
  "dbflux_ssm",
  "dbflux_storage",
+ "dbflux_telemetry",
  "indexmap 2.14.2",
  "log",
  "reqwest 0.12.28",
@@ -3340,12 +3341,25 @@ dependencies = [
  "dbflux_approval",
  "dbflux_core",
  "dbflux_policy",
+ "dbflux_telemetry",
  "dirs 6.0.0",
  "log",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "dbflux_telemetry"
+version = "0.9.0-dev.0"
+dependencies = [
+ "chrono",
+ "semver",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "uuid",
 ]

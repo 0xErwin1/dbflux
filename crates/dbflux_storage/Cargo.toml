@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_approval.workspace = true
 dbflux_core.workspace = true
+dbflux_telemetry = { workspace = true, optional = true }
 dirs.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
@@ -24,6 +25,9 @@ serde_json.workspace = true
 uuid.workspace = true
 
 chrono = { workspace = true }
+
+[features]
+telemetry = ["dep:dbflux_telemetry"]
 
 [dev-dependencies]
 dbflux_policy.workspace = true

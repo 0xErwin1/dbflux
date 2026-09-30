@@ -12,6 +12,7 @@ license.workspace = true
 
 [dependencies]
 dbflux_core.workspace = true
+dbflux_telemetry = { workspace = true, optional = true }
 dbflux_storage.workspace = true
 dbflux_ssh.workspace = true
 dbflux_proxy.workspace = true
@@ -50,6 +51,7 @@ reqwest.workspace = true
 semver.workspace = true
 
 [features]
+telemetry = ["dep:dbflux_telemetry", "dbflux_storage/telemetry"]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "mssql"]
 # Per-driver features enable the driver crate (for registration here) and, when
 # the MCP server is compiled in, forward the matching driver feature to it. This
