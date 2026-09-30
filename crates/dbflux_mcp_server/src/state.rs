@@ -50,7 +50,7 @@ impl ServerState {
     pub fn new(client_id: String, config_dir: Option<PathBuf>) -> Result<Self, String> {
         let storage_runtime = open_storage_runtime()?;
         let profiles = load_profiles(&storage_runtime)?;
-        let auth_profiles = load_auth_profiles(&storage_runtime)?;
+        let stored_auth_profiles = load_auth_profiles(&storage_runtime)?;
         let services = dbflux_storage::load_service_configs(&storage_runtime);
         let (runtime, governance_settings) =
             build_runtime(&storage_runtime, config_dir.as_deref())?;
@@ -59,10 +59,10 @@ impl ServerState {
         validate_client_id(&runtime, &client_id, config_dir.as_deref())?;
 
         let profile_manager = ProfileManager::with_profiles(profiles, None);
-        let auth_profile_manager =
-            AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
         let driver_registry = build_driver_registry();
         let auth_provider_registry = build_auth_provider_registry(&services);
+        let auth_profile_manager =
+            build_auth_profile_manager(stored_auth_profiles, &auth_provider_registry);
         let driver_settings = Arc::new(load_driver_settings(&storage_runtime)?);
         let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
 
@@ -91,6 +91,27 @@ impl ServerState {
 
         Ok(state)
     }
+}
+
+/// Mirrors `AppState::list_auth_profiles`: AWS profiles are not stored, they are
+/// reflected from `~/.aws`, and connections reference their stable reflected ids.
+fn build_auth_profile_manager(
+    stored_profiles: Vec<dbflux_core::AuthProfile>,
+    auth_provider_registry: &HashMap<String, Arc<dyn DynAuthProvider>>,
+) -> AuthProfileManager {
+    const AWS_REFLECTED_PROVIDER_IDS: &[&str] =
+        &["aws-sso", "aws-sso-session", "aws-shared-credentials"];
+
+    let mut profiles: Vec<dbflux_core::AuthProfile> = stored_profiles
+        .into_iter()
+        .filter(|profile| !AWS_REFLECTED_PROVIDER_IDS.contains(&profile.provider_id.as_str()))
+        .collect();
+
+    for provider in auth_provider_registry.values() {
+        profiles.extend(provider.reflect_profiles());
+    }
+
+    AuthProfileManager::with_items(profiles, None, "auth profiles")
 }
 
 fn load_driver_settings(
@@ -920,6 +941,10 @@ fn build_auth_provider_registry(
             as Arc<dyn DynAuthProvider>;
         registry.insert(shared.provider_id().to_string(), shared);
 
+        let sso_session =
+            Arc::new(dbflux_aws::AwsSsoSessionAuthProvider::new()) as Arc<dyn DynAuthProvider>;
+        registry.insert(sso_session.provider_id().to_string(), sso_session);
+
         // aws-static-credentials provider removed (ADR-7): DBFlux no longer
         // stores AWS long-lived secrets. Shared-credentials profiles are
         // reflected from ~/.aws/credentials via AwsSharedCredentialsAuthProvider.
@@ -1040,6 +1065,102 @@ mod tests {
             .get("clickhouse")
             .expect("clickhouse driver must be registered");
         assert_eq!(driver.driver_key(), "builtin:clickhouse");
+    }
+
+    struct ReflectingAuthProvider {
+        provider_id: &'static str,
+        reflected: Vec<AuthProfile>,
+    }
+
+    #[async_trait::async_trait]
+    impl DynAuthProvider for ReflectingAuthProvider {
+        fn provider_id(&self) -> &str {
+            self.provider_id
+        }
+
+        fn display_name(&self) -> &str {
+            "Reflecting Test Provider"
+        }
+
+        fn form_def(&self) -> &dbflux_core::AuthFormDef {
+            static FORM: std::sync::OnceLock<dbflux_core::AuthFormDef> = std::sync::OnceLock::new();
+            FORM.get_or_init(|| dbflux_core::AuthFormDef { tabs: vec![] })
+        }
+
+        async fn validate_session(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<AuthSessionState, dbflux_core::DbError> {
+            Ok(AuthSessionState::LoginRequired)
+        }
+
+        async fn login(
+            &self,
+            _profile: &AuthProfile,
+            _url_callback: UrlCallback,
+        ) -> Result<dbflux_core::auth::AuthSession, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::connection_failed("not supported"))
+        }
+
+        async fn resolve_credentials(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<dbflux_core::auth::ResolvedCredentials, dbflux_core::DbError> {
+            Ok(dbflux_core::auth::ResolvedCredentials::default())
+        }
+
+        fn reflect_profiles(&self) -> Vec<AuthProfile> {
+            self.reflected.clone()
+        }
+    }
+
+    fn reflecting_registry(
+        provider_id: &'static str,
+        reflected: Vec<AuthProfile>,
+    ) -> HashMap<String, Arc<dyn DynAuthProvider>> {
+        HashMap::from([(
+            provider_id.to_string(),
+            Arc::new(ReflectingAuthProvider {
+                provider_id,
+                reflected,
+            }) as Arc<dyn DynAuthProvider>,
+        )])
+    }
+
+    #[test]
+    fn auth_profile_manager_includes_reflected_profile_without_stored_row() {
+        let mut reflected = AuthProfile::new("dev", "aws-sso", HashMap::new());
+        reflected.read_only = true;
+        let reflected_id = reflected.id;
+        let registry = reflecting_registry("aws-sso", vec![reflected]);
+
+        let manager = build_auth_profile_manager(Vec::new(), &registry);
+
+        assert!(
+            manager
+                .items
+                .iter()
+                .any(|profile| profile.id == reflected_id)
+        );
+    }
+
+    #[test]
+    fn auth_profile_manager_replaces_stored_row_of_reflecting_provider() {
+        let mut reflected = AuthProfile::new("dev", "aws-sso", HashMap::new());
+        reflected.read_only = true;
+        let reflected_id = reflected.id;
+        let registry = reflecting_registry("aws-sso", vec![reflected]);
+
+        let stale_stored = AuthProfile::new("dev", "aws-sso", HashMap::new());
+        let other_stored = AuthProfile::new("rpc", "rpc-auth", HashMap::new());
+        let other_stored_id = other_stored.id;
+
+        let manager = build_auth_profile_manager(vec![stale_stored, other_stored], &registry);
+
+        let ids: Vec<_> = manager.items.iter().map(|profile| profile.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&reflected_id));
+        assert!(ids.contains(&other_stored_id));
     }
 
     fn temp_runtime() -> (tempfile::TempDir, StorageRuntime) {
