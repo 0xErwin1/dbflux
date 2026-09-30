@@ -15,10 +15,10 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 ### AppImage（便携版）
 
 ```bash
-# 从 Releases 页面下载（ARM 架构请将 amd64 替换为 arm64）
-wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.AppImage
-chmod +x dbflux-linux-amd64.AppImage
-./dbflux-linux-amd64.AppImage
+# 从 Releases 页面下载（ARM 架构请将 x86_64 替换为 aarch64）
+wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-x86_64.AppImage
+chmod +x dbflux-x86_64.AppImage
+./dbflux-x86_64.AppImage
 ```
 
 ### Arch Linux

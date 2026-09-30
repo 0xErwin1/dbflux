@@ -106,7 +106,7 @@ jobs:
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
           prefix-key: "v0-rust"
-          shared-key: linux-${{ matrix.arch }}
+          shared-key: linux-jammy-${{ matrix.arch }}
           cache-targets: true
           cache-on-failure: true
           # A release runs on a tag ref, and a cache saved there is scoped to
@@ -174,7 +174,14 @@ jobs:
           ) &
           SAMPLER_PID=$!
 
-          cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+          # Native runners provide Docker, but their newer libc must not leak
+          # into the release binary or the bundled dependency closure.
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            -v "$HOME/.cargo:/rust/cargo" -v "$HOME/.rustup:/rust/rustup" \
+            -e CARGO_HOME=/rust/cargo -e RUSTUP_HOME=/rust/rustup -e FEATURES \
+            ubuntu:22.04 bash scripts/appimage-build.sh ${{ matrix.target }}
+          sudo chown -R "$(id -u):$(id -g)" target AppDir "$HOME/.cargo" "$HOME/.rustup"
 
           kill "$SAMPLER_PID"
 
@@ -189,6 +196,9 @@ jobs:
 
           free -h
           cat "$SAMPLES"
+
+      - name: Check AppImage packaging contracts
+        run: python3 -m unittest discover -s scripts -p 'test_appimage*.py'
 
       - name: Create package
         run: |
@@ -268,19 +278,16 @@ jobs:
           cp LICENSE-MIT AppDir/usr/share/licenses/dbflux/
           cp LICENSE-APACHE AppDir/usr/share/licenses/dbflux/
 
-          ln -sf usr/bin/dbflux AppDir/AppRun
           ln -sf "usr/share/applications/$APP_ID.desktop" "AppDir/$APP_ID.desktop"
           ln -sf "usr/share/icons/hicolor/scalable/apps/$APP_ID.svg" "AppDir/$APP_ID.svg"
 
-          APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage AppDir
+          APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage \
+            AppDir dbflux-${{ matrix.rpm_arch }}.AppImage
 
-          APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" ! -name "appimagetool-*.AppImage" | head -n 1)
-          if [ -z "$APPIMAGE_FILE" ]; then
-            echo "AppImage output not found"
-            exit 1
-          fi
-
-          mv "$APPIMAGE_FILE" dbflux-linux-${{ matrix.arch }}.AppImage
+      - name: Verify produced AppImage on Ubuntu 22.04
+        run: |
+          docker run --rm -v "$PWD:/work:ro" -w /work ubuntu:22.04 \
+            bash scripts/appimage-verify.sh /work/dbflux-${{ matrix.rpm_arch }}.AppImage
 
       - name: Generate PNG icons
         run: |
@@ -363,14 +370,14 @@ jobs:
       - name: Sign artifacts
         run: |
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
-          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
+          gpg --armor --detach-sign dbflux-${{ matrix.rpm_arch }}.AppImage
           gpg --armor --detach-sign *.deb
           gpg --armor --detach-sign *.rpm
 
       - name: Generate checksums
         run: |
           sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
-          sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+          sha256sum dbflux-${{ matrix.rpm_arch }}.AppImage > dbflux-${{ matrix.rpm_arch }}.AppImage.sha256
           sha256sum *.deb > dbflux_${{ matrix.arch }}.deb.sha256
           sha256sum *.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
 
@@ -383,9 +390,9 @@ jobs:
             dbflux-linux-${{ matrix.arch }}.tar.gz
             dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
             dbflux-linux-${{ matrix.arch }}.tar.gz.asc
-            dbflux-linux-${{ matrix.arch }}.AppImage
-            dbflux-linux-${{ matrix.arch }}.AppImage.sha256
-            dbflux-linux-${{ matrix.arch }}.AppImage.asc
+            dbflux-${{ matrix.rpm_arch }}.AppImage
+            dbflux-${{ matrix.rpm_arch }}.AppImage.sha256
+            dbflux-${{ matrix.rpm_arch }}.AppImage.asc
             *.deb
             *.deb.asc
             dbflux_${{ matrix.arch }}.deb.sha256
@@ -401,9 +408,9 @@ jobs:
           cp dbflux-linux-${{ matrix.arch }}.tar.gz /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.tar.gz.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-${{ matrix.rpm_arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-${{ matrix.rpm_arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-${{ matrix.rpm_arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.deb /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
