@@ -1334,6 +1334,7 @@ document:
     destructive_body: "Este comando puede eliminar datos y no se puede deshacer."
     connection_inactive: "La conexión está cerrada. Vuelve a conectar para ejecutar comandos."
     connecting: "Todavía se está conectando a %{database}. Inténtalo de nuevo en un momento."
+    tab_title: "Consola · %{connection} · %{database}"
   dashboard:
     pane_actions:
       open_panel: "Abrir panel"
@@ -4425,6 +4426,7 @@ sidebar:
     delete_count: "Eliminar %{count} elementos"
     close: Cerrar
     new_query: Nueva consulta
+    open_console: Abrir consola
     drop_database: Eliminar base de datos
     new_connection: Nueva conexión
     new_folder: Nueva carpeta

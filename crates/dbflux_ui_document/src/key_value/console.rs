@@ -133,52 +133,8 @@ mod tests {
 
         let driver = FakeDriver::new(DbKind::Redis)
             .with_default_result(QueryResult::text("OK".to_string(), Duration::ZERO));
-        let profile_id = uuid::Uuid::new_v4();
-
-        let app_state: Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
-                    .expect("in-memory storage");
-                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
-                    .expect("test storage setup")
-            })
-        });
-
-        cx.update(|cx| {
-            app_state.update(cx, |state, _| {
-                let profile = dbflux_core::ConnectionProfile::new(
-                    "cache",
-                    dbflux_core::DbConfig::SQLite {
-                        path: std::path::PathBuf::from(":memory:"),
-                        connection_id: None,
-                    },
-                );
-                let connection = driver.connect_arc(&profile).expect("fake connection");
-                state.connections_mut().insert(
-                    profile_id,
-                    dbflux_core::ConnectedProfile {
-                        profile,
-                        connection,
-                        schema: None,
-                        mutation_policy: dbflux_core::MutationPolicy::default(),
-                        read_only_reason: None,
-                        database_schemas: Default::default(),
-                        table_details: Default::default(),
-                        collection_children: Default::default(),
-                        schema_types: Default::default(),
-                        schema_columns: Default::default(),
-                        schema_indexes: Default::default(),
-                        schema_foreign_keys: Default::default(),
-                        schema_routines: Default::default(),
-                        dependents_cache: Default::default(),
-                        active_database: None,
-                        redis_key_cache: Default::default(),
-                        database_connections: Default::default(),
-                        proxy_tunnel: None,
-                    },
-                );
-            });
-        });
+        let (app_state, profile_id) =
+            crate::keyboard_test_support::connected_app_state(cx, &driver, "cache");
 
         let (host, window) = host_document(
             cx,

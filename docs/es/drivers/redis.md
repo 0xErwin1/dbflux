@@ -23,7 +23,8 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   índice de la database activa se rastrea en la conexión.
 - Autenticación con username + password opcionales (`AUTHENTICATION`).
 - Consola de comandos nativa (`NATIVE_CONSOLE`): el navegador de claves acopla
-  una consola que ejecuta un comando a la vez mediante `Connection::execute`
+  una consola, y el menú de una base de datos en la barra lateral abre una en
+  su propia pestaña, que ejecuta un comando a la vez mediante `Connection::execute`
   contra la database abierta, con la validación y la detección de comandos
   peligrosos del language service, las filas de auditoría y el historial de
   consultas que usa el editor.

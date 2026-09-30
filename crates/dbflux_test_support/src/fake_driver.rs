@@ -789,7 +789,9 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     transfer_family: TransferFamily::Sql,
     deployment_class: None,
     query_language: QueryLanguage::Sql,
-    capabilities: DriverCapabilities::RELATIONAL_BASE,
+    capabilities: DriverCapabilities::RELATIONAL_BASE
+        .union(DriverCapabilities::NATIVE_CONSOLE)
+        .union(DriverCapabilities::REQUEST_ROW_LIMIT),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,

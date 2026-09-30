@@ -13,10 +13,13 @@
 
 mod format;
 
-use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::controls::{
-    Button, Input, InputEvent, InputMoveDown, InputMoveUp, InputState,
+use crate::code::{ExecutionSessionBinding, QueryCompletionProvider};
+use crate::completion_support::{
+    frameless_single_line_completion_editor_sized, new_single_line_completion_state,
 };
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::controls::CompletionProvider;
+use dbflux_components::controls::{Button, InputEvent, InputMoveDown, InputMoveUp};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Kbd, Text};
 use dbflux_components::tokens::{ChromeColors, ConsoleMetrics, FontSizes, Spacing};
@@ -26,8 +29,9 @@ use dbflux_core::observability::{
     EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
 };
 use dbflux_core::{
-    Connection, DangerousQueryKind, DbError, ExecutionClassification, HistoryEntry,
-    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult, classify_query_for_language,
+    Connection, DangerousQueryKind, DbError, DriverCapabilities, ExecutionClassification,
+    HistoryEntry, NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult,
+    classify_query_for_language,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -38,6 +42,9 @@ use format::{
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::input::EditorState;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -89,26 +96,36 @@ pub(crate) struct PendingConsoleCommand {
     pub ceiling: ExecutionClassification,
 }
 
+/// How the console sits in its host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsoleLayout {
+    /// Docked under a document's content, collapsible to its header.
+    Docked,
+    /// The whole content of its own tab: always open, the transcript fills
+    /// the height.
+    Tab,
+}
+
 pub struct NativeConsole {
     app_state: Entity<AppStateEntity>,
+    layout: ConsoleLayout,
     target: NativeConsoleTarget,
     profile: NativeConsoleProfile,
     /// The key context whose binding of `ToggleConsole` the header shows.
     shortcut_context: ContextId,
     open: bool,
-    pub(crate) input: Entity<InputState>,
+    pub(crate) input: Entity<EditorState>,
     input_focused: bool,
     pub(crate) transcript: Vec<ConsoleEntry>,
     unrecorded: Vec<(i64, String)>,
     recall: Vec<String>,
     history_cursor: Option<usize>,
     pub(crate) pending: Option<PendingConsoleCommand>,
-    /// Whether the pending confirmation has been drawn. The single-line
-    /// input's Enter action propagates, so one keystroke can emit
-    /// `PressEnter` twice; only a confirmation the user has seen may be
-    /// answered by Enter in the empty field.
-    pending_shown: bool,
     running: bool,
+    /// The isolated execution session the editor uses, where the driver
+    /// offers one, so a transaction opened by one command stays open for
+    /// the next.
+    session: Arc<ExecutionSessionBinding>,
     scroll: ScrollHandle,
     _subscription: Subscription,
 }
@@ -133,7 +150,42 @@ impl NativeConsole {
             )
         };
 
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        // The editor's completion engine, for the connection's language.
+        let completion_provider: Option<Rc<dyn CompletionProvider>> = app_state
+            .read(cx)
+            .connections()
+            .get(&target.profile_id)
+            .map(|connected| {
+                let provider: Rc<dyn CompletionProvider> = Rc::new(QueryCompletionProvider::new(
+                    connected.connection.metadata().query_language.clone(),
+                    app_state.clone(),
+                    Some(target.profile_id),
+                    target.database.clone(),
+                    Rc::new(Cell::new(0)),
+                ));
+                provider
+            });
+
+        let input = cx.new(|cx| {
+            let mut state = new_single_line_completion_state(window, cx, placeholder);
+            state.lsp_mut().completion_provider = completion_provider;
+            state
+        });
+
+        // Closing the host closes the session once any running command is
+        // done; the binding serializes both.
+        cx.on_release(|console: &mut Self, cx| {
+            let generation = console.session.invalidate();
+            let session = console.session.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(error) = session.close_invalidated(generation) {
+                        log::warn!("Could not close the console execution session: {error}");
+                    }
+                })
+                .detach();
+        })
+        .detach();
 
         let subscription = cx.subscribe_in(
             &input,
@@ -148,6 +200,7 @@ impl NativeConsole {
 
         Self {
             app_state,
+            layout: ConsoleLayout::Docked,
             target,
             profile,
             shortcut_context,
@@ -159,11 +212,28 @@ impl NativeConsole {
             recall: Vec::new(),
             history_cursor: None,
             pending: None,
-            pending_shown: false,
             running: false,
+            session: ExecutionSessionBinding::new(),
             scroll: ScrollHandle::new(),
             _subscription: subscription,
         }
+    }
+
+    /// This console as the whole content of a tab: open from the start and
+    /// never collapsed.
+    pub fn in_tab(mut self) -> Self {
+        self.layout = ConsoleLayout::Tab;
+        self.open = true;
+        self
+    }
+
+    /// Moves the keyboard into the input.
+    pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        // The Focus event arrives with the next frame; until then the host
+        // would keep reporting its own context and claim the letters typed.
+        self.input_focused = true;
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -183,22 +253,24 @@ impl NativeConsole {
 
     /// Shows or hides the console, moving focus into its input when it
     /// opens. Returns whether it is now open; on close the host takes focus
-    /// back.
+    /// back. A tab console stays open and only takes the focus.
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.open = !self.open;
-
-        if self.open {
-            self.input.update(cx, |state, cx| state.focus(window, cx));
-            // The Focus event arrives with the next frame; until then the
-            // host would keep reporting its own context and claim the
-            // letters typed.
-            self.input_focused = true;
-        } else {
-            self.input_focused = false;
+        if self.layout == ConsoleLayout::Docked {
+            self.open = !self.open;
         }
 
-        cx.notify();
+        if self.open {
+            self.focus_input(window, cx);
+        } else {
+            self.input_focused = false;
+            cx.notify();
+        }
+
         self.open
+    }
+
+    fn completion_menu_open(&self, cx: &App) -> bool {
+        self.input.read(cx).completion_menu_state().open
     }
 
     fn prompt(&self) -> String {
@@ -300,7 +372,7 @@ impl NativeConsole {
         if command.is_empty() {
             // Enter in the empty field answers a pending confirmation, as
             // Run anyway does.
-            if self.pending.is_some() && self.pending_shown {
+            if self.pending.is_some() {
                 self.confirm_pending(cx);
             }
             return;
@@ -372,7 +444,6 @@ impl NativeConsole {
                     kind,
                     ceiling,
                 });
-                self.pending_shown = false;
                 cx.notify();
             }
             ConsoleGate::Refuse(message) => {
@@ -483,6 +554,19 @@ impl NativeConsole {
             request = request.with_confirmed_ceiling(ceiling);
         }
 
+        // Drivers that cannot enforce a row limit refuse a request carrying
+        // one, so the editor's cap only goes to drivers that honour it.
+        if connection
+            .metadata()
+            .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
+        {
+            let limit = self.app_state.read(cx).general_settings().editor_row_limit;
+            request = request.with_limit(u32::try_from(limit).unwrap_or(u32::MAX));
+        }
+
+        let session = self.session.clone();
+        let database = self.target.database.clone();
+
         // Captured before spawning so the execution is audited even if the
         // document closes while the command runs.
         let audit_service = self.app_state.read(cx).audit_service().clone();
@@ -500,7 +584,7 @@ impl NativeConsole {
         cx.spawn(async move |this, cx| {
             let result: Result<QueryResult, DbError> = cx
                 .background_executor()
-                .spawn(async move { connection.execute(&request) })
+                .spawn(async move { session.execute(connection, database, &request).result })
                 .await;
 
             let duration_ms = started_at.elapsed().as_millis() as i64;
@@ -530,8 +614,13 @@ impl NativeConsole {
 
         let succeeded = result.is_ok();
 
-        let output = match &result {
+        let mut result = result;
+        let output = match &mut result {
             Ok(result) => {
+                crate::result_warnings::handoff_sql_editor_result(result, |warning| {
+                    report_error(warning, cx)
+                });
+
                 let entry = HistoryEntry::new(
                     command.clone(),
                     self.target.database.clone(),
@@ -565,6 +654,7 @@ impl NativeConsole {
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
         let open = self.open;
+        let docked = self.layout == ConsoleLayout::Docked;
 
         let header = div()
             .id("native-console-header")
@@ -578,19 +668,22 @@ impl NativeConsole {
                 header.border_b_1().border_color(theme.border)
             })
             .text_size(FontSizes::XS)
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.toggle(window, cx);
-            }))
-            .child(
-                Icon::new(if open {
-                    AppIcon::ChevronDown
-                } else {
-                    AppIcon::ChevronRight
-                })
-                .size(ConsoleMetrics::CHEVRON)
-                .color(muted),
-            )
+            .when(docked, |header| {
+                header
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle(window, cx);
+                    }))
+                    .child(
+                        Icon::new(if open {
+                            AppIcon::ChevronDown
+                        } else {
+                            AppIcon::ChevronRight
+                        })
+                        .size(ConsoleMetrics::CHEVRON)
+                        .color(muted),
+                    )
+            })
             .child(
                 Icon::new(AppIcon::SquareTerminal)
                     .size(ConsoleMetrics::ICON)
@@ -624,9 +717,10 @@ impl NativeConsole {
             .key_context(dbflux_components::key_contexts::NATIVE_CONSOLE)
             .flex()
             .flex_col()
-            .flex_none()
-            .border_t_1()
-            .border_color(theme.input)
+            .when(docked, |container| {
+                container.flex_none().border_t_1().border_color(theme.input)
+            })
+            .when(!docked, |container| container.size_full())
             .bg(theme.background)
             .child(header);
 
@@ -673,31 +767,42 @@ impl NativeConsole {
         });
 
         let pending = self.pending.clone();
+        let fills = self.layout == ConsoleLayout::Tab;
 
         div()
             .id("native-console-body")
             .flex()
             .flex_col()
+            .when(fills, |body| body.flex_1().min_h_0())
             .pt(Spacing::SM)
             .pb(ConsoleMetrics::PADDING_BOTTOM)
             .px(ConsoleMetrics::PADDING_X)
             .font_family(AppFonts::MONO)
             .text_size(ConsoleMetrics::FONT)
             .line_height(ConsoleMetrics::LINE_HEIGHT)
+            // Up and Down walk the history, unless an open completion menu
+            // needs them.
             .capture_action(cx.listener(|this, _: &InputMoveUp, window, cx| {
-                this.recall_history(true, window, cx);
-                cx.stop_propagation();
+                if !this.completion_menu_open(cx) {
+                    this.recall_history(true, window, cx);
+                    cx.stop_propagation();
+                }
             }))
             .capture_action(cx.listener(|this, _: &InputMoveDown, window, cx| {
-                this.recall_history(false, window, cx);
-                cx.stop_propagation();
+                if !this.completion_menu_open(cx) {
+                    this.recall_history(false, window, cx);
+                    cx.stop_propagation();
+                }
             }))
             .child(
                 div()
                     .id("native-console-transcript")
                     .flex()
                     .flex_col()
-                    .max_h(ConsoleMetrics::TRANSCRIPT_HEIGHT)
+                    .when(fills, |transcript| transcript.flex_1().min_h_0())
+                    .when(!fills, |transcript| {
+                        transcript.max_h(ConsoleMetrics::TRANSCRIPT_HEIGHT)
+                    })
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .children(transcript),
@@ -763,10 +868,12 @@ impl NativeConsole {
                                 }),
                             )
                             .child(
-                                Input::new(&self.input)
-                                    .id("native-console-input")
-                                    .appearance(false)
-                                    .w_full(),
+                                frameless_single_line_completion_editor_sized(
+                                    &self.input,
+                                    ConsoleMetrics::FONT,
+                                )
+                                .aria_label(dbflux_i18n::t!("document.console.title"))
+                                .w_full(),
                             ),
                     )
                     .when(self.running, |row| {
@@ -782,7 +889,6 @@ impl NativeConsole {
 
 impl Render for NativeConsole {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.pending_shown = self.open && self.pending.is_some();
         self.render_console(cx)
     }
 }

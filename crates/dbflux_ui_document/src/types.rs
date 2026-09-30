@@ -42,6 +42,8 @@ pub enum DocumentKind {
     McpApprovals,
     // Migrate-data wizard (table -> table, cross-connection)
     MigrateWizard,
+    // Native command console in its own tab (driver-agnostic)
+    Console,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).

@@ -12,6 +12,7 @@ Advanced open-source relational database.
 ## Features
 
 - PostgreSQL relational driver with SQL query execution and schema discovery.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Supports schemas, tables, views, indexes, foreign keys, check constraints, unique constraints, and custom types.
 - Exposes stored routines (functions, procedures, aggregates, window functions) in the schema tree with read-only definition viewer.
 - Supports authentication, SSL, SSH tunneling, and URI/manual connection modes.

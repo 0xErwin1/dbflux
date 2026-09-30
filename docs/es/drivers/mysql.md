@@ -12,6 +12,13 @@ Base de datos relacional open-source popular.
 ## Funcionalidades
 
 - Implementaciones de driver relacional para MySQL y MariaDB en un solo crate.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Soporta ejecución de SQL, descubrimiento de schema, índices, foreign keys,
   constraints CHECK, y constraints UNIQUE.
 - Soporta autenticación, túnel SSH, y modos de conexión URI/manual.

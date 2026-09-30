@@ -40,7 +40,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
 | `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
 | `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
-| `` Ctrl+` ``                                     | Mostrar u ocultar la consola de comandos del documento activo, cuando su conexión tiene una (bases de datos clave-valor, colecciones de documentos) |
+| `` Ctrl+` ``                                     | Mostrar u ocultar la consola acoplada bajo la tabla, colección o navegador clave-valor activo, cuando su conexión tiene una; en una pestaña de consola, devolver el teclado a su campo |
 | `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
 | `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Ocultar o mostrar los resultados de un documento de consulta, dejando solo el editor |
 | `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |

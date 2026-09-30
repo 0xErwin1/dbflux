@@ -6,7 +6,6 @@ use super::{NativeConsole, NativeConsoleEvent, NativeConsoleTarget};
 use dbflux_app::keymap::ContextId;
 use dbflux_audit::query::AuditQueryFilter;
 use dbflux_core::{DbKind, ExecutionClassification, HistoryEntry, QueryResult};
-use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_test_support::fake_driver::FakeDriver;
 use dbflux_ui_base::AppStateEntity;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
@@ -26,56 +25,35 @@ struct Harness {
 
 /// A console over a connected fake Redis profile, database `0`.
 fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
-    crate::keyboard_test_support::init_keyboard_runtime(cx);
-
     let driver = FakeDriver::new(DbKind::Redis)
         .with_query_result(
             "GET greeting",
             QueryResult::text("hello".to_string(), Duration::ZERO),
         )
         .with_default_result(QueryResult::text("(integer) 2".to_string(), Duration::ZERO));
-    let profile_id = Uuid::new_v4();
 
-    let app_state = cx.update(|cx| {
-        cx.new(|_| {
-            let runtime = StorageRuntime::in_memory().expect("in-memory storage");
-            AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
-        })
-    });
+    open_with(cx, driver, Some("0"))
+}
 
-    cx.update(|cx| {
-        app_state.update(cx, |state, _| {
-            let profile = dbflux_core::ConnectionProfile::new(
-                CONNECTION_NAME,
-                dbflux_core::DbConfig::SQLite {
-                    path: std::path::PathBuf::from(":memory:"),
-                    connection_id: None,
-                },
-            );
-            let connection = driver.connect_arc(&profile).expect("fake connection");
-            let connected = dbflux_core::ConnectedProfile {
-                profile,
-                connection,
-                schema: None,
-                mutation_policy: dbflux_core::MutationPolicy::default(),
-                read_only_reason: None,
-                database_schemas: Default::default(),
-                table_details: Default::default(),
-                collection_children: Default::default(),
-                schema_types: Default::default(),
-                schema_columns: Default::default(),
-                schema_indexes: Default::default(),
-                schema_foreign_keys: Default::default(),
-                schema_routines: Default::default(),
-                dependents_cache: Default::default(),
-                active_database: None,
-                redis_key_cache: Default::default(),
-                database_connections: Default::default(),
-                proxy_tunnel: None,
-            };
-            state.connections_mut().insert(profile_id, connected);
-        });
-    });
+/// A console over a connected profile of `driver`, running against
+/// `database`, with the presentation the driver's metadata declares.
+fn open_with<'a>(
+    cx: &'a mut TestAppContext,
+    driver: FakeDriver,
+    database: Option<&str>,
+) -> (Harness, &'a mut VisualTestContext) {
+    let database = database.map(str::to_string);
+    crate::keyboard_test_support::init_keyboard_runtime(cx);
+
+    let profile = {
+        use dbflux_core::DbDriver as _;
+        driver
+            .metadata()
+            .native_console()
+            .expect("the fake driver offers a console")
+    };
+    let (app_state, profile_id) =
+        crate::keyboard_test_support::connected_app_state(cx, &driver, CONNECTION_NAME);
 
     let events = Rc::new(RefCell::new(Vec::new()));
     let console_holder: Rc<RefCell<Option<Entity<NativeConsole>>>> = Rc::new(RefCell::new(None));
@@ -86,15 +64,12 @@ fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
         let console_holder = console_holder.clone();
 
         move |window, cx| {
-            let profile = dbflux_core::NativeConsoleProfile::for_language(
-                &dbflux_core::QueryLanguage::RedisCommands,
-            );
             let console = cx.new(|cx| {
                 NativeConsole::new(
                     NativeConsoleTarget {
                         profile_id,
-                        database: Some("0".to_string()),
-                        label: "db0".to_string(),
+                        label: database.clone().unwrap_or_default(),
+                        database,
                     },
                     profile,
                     ContextId::KeyValue,
@@ -370,4 +345,78 @@ fn the_native_console_is_covered(cx: &mut TestAppContext) {
     ] {
         assert!(checked.iter().any(|checked| checked == id), "{checked:?}");
     }
+}
+
+#[gpui::test]
+fn drivers_that_enforce_a_row_limit_get_the_editor_limit(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::Postgres)
+        .with_default_result(QueryResult::text("ok".to_string(), Duration::ZERO));
+    let (harness, window) = open_with(cx, driver, None);
+
+    type_and_submit(&harness, window, "SELECT * FROM orders");
+
+    let editor_limit = window.update(|_, cx| {
+        harness
+            .app_state
+            .read(cx)
+            .general_settings()
+            .editor_row_limit
+    });
+    let requests = harness.driver.stats().executed_requests;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].limit, Some(editor_limit as u32));
+}
+
+#[gpui::test]
+fn drivers_that_refuse_a_row_limit_get_none(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+
+    type_and_submit(&harness, window, "GET greeting");
+
+    let requests = harness.driver.stats().executed_requests;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].limit, None);
+}
+
+/// With the completion menu open, Up moves in the menu instead of recalling
+/// history; with it closed, Up recalls.
+#[gpui::test]
+fn up_leaves_an_open_completion_menu_alone(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+
+    window.update(|window, cx| {
+        harness
+            .console
+            .update(cx, |console, cx| console.toggle(window, cx))
+    });
+    type_and_submit(&harness, window, "GET greeting");
+    window.run_until_parked();
+
+    window.simulate_input("HG");
+    window.run_until_parked();
+    let menu_open = window.update(|_, cx| {
+        harness
+            .console
+            .read(cx)
+            .input
+            .read(cx)
+            .completion_menu_state()
+            .open
+    });
+    assert!(
+        menu_open,
+        "typing a command prefix opens the completion menu"
+    );
+
+    window.simulate_keystrokes("up");
+    window.run_until_parked();
+    let value = window.update(|_, cx| harness.console.read(cx).input.read(cx).value().to_string());
+    assert_eq!(value, "HG", "Up stays in the menu");
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    window.simulate_keystrokes("up");
+    window.run_until_parked();
+    let value = window.update(|_, cx| harness.console.read(cx).input.read(cx).value().to_string());
+    assert_eq!(value, "GET greeting", "with the menu closed, Up recalls");
 }

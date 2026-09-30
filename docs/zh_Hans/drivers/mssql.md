@@ -14,6 +14,7 @@ Microsoft SQL Server 关系型数据库。
 ## 功能
 
 - 面向 SQL Server / Azure SQL 的关系型驱动程序，支持 SQL 查询执行与 Schema 发现。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 通过 SQL Server 登录账户（用户名 + 密码）认证；URI 模式接受 ADO、JDBC 以及 `sqlserver://user:pass@host:port/db` 形式的连接串。
 - 把 `Application Name` 上报为 `dbflux/<version>`，除非连接串或 URI 已设置了该值 —— 此时始终以用户提供的值为准；`sqlserver://`/`mssql://` URL 方案可用 `applicationname` 查询参数来设置它。
 - 经由 tiberius 的 `EncryptionLevel` 提供 TLS 加密模式（`off`、`on`、`required`）。表单只暴露一个 **SSL Mode** 下拉框，`TrustServerCertificate` 标志会自动推导：`off` —— 不加密（登录包仍由 TDS 加密）；`on` —— 加密，接受自签名证书，最适合使用其自动生成证书的本地/开发用 SQL Server；`required` —— 加密，校验证书链，适用于持有真实 CA 签名证书的服务器（如 Azure SQL 等）。在 URI 模式下，如果需要非常规组合（例如 `?encrypt=required&trust=true`），可用 `?trust=true|false` 显式覆盖推导出的值。

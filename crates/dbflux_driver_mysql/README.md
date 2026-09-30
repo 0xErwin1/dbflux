@@ -12,6 +12,7 @@ Popular open-source relational database.
 ## Features
 
 - MySQL and MariaDB relational driver implementations in one crate.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Supports SQL execution, schema discovery, indexes, foreign keys, check constraints, and unique constraints.
 - Supports authentication, SSH tunneling, and URI/manual connection modes.
 - TLS with the five native SSL modes (`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifies the server chain while skipping hostname validation and `VERIFY_IDENTITY` verifies both. A custom root CA replaces the system trust store for the verifying modes, and a client certificate + key enables mutual TLS. Uses the `rustls`/`aws-lc-rs` backend.

@@ -1334,6 +1334,7 @@ document:
     destructive_body: "此命令可能删除数据，且无法撤销。"
     connection_inactive: "连接已关闭。请重新连接后再运行命令。"
     connecting: "仍在连接 %{database}，请稍后再试。"
+    tab_title: "控制台 · %{connection} · %{database}"
   dashboard:
     pane_actions:
       open_panel: "打开面板"
@@ -4423,6 +4424,7 @@ sidebar:
     delete_count: "删除 %{count} 项"
     close: 关闭
     new_query: 新建查询
+    open_console: 打开控制台
     drop_database: 删除数据库
     new_connection: 新建连接
     new_folder: 新建文件夹

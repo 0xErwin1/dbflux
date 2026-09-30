@@ -14,6 +14,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 ## 功能
 
 - 关系型驱动程序（`DatabaseCategory::Relational`、`QueryLanguage::Sql`），针对 Redshift 集群或 Redshift Serverless 端点使用 PostgreSQL 线协议通信。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会拒绝请求级的行数上限，因此控制台命令不带上限运行。
 - 连接表单包含主机、端口（默认 `5439`）、数据库、用户、密码、SSL/`sslmode`（`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`）、连接 URI 模式（`redshift://...`，内部被规范化为 `postgresql://...`），以及 SSH 隧道。
 - 自定义 TLS 信任与双向 TLS：在启用 TLS 的模式下，会把固定的私有根 CA（PEM）叠加到系统根证书之上加入信任库；客户端证书 + 私钥（PEM/PKCS#8）可启用双向 TLS。证书材料按连接从表单中配置的路径加载；校验强度绝不会被削弱（`verify-ca`/`verify-full` 仍会拒绝不受信的证书）。证书/私钥文件缺失、不可读或格式错误会呈现为清晰的连接错误，而不是静默回退到系统信任库；私钥内容从不被记录到日志。
 - 基于 `information_schema` 的 Schema 探查，覆盖数据库、schema、表、视图与列，并用 `ColumnKind` 分类（时间戳/整数/浮点/文本），与标准 PostgreSQL 的 OID 对应。

@@ -26,6 +26,12 @@ así que el endpoint es una URL y no un par host/port.
 
 - Transporte HTTP(S) bloqueante construido sobre rustls, autenticando con HTTP
   Basic.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea SQL a la vez mediante `Connection::execute` con la
+  validación del editor, la confirmación de queries peligrosas, las filas de
+  auditoría y el historial de consultas. El driver rechaza los límites de filas
+  por request, así que los comandos de la consola se ejecutan sin límite.
 - SQL arbitrario de un solo statement, con respuestas forzadas a `JSONCompact`
   para que los nombres y tipos de columna lleguen junto con las filas.
 - El ancho de fila se verifica contra el número de columnas declaradas en cada

@@ -33,6 +33,12 @@ pub enum DocumentKey {
     /// A Redis-style key-value database browser.
     KeyValueDb { profile_id: Uuid, database: String },
 
+    /// A native console tab for a database (`None`: the connection's own).
+    Console {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
+
     /// A standalone chart document linked to a saved chart by ID.
     Chart { saved_chart_id: Uuid },
 

@@ -16,6 +16,13 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
 
 - Driver relacional para SQL Server / Azure SQL con ejecución de queries SQL y
   descubrimiento de schema.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Autenticación mediante logins de SQL Server (usuario + contraseña); el modo
   URI acepta connection strings ADO, JDBC y
   `sqlserver://user:pass@host:port/db`.

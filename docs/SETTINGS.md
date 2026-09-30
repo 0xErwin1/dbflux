@@ -99,7 +99,9 @@ not supported" error on MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift,
 CloudWatch, external RPC drivers, and DynamoDB writes (PartiQL
 `INSERT`/`UPDATE`/`DELETE` and put, update, and delete commands). Changing the
 limit does not change this. The limit adds no timeout and does not apply to
-Lua, Python, or Bash scripts, connection hooks, or metrics.
+Lua, Python, or Bash scripts, connection hooks, or metrics. The
+[console](CONSOLE.md) sends the same limit to drivers that can enforce it and
+runs its commands without one on the others.
 
 ### Storage (Nightly builds only)
 

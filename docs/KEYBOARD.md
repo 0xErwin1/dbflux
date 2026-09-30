@@ -39,7 +39,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
 | `Ctrl+m` | Open tab context menu |
-| `` Ctrl+` `` | Show or hide the command console of the active document, where its connection has one (key-value databases, document collections) |
+| `` Ctrl+` `` | Show or hide the console docked under the active table, collection or key-value browser, where its connection has one; in a console tab, return the keyboard to its input |
 | `Ctrl+,` / `Cmd+,` | Open settings |
 | `Ctrl+Shift+E` / `Cmd+Shift+E` | Hide or show the results of a query document, leaving the editor alone |
 | `Ctrl+Shift+R` / `Cmd+Shift+R` | Maximize the results of a query document over the editor, or restore the split |

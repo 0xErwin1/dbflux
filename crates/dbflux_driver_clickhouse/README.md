@@ -25,6 +25,7 @@ the endpoint is a URL and not a host/port pair.
 ## Features
 
 - Blocking HTTP(S) transport built on rustls, authenticating with HTTP Basic.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver refuses request row limits, so console commands run without one.
 - Arbitrary single-statement SQL, with responses forced to `JSONCompact` so column
   names and types arrive alongside the rows.
 - Row width is checked against the declared column count on every response, so a

@@ -16,6 +16,7 @@ Microsoft SQL Server driver for DBFlux, built on the
 
 - SQL Server / Azure SQL relational driver with SQL query execution and schema
   discovery.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Authentication via SQL Server logins (username + password); URI mode accepts
   ADO, JDBC, and `sqlserver://user:pass@host:port/db` connection strings.
 - Reports `Application Name` as `dbflux/<version>` unless the connection

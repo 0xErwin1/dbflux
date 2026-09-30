@@ -7,9 +7,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-pub(super) struct SessionExecution {
-    pub(super) result: Result<QueryResult, DbError>,
-    pub(super) isolated: bool,
+pub(crate) struct SessionExecution {
+    pub(crate) result: Result<QueryResult, DbError>,
+    pub(crate) isolated: bool,
 }
 
 enum SessionSlot {
@@ -32,13 +32,13 @@ enum SessionSlot {
 ///
 /// The slot mutex is intentionally held throughout open and execute. It serializes
 /// interactive statements and is never acquired from the foreground thread.
-pub(super) struct ExecutionSessionBinding {
+pub(crate) struct ExecutionSessionBinding {
     generation: AtomicU64,
     slot: Mutex<SessionSlot>,
 }
 
 impl ExecutionSessionBinding {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             generation: AtomicU64::new(0),
             slot: Mutex::new(SessionSlot::Empty),
@@ -46,7 +46,7 @@ impl ExecutionSessionBinding {
     }
 
     /// Advances the context generation before a background caller schedules cleanup.
-    pub(super) fn invalidate(&self) -> u64 {
+    pub(crate) fn invalidate(&self) -> u64 {
         self.generation.fetch_add(1, Ordering::AcqRel) + 1
     }
 
@@ -58,7 +58,7 @@ impl ExecutionSessionBinding {
         self.current_generation() == generation
     }
 
-    pub(super) fn execute(
+    pub(crate) fn execute(
         &self,
         root: Arc<dyn Connection>,
         database: Option<String>,
@@ -179,7 +179,7 @@ impl ExecutionSessionBinding {
 
     /// Closes the session only after prior serialized execution has completed.
     #[allow(clippy::result_large_err)]
-    pub(super) fn close_invalidated(&self, generation: u64) -> Result<(), DbError> {
+    pub(crate) fn close_invalidated(&self, generation: u64) -> Result<(), DbError> {
         let mut slot = self
             .slot
             .lock()
