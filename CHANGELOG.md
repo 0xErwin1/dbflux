@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-09-30
+
 ### Added
 
 * **Visual query builder for document collections** — MongoDB collections gain a **Builder** button that opens a right-rail builder: filter conditions in all-of / any-of groups with operators that follow each field's type, include or exclude projection, sort, limit and skip, and a group stage with `$count`, `$sum` and `$avg` that runs as a read-only aggregation. Fields come from the collection's schema sample, the builder stays in sync with the query bar, and clauses it cannot show (such as `$expr`) are never overwritten without asking. Document drivers without a builder show the button disabled.
@@ -82,6 +84,8 @@ All notable changes to DBFlux will be documented in this file.
 * **Keyboard-driven migration wizard** — The migration wizard now takes keymap keys on every step, listed under the Migrate Wizard context in Settings > Keybindings. Alt+L and Alt+H continue and go back, and Ctrl+Enter continues or, on the Confirm step, starts the run. In Source and Target, J and K move through the tree, H and L collapse or expand a node or move between the two trees, and Enter or Space checks a table or chooses the target database. In Tables Mapping, H and L move between a row's target name, mode and Columns, and Enter types the name, opens the mode list or opens the column drill-in, whose source-column lists open with Enter. In Options, Enter types the segment size and Space flips the referential-integrity switch. On Confirm, Space checks the destructive-plan acknowledgment and Shift+J and Shift+K reorder the load order. M lists the footer and step buttons, including Set all to a mode, Cancel migration and Close. macOS uses Cmd+Enter.
 * **Typing in the document tree search** — The search field of a document tree now types every letter. Before, letters the tree binds, such as J, K, H, L, G, E, T, R and N, ran tree actions instead of reaching the field, and the field took the keyboard back on every redraw. Enter in the field now returns the keyboard to the tree with the matches kept, so N and Shift+N step through them, and Escape closes the search. The inline value editor keeps its letters too.
 * **Tab inside dialogs** — Tab and Shift+Tab now cycle through the controls of an open dialog and wrap around, instead of moving focus to the panels behind it.
+* **Vulnerable website dependencies** — The pnpm workspaces of the website and of its MCP server override vulnerable transitive dependencies with patched versions, such as `undici` and `sharp`.
+* **Images in the versioned docs** — The versioned documentation build now mirrors `resources/dbflux.png` from each version's git ref next to the markdown it renders, so images the rendered documents reference, such as the README's, load on every published version instead of showing a broken image.
 
 ## [0.8.4] - 2026-09-29
 
