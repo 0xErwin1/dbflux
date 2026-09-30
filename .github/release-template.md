@@ -14,10 +14,10 @@ sudo ./scripts/install.sh
 
 ### AppImage (portable)
 ```bash
-# Download
-wget https://github.com/__REPO__/releases/download/__VERSION__/dbflux-linux-amd64.AppImage
-chmod +x dbflux-linux-amd64.AppImage
-./dbflux-linux-amd64.AppImage
+# Download (replace x86_64 with aarch64 for ARM)
+wget https://github.com/__REPO__/releases/download/__VERSION__/dbflux-x86_64.AppImage
+chmod +x dbflux-x86_64.AppImage
+./dbflux-x86_64.AppImage
 ```
 
 ### macOS
@@ -68,7 +68,7 @@ gpg --keyserver keyserver.ubuntu.com --recv-keys A614B7D25134987A
 gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 
 # Linux AppImage
-gpg --verify dbflux-linux-amd64.AppImage.asc dbflux-linux-amd64.AppImage
+gpg --verify dbflux-x86_64.AppImage.asc dbflux-x86_64.AppImage
 
 # macOS DMG
 gpg --verify dbflux-macos-arm64.dmg.asc dbflux-macos-arm64.dmg

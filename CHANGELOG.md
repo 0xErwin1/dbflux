@@ -60,6 +60,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Linux AppImage packaging** — Bundle the shared-library dependency closure, including xkbcommon-x11 and runtime-loaded fontconfig, and build both Linux architectures on Ubuntu 22.04 rather than the newer runner libraries. CI checks the produced AppImages for missing dependencies, GLIBC requirements above 2.35 and early startup failure under Xvfb. AppImage downloads are now named `dbflux-x86_64.AppImage` and `dbflux-aarch64.AppImage`, without the old filename aliases; host graphics drivers are still required.
 * **Point inspector and Show in tree in table charts** — The chart of a table or collection tab now shows the point inspector for the point under the pointer or the point picked with H and L: the series, time and value, and every column of the row behind it. Show in tree, from the inspector or the table menu's Toolbar entry, selects that row in the table and scrolls to it, leaving a chart-only view for the table. Before, the inspector never appeared. Charts of query editor results still show no inspector.
 * **Row actions in the keyboard menu** — The context menu of a result row opened with M or Shift+F10 now lists the driver's row actions, such as Kill session in an instance inspector, which only a right click showed before.
 * **Tab in the find panel** — Tab and Shift+Tab no longer get stuck in the editor's find panel when the replace field is hidden: they move focus between panes. With the replace field shown they still switch between the two fields.
