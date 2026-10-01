@@ -12,13 +12,23 @@ set -euo pipefail
 
 # Configuration
 REPO_URL="https://github.com/0xErwin1/dbflux"
+INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh"
+UNINSTALL_SCRIPT_URL="https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninstall.sh"
 APP_NAME="dbflux"
 DEFAULT_PREFIX="/usr/local"
-GPG_KEY_ID="A614B7D25134987A"
-GPG_KEYSERVER="keyserver.ubuntu.com"
 
-# Detect script location and mode
-if [[ -t 0 ]] && [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+# Full fingerprint of the release signing key. Signatures are accepted only
+# when their primary key matches it, so a short-ID collision on the keyserver
+# cannot substitute another key. Update it when the signing key is rotated.
+GPG_KEY_FINGERPRINT="B39EB98E8860DAFB05670073A614B7D25134987A"
+GPG_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${GPG_KEY_FINGERPRINT}"
+
+ORIGINAL_ARGS=("$@")
+
+# A script read from a pipe (`curl | bash`, `bash -s`) or a process
+# substitution has no regular file behind BASH_SOURCE. Whether stdin is a
+# terminal is irrelevant: a local run under automation is still a local run.
+if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
     REMOTE_MODE=false
@@ -86,13 +96,25 @@ INSTALLATION METHODS:
 PRIVILEGES:
     Root/sudo is only required if the prefix is not writable by the current user.
 EOF
-    exit 1
+    exit "${1:-1}"
+}
+
+# Fail with a clear message when an option that takes a value is the last argument.
+require_value() {
+    local option="$1"
+    local remaining="$2"
+
+    if [[ "$remaining" -lt 2 ]]; then
+        error "Option $option requires a value"
+        usage 1
+    fi
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --prefix)
+            require_value "$1" "$#"
             PREFIX="$2"
             shift 2
             ;;
@@ -101,6 +123,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --version)
+            require_value "$1" "$#"
             VERSION="$2"
             shift 2
             ;;
@@ -113,14 +136,24 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            usage
+            usage 0
             ;;
         *)
             error "Unknown option: $1"
-            usage
+            usage 1
             ;;
     esac
 done
+
+if [[ "$PREFIX" != /* ]]; then
+    error "Installation prefix must be an absolute path: $PREFIX"
+    exit 1
+fi
+
+# Release tags are `vX.Y.Z`; accept `X.Y.Z` as well instead of failing with a 404.
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
+    VERSION="v$VERSION"
+fi
 
 # Detect architecture
 detect_arch() {
@@ -173,6 +206,9 @@ check_requirements() {
         if ! command -v tar &>/dev/null; then
             missing+=("tar")
         fi
+        if ! command -v sha256sum &>/dev/null; then
+            missing+=("sha256sum (coreutils)")
+        fi
     fi
 
     if [[ "$BUILD_FROM_SOURCE" == "true" ]]; then
@@ -215,21 +251,51 @@ check_prefix_writable() {
 
     if [[ $EUID -ne 0 ]]; then
         error "Installation prefix '$PREFIX' is not writable"
-        echo ""
-        echo "Options:"
-        echo "  1. Run with sudo: sudo $0 $*"
-        echo "  2. Install to user directory: $0 --prefix ~/.local"
+        echo "" >&2
+        echo "Options:" >&2
+        echo "  1. Run with sudo: $(rerun_command sudo "${ORIGINAL_ARGS[@]}")" >&2
+        echo "  2. Install to user directory: $(rerun_command "" --prefix "$HOME/.local")" >&2
         exit 1
     fi
 }
 
-# Download file with curl or wget
+# Print the command that re-runs this installer the way it was started
+# (piped from curl or as a local file), optionally under sudo.
+rerun_command() {
+    local runner="$1"
+    shift
+
+    local arguments=""
+    if [[ $# -gt 0 ]]; then
+        arguments=" $(printf '%q ' "$@")"
+        arguments="${arguments% }"
+    fi
+
+    local sudo_prefix=""
+    if [[ -n "$runner" ]]; then
+        sudo_prefix="$runner "
+    fi
+
+    if [[ "$REMOTE_MODE" == "true" ]]; then
+        if [[ -n "$arguments" ]]; then
+            echo "curl -fsSL $INSTALL_SCRIPT_URL | ${sudo_prefix}bash -s --$arguments"
+        else
+            echo "curl -fsSL $INSTALL_SCRIPT_URL | ${sudo_prefix}bash"
+        fi
+    else
+        echo "${sudo_prefix}$0$arguments"
+    fi
+}
+
+# Download a URL with curl or wget; an output of "-" writes to stdout.
+# Returns the downloader's status instead of exiting, so callers decide
+# whether a missing file is fatal.
 download() {
     local url="$1"
     local output="$2"
 
     if command -v curl &>/dev/null; then
-        curl -fsSL "$url" -o "$output"
+        curl -fsSL --proto '=https' --retry 3 "$url" -o "$output"
     elif command -v wget &>/dev/null; then
         wget -q "$url" -O "$output"
     else
@@ -238,43 +304,53 @@ download() {
     fi
 }
 
+# Download a file the installation cannot proceed without.
+download_required() {
+    local url="$1"
+    local output="$2"
+
+    if ! download "$url" "$output"; then
+        error "Failed to download $url"
+        error "Check the version and architecture, or your network connection."
+        exit 1
+    fi
+}
+
 # Get latest release version from GitHub
 get_latest_version() {
     local api_url="https://api.github.com/repos/0xErwin1/dbflux/releases/latest"
-    local version
+    local response
 
-    if command -v curl &>/dev/null; then
-        version=$(curl -fsSL "$api_url" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-    elif command -v wget &>/dev/null; then
-        version=$(wget -qO- "$api_url" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    if ! response=$(download "$api_url" -); then
+        error "Failed to query the latest release from $api_url"
+        error "The GitHub API may be rate limiting this address; retry later or pass --version vX.Y.Z."
+        exit 1
     fi
 
-    if [[ -z "$version" ]]; then
-        error "Failed to get latest version from GitHub"
+    local version
+    version=$(printf '%s\n' "$response" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+
+    if [[ ! "$version" =~ ^v[0-9] ]]; then
+        error "Failed to read the latest version from the GitHub API response"
         exit 1
     fi
 
     echo "$version"
 }
 
-# Import GPG key from keyserver
-import_gpg_key() {
-    if gpg --list-keys "$GPG_KEY_ID" &>/dev/null; then
-        return 0
-    fi
-
-    step "Importing GPG key $GPG_KEY_ID from $GPG_KEYSERVER..."
-    if ! gpg --keyserver "$GPG_KEYSERVER" --recv-keys "$GPG_KEY_ID" &>/dev/null; then
-        warn "Failed to import GPG key from keyserver"
-        return 1
-    fi
-    info "GPG key imported"
-}
-
-# Verify GPG signature
+# Verify a detached signature against the pinned release key.
+#
+# Uses a throwaway GnuPG home inside the installer's temporary directory, so
+# the user's keyring is neither read nor modified and only the pinned key can
+# produce an accepted signature. The key is fetched over HTTPS, which works
+# without dirmngr and through firewalls that block the HKP port.
+#
+# Missing gpg or an unreachable key server degrade to a warning (the checksum
+# still guards against corruption); a signature that does not verify aborts.
 verify_gpg_signature() {
     local file="$1"
     local sig_file="$2"
+    local gnupg_home="$3"
 
     if [[ "$SKIP_GPG_VERIFY" == "true" ]]; then
         warn "Skipping GPG verification (--skip-gpg-verify)"
@@ -287,22 +363,67 @@ verify_gpg_signature() {
         return 0
     fi
 
-    import_gpg_key || {
-        warn "Could not import GPG key, skipping signature verification"
+    mkdir -p "$gnupg_home"
+    chmod 700 "$gnupg_home"
+
+    step "Importing release signing key $GPG_KEY_FINGERPRINT..."
+    local key_file="$gnupg_home/release-key.asc"
+    if ! download "$GPG_KEY_URL" "$key_file" \
+        || ! gpg --homedir "$gnupg_home" --batch --quiet --import "$key_file" &>/dev/null; then
+        warn "Could not import the release signing key, skipping signature verification"
         return 0
-    }
+    fi
 
     step "Verifying GPG signature..."
-    if gpg --verify "$sig_file" "$file" &>/dev/null; then
+    local status_output
+    status_output=$(gpg --homedir "$gnupg_home" --batch --status-fd 1 --verify "$sig_file" "$file" 2>/dev/null || true)
+
+    # VALIDSIG carries the signing key's fingerprint and, as its last field
+    # (when present), the primary key's fingerprint.
+    local signer_fingerprints
+    signer_fingerprints=$(printf '%s\n' "$status_output" \
+        | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3; print $NF }')
+
+    if grep -qx "$GPG_KEY_FINGERPRINT" <<< "$signer_fingerprints"; then
         info "GPG signature OK"
         return 0
-    else
-        error "GPG signature verification failed!"
-        error "The file may have been tampered with."
-        echo ""
-        echo "To skip verification (not recommended): $0 --skip-gpg-verify"
+    fi
+
+    error "GPG signature verification failed!"
+    error "The file may have been tampered with."
+    echo "" >&2
+    echo "To skip verification (not recommended): $(rerun_command "" "${ORIGINAL_ARGS[@]}" --skip-gpg-verify)" >&2
+    exit 1
+}
+
+# Compare a file's SHA-256 against a `sha256sum`-format checksum file.
+#
+# The expected hash is read from the first field and compared directly, so the
+# file name recorded in the checksum file does not have to match the local one.
+verify_checksum() {
+    local file="$1"
+    local checksum_file="$2"
+
+    step "Verifying checksum..."
+
+    local expected_checksum
+    local actual_checksum
+    expected_checksum=$(awk 'NR == 1 { print tolower($1) }' "$checksum_file")
+    actual_checksum=$(sha256sum "$file" | awk '{ print $1 }')
+
+    if [[ ! "$expected_checksum" =~ ^[0-9a-f]{64}$ ]]; then
+        error "Checksum file is empty or malformed"
         exit 1
     fi
+
+    if [[ "$expected_checksum" != "$actual_checksum" ]]; then
+        error "Checksum verification failed!"
+        error "Expected: $expected_checksum"
+        error "Actual:   $actual_checksum"
+        exit 1
+    fi
+
+    info "Checksum OK"
 }
 
 # Download and extract release
@@ -311,9 +432,10 @@ download_release() {
     local version="$2"
     local tmp_dir="$3"
 
-    local release_url="$REPO_URL/releases/download/$version/dbflux-$arch.tar.gz"
-    local checksum_url="$REPO_URL/releases/download/$version/dbflux-$arch.tar.gz.sha256"
-    local sig_url="$REPO_URL/releases/download/$version/dbflux-$arch.tar.gz.asc"
+    local asset_name="dbflux-$arch.tar.gz"
+    local release_url="$REPO_URL/releases/download/$version/$asset_name"
+    local checksum_url="$release_url.sha256"
+    local sig_url="$release_url.asc"
 
     step "Downloading DBFlux $version for $arch..."
 
@@ -322,29 +444,23 @@ download_release() {
         return 0
     fi
 
-    local tarball="$tmp_dir/dbflux.tar.gz"
-    local checksum_file="$tmp_dir/dbflux.tar.gz.sha256"
-    local sig_file="$tmp_dir/dbflux.tar.gz.asc"
+    local tarball="$tmp_dir/$asset_name"
+    local checksum_file="$tarball.sha256"
+    local sig_file="$tarball.asc"
 
-    download "$release_url" "$tarball"
-    download "$checksum_url" "$checksum_file"
-    download "$sig_url" "$sig_file" || true  # Signature might not exist for older releases
+    download_required "$release_url" "$tarball"
+    download_required "$checksum_url" "$checksum_file"
 
-    # Verify GPG signature first (if available)
-    if [[ -f "$sig_file" ]]; then
-        verify_gpg_signature "$tarball" "$sig_file"
+    # wget leaves an empty file behind on a failed download, so a missing
+    # signature is detected by the download status rather than by the file.
+    if download "$sig_url" "$sig_file"; then
+        verify_gpg_signature "$tarball" "$sig_file" "$tmp_dir/gnupg"
     else
+        rm -f "$sig_file"
         warn "No GPG signature found for this release"
     fi
 
-    # Verify checksum
-    step "Verifying checksum..."
-    cd "$tmp_dir"
-    if ! sha256sum -c "$checksum_file" &>/dev/null; then
-        error "Checksum verification failed!"
-        exit 1
-    fi
-    info "Checksum OK"
+    verify_checksum "$tarball" "$checksum_file"
 
     step "Extracting..."
     tar -xzf "$tarball" -C "$tmp_dir"
@@ -413,7 +529,11 @@ build_from_source() {
 check_build_deps() {
     local missing=()
 
-    # Check for required dev libraries
+    # .cargo/config.toml links the x86_64 Linux target with mold.
+    if [[ "$(uname -m)" == "x86_64" ]] && ! command -v mold &>/dev/null; then
+        missing+=("mold")
+    fi
+
     if ! pkg-config --exists openssl 2>/dev/null; then
         missing+=("libssl-dev")
     fi
@@ -423,20 +543,33 @@ check_build_deps() {
     if ! pkg-config --exists xkbcommon 2>/dev/null; then
         missing+=("libxkbcommon-dev")
     fi
+    if ! pkg-config --exists xkbcommon-x11 2>/dev/null; then
+        missing+=("libxkbcommon-x11-dev")
+    fi
 
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        warn "Missing build dependencies: ${missing[*]}"
-        echo ""
-        echo "Install them with:"
-        echo "  Ubuntu/Debian: sudo apt install ${missing[*]}"
-        echo "  Fedora:        sudo dnf install ${missing[*]//lib/} ${missing[*]//-dev/-devel}"
-        echo "  Arch:          sudo pacman -S ${missing[*]//lib/} ${missing[*]//-dev/}"
-        echo ""
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    warn "Missing build dependencies: ${missing[*]}"
+    echo "" >&2
+    echo "Install the build dependencies with:" >&2
+    echo "  Ubuntu/Debian: sudo apt install ${missing[*]}" >&2
+    echo "  Fedora:        sudo dnf install mold openssl-devel dbus-devel libxkbcommon-devel libxkbcommon-x11-devel" >&2
+    echo "  Arch:          sudo pacman -S mold openssl dbus libxkbcommon libxkbcommon-x11" >&2
+    echo "" >&2
+
+    # When piped from curl, stdin is the script itself, so the answer must
+    # come from the terminal; without one, stop rather than guess.
+    local reply=""
+    if ! { read -p "Continue anyway? [y/N] " -n 1 -r reply < /dev/tty; } 2>/dev/null; then
+        error "No terminal available to confirm; install the dependencies and re-run"
+        exit 1
+    fi
+    echo >&2
+
+    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+        exit 1
     fi
 }
 
@@ -557,7 +690,11 @@ post_install() {
     echo ""
     echo "To uninstall:"
     if [[ "$REMOTE_MODE" == "true" ]]; then
-        echo "  curl -fsSL $REPO_URL/raw/main/scripts/uninstall.sh | bash -s -- --prefix $PREFIX"
+        local sudo_prefix=""
+        if [[ $EUID -eq 0 ]]; then
+            sudo_prefix="sudo "
+        fi
+        echo "  curl -fsSL $UNINSTALL_SCRIPT_URL | ${sudo_prefix}bash -s -- --prefix $PREFIX"
     else
         echo "  $SCRIPT_DIR/uninstall.sh --prefix $PREFIX"
     fi
@@ -591,6 +728,8 @@ main() {
     # Create temp directory
     local tmp_dir
     tmp_dir=$(mktemp -d)
+    # Expanded now on purpose: tmp_dir is local and gone when the EXIT trap runs.
+    # shellcheck disable=SC2064
     trap "rm -rf '$tmp_dir'" EXIT
 
     # Download or build

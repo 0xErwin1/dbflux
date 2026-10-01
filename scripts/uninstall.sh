@@ -11,8 +11,18 @@ set -euo pipefail
 
 # Configuration
 REPO_URL="https://github.com/0xErwin1/dbflux"
+UNINSTALL_SCRIPT_URL="https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninstall.sh"
 APP_NAME="dbflux"
 DEFAULT_PREFIX="/usr/local"
+
+ORIGINAL_ARGS=("$@")
+
+# A script read from a pipe (`curl | bash`) has no regular file behind BASH_SOURCE.
+if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+    REMOTE_MODE=false
+else
+    REMOTE_MODE=true
+fi
 
 # Color output (disable if not a terminal)
 if [[ -t 1 ]]; then
@@ -69,13 +79,53 @@ EXAMPLES:
 PRIVILEGES:
     Root/sudo is only required if prefix is not writable by current user.
 EOF
-    exit 1
+    exit "${1:-1}"
+}
+
+# Fail with a clear message when an option that takes a value is the last argument.
+require_value() {
+    local option="$1"
+    local remaining="$2"
+
+    if [[ "$remaining" -lt 2 ]]; then
+        error "Option $option requires a value"
+        usage 1
+    fi
+}
+
+# Print the command that re-runs this uninstaller the way it was started
+# (piped from curl or as a local file), optionally under sudo.
+rerun_command() {
+    local runner="$1"
+    shift
+
+    local arguments=""
+    if [[ $# -gt 0 ]]; then
+        arguments=" $(printf '%q ' "$@")"
+        arguments="${arguments% }"
+    fi
+
+    local sudo_prefix=""
+    if [[ -n "$runner" ]]; then
+        sudo_prefix="$runner "
+    fi
+
+    if [[ "$REMOTE_MODE" == "true" ]]; then
+        if [[ -n "$arguments" ]]; then
+            echo "curl -fsSL $UNINSTALL_SCRIPT_URL | ${sudo_prefix}bash -s --$arguments"
+        else
+            echo "curl -fsSL $UNINSTALL_SCRIPT_URL | ${sudo_prefix}bash"
+        fi
+    else
+        echo "${sudo_prefix}$0$arguments"
+    fi
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --prefix)
+            require_value "$1" "$#"
             PREFIX="$2"
             shift 2
             ;;
@@ -92,14 +142,19 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            usage
+            usage 0
             ;;
         *)
             error "Unknown option: $1"
-            usage
+            usage 1
             ;;
     esac
 done
+
+if [[ "$PREFIX" != /* ]]; then
+    error "Installation prefix must be an absolute path: $PREFIX"
+    exit 1
+fi
 
 # Check if prefix is writable
 check_prefix_writable() {
@@ -118,17 +173,17 @@ check_prefix_writable() {
 
     if [[ $EUID -ne 0 ]]; then
         error "Installation prefix '$PREFIX' is not writable"
-        echo ""
-        echo "Options:"
-        echo "  1. Run with sudo: sudo $0 $*"
-        echo "  2. Specify correct prefix: $0 --prefix ~/.local"
+        echo "" >&2
+        echo "Options:" >&2
+        echo "  1. Run with sudo: $(rerun_command sudo "${ORIGINAL_ARGS[@]}")" >&2
+        echo "  2. Specify correct prefix: $(rerun_command "" --prefix "$HOME/.local")" >&2
         exit 1
     fi
 }
 
-# Find installed files
+# Collect installed files into INSTALLED_FILES.
 find_installed_files() {
-    local files=()
+    local -n files=INSTALLED_FILES
 
     [[ -f "$PREFIX/bin/$APP_NAME" ]] && files+=("$PREFIX/bin/$APP_NAME")
     [[ -f "$PREFIX/share/applications/$APP_NAME.desktop" ]] && files+=("$PREFIX/share/applications/$APP_NAME.desktop")
@@ -141,12 +196,12 @@ find_installed_files() {
         [[ -f "$PREFIX/share/icons/hicolor/$size/apps/$APP_NAME.png" ]] && files+=("$PREFIX/share/icons/hicolor/$size/apps/$APP_NAME.png")
     done
 
-    echo "${files[@]}"
+    return 0
 }
 
-# Find user config directories
+# Collect existing user config and data directories into USER_CONFIG_DIRS.
 find_user_config() {
-    local dirs=()
+    local -n dirs=USER_CONFIG_DIRS
 
     local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
     local data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -154,7 +209,7 @@ find_user_config() {
     [[ -d "$config_dir/$APP_NAME" ]] && dirs+=("$config_dir/$APP_NAME")
     [[ -d "$data_dir/$APP_NAME" ]] && dirs+=("$data_dir/$APP_NAME")
 
-    echo "${dirs[@]}"
+    return 0
 }
 
 # Remove file safely
@@ -272,11 +327,10 @@ main() {
 
     check_prefix_writable
 
-    # Find installed files
-    local installed_files
-    installed_files=$(find_installed_files)
+    INSTALLED_FILES=()
+    find_installed_files
 
-    if [[ -z "$installed_files" ]]; then
+    if [[ ${#INSTALLED_FILES[@]} -eq 0 ]]; then
         error "DBFlux is not installed at $PREFIX"
         echo ""
         echo "Try specifying a different prefix:"
@@ -286,18 +340,25 @@ main() {
     fi
 
     info "Found installed files:"
-    for file in $installed_files; do
+    for file in "${INSTALLED_FILES[@]}"; do
         echo "  - $file"
     done
     echo ""
 
     # Show user config if --remove-config
     if [[ "$REMOVE_CONFIG" == "true" ]]; then
-        local user_config
-        user_config=$(find_user_config)
-        if [[ -n "$user_config" ]]; then
+        # sudo resets HOME to root's on most distributions, so the directories
+        # below belong to root, not to the user who invoked sudo.
+        if [[ $EUID -eq 0 ]] && [[ -n "${SUDO_USER:-}" ]]; then
+            warn "Running under sudo: --remove-config targets root's directories, not $SUDO_USER's"
+            warn "To remove $SUDO_USER's data, run as $SUDO_USER: rm -rf ~/.config/$APP_NAME ~/.local/share/$APP_NAME"
+        fi
+
+        USER_CONFIG_DIRS=()
+        find_user_config
+        if [[ ${#USER_CONFIG_DIRS[@]} -gt 0 ]]; then
             warn "The following user data will also be removed:"
-            for dir in $user_config; do
+            for dir in "${USER_CONFIG_DIRS[@]}"; do
                 echo "  - $dir"
             done
             echo ""
