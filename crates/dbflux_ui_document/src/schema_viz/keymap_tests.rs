@@ -82,6 +82,8 @@ fn focused_diagram(cx: &mut TestAppContext) -> (Entity<SchemaVizDocument>, &mut 
                 None,
                 SchemaVizMode::Global,
                 app_state,
+                #[cfg(feature = "telemetry")]
+                None,
                 window,
                 cx,
             )

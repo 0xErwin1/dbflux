@@ -442,7 +442,8 @@ pub struct SchemaVizDocument {
     pub zoom: f32,
     pub focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
-    // Dependencies
+    // A live document retains AppStateEntity. The completion's weak App handle
+    // cannot expire independently of a live document during normal operation.
     app_state: Entity<AppStateEntity>,
     // Pan state
     is_panning: bool,
@@ -462,6 +463,8 @@ pub struct SchemaVizDocument {
     pub show_types: bool,
     pub show_indexes: bool,
     pub table_cap_warning: bool,
+    #[cfg(feature = "telemetry")]
+    usage_ticket: Option<dbflux_core::observability::usage::UsageTicket>,
     // Cancellation
     cancel_token: Option<Arc<CancelToken>>,
     /// Frame of the loading spinner, advanced by a timer while the schema loads.
@@ -592,6 +595,9 @@ impl SchemaVizDocument {
         database: Option<String>,
         mode: SchemaVizMode,
         app_state: Entity<AppStateEntity>,
+        #[cfg(feature = "telemetry")] usage_ticket: Option<
+            dbflux_core::observability::usage::UsageTicket,
+        >,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -638,6 +644,8 @@ impl SchemaVizDocument {
             show_types: true,
             show_indexes: false,
             table_cap_warning: false,
+            #[cfg(feature = "telemetry")]
+            usage_ticket,
             cancel_token: None,
             loading_frame: 0,
             pending_toast: None,
@@ -831,7 +839,10 @@ impl SchemaVizDocument {
                                 capped,
                                 tables_loaded,
                                 bulk,
+                                complete: metadata_complete,
                             } = result;
+                            #[cfg(not(feature = "telemetry"))]
+                            let _metadata_complete = metadata_complete;
                             let (focal_table, focal_schema) = match &doc.mode {
                                 SchemaVizMode::Focused { table, schema } => {
                                     (table.clone(), schema.clone())
@@ -936,6 +947,19 @@ impl SchemaVizDocument {
                             doc.graph = Some(graph);
                             doc.layout = Some(layout);
                             doc.load_status = LoadStatus::Ready;
+                            #[cfg(feature = "telemetry")]
+                            if metadata_complete
+                                && !doc
+                                    .cancel_token
+                                    .as_ref()
+                                    .is_some_and(|token| token.is_cancelled())
+                                && let Some(ticket) = doc.usage_ticket.take()
+                                && let Err(error) = ticket.record(
+                                    dbflux_core::observability::usage::UsageFeature::SchemaInspect,
+                                )
+                            {
+                                log::warn!("Schema inspection usage recording failed: {error:?}");
+                            }
                             doc.table_cap_warning = capped;
                             match initial_pan {
                                 Some(pan) => doc.pan_offset = pan,
@@ -1333,6 +1357,20 @@ impl SchemaVizDocument {
                     }
                 }
 
+                // Judge the final required relation set: the existing second
+                // pass can recover a neighbor whose first detail request failed.
+                let complete = bulk
+                    .get(&schema)
+                    .is_some_and(|schema_bulk| schema_bulk.fetched_foreign_keys.is_some())
+                    && all_table_names.iter().all(|(schema, name)| {
+                        all_tables.iter().any(|table| {
+                            table.name == *name
+                                && table.schema == *schema
+                                && bulk.get(schema).is_some_and(|schema_bulk| {
+                                    schema_bulk.relation_is_complete(table)
+                                })
+                        })
+                    });
                 let graph = SchemaGraph::build(&all_tables);
                 let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
                 let layout = dbflux_schema_viz::layout::compute_layout(
@@ -1349,6 +1387,7 @@ impl SchemaVizDocument {
                     layout,
                     capped: false,
                     tables_loaded,
+                    complete,
                     bulk: bulk
                         .into_iter()
                         .map(|(schema, schema_bulk)| {
@@ -1414,6 +1453,15 @@ impl SchemaVizDocument {
                     }
                 }
 
+                let complete = tables_to_load.iter().all(|required| {
+                    all_table_details.iter().any(|table| {
+                        table.name == required.name
+                            && table.schema == required.schema
+                            && bulk
+                                .get(&required.schema)
+                                .is_some_and(|schema_bulk| schema_bulk.relation_is_complete(table))
+                    })
+                });
                 let graph = SchemaGraph::build(&all_table_details);
                 let layout = Self::initial_global_layout(&graph);
 
@@ -1423,6 +1471,7 @@ impl SchemaVizDocument {
                     layout,
                     capped,
                     tables_loaded,
+                    complete,
                     bulk: bulk
                         .into_iter()
                         .map(|(schema, schema_bulk)| {
@@ -3860,6 +3909,17 @@ struct SchemaBulk {
 }
 
 impl SchemaBulk {
+    fn relation_is_complete(&self, table: &TableInfo) -> bool {
+        // A relation present in the column map always takes the fabrication
+        // path. Its Some(empty) indexes/FKs may be stand-ins for failed seams,
+        // so only successful bulk results prove those parts were loaded.
+        let fabricated = self.columns.contains_key(&table.name);
+        (table.columns.is_some() || fabricated)
+            && (self.fetched_indexes.is_some() || (!fabricated && table.indexes.is_some()))
+            && (self.fetched_foreign_keys.is_some()
+                || (!fabricated && table.foreign_keys.is_some()))
+    }
+
     /// The cache-seed view of this schema's bulk result: the rows exactly as
     /// fetched, including every relation the diagram itself did not use.
     fn cache_seed(&self, database: &str, schema: Option<&str>) -> FetchedSchemaBulk {
@@ -3887,6 +3947,7 @@ struct FetchedSchemaBulk {
 
 /// What `load_focused_schema_blocking` produced for one diagram load.
 struct LoadedSchemaData {
+    complete: bool,
     tables: Vec<TableInfo>,
     graph: SchemaGraph,
     layout: LayoutResult,
