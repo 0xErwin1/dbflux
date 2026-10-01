@@ -1,0 +1,87 @@
+name: Installer
+
+# Exercises scripts/install.sh the way the website runs it: read from stdin
+# (`curl | bash`), downloading and verifying the latest published release.
+# No other job runs the remote path, which is how a checksum check that could
+# never pass shipped unnoticed (issue #814).
+#
+# The release is resolved here with an authenticated `gh` call and passed as
+# --version, because the installer's own lookup uses the unauthenticated
+# GitHub API and shared runners hit its rate limit.
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/uninstall.sh'
+      - '.github/workflows/installer.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/uninstall.sh'
+      - '.github/workflows/installer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+# An explicit `bash` shell adds `-o pipefail`, so piping the installer through
+# `tee` does not hide its exit status.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Lint installer scripts
+        run: shellcheck scripts/install.sh scripts/uninstall.sh
+
+  remote-install:
+    name: Remote install and uninstall
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Resolve latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo 0xErwin1/dbflux --json tagName --jq .tagName)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install from stdin into a user prefix
+        env:
+          VERSION: ${{ steps.release.outputs.tag }}
+        run: |
+          prefix="$RUNNER_TEMP/dbflux"
+          bash -s -- --prefix "$prefix" --version "$VERSION" < scripts/install.sh 2>&1 | tee install.log
+
+          grep -q "GPG signature OK" install.log
+          grep -q "Checksum OK" install.log
+          test -x "$prefix/bin/dbflux"
+          grep -q "^Exec=$prefix/bin/dbflux" "$prefix/share/applications/dbflux.desktop"
+
+      - name: Uninstall from stdin
+        run: |
+          prefix="$RUNNER_TEMP/dbflux"
+          bash -s -- --prefix "$prefix" --force < scripts/uninstall.sh
+
+          test ! -e "$prefix/bin/dbflux"
+          test ! -e "$prefix/share/applications/dbflux.desktop"

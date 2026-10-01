@@ -8,6 +8,10 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Native console** — PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, Redshift, ClickHouse, Turso, MongoDB and Redis offer a console that runs one native command at a time and prints the result as text. It is docked under tables, document collections and the key-value browser (Ctrl+` shows or hides it), and Open console in a database's sidebar menu opens one in its own tab. Commands go through the editor's validation and dangerous-query confirmation, are recorded in the audit log, join the query history (Up and Down walk it) and complete like the editor. Drivers that enforce a row limit apply the editor row limit to console commands. See the new Console page of the documentation.
 
+### Fixed
+
+* **Linux install script** — The installation command on the website no longer stops with "Checksum verification failed!": the downloaded release now passes its checksum check, and a mismatch prints the expected and actual hashes. The release signature is now checked against the DBFlux signing key's full fingerprint, using a temporary keyring fetched over HTTPS, so it no longer needs `dirmngr` or the keyserver port and no longer writes to your own keyring. Installing from an extracted release without a terminal installs that release instead of downloading another, `--build` no longer reads its confirmation from the piped script, and `--version 0.8.5` is accepted as `v0.8.5`.
+
 ## [0.8.5] - 2026-09-30
 
 ### Added
