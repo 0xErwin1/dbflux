@@ -727,7 +727,11 @@ async fn lookup_postgres_custom_type_kind(
             .map_err(|e| format!("Create type existence check error: {}", e))
     })
     .await
-    .and_then(|result| parse_custom_type_kind_result(&result))
+    .and_then(|result| {
+        #[cfg(feature = "telemetry")]
+        observe_query_result(&result);
+        parse_custom_type_kind_result(&result)
+    })
 }
 
 fn non_empty(s: String) -> Option<String> {
@@ -1390,7 +1394,11 @@ impl DbFluxServer {
             connection
                 .execute(&request)
                 .map_err(|e| format!("Create table error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await?;
 
@@ -1470,10 +1478,23 @@ impl DbFluxServer {
         Self::execute_connection_blocking(connection, move |connection| {
             connection
                 .execute(&QueryRequest::new("BEGIN"))
+                .inspect(|result| {
+                    #[cfg(feature = "telemetry")]
+                    observe_query_result(result);
+                    #[cfg(not(feature = "telemetry"))]
+                    let _result = result;
+                })
                 .map_err(|error| format!("BEGIN failed: {error}"))?;
 
             for (operation_index, statement) in transactional_statements {
-                if let Err(execution_error) = connection.execute(&QueryRequest::new(statement)) {
+                if let Err(execution_error) = connection.execute(&QueryRequest::new(statement))
+                    .inspect(|result| {
+                        #[cfg(feature = "telemetry")]
+                        observe_query_result(result);
+                        #[cfg(not(feature = "telemetry"))]
+                        let _result = result;
+                    })
+                {
                     let message = format!(
                         "ALTER TABLE aborted at operation {} ({}): {}",
                         operation_index, operation_names[operation_index], execution_error
@@ -1487,7 +1508,14 @@ impl DbFluxServer {
                 }
             }
 
-            if let Err(commit_error) = connection.execute(&QueryRequest::new("COMMIT")) {
+            if let Err(commit_error) = connection.execute(&QueryRequest::new("COMMIT"))
+                .inspect(|result| {
+                    #[cfg(feature = "telemetry")]
+                    observe_query_result(result);
+                    #[cfg(not(feature = "telemetry"))]
+                    let _result = result;
+                })
+            {
                 return match connection.execute(&QueryRequest::new("ROLLBACK")) {
                     Ok(_) => Err(format!("COMMIT failed: {commit_error}; rollback attempted")),
                     Err(rollback_error) => Err(format!(
@@ -1580,7 +1608,11 @@ impl DbFluxServer {
                 if let Err(exec_err) =
                     Self::execute_connection_blocking(connection.clone(), move |c| {
                         c.execute(&request)
-                            .map(|_| ())
+                            .map(|result| {
+                                #[cfg(feature = "telemetry")]
+                                observe_query_result(&result);
+                                drop(result);
+                            })
                             .map_err(|e| format!("ALTER TABLE error: {}", e))
                     })
                     .await
@@ -1714,7 +1746,11 @@ impl DbFluxServer {
             connection
                 .execute(&request)
                 .map_err(|e| format!("Create index error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await?;
 
@@ -1745,7 +1781,11 @@ impl DbFluxServer {
             connection
                 .execute(&request)
                 .map_err(|e| format!("Drop index error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await?;
 
@@ -1812,7 +1852,11 @@ impl DbFluxServer {
             connection
                 .execute(&query_request)
                 .map_err(|e| format!("Create type error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await
         {
@@ -2832,6 +2876,8 @@ mod alter_table_integration_tests {
         // Minimal stub: supports_transactional_ddl=false, first execute succeeds, second fails.
         struct FakeNonAtomicConnection {
             call_count: std::sync::atomic::AtomicUsize,
+            fail_second: bool,
+            semantic_failure: bool,
         }
 
         static FAKE_DIALECT: DefaultSqlDialect = DefaultSqlDialect;
@@ -2870,8 +2916,15 @@ mod alter_table_integration_tests {
                 let n = self
                     .call_count
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                if n == 0 {
-                    Ok(QueryResult::empty())
+                if n == 0 || !self.fail_second {
+                    let mut result = QueryResult::empty();
+                    if self.semantic_failure {
+                        result.metadata_extra = Some(std::collections::HashMap::from([(
+                            "script_failure".into(),
+                            serde_json::json!(true),
+                        )]));
+                    }
+                    Ok(result)
                 } else {
                     Err(DbError::query_failed("second op fails".to_string()))
                 }
@@ -2924,6 +2977,8 @@ mod alter_table_integration_tests {
 
         let connection = Arc::new(FakeNonAtomicConnection {
             call_count: std::sync::atomic::AtomicUsize::new(0),
+            fail_second: true,
+            semantic_failure: false,
         }) as Arc<dyn Connection>;
 
         let ops = vec![
@@ -2952,6 +3007,69 @@ mod alter_table_integration_tests {
             "should have aborted at op index 1 (second op)"
         );
         assert_eq!(value["altered"], false);
+
+        #[cfg(feature = "telemetry")]
+        {
+            use crate::{
+                governance::tests::{create_test_state, with_usage_owner},
+                telemetry_usage::scope_call,
+            };
+            let state = create_test_state();
+            let mut policy = dbflux_mcp::builtin_policies()
+                .into_iter()
+                .find(|policy| policy.id == "builtin/admin")
+                .expect("admin policy");
+            policy
+                .allowed_classes
+                .extend(policy.approval_classes.drain(..));
+            state
+                .runtime
+                .write()
+                .await
+                .upsert_policy_mut(policy)
+                .expect("explicit allow without approval");
+            let (values, finishes, counts, leases) =
+                with_usage_owner(state, |middleware| async move {
+                    let mut values = Vec::new();
+                    for (fail_second, semantic_failure) in
+                        [(true, false), (false, true), (false, false)]
+                    {
+                        let connection: Arc<dyn Connection> = Arc::new(FakeNonAtomicConnection {
+                            call_count: std::sync::atomic::AtomicUsize::new(0),
+                            fail_second,
+                            semantic_failure,
+                        });
+                        let result = scope_call(middleware.authorize_and_execute(
+                            "alter_table",
+                            None,
+                            dbflux_policy::ExecutionClassification::AdminSafe,
+                            || async {
+                                let (value, _sql) = DbFluxServer::run_alter_non_atomic(
+                                    connection, &ops, "test_tbl",
+                                )
+                                .await
+                                .map_err(|error| rmcp::ErrorData::internal_error(error, None))?;
+                                values.push(value.clone());
+                                Ok(CallToolResult::success(vec![to_json_content(&value)?]))
+                            },
+                        ))
+                        .await
+                        .expect("unchanged successful tool result");
+                        assert_eq!(result.is_error, Some(false));
+                    }
+                    values
+                })
+                .await;
+            assert_eq!(values[0]["altered"], false);
+            assert_eq!(
+                values[1]["altered"], true,
+                "semantic failure does not change public result"
+            );
+            assert_eq!(values[2]["altered"], true);
+            assert_eq!(finishes, [false, false, true]);
+            assert_eq!(counts, [0, 0, 0, 0, 1, 0]);
+            assert_eq!(leases, 0);
+        }
     }
 }
 

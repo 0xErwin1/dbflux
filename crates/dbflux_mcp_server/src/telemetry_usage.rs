@@ -13,6 +13,8 @@ const TRANSACTION_TIMEOUT: Duration = Duration::from_millis(250);
 pub(crate) struct McpToolUsageClient {
     session_nonce: Uuid,
     #[cfg(test)]
+    acknowledged_begins: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
     fixture: Option<std::sync::Mutex<std::collections::VecDeque<tokio::io::DuplexStream>>>,
 }
 
@@ -28,17 +30,38 @@ impl McpToolUsageClient {
         Self {
             session_nonce: Uuid::new_v4(),
             #[cfg(test)]
+            acknowledged_begins: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
             fixture: None,
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn fixture(streams: Vec<tokio::io::DuplexStream>) -> Self {
+        let mut client = Self::new();
+        client.fixture = Some(std::sync::Mutex::new(streams.into()));
+        client
+    }
+
+    #[cfg(test)]
+    pub(crate) fn acknowledged_begins(&self) -> usize {
+        self.acknowledged_begins
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub(crate) async fn begin(&self) -> Option<McpToolUsageCapability> {
-        self.accept_begin(
+        let capability = self.accept_begin(
             self.request(IpcMessage::BeginMcpToolUsage {
                 session_nonce: self.session_nonce,
             })
             .await?,
-        )
+        );
+        #[cfg(test)]
+        if capability.is_some() {
+            self.acknowledged_begins
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        capability
     }
 
     fn accept_begin(&self, response: IpcResponse) -> Option<McpToolUsageCapability> {
@@ -154,6 +177,343 @@ async fn connect() -> io::Result<tokio::net::windows::named_pipe::NamedPipeClien
             Err(error) => return Err(error),
         }
     }
+}
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+// Scope permission and positive completion evidence are deliberately separate.
+// Neither carries tool identity or result data across the app-control boundary.
+tokio::task_local! {
+    static CALL_CLAIMED: AtomicBool;
+    pub(crate) static OPERATION: Option<Arc<CompletionEvidence>>;
+}
+
+pub(crate) struct CompletionEvidence {
+    tool: &'static str,
+    typed: AtomicBool,
+    primary_mutation: AtomicBool,
+    completed: AtomicBool,
+    failed: AtomicBool,
+}
+
+pub(crate) async fn scope_call<F: Future>(future: F) -> F::Output {
+    CALL_CLAIMED
+        .scope(AtomicBool::new(false), OPERATION.scope(None, future))
+        .await
+}
+
+pub(crate) fn capture(tool: &str) -> Option<Arc<CompletionEvidence>> {
+    let tool = reviewed_tool(tool)?;
+    let claimed = CALL_CLAIMED
+        .try_with(|claimed| claimed.swap(true, Ordering::Relaxed))
+        .ok()?;
+    (!claimed).then(|| {
+        Arc::new(CompletionEvidence {
+            tool,
+            typed: AtomicBool::new(false),
+            primary_mutation: AtomicBool::new(false),
+            completed: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+        })
+    })
+}
+
+fn reviewed_tool(tool: &str) -> Option<&'static str> {
+    // These opaque contracts lose required completion evidence before the hook:
+    // count_records scalar conversion, insert_record CrudResult conversion, and
+    // list_scripts' best-effort filesystem enumeration.
+    Some(match tool {
+        "list_connections" => "list_connections",
+        "connect" => "connect",
+        "disconnect" => "disconnect",
+        "get_connection_info" => "get_connection_info",
+        "list_databases" => "list_databases",
+        "list_schemas" => "list_schemas",
+        "list_tables" => "list_tables",
+        "describe_object" => "describe_object",
+        "explain_query" => "explain_query",
+        "preview_mutation" => "preview_mutation",
+        "select_data" => "select_data",
+        "aggregate_data" => "aggregate_data",
+        "update_records" => "update_records",
+        "upsert_record" => "upsert_record",
+        "delete_records" => "delete_records",
+        "truncate_table" => "truncate_table",
+        "drop_table" => "drop_table",
+        "drop_database" => "drop_database",
+        "create_table" => "create_table",
+        "alter_table" => "alter_table",
+        "create_index" => "create_index",
+        "drop_index" => "drop_index",
+        "create_type" => "create_type",
+        "get_script" => "get_script",
+        "create_script" => "create_script",
+        "update_script" => "update_script",
+        "delete_script" => "delete_script",
+        "execute_script" => "execute_script",
+        "query_audit_logs" => "query_audit_logs",
+        "get_audit_entry" => "get_audit_entry",
+        "export_audit_logs" => "export_audit_logs",
+        _ => return None,
+    })
+}
+
+impl CompletionEvidence {
+    pub(crate) fn successful(&self) -> bool {
+        self.completed.load(Ordering::Relaxed) && !self.failed.load(Ordering::Relaxed)
+    }
+
+    fn observe_json(&self, value: &serde_json::Value) {
+        use serde_json::Value;
+        let array = |key| value.get(key).is_some_and(Value::is_array);
+        let string = |key| value.get(key).is_some_and(Value::is_string);
+        let number = |key| value.get(key).and_then(Value::as_u64).is_some();
+        let truth = |key| value.get(key) == Some(&Value::Bool(true));
+        let query = || {
+            self.typed.load(Ordering::Relaxed)
+                && array("columns")
+                && array("rows")
+                && number("row_count")
+        };
+        let keys: &[&str] = match self.tool {
+            "list_connections" => &["connections"],
+            "connect" | "disconnect" => &["success", "message"],
+            "get_connection_info" => &[
+                "connection_id",
+                "driver_type",
+                "category",
+                "status",
+                "version",
+                "current_database",
+            ],
+            "list_databases" => &["databases"],
+            "list_schemas" => &["schemas"],
+            "list_tables" => &["tables"],
+            "describe_object" | "select_data" | "aggregate_data" | "explain_query"
+            | "preview_mutation" | "execute_script" => {
+                &["columns", "rows", "row_count", "result_sets"]
+            }
+            "update_records" => &["updated", "records"],
+            "upsert_record" => &["upserted", "records"],
+            "delete_records" => &["deleted", "records"],
+            "truncate_table" => &["truncated", "table"],
+            "drop_table" => &["dropped", "table"],
+            "drop_database" => &["dropped", "database"],
+            "create_table" => &["created", "table"],
+            "create_index" => &["created", "index_name", "table"],
+            "drop_index" => &["dropped", "index_name"],
+            "create_type" => &["created", "type", "skipped"],
+            "alter_table" => &[
+                "altered",
+                "table",
+                "atomic",
+                "operations",
+                "non_atomic_alter",
+                "aborted_at",
+                "driver_managed",
+                "statement_count",
+                "illustrative_preview",
+            ],
+            "get_script" => &["path", "name", "content", "language", "size"],
+            "create_script" => &["path", "name"],
+            "update_script" => &["path", "size"],
+            "get_audit_entry" | "query_audit_logs" => &[
+                "id",
+                "actor_id",
+                "tool_id",
+                "decision",
+                "reason",
+                "created_at_epoch_ms",
+            ],
+            _ => &[],
+        };
+        let known_object = |value: &Value| {
+            value
+                .as_object()
+                .is_some_and(|object| object.keys().all(|key| keys.contains(&key.as_str())))
+        };
+        let known_shape = if let Some(items) = value.as_array() {
+            items.iter().all(known_object)
+        } else {
+            known_object(value)
+        };
+        let positive = match self.tool {
+            "list_connections" => array("connections"),
+            "connect" | "disconnect" => truth("success") && string("message"),
+            "get_connection_info" => {
+                string("connection_id")
+                    && string("driver_type")
+                    && string("category")
+                    && value.get("status").and_then(Value::as_str) == Some("connected")
+            }
+            "list_databases" => array("databases"),
+            "list_schemas" => array("schemas"),
+            "list_tables" => array("tables"),
+            "describe_object" | "select_data" | "aggregate_data" | "explain_query"
+            | "preview_mutation" | "execute_script" => query(),
+            "update_records" => self.primary_mutation.load(Ordering::Relaxed) && number("updated"),
+            "upsert_record" => self.primary_mutation.load(Ordering::Relaxed) && number("upserted"),
+            "delete_records" => self.primary_mutation.load(Ordering::Relaxed) && number("deleted"),
+            "truncate_table" => truth("truncated") && string("table"),
+            "drop_table" => truth("dropped") && string("table"),
+            "drop_database" => truth("dropped") && string("database"),
+            "create_table" => truth("created") && string("table"),
+            "create_index" => truth("created") && string("index_name") && string("table"),
+            "drop_index" => truth("dropped") && string("index_name"),
+            "create_type" => {
+                string("type")
+                    && (truth("created")
+                        || (truth("skipped") && value.get("created") == Some(&Value::Bool(false))))
+            }
+            "alter_table" => {
+                let aborted = value
+                    .get("aborted_at")
+                    .is_some_and(|value| !value.is_null());
+                let failed_step = value
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .is_some_and(|steps| {
+                        steps
+                            .iter()
+                            .any(|step| step.get("success") != Some(&Value::Bool(true)))
+                    });
+                if !truth("altered") || aborted || failed_step {
+                    self.failed.store(true, Ordering::Relaxed);
+                }
+                truth("altered")
+                    && string("table")
+                    && array("operations")
+                    && (value.get("atomic").is_some_and(Value::is_boolean)
+                        || truth("non_atomic_alter"))
+                    && !aborted
+                    && !failed_step
+            }
+            "query_audit_logs" => value.as_array().is_some_and(|items| {
+                items.iter().all(|item| {
+                    item.get("id").and_then(Value::as_i64).is_some()
+                        && ["actor_id", "tool_id", "decision"]
+                            .iter()
+                            .all(|key| item.get(key).is_some_and(Value::is_string))
+                        && item
+                            .get("created_at_epoch_ms")
+                            .and_then(Value::as_i64)
+                            .is_some()
+                })
+            }),
+            "get_script" => {
+                string("path")
+                    && string("name")
+                    && string("content")
+                    && string("language")
+                    && number("size")
+            }
+            "create_script" => string("path") && string("name"),
+            "update_script" => string("path") && number("size"),
+            "get_audit_entry" => {
+                value.is_object()
+                    && number("id")
+                    && string("actor_id")
+                    && string("tool_id")
+                    && string("decision")
+                    && value
+                        .get("created_at_epoch_ms")
+                        .and_then(Value::as_i64)
+                        .is_some()
+            }
+            _ => false,
+        };
+        if positive && known_shape {
+            self.completed.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+pub(crate) fn observe_json(value: &serde_json::Value) {
+    OPERATION
+        .try_with(|evidence| {
+            if let Some(evidence) = evidence {
+                evidence.observe_json(value);
+            }
+        })
+        .ok();
+}
+
+pub(crate) fn observe_primary_mutation(result: &dbflux_core::QueryResult, affected_key: &str) {
+    observe_typed(result);
+    OPERATION
+        .try_with(|evidence| {
+            if let Some(evidence) = evidence {
+                let expected_key = match evidence.tool {
+                    "update_records" => "updated",
+                    "delete_records" => "deleted",
+                    "upsert_record" => "upserted",
+                    _ => return,
+                };
+                if affected_key == expected_key {
+                    evidence.primary_mutation.store(true, Ordering::Relaxed);
+                }
+            }
+        })
+        .ok();
+}
+
+pub(crate) fn observe_typed(result: &dbflux_core::QueryResult) {
+    OPERATION
+        .try_with(|evidence| {
+            if let Some(evidence) = evidence {
+                evidence.typed.store(true, Ordering::Relaxed);
+                fn failed(result: &dbflux_core::QueryResult) -> bool {
+                    result
+                        .metadata_extra
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.contains_key("script_failure"))
+                        || result.additional_results.iter().any(failed)
+                }
+                if failed(result) {
+                    evidence.failed.store(true, Ordering::Relaxed);
+                }
+            }
+        })
+        .ok();
+}
+
+pub(crate) fn observe_final(result: &rmcp::model::CallToolResult) {
+    OPERATION
+        .try_with(|evidence| {
+            if let Some(evidence) = evidence {
+                evidence.completed.store(false, Ordering::Relaxed);
+                if result.content.len() != 1 {
+                    return;
+                }
+                if let Some(text) = result.content[0].as_text()
+                    && let Ok(value) = serde_json::from_str(&text.text)
+                {
+                    evidence.observe_json(&value);
+                }
+                match evidence.tool {
+                    // These two reviewed handlers return text only after their fallible primary work.
+                    "export_audit_logs" => {
+                        if result.content.len() == 1 && result.content[0].as_text().is_some() {
+                            evidence.completed.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    "delete_script" => {
+                        if result.content.len() == 1
+                            && result.content[0].as_text().is_some_and(|text| {
+                                text.text == r#"{"status": "Script deleted successfully"}"#
+                            })
+                        {
+                            evidence.completed.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .ok();
 }
 
 #[cfg(test)]
