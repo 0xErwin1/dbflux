@@ -36,7 +36,10 @@ pick the folder.
 
 - The folder appears below your own scripts, with its name as the label. Only
   files the editor opens (`.sql`, `.js`, `.redis`, `.lua`, `.py`, `.sh` and the
-  other script types) are listed, and subfolders without any are hidden.
+  other script types) are listed. Subfolders that hold only other files are
+  hidden; empty ones are shown, so a folder you just created stays visible.
+  Symbolic links that lead out of the folder are not listed, and nothing is
+  written through them.
 - Scripts open and save in place, so the files stay in sync with the folder.
   Creating, renaming and deleting files and subfolders inside it works as in
   your own scripts folder. Moving a file between two different folders is
@@ -45,7 +48,8 @@ pick the folder.
   **Refresh** from its menu, to pick up files added or changed outside DBFlux.
   The folders are also scanned in the background each time DBFlux starts.
 - If the folder is moved, deleted, unmounted or cannot be read, it stays in the
-  list marked **unavailable** until it comes back or you remove it.
+  list marked **unavailable** until it comes back or you remove it. Its menu
+  says why it could not be read.
 - **Remove from sidebar** (`x`) only forgets the folder. Its files are never
   touched, and the folder itself cannot be renamed, moved or deleted from
   DBFlux.

@@ -404,11 +404,36 @@ impl AppStateEntity {
 /// on the thread that renders. A scan that lands after a folder was removed
 /// leaves that folder alone (see `ScriptsDirectory::adopt_full_scan`).
 pub fn rescan_scripts_in_background(app_state: &Entity<AppStateEntity>, cx: &mut App) {
-    let Some(request) = app_state
+    let request = app_state
         .read(cx)
         .scripts_directory()
-        .map(|directory| directory.scan_request())
-    else {
+        .map(|directory| directory.scan_request());
+
+    run_scripts_scan(app_state, request, cx);
+}
+
+/// Re-scans, in the background, only the scripts root that owns `path`, for
+/// example after a change there, to pick up what the in-memory edit cannot
+/// know (files changed outside DBFlux, a first scan the change superseded).
+pub fn rescan_script_root_in_background(
+    app_state: &Entity<AppStateEntity>,
+    path: &std::path::Path,
+    cx: &mut App,
+) {
+    let request = app_state
+        .read(cx)
+        .scripts_directory()
+        .and_then(|directory| directory.scan_request_for(path));
+
+    run_scripts_scan(app_state, request, cx);
+}
+
+fn run_scripts_scan(
+    app_state: &Entity<AppStateEntity>,
+    request: Option<dbflux_core::ScriptsScanRequest>,
+    cx: &mut App,
+) {
+    let Some(request) = request else {
         return;
     };
 

@@ -85,6 +85,9 @@ pub struct MountedScriptRoot {
     root: ExternalScriptRoot,
     entries: Vec<ScriptEntry>,
     availability: ScriptRootAvailability,
+    /// Bumped by every change made through [`ScriptsDirectory`], so a scan
+    /// requested before the change is recognized as stale and dropped.
+    generation: u64,
 }
 
 impl MountedScriptRoot {
@@ -93,6 +96,7 @@ impl MountedScriptRoot {
             root,
             entries: Vec::new(),
             availability: ScriptRootAvailability::Pending,
+            generation: 0,
         }
     }
 
@@ -135,34 +139,39 @@ impl MountedScriptRoot {
 }
 
 /// The roots to scan, detached from [`ScriptsDirectory`] so the walk can run
-/// on a background thread.
+/// on a background thread. Each root carries the generation it had when the
+/// request was taken.
 #[derive(Debug, Clone)]
 pub struct ScriptsScanRequest {
-    managed: PathBuf,
-    external: Vec<(Uuid, PathBuf)>,
+    managed: Option<(PathBuf, u64)>,
+    external: Vec<(Uuid, PathBuf, u64)>,
 }
 
 impl ScriptsScanRequest {
-    /// Walks every root. Blocks for as long as the slowest folder takes to
-    /// answer, so call it off the thread that renders.
+    /// Walks the requested roots. Blocks for as long as the slowest folder
+    /// takes to answer, so call it off the thread that renders.
     pub fn run(self) -> ScriptsScan {
-        let managed = scan_directory(&self.managed);
+        let managed = self.managed.map(|(root, generation)| {
+            let entries = scan_directory(&root);
+            (root, generation, entries)
+        });
 
         let external = self
             .external
             .into_iter()
-            .map(|(id, path)| {
+            .map(|(id, path, generation)| {
                 let scanned =
-                    scan_tree(&path, ScanFilter::OpenableOnly).map_err(|error| error.to_string());
-                (id, path, scanned)
+                    scan_tree(&path, ScanMode::External).map_err(|error| error.to_string());
+                ExternalScan {
+                    id,
+                    path,
+                    generation,
+                    scanned,
+                }
             })
             .collect();
 
-        ScriptsScan {
-            managed_root: self.managed,
-            managed,
-            external,
-        }
+        ScriptsScan { managed, external }
     }
 }
 
@@ -170,9 +179,18 @@ impl ScriptsScanRequest {
 /// [`ScriptsDirectory::adopt_full_scan`].
 #[derive(Debug, Clone)]
 pub struct ScriptsScan {
-    managed_root: PathBuf,
-    managed: Vec<ScriptEntry>,
-    external: Vec<(Uuid, PathBuf, Result<Vec<ScriptEntry>, String>)>,
+    managed: Option<(PathBuf, u64, Vec<ScriptEntry>)>,
+    external: Vec<ExternalScan>,
+}
+
+/// One external root's part of a [`ScriptsScan`]: the error text when the
+/// folder could not be read.
+#[derive(Debug, Clone)]
+struct ExternalScan {
+    id: Uuid,
+    path: PathBuf,
+    generation: u64,
+    scanned: Result<Vec<ScriptEntry>, String>,
 }
 
 /// Manages the scripts the sidebar lists.
@@ -182,15 +200,31 @@ pub struct ScriptsScan {
 /// user registered; their files are listed and edited where they are and are
 /// never copied. Every filesystem operation is confined to one root: a path
 /// outside all of them, or an operation that would cross from one root into
-/// another, is refused.
+/// another, is refused. Inside an external root the check is made on the
+/// resolved path, so a symlink leading out of the folder is neither listed nor
+/// written through.
 ///
 /// The roots never overlap: an external root cannot sit inside the managed root
 /// or another external root, nor contain one. That keeps "which root owns this
 /// path" a single answer.
+///
+/// Changes made through this type update the cached trees in memory and never
+/// walk the disk, so they are safe to call from the UI thread whatever the
+/// folder sits on. Walking happens only through [`ScriptsScanRequest`], whose
+/// result is dropped for any root changed since the request was taken.
 pub struct ScriptsDirectory {
     root: PathBuf,
     entries: Vec<ScriptEntry>,
+    managed_generation: u64,
     external: Vec<MountedScriptRoot>,
+}
+
+/// The cached tree of one root, borrowed for an in-memory edit.
+struct RootTree<'a> {
+    root: &'a Path,
+    mode: ScanMode,
+    entries: &'a mut Vec<ScriptEntry>,
+    generation: &'a mut u64,
 }
 
 impl ScriptsDirectory {
@@ -202,11 +236,15 @@ impl ScriptsDirectory {
         let root = data_dir.join("dbflux").join("scripts");
         fs::create_dir_all(&root).map_err(DbError::IoError)?;
 
+        // External roots are stored canonical; the managed root must be too, or
+        // the overlap checks miss a data directory reached through a symlink.
+        let root = fs::canonicalize(&root).unwrap_or(root);
         let entries = scan_directory(&root);
 
         Ok(Self {
             root,
             entries,
+            managed_generation: 0,
             external: Vec::new(),
         })
     }
@@ -253,9 +291,20 @@ impl ScriptsDirectory {
     ///
     /// They stay [`ScriptRootAvailability::Pending`] until a scan is adopted, so
     /// startup never waits on a slow or unmounted folder. Replaces any roots
-    /// registered before.
+    /// registered before. A root that overlaps the managed root or one listed
+    /// before it is logged and skipped, so one path never has two owners.
     pub fn register_external_roots(&mut self, roots: Vec<ExternalScriptRoot>) {
-        self.external = roots.into_iter().map(MountedScriptRoot::pending).collect();
+        self.external.clear();
+
+        for root in roots {
+            match self.ensure_no_overlap(&root.path) {
+                Ok(()) => self.external.push(MountedScriptRoot::pending(root)),
+                Err(error) => log::warn!(
+                    "Skipping external scripts folder {}: {error}",
+                    root.path.display()
+                ),
+            }
+        }
     }
 
     /// Resolves `path` to the canonical folder an external root would use, and
@@ -303,17 +352,17 @@ impl ScriptsDirectory {
         Ok(canonical)
     }
 
-    /// Registers an external root and scans it.
+    /// Registers an external root and scans it synchronously.
     ///
     /// The root's path must already be canonical, as
     /// [`Self::validate_external_root`] returns it; the overlap checks run again
-    /// here against the current registrations.
+    /// here against the current registrations. The scan blocks; the app uses
+    /// [`Self::add_external_root_pending`] and scans in the background.
     pub fn add_external_root(&mut self, root: ExternalScriptRoot) -> Result<(), DbError> {
         self.ensure_no_overlap(&root.path)?;
 
         let mut mounted = MountedScriptRoot::pending(root);
-        mounted
-            .adopt(scan_tree(mounted.path(), ScanFilter::OpenableOnly).map_err(|e| e.to_string()));
+        mounted.adopt(scan_tree(mounted.path(), ScanMode::External).map_err(|e| e.to_string()));
         self.external.push(mounted);
 
         Ok(())
@@ -366,7 +415,9 @@ impl ScriptsDirectory {
         Ok(())
     }
 
-    /// The root `path` belongs to, or `None` when it is outside every root.
+    /// The root `path` belongs to by its spelling, or `None` when it is outside
+    /// every root. Operations also check the resolved path inside external
+    /// roots; see [`Self::ensure_contained`].
     pub fn owning_root(&self, path: &Path) -> Option<&Path> {
         if path.starts_with(&self.root) {
             return Some(&self.root);
@@ -383,88 +434,124 @@ impl ScriptsDirectory {
         path == self.root || self.external_root_at(path).is_some()
     }
 
+    /// Whether every path in `sources` belongs to the same root as `target`,
+    /// which is what a move needs. Decided from the paths alone, without
+    /// touching the disk, so drag feedback can ask it on every pointer move.
+    pub fn share_root(&self, sources: &[PathBuf], target: &Path) -> bool {
+        let Some(target_root) = self.owning_root(target) else {
+            return false;
+        };
+
+        sources
+            .iter()
+            .all(|source| self.owning_root(source) == Some(target_root))
+    }
+
     fn require_owning_root(&self, path: &Path, what: &str) -> Result<PathBuf, DbError> {
         self.owning_root(path)
             .map(Path::to_path_buf)
             .ok_or_else(|| io_error(format!("{what} is outside the script folders")))
     }
 
+    /// Refuses a directory of an external root that resolves outside it, such
+    /// as a symlinked subfolder pointing elsewhere: writing there would leave
+    /// the folder the user registered.
+    ///
+    /// The managed root keeps checking by spelling only, as it always has, so a
+    /// symlink the user placed in DBFlux's own folder keeps working.
+    fn ensure_contained(&self, root: &Path, dir: &Path) -> Result<(), DbError> {
+        if root == self.root {
+            return Ok(());
+        }
+
+        let resolved = fs::canonicalize(dir).map_err(DbError::IoError)?;
+        if resolved.starts_with(root) {
+            Ok(())
+        } else {
+            Err(io_error(format!(
+                "{} resolves outside the scripts folder {}",
+                dir.display(),
+                root.display()
+            )))
+        }
+    }
+
     /// Re-scan every root synchronously and update the cached trees.
     ///
-    /// Blocks on every external folder; prefer [`Self::scan_request`] from the
-    /// UI thread.
+    /// Blocks on every external folder; the app uses [`Self::scan_request`] off
+    /// the UI thread instead.
     pub fn refresh(&mut self) {
         let scan = self.scan_request().run();
         self.adopt_full_scan(scan);
-    }
-
-    /// Re-scan only the root that owns `path`.
-    fn refresh_root_of(&mut self, path: &Path) {
-        if path.starts_with(&self.root) {
-            self.adopt_scan(Self::scan(&self.root));
-            return;
-        }
-
-        if let Some(mounted) = self
-            .external
-            .iter_mut()
-            .find(|mounted| path.starts_with(mounted.path()))
-        {
-            let scanned =
-                scan_tree(mounted.path(), ScanFilter::OpenableOnly).map_err(|e| e.to_string());
-            mounted.adopt(scanned);
-        }
     }
 
     /// The roots a full scan would walk, detached so the walk can run on a
     /// background thread.
     pub fn scan_request(&self) -> ScriptsScanRequest {
         ScriptsScanRequest {
-            managed: self.root.clone(),
+            managed: Some((self.root.clone(), self.managed_generation)),
             external: self
                 .external
                 .iter()
-                .map(|mounted| (mounted.id(), mounted.path().to_path_buf()))
+                .map(|mounted| {
+                    (
+                        mounted.id(),
+                        mounted.path().to_path_buf(),
+                        mounted.generation,
+                    )
+                })
                 .collect(),
         }
     }
 
-    /// Applies a full scan.
-    ///
-    /// A root removed or re-registered at another path since the request was
-    /// taken keeps its current state, so a late scan never resurrects a root.
-    pub fn adopt_full_scan(&mut self, scan: ScriptsScan) {
-        if scan.managed_root == self.root {
-            self.entries = scan.managed;
+    /// A scan of only the root that owns `path`, or `None` when `path` is
+    /// outside every root.
+    pub fn scan_request_for(&self, path: &Path) -> Option<ScriptsScanRequest> {
+        if path.starts_with(&self.root) {
+            return Some(ScriptsScanRequest {
+                managed: Some((self.root.clone(), self.managed_generation)),
+                external: Vec::new(),
+            });
         }
 
-        for (id, path, scanned) in scan.external {
-            if let Some(mounted) = self
-                .external
-                .iter_mut()
-                .find(|mounted| mounted.id() == id && mounted.path() == path)
-            {
-                mounted.adopt(scanned);
+        let mounted = self
+            .external
+            .iter()
+            .find(|mounted| path.starts_with(mounted.path()))?;
+
+        Some(ScriptsScanRequest {
+            managed: None,
+            external: vec![(
+                mounted.id(),
+                mounted.path().to_path_buf(),
+                mounted.generation,
+            )],
+        })
+    }
+
+    /// Applies a scan.
+    ///
+    /// A root is updated only while it is still registered at the same path and
+    /// unchanged since the request was taken: a late scan never resurrects a
+    /// removed root nor overwrites a change made after it started. A dropped
+    /// root keeps its in-memory tree until the next scan.
+    pub fn adopt_full_scan(&mut self, scan: ScriptsScan) {
+        if let Some((root, generation, entries)) = scan.managed
+            && root == self.root
+            && generation == self.managed_generation
+        {
+            self.entries = entries;
+        }
+
+        for external in scan.external {
+            if let Some(mounted) = self.external.iter_mut().find(|mounted| {
+                mounted.id() == external.id
+                    && mounted.path() == external.path
+                    && mounted.generation == external.generation
+            }) {
+                mounted.adopt(external.scanned);
             }
         }
-    }
-
-    /// Scans the managed root, without touching the cached tree.
-    ///
-    /// Split from [`Self::refresh`] so the walking can happen off the thread that
-    /// renders: a directory on a stalled mount blocks for as long as the disk
-    /// takes to answer, and a close gesture must not inherit that wait.
-    pub fn scan(root: &Path) -> Vec<ScriptEntry> {
-        scan_directory(root)
-    }
-
-    /// Replaces the managed root's cached tree with entries scanned elsewhere.
-    ///
-    /// The entries are taken as given: this does not check that they still
-    /// describe the root, because only the caller that scanned them knows how
-    /// fresh they are.
-    pub fn adopt_scan(&mut self, entries: Vec<ScriptEntry>) {
-        self.entries = entries;
     }
 
     /// Removes `path` when it still holds exactly `expected_bytes`.
@@ -476,8 +563,7 @@ impl ScriptsDirectory {
     /// removed; keeping a file deliberately is not an error.
     ///
     /// Pure filesystem work: it neither reads nor updates the cached tree, so the
-    /// caller can run it off the UI thread and hand the result to
-    /// [`Self::adopt_scan`] afterwards.
+    /// caller can run it off the UI thread and rescan afterwards.
     pub fn remove_if_unchanged(
         root: &Path,
         path: &Path,
@@ -544,7 +630,8 @@ impl ScriptsDirectory {
         extension: &str,
     ) -> Result<PathBuf, DbError> {
         let dir = parent.unwrap_or(&self.root).to_path_buf();
-        self.require_owning_root(&dir, "Target directory")?;
+        let root = self.require_owning_root(&dir, "Target directory")?;
+        self.ensure_contained(&root, &dir)?;
 
         let filename = if name.contains('.') {
             name.to_string()
@@ -558,7 +645,7 @@ impl ScriptsDirectory {
         }
 
         fs::write(&path, "").map_err(DbError::IoError)?;
-        self.refresh_root_of(&path);
+        self.record_insert(&path, false);
         Ok(path)
     }
 
@@ -566,7 +653,8 @@ impl ScriptsDirectory {
     /// Returns the full path.
     pub fn create_folder(&mut self, parent: Option<&Path>, name: &str) -> Result<PathBuf, DbError> {
         let dir = parent.unwrap_or(&self.root).to_path_buf();
-        self.require_owning_root(&dir, "Target directory")?;
+        let root = self.require_owning_root(&dir, "Target directory")?;
+        self.ensure_contained(&root, &dir)?;
 
         let path = dir.join(name);
         if path.exists() {
@@ -574,7 +662,7 @@ impl ScriptsDirectory {
         }
 
         fs::create_dir_all(&path).map_err(DbError::IoError)?;
-        self.refresh_root_of(&path);
+        self.record_insert(&path, true);
         Ok(path)
     }
 
@@ -589,7 +677,7 @@ impl ScriptsDirectory {
             ));
         }
 
-        self.require_owning_root(old_path, "Path")?;
+        let root = self.require_owning_root(old_path, "Path")?;
 
         if self.is_root(old_path) {
             return Err(io_error("Cannot rename a scripts root".to_string()));
@@ -598,6 +686,7 @@ impl ScriptsDirectory {
         let parent = old_path
             .parent()
             .ok_or_else(|| io_error("Cannot rename root".to_string()))?;
+        self.ensure_contained(&root, parent)?;
 
         let new_path = parent.join(new_name);
         if new_path.exists() {
@@ -605,24 +694,33 @@ impl ScriptsDirectory {
         }
 
         fs::rename(old_path, &new_path).map_err(DbError::IoError)?;
-        self.refresh_root_of(&new_path);
+        self.record_move(old_path, &new_path);
         Ok(new_path)
     }
 
     /// Delete a file or folder (recursive for folders) inside any root.
     /// A root itself is never deleted; an external root is unregistered with
-    /// [`Self::remove_external_root`] instead.
+    /// [`Self::remove_external_root`] instead. A symlink is removed, never the
+    /// entry it points at.
     pub fn delete(&mut self, path: &Path) -> Result<(), DbError> {
         let root = self.require_owning_root(path, "Path")?;
         Self::ensure_deletable(&root, path)?;
 
-        if path.is_dir() {
-            fs::remove_dir_all(path).map_err(DbError::IoError)?;
-        } else {
-            fs::remove_file(path).map_err(DbError::IoError)?;
+        if let Some(parent) = path.parent() {
+            self.ensure_contained(&root, parent)?;
         }
 
-        self.refresh_root_of(&root);
+        let is_link = fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+
+        if path.is_dir() && !is_link {
+            fs::remove_dir_all(path).map_err(DbError::IoError)?;
+        } else {
+            remove_file_or_link(path).map_err(DbError::IoError)?;
+        }
+
+        self.record_remove(path);
         Ok(())
     }
 
@@ -661,13 +759,18 @@ impl ScriptsDirectory {
             return Ok(source.to_path_buf());
         }
 
+        if let Some(parent) = source.parent() {
+            self.ensure_contained(&source_root, parent)?;
+        }
+
         if dest.exists() {
             return Err(io_error(format!("Already exists: {}", dest.display())));
         }
 
+        self.ensure_contained(&target_root, target_dir)?;
         fs::create_dir_all(target_dir).map_err(DbError::IoError)?;
         fs::rename(source, &dest).map_err(DbError::IoError)?;
-        self.refresh_root_of(&dest);
+        self.record_move(source, &dest);
         Ok(dest)
     }
 
@@ -675,7 +778,8 @@ impl ScriptsDirectory {
     /// default).
     pub fn import(&mut self, source: &Path, target_dir: Option<&Path>) -> Result<PathBuf, DbError> {
         let dir = target_dir.unwrap_or(&self.root).to_path_buf();
-        self.require_owning_root(&dir, "Target directory")?;
+        let root = self.require_owning_root(&dir, "Target directory")?;
+        self.ensure_contained(&root, &dir)?;
 
         let filename = source
             .file_name()
@@ -690,8 +794,86 @@ impl ScriptsDirectory {
         }
 
         fs::copy(source, &dest).map_err(DbError::IoError)?;
-        self.refresh_root_of(&dest);
+        self.record_insert(&dest, false);
         Ok(dest)
+    }
+
+    /// The cached tree of the root that owns `path`.
+    fn tree_for_mut(&mut self, path: &Path) -> Option<RootTree<'_>> {
+        if path.starts_with(&self.root) {
+            return Some(RootTree {
+                root: &self.root,
+                mode: ScanMode::Managed,
+                entries: &mut self.entries,
+                generation: &mut self.managed_generation,
+            });
+        }
+
+        self.external
+            .iter_mut()
+            .find(|mounted| path.starts_with(&mounted.root.path))
+            .map(|mounted| RootTree {
+                root: &mounted.root.path,
+                mode: ScanMode::External,
+                entries: &mut mounted.entries,
+                generation: &mut mounted.generation,
+            })
+    }
+
+    /// Adds a just-created entry to the cached tree, as a scan would list it.
+    fn record_insert(&mut self, path: &Path, is_dir: bool) {
+        let Some(tree) = self.tree_for_mut(path) else {
+            return;
+        };
+
+        *tree.generation += 1;
+
+        let entry = if is_dir {
+            ScriptEntry::Folder {
+                path: path.to_path_buf(),
+                name: file_name_of(path),
+                children: Vec::new(),
+            }
+        } else if tree.mode.lists_file(path) {
+            file_entry(path.to_path_buf())
+        } else {
+            return;
+        };
+
+        insert_into_tree(tree.entries, tree.root, entry);
+    }
+
+    /// Drops a removed entry from the cached tree.
+    fn record_remove(&mut self, path: &Path) {
+        let Some(tree) = self.tree_for_mut(path) else {
+            return;
+        };
+
+        *tree.generation += 1;
+        remove_from_tree(tree.entries, tree.root, path);
+    }
+
+    /// Moves a cached entry, and everything under it, to `new_path` in the same
+    /// root.
+    fn record_move(&mut self, old_path: &Path, new_path: &Path) {
+        let Some(tree) = self.tree_for_mut(old_path) else {
+            return;
+        };
+
+        *tree.generation += 1;
+
+        let Some(entry) = remove_from_tree(tree.entries, tree.root, old_path) else {
+            return;
+        };
+
+        let moved = rebase_entry(entry, new_path.to_path_buf());
+        if let ScriptEntry::File { path, .. } = &moved
+            && !tree.mode.lists_file(path)
+        {
+            return;
+        }
+
+        insert_into_tree(tree.entries, tree.root, moved);
     }
 }
 
@@ -702,6 +884,114 @@ fn io_error(message: String) -> DbError {
 /// Whether one of the two folders contains the other (or they are the same).
 fn overlaps(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
+}
+
+/// Removes a file, or a symlink whatever it points at. A symlink to a folder is
+/// a directory entry on Windows, so it needs `remove_dir` there.
+fn remove_file_or_link(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if cfg!(windows) && path.is_dir() => fs::remove_dir(path).or(Err(error)),
+        Err(error) => Err(error),
+    }
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+fn file_entry(path: PathBuf) -> ScriptEntry {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    ScriptEntry::File {
+        name: file_name_of(&path),
+        path,
+        extension,
+    }
+}
+
+/// The children of the folder at `dir` in a tree rooted at `root`, or `None`
+/// when the cached tree does not hold that folder.
+fn children_mut<'a>(
+    entries: &'a mut Vec<ScriptEntry>,
+    root: &Path,
+    dir: &Path,
+) -> Option<&'a mut Vec<ScriptEntry>> {
+    if dir == root {
+        return Some(entries);
+    }
+
+    for entry in entries.iter_mut() {
+        if let ScriptEntry::Folder { path, children, .. } = entry
+            && dir.starts_with(path.as_path())
+        {
+            return children_mut(children, path, dir);
+        }
+    }
+
+    None
+}
+
+/// Inserts `entry` under its parent folder in scan order (folders first, then
+/// files, each by case-insensitive name), replacing an entry at the same path.
+/// A parent missing from the cached tree is left for the next scan.
+fn insert_into_tree(entries: &mut Vec<ScriptEntry>, root: &Path, entry: ScriptEntry) {
+    let Some(parent) = entry.path().parent() else {
+        return;
+    };
+
+    let Some(siblings) = children_mut(entries, root, parent) else {
+        return;
+    };
+
+    siblings.retain(|sibling| sibling.path() != entry.path());
+
+    let sort_key = |entry: &ScriptEntry| (!entry.is_folder(), entry.name().to_lowercase());
+    let key = sort_key(&entry);
+    let index = siblings
+        .iter()
+        .position(|sibling| sort_key(sibling) > key)
+        .unwrap_or(siblings.len());
+
+    siblings.insert(index, entry);
+}
+
+fn remove_from_tree(
+    entries: &mut Vec<ScriptEntry>,
+    root: &Path,
+    path: &Path,
+) -> Option<ScriptEntry> {
+    let siblings = children_mut(entries, root, path.parent()?)?;
+    let index = siblings.iter().position(|entry| entry.path() == path)?;
+    Some(siblings.remove(index))
+}
+
+/// The same entry at `new_path`, with every descendant's path following it.
+fn rebase_entry(entry: ScriptEntry, new_path: PathBuf) -> ScriptEntry {
+    match entry {
+        ScriptEntry::File { .. } => file_entry(new_path),
+        ScriptEntry::Folder { children, .. } => {
+            let children = children
+                .into_iter()
+                .map(|child| {
+                    let child_path = new_path.join(file_name_of(child.path()));
+                    rebase_entry(child, child_path)
+                })
+                .collect();
+
+            ScriptEntry::Folder {
+                name: file_name_of(&new_path),
+                path: new_path,
+                children,
+            }
+        }
+    }
 }
 
 pub fn hook_script_path(hooks_dir: &Path, hook_id: &str, language: ScriptLanguage) -> PathBuf {
@@ -718,62 +1008,87 @@ fn has_file_extension(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some()
 }
 
-/// Which files a scan keeps.
+/// How a root is walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScanFilter {
-    /// Every file with an extension: the managed root holds only what DBFlux
-    /// or the user put there for it.
-    AnyExtension,
-    /// Only files the editor opens, and only folders that lead to one: an
-    /// external folder is often a repository full of unrelated files.
-    OpenableOnly,
+enum ScanMode {
+    /// DBFlux's own folder: every file with an extension, symlinks followed as
+    /// before external roots existed.
+    Managed,
+    /// A folder the user registered, often a repository full of unrelated
+    /// files: only files the editor opens, folders that lead to one or are
+    /// empty, and nothing reached through a symlink that leaves the folder.
+    External,
+}
+
+impl ScanMode {
+    fn lists_file(self, path: &Path) -> bool {
+        has_file_extension(path) && (self == ScanMode::Managed || is_openable_script(path))
+    }
 }
 
 /// Recursively scan the managed root, returning sorted entries (folders first,
 /// then files). A root that cannot be read yields an empty tree.
 fn scan_directory(dir: &Path) -> Vec<ScriptEntry> {
-    scan_tree(dir, ScanFilter::AnyExtension).unwrap_or_else(|e| {
+    scan_tree(dir, ScanMode::Managed).unwrap_or_else(|e| {
         log::warn!("Failed to read scripts directory {:?}: {}", dir, e);
         Vec::new()
     })
+}
+
+/// What every level of one walk shares.
+struct ScanContext {
+    mode: ScanMode,
+    /// The resolved root, for the external containment check.
+    root: PathBuf,
 }
 
 /// Recursively scan `root`, returning sorted entries (folders first, then
 /// files).
 ///
 /// Fails only when `root` itself cannot be read; an unreadable subfolder is
-/// logged and listed empty. Each folder is walked once by its canonical path, so
-/// a symlink back to an ancestor does not repeat the tree.
-fn scan_tree(root: &Path, filter: ScanFilter) -> Result<Vec<ScriptEntry>, std::io::Error> {
+/// logged and listed empty. A folder that resolves to one of its own ancestors
+/// is skipped, so a symlink cycle does not repeat the tree.
+fn scan_tree(root: &Path, mode: ScanMode) -> Result<Vec<ScriptEntry>, std::io::Error> {
     let read_dir = fs::read_dir(root)?;
+    let resolved_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
-    let mut visited = HashSet::new();
-    if let Ok(canonical) = fs::canonicalize(root) {
-        visited.insert(canonical);
-    }
+    let context = ScanContext {
+        mode,
+        root: resolved_root.clone(),
+    };
+    let mut ancestors = vec![resolved_root];
 
-    Ok(scan_entries(read_dir, filter, &mut visited))
+    Ok(scan_entries(read_dir, &context, &mut ancestors).entries)
 }
 
-fn scan_folder(dir: &Path, filter: ScanFilter, visited: &mut HashSet<PathBuf>) -> Vec<ScriptEntry> {
-    let read_dir = match fs::read_dir(dir) {
-        Ok(rd) => rd,
+/// The entries of one folder, and whether it held anything visible at all
+/// (before filtering), which decides if an empty result is pruned.
+struct FolderScan {
+    entries: Vec<ScriptEntry>,
+    had_visible_entries: bool,
+}
+
+fn scan_folder(dir: &Path, context: &ScanContext, ancestors: &mut Vec<PathBuf>) -> FolderScan {
+    match fs::read_dir(dir) {
+        Ok(read_dir) => scan_entries(read_dir, context, ancestors),
         Err(e) => {
             log::warn!("Failed to read scripts directory {:?}: {}", dir, e);
-            return Vec::new();
+            FolderScan {
+                entries: Vec::new(),
+                had_visible_entries: false,
+            }
         }
-    };
-
-    scan_entries(read_dir, filter, visited)
+    }
 }
 
 fn scan_entries(
     read_dir: fs::ReadDir,
-    filter: ScanFilter,
-    visited: &mut HashSet<PathBuf>,
-) -> Vec<ScriptEntry> {
+    context: &ScanContext,
+    ancestors: &mut Vec<PathBuf>,
+) -> FolderScan {
     let mut folders = Vec::new();
     let mut files = Vec::new();
+    let mut had_visible_entries = false;
 
     for entry in read_dir.flatten() {
         let path = entry.path();
@@ -787,53 +1102,74 @@ fn scan_entries(
             continue;
         }
 
-        if path.is_dir() {
-            let first_visit = match fs::canonicalize(&path) {
-                Ok(canonical) => visited.insert(canonical),
-                Err(e) => {
-                    log::warn!("Failed to resolve scripts folder {:?}: {}", path, e);
-                    false
-                }
-            };
+        had_visible_entries = true;
 
-            if !first_visit {
+        let is_link = entry
+            .file_type()
+            .map(|file_type| file_type.is_symlink())
+            .unwrap_or(false);
+
+        if is_link && context.mode == ScanMode::External && !keeps_external_link(&path, context) {
+            continue;
+        }
+
+        if path.is_dir() {
+            let resolved = fs::canonicalize(&path).ok();
+
+            if resolved
+                .as_ref()
+                .is_some_and(|resolved| ancestors.contains(resolved))
+            {
                 continue;
             }
 
-            let children = scan_folder(&path, filter, visited);
+            if let Some(resolved) = &resolved {
+                ancestors.push(resolved.clone());
+            }
 
-            if filter == ScanFilter::OpenableOnly && children.is_empty() {
+            let scanned = scan_folder(&path, context, ancestors);
+
+            if resolved.is_some() {
+                ancestors.pop();
+            }
+
+            // An external folder whose content is all unrelated files is noise;
+            // an empty one is kept, since the user may have just made it.
+            if context.mode == ScanMode::External
+                && scanned.entries.is_empty()
+                && scanned.had_visible_entries
+            {
                 continue;
             }
 
             folders.push(ScriptEntry::Folder {
                 path,
                 name,
-                children,
+                children: scanned.entries,
             });
-        } else if has_file_extension(&path) {
-            if filter == ScanFilter::OpenableOnly && !is_openable_script(&path) {
-                continue;
-            }
-
-            let extension = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-
-            files.push(ScriptEntry::File {
-                path,
-                name,
-                extension,
-            });
+        } else if context.mode.lists_file(&path) {
+            files.push(file_entry(path));
         }
     }
 
     folders.sort_by_key(|a| a.name().to_lowercase());
     files.sort_by_key(|a| a.name().to_lowercase());
 
-    folders.into_iter().chain(files).collect()
+    FolderScan {
+        entries: folders.into_iter().chain(files).collect(),
+        had_visible_entries,
+    }
+}
+
+/// Whether a symlink inside an external root is listed: only one to a file
+/// that stays inside the root. A link to a folder inside the root would repeat
+/// a folder already listed by its real path, in an order that depends on the
+/// directory listing; a link leading out of the root is outside it.
+fn keeps_external_link(path: &Path, context: &ScanContext) -> bool {
+    match fs::canonicalize(path) {
+        Ok(target) => target.starts_with(&context.root) && !target.is_dir(),
+        Err(_) => false,
+    }
 }
 
 /// Collect all openable file extensions for use in file dialogs.
@@ -906,6 +1242,7 @@ mod tests {
         ScriptsDirectory {
             root: root.to_path_buf(),
             entries: scan_directory(root),
+            managed_generation: 0,
             external: Vec::new(),
         }
     }
@@ -956,7 +1293,7 @@ mod tests {
     }
 
     #[test]
-    fn external_root_lists_only_openable_scripts_and_prunes_empty_folders() {
+    fn external_root_lists_only_scripts_and_hides_folders_of_unrelated_files() {
         let (_managed, _external, mut dir, id) = with_external_root();
         let root = external_path(&dir, id);
 
@@ -974,7 +1311,11 @@ mod tests {
             .iter()
             .map(ScriptEntry::name)
             .collect();
-        assert_eq!(names, vec!["query.sql"]);
+        assert_eq!(
+            names,
+            vec!["empty", "query.sql"],
+            "an empty folder may be one the user just made; one of unrelated files is noise"
+        );
     }
 
     #[test]
@@ -1209,11 +1550,160 @@ mod tests {
 
         // The off-thread shape: the scan runs apart from the owner of the cache,
         // which adopts the result once it has one.
-        let scanned = ScriptsDirectory::scan(tmp.path());
-        dir.adopt_scan(scanned);
+        let scanned = dir.scan_request().run();
+        dir.adopt_full_scan(scanned);
 
         assert_eq!(dir.entries().len(), 1);
         assert_eq!(dir.entries()[0].name(), "later.sql");
+    }
+
+    #[test]
+    fn a_change_updates_the_tree_without_walking_the_disk() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+
+        // Written behind DBFlux's back: only a scan can find it.
+        fs::write(root.join("foreign.sql"), "SELECT 1;").unwrap();
+
+        let created = dir.create_file(Some(&root), "mine", "sql").unwrap();
+
+        let names: Vec<&str> = dir
+            .external_root(id)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(ScriptEntry::name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["mine.sql"],
+            "no scan ran, so the foreign file is unseen"
+        );
+        assert_eq!(dir.external_root(id).unwrap().entries()[0].path(), created);
+    }
+
+    #[test]
+    fn a_scan_requested_before_a_change_is_dropped() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+
+        let stale = dir.scan_request();
+        dir.create_file(Some(&root), "after", "sql").unwrap();
+        dir.adopt_full_scan(stale.run());
+
+        assert_eq!(
+            dir.external_root(id).unwrap().entries().len(),
+            1,
+            "the stale scan would have dropped the new file"
+        );
+
+        fs::write(root.join("foreign.sql"), "SELECT 1;").unwrap();
+        let fresh = dir.scan_request_for(&root).unwrap();
+        dir.adopt_full_scan(fresh.run());
+
+        assert_eq!(dir.external_root(id).unwrap().entries().len(), 2);
+    }
+
+    #[test]
+    fn renaming_and_moving_a_folder_rebases_its_cached_children() {
+        let tmp = TempDir::new().unwrap();
+        let mut dir = make_dir(tmp.path());
+
+        let folder = dir.create_folder(None, "reports").unwrap();
+        dir.create_file(Some(&folder), "daily", "sql").unwrap();
+        let target = dir.create_folder(None, "archive").unwrap();
+
+        let renamed = dir.rename(&folder, "monthly").unwrap();
+        let moved = dir.move_entry(&renamed, &target).unwrap();
+
+        let in_memory = dir.entries().to_vec();
+        dir.refresh();
+        assert_eq!(
+            format!("{in_memory:?}"),
+            format!("{:?}", dir.entries()),
+            "the cached tree matches what a scan finds"
+        );
+
+        let ScriptEntry::Folder { children, .. } = &dir.entries()[0] else {
+            panic!("Expected folder");
+        };
+        assert_eq!(children[0].path(), moved);
+    }
+
+    #[test]
+    fn registering_skips_roots_that_overlap() {
+        let managed = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let mut dir = make_dir(managed.path());
+
+        dir.register_external_roots(vec![
+            ExternalScriptRoot::new(managed.path().join("inner")),
+            ExternalScriptRoot::new(external.path().to_path_buf()),
+            ExternalScriptRoot::new(external.path().join("nested")),
+        ]);
+
+        let paths: Vec<&Path> = dir
+            .external_roots()
+            .iter()
+            .map(MountedScriptRoot::path)
+            .collect();
+        assert_eq!(paths, vec![external.path()]);
+    }
+
+    #[test]
+    fn share_root_tells_moves_within_a_root_from_moves_across() {
+        let (managed, _external, dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let managed_file = managed.path().join("a.sql");
+        let external_file = root.join("b.sql");
+
+        assert!(dir.share_root(std::slice::from_ref(&managed_file), managed.path()));
+        assert!(dir.share_root(std::slice::from_ref(&external_file), &root));
+        assert!(!dir.share_root(std::slice::from_ref(&managed_file), &root));
+        assert!(!dir.share_root(&[managed_file, external_file], &root));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_external_root_neither_lists_nor_writes_through_links_that_leave_it() {
+        let (_managed, elsewhere, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.sql"), "SELECT 1;").unwrap();
+        fs::create_dir(root.join("real")).unwrap();
+        fs::write(root.join("real/inside.sql"), "SELECT 2;").unwrap();
+
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.join("secret.sql"))
+            .unwrap();
+        dir.refresh();
+
+        let names: Vec<&str> = dir
+            .external_root(id)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(ScriptEntry::name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["real"],
+            "a link out of the folder, and a second path to a listed folder, are skipped"
+        );
+
+        assert!(
+            dir.create_file(Some(&root.join("escape")), "x", "sql")
+                .is_err()
+        );
+        assert!(
+            dir.import(
+                &elsewhere.path().join("missing.sql"),
+                Some(&root.join("escape"))
+            )
+            .is_err()
+        );
+        assert!(!outside.path().join("x.sql").exists());
     }
 
     #[test]

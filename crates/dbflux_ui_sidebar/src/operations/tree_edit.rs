@@ -293,7 +293,7 @@ impl Sidebar {
             });
 
             match result {
-                Some(Ok(_)) => self.refresh_scripts_tree(cx),
+                Some(Ok(new_path)) => self.after_script_change(&new_path, cx),
                 Some(Err(error)) => {
                     crate::operations::script_ops::report_script_operation_failure(error, cx)
                 }

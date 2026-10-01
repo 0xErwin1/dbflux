@@ -3,6 +3,7 @@ use crate::ui::document::pane::CloseDisposition;
 use crate::ui::labels::{
     NoActiveConnectionKind, documents_default_title, documents_no_active_connection_message,
 };
+use dbflux_ui_base::app_state_entity::rescan_script_root_in_background;
 
 impl Workspace {
     /// Opens a table in a new DataDocument tab, or focuses the existing one.
@@ -715,8 +716,9 @@ impl Workspace {
     /// bytes the document last loaded or wrote. Both the verification and the
     /// removal run on the background executor — reading the whole file, and the
     /// directory walk that follows the removal, block for as long as the disk takes
-    /// to answer, and a close gesture must not inherit that wait. The foreground
-    /// only adopts the freshly scanned tree and tells the sidebar.
+    /// to answer, and a close gesture must not inherit that wait. The tree is then
+    /// rescanned in the background too, and adopted only if nothing changed in
+    /// that folder meanwhile.
     ///
     /// Deleting on buffer emptiness alone could destroy foreign content, and a
     /// leftover empty script is the safer failure, so every uncertain case keeps
@@ -755,8 +757,9 @@ impl Workspace {
         }
 
         let app_state = self.app_state.clone();
+        let removed_path = cleanup.path.clone();
         cx.spawn(async move |_this, cx| {
-            let scanned_after_removal = cx
+            let removed = cx
                 .background_executor()
                 .spawn(async move {
                     match dbflux_core::ScriptsDirectory::remove_if_unchanged(
@@ -764,29 +767,23 @@ impl Workspace {
                         &cleanup.path,
                         &cleanup.expected_bytes,
                     ) {
-                        Ok(true) => Some(dbflux_core::ScriptsDirectory::scan(&root)),
-                        Ok(false) => None,
+                        Ok(removed) => removed,
                         Err(e) => {
                             log::warn!(
                                 "Failed to remove the emptied script {}: {e}",
                                 cleanup.path.display()
                             );
-                            None
+                            false
                         }
                     }
                 })
                 .await;
 
-            let Some(entries) = scanned_after_removal else {
+            if !removed {
                 return;
-            };
+            }
 
-            app_state.update(cx, |state, cx| {
-                if let Some(dir) = state.scripts_directory_mut() {
-                    dir.adopt_scan(entries);
-                }
-                cx.emit(AppStateChanged);
-            });
+            cx.update(|cx| rescan_script_root_in_background(&app_state, &removed_path, cx));
         })
         .detach();
     }

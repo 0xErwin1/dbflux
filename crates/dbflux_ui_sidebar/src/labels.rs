@@ -635,6 +635,11 @@ pub(crate) fn scripts_root_scanning_label(label: &str) -> String {
     dbflux_i18n::t!("sidebar.tree.scripts_root_scanning", label = label)
 }
 
+/// Menu line naming why an external scripts folder could not be read.
+pub(crate) fn scripts_root_unavailable_reason_label(reason: &str) -> String {
+    dbflux_i18n::t!("sidebar.menu.unavailable_reason", reason = reason)
+}
+
 /// Sidebar label of an external scripts folder that could not be read.
 pub(crate) fn scripts_root_unavailable_label(label: &str) -> String {
     dbflux_i18n::t!("sidebar.tree.scripts_root_unavailable", label = label)
@@ -1649,7 +1654,8 @@ mod tests {
         "sidebar.toast.schema_snapshot_failed",
     ];
 
-    const SCRIPT_ROOT_KEYS: [&str; 12] = [
+    const SCRIPT_ROOT_KEYS: [&str; 13] = [
+        "sidebar.menu.unavailable_reason",
         "sidebar.toast.script_operation_failed",
         "sidebar.status.external_folders",
         "sidebar.status.unavailable_folders",

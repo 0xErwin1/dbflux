@@ -4447,6 +4447,7 @@ sidebar:
     copy_inspector_id: Copiar ID de inspector
     remove_external_folder: Quitar del panel lateral
     refresh_scripts: Actualizar
+    unavailable_reason: "No disponible: %{reason}"
   overlay:
     add_folder: Nueva carpeta
     add_connection: Nueva conexión

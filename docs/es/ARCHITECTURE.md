@@ -1851,7 +1851,10 @@ IA con una capa completa de gobernanza:
   - `scripts/` carpeta de scripts del usuario
     (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory`
     también contiene las carpetas externas registradas en `cfg_script_roots`;
-    cada operación de archivos se queda dentro de una sola raíz, y las
+    cada operación de archivos se queda dentro de una sola raíz (dentro de
+    una raíz externa, según la ruta resuelta, así que los enlaces simbólicos
+    que salen de ella no se listan ni se escriben), los cambios actualizan el
+    árbol en memoria y los escaneos corren fuera del hilo de UI, y las
     herramientas MCP de scripts solo ven `scripts/`.
 - Secrets: los passwords se almacenan en el keyring del sistema operativo; las
   referencias se derivan de los profile IDs. El trait `HasSecretRef` unifica las

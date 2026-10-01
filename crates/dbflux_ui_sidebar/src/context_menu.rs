@@ -119,6 +119,27 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
     }
 }
 
+impl Sidebar {
+    /// The read error of the unavailable external scripts folder `item_id`
+    /// names, or `None` when it is readable or not an external folder.
+    fn unavailable_script_root_reason(&self, item_id: &str, cx: &App) -> Option<String> {
+        let Some(SchemaNodeId::ScriptsRoot { path }) = parse_node_id(item_id) else {
+            return None;
+        };
+
+        let mounted = self
+            .app_state
+            .read(cx)
+            .scripts_directory()?
+            .external_root_at(std::path::Path::new(&path))?;
+
+        match mounted.availability() {
+            dbflux_core::ScriptRootAvailability::Unavailable { reason } => Some(reason.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// The mono caption at the top of a schema object's menu: its qualified
 /// name (`public.orders`), like the column and row the cell menu names.
 pub(crate) fn menu_caption(item_id: &str) -> Option<String> {
@@ -1095,6 +1116,14 @@ impl Sidebar {
 
             SchemaNodeKind::ScriptsRoot => {
                 let mut items = Vec::new();
+
+                // Why the folder could not be read; the tree row only says that
+                // it could not.
+                if let Some(reason) = self.unavailable_script_root_reason(item_id, cx) {
+                    items.push(ContextMenuItem::header(
+                        crate::labels::scripts_root_unavailable_reason_label(&reason),
+                    ));
+                }
 
                 Self::append_menu_section(
                     &mut items,

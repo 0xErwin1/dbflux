@@ -4447,6 +4447,7 @@ sidebar:
     copy_inspector_id: Copy inspector ID
     remove_external_folder: Remove from sidebar
     refresh_scripts: Refresh
+    unavailable_reason: "Unavailable: %{reason}"
   overlay:
     add_folder: New folder
     add_connection: New connection

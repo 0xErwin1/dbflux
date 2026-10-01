@@ -242,7 +242,9 @@ impl Sidebar {
         // never propagated, leaving the folder visually stuck open.
         if matches!(
             parsed,
-            Some(SchemaNodeId::ScriptsFolder { .. }) | Some(SchemaNodeId::ScriptFile { .. })
+            Some(SchemaNodeId::ScriptsFolder { .. })
+                | Some(SchemaNodeId::ScriptFile { .. })
+                | Some(SchemaNodeId::ScriptsRoot { .. })
         ) {
             self.refresh_scripts_tree(cx);
         } else {

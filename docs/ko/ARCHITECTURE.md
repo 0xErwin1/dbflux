@@ -1003,7 +1003,7 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
   - 가져오기는 멱등적입니다 (`sys_legacy_imports`에서 추적)
 - 세션 데이터 (데이터 디렉터리):
   - `sessions/` 편집기 자동 저장과 복구를 위한 스크래치 및 섀도 파일 (crates/dbflux_storage/src/artifacts.rs).
-  - `scripts/` 사용자 스크립트 폴더 (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory`는 `cfg_script_roots`에 등록된 외부 폴더도 보관합니다. 모든 파일 작업은 하나의 루트 안에서만 이루어지며, MCP 스크립트 도구는 `scripts/`만 봅니다.
+  - `scripts/` 사용자 스크립트 폴더 (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory`는 `cfg_script_roots`에 등록된 외부 폴더도 보관합니다. 모든 파일 작업은 하나의 루트 안에서만 이루어지고(외부 루트에서는 확인된 실제 경로 기준이므로 밖으로 나가는 심볼릭 링크는 나열되지도 쓰이지도 않음), 변경은 메모리의 트리만 갱신하며 검색은 UI 스레드 밖에서 실행되고, MCP 스크립트 도구는 `scripts/`만 봅니다.
 - 비밀: 비밀번호는 OS 키링에 저장되고, 참조는 프로필 ID에서 파생됩니다. `HasSecretRef` 트레이트는 SSH 터널과 프록시 비밀 작업을 통합합니다 (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## 빌드 및 배포

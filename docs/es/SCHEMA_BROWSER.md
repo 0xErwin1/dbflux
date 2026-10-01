@@ -40,8 +40,10 @@ selecciona la carpeta.
 
 - La carpeta aparece debajo de tus propios scripts, con su nombre como etiqueta.
   Solo se listan los archivos que abre el editor (`.sql`, `.js`, `.redis`,
-  `.lua`, `.py`, `.sh` y los demás tipos de script), y se ocultan las subcarpetas
-  que no tienen ninguno.
+  `.lua`, `.py`, `.sh` y los demás tipos de script). Se ocultan las subcarpetas
+  que solo contienen otros archivos; las vacías se muestran, así que una carpeta
+  que acabas de crear sigue visible. Los enlaces simbólicos que salen de la
+  carpeta no se listan, y nada se escribe a través de ellos.
 - Los scripts se abren y se guardan en su lugar, así que los archivos quedan
   sincronizados con la carpeta. Crear, renombrar y eliminar archivos y
   subcarpetas dentro de ella funciona igual que en tu propia carpeta de scripts.
@@ -50,7 +52,8 @@ selecciona la carpeta.
   en su menú, para ver archivos agregados o modificados fuera de DBFlux. Las
   carpetas también se escanean en segundo plano cada vez que DBFlux arranca.
 - Si la carpeta se mueve, se elimina, se desmonta o no se puede leer, sigue en
-  la lista marcada como **no disponible** hasta que vuelva o la quites.
+  la lista marcada como **no disponible** hasta que vuelva o la quites. Su menú
+  indica por qué no se pudo leer.
 - **Quitar del panel lateral** (`x`) solo olvida la carpeta. Sus archivos nunca
   se tocan, y la carpeta en sí no se puede renombrar, mover ni eliminar desde
   DBFlux.

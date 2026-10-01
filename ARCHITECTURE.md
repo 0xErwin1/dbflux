@@ -1016,7 +1016,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - Import is idempotent (tracked in `sys_legacy_imports`)
 - Session data (data dir):
   - `sessions/` scratch and shadow files for editor auto-save and recovery (crates/dbflux_storage/src/artifacts.rs).
-  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory` also holds the external folders registered in `cfg_script_roots`; every file operation stays inside one root, and the MCP script tools only see `scripts/`.
+  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory` also holds the external folders registered in `cfg_script_roots`; every file operation stays inside one root (inside an external root by resolved path, so symlinks leading out are neither listed nor written through), changes update the cached trees in memory and scans run off the UI thread, and the MCP script tools only see `scripts/`.
 - Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## Build & Deploy

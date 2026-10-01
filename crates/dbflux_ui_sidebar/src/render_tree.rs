@@ -984,23 +984,44 @@ pub(super) fn render_tree_item(
                                         | Some(SchemaNodeId::ScriptsRoot { .. })
                                 );
 
+                                let managed_root = sidebar_for_move
+                                    .read(cx)
+                                    .app_state
+                                    .read(cx)
+                                    .scripts_directory()
+                                    .map(|dir| dir.root_path().to_path_buf());
+
                                 let target_path = match target_id.as_ref() {
                                     Some(SchemaNodeId::ScriptsFolder { path: Some(p) })
                                     | Some(SchemaNodeId::ScriptsRoot { path: p }) => {
                                         Some(std::path::PathBuf::from(p))
                                     }
                                     Some(SchemaNodeId::ScriptsFolder { path: None }) => {
-                                        dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
+                                        managed_root
                                     }
                                     _ => None,
                                 };
 
                                 let source_paths = event.drag(cx).all_paths();
-                                let invalid_target = target_path.as_ref().is_some_and(|target| {
-                                    source_paths.iter().any(|source| {
-                                        *target == *source || target.starts_with(source)
-                                    })
+
+                                // A folder row and the folder a drop beside it
+                                // lands in share a root (roots only take drops
+                                // into them), so the row path decides it.
+                                let crosses_roots = target_path.as_ref().is_some_and(|target| {
+                                    !sidebar_for_move
+                                        .read(cx)
+                                        .app_state
+                                        .read(cx)
+                                        .scripts_directory()
+                                        .is_some_and(|dir| dir.share_root(&source_paths, target))
                                 });
+
+                                let invalid_target = crosses_roots
+                                    || target_path.as_ref().is_some_and(|target| {
+                                        source_paths.iter().any(|source| {
+                                            *target == *source || target.starts_with(source)
+                                        })
+                                    });
 
                                 if invalid_target {
                                     sidebar_for_move.update(cx, |this, cx| {

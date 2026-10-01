@@ -4446,6 +4446,7 @@ sidebar:
     copy_inspector_id: 검사기 ID 복사
     remove_external_folder: 사이드바에서 제거
     refresh_scripts: 새로 고침
+    unavailable_reason: "사용할 수 없음: %{reason}"
   overlay:
     add_folder: 새 폴더
     add_connection: 새 연결

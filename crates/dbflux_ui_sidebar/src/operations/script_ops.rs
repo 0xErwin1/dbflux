@@ -1,5 +1,7 @@
 use crate::*;
-use dbflux_ui_base::app_state_entity::rescan_scripts_in_background;
+use dbflux_ui_base::app_state_entity::{
+    rescan_script_root_in_background, rescan_scripts_in_background,
+};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 /// Reports a script file operation the user just triggered that failed, such as
@@ -88,12 +90,20 @@ impl Sidebar {
 
         match created {
             Some(Ok(path)) => {
-                self.refresh_scripts_tree(cx);
+                self.after_script_change(&path, cx);
                 cx.emit(SidebarEvent::OpenScript { path });
             }
             Some(Err(error)) => report_script_operation_failure(error, cx),
             None => {}
         }
+    }
+
+    /// Redraws the scripts tree from the in-memory edit a change just made,
+    /// then rescans that change's root in the background for anything the edit
+    /// cannot know. The UI thread never walks the folder.
+    pub(crate) fn after_script_change(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.refresh_scripts_tree(cx);
+        rescan_script_root_in_background(&self.app_state, path, cx);
     }
 
     pub(crate) fn create_script_file(&mut self, cx: &mut Context<Self>) {
@@ -122,7 +132,7 @@ impl Sidebar {
             None => return,
         };
 
-        self.refresh_scripts_tree(cx);
+        self.after_script_change(&path, cx);
 
         let item_id = SchemaNodeId::ScriptsFolder {
             path: Some(path.to_string_lossy().to_string()),
@@ -169,7 +179,7 @@ impl Sidebar {
                 match imported {
                     Some(Ok(path)) => {
                         sidebar.update(cx, |this, cx| {
-                            this.refresh_scripts_tree(cx);
+                            this.after_script_change(&path, cx);
                             cx.emit(SidebarEvent::OpenScript { path });
                         });
                     }
@@ -504,6 +514,18 @@ impl Sidebar {
                 .any(|candidate| candidate != source && source.starts_with(candidate))
         });
 
+        // Moves never cross roots. The drag feedback already refuses such a
+        // target; this covers the drops and keys that reach here without it.
+        let same_root = self
+            .app_state
+            .read(cx)
+            .scripts_directory()
+            .is_some_and(|dir| dir.share_root(&normalized_sources, target_dir));
+
+        if !same_root {
+            return false;
+        }
+
         let mut moved_any = false;
         let mut first_error = None;
         self.app_state.update(cx, |state, _cx| {
@@ -534,7 +556,7 @@ impl Sidebar {
         }
 
         if moved_any {
-            self.refresh_scripts_tree(cx);
+            self.after_script_change(target_dir, cx);
         }
 
         moved_any
@@ -547,7 +569,7 @@ impl Sidebar {
         });
 
         match result {
-            Some(Ok(())) => self.refresh_scripts_tree(cx),
+            Some(Ok(())) => self.after_script_change(&path, cx),
             Some(Err(error)) => report_script_operation_failure(error, cx),
             None => {}
         }
