@@ -913,7 +913,9 @@ pub(crate) fn mongo_ssl_mode_to_uri_params(
     match mode {
         "" | "off" => Ok(String::new()),
         "on" => Ok(
-            "&tls=true&tlsAllowInvalidCertificates=true&tlsAllowInvalidHostnames=true".to_string(),
+            // The rustls backend rejects tlsAllowInvalidHostnames; with rustls,
+            // tlsAllowInvalidCertificates already skips the hostname check.
+            "&tls=true&tlsAllowInvalidCertificates=true".to_string(),
         ),
         "verify" => {
             let mut params = String::from("&tls=true");
@@ -1029,7 +1031,11 @@ fn build_mongodb_uri(
     uri.push_str(host);
     uri.push(':');
     uri.push_str(&port.to_string());
-    uri.push_str("/?appName=dbflux");
+    // The form takes a single host, so connect to exactly that server (as
+    // Compass does). Without directConnection the driver follows the replica
+    // set's advertised member hosts; behind an SSH tunnel those name the remote
+    // side (e.g. 127.0.0.1:27017) and resolve to the local machine instead.
+    uri.push_str("/?appName=dbflux&directConnection=true");
 
     // Add authSource if specified, or default to "admin" when user is provided
     if let Some(auth_db) = auth_database {
@@ -4988,6 +4994,28 @@ mod tests {
     }
 
     #[test]
+    fn build_mongodb_uri_connects_directly_to_the_given_host() {
+        let uri = build_mongodb_uri("127.0.0.1", 40123, None, None, None, "");
+        assert!(uri.contains("directConnection=true"));
+
+        let options = ClientOptions::parse(&uri)
+            .run()
+            .expect("form URI should parse");
+        assert_eq!(options.direct_connection, Some(true));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_on_produces_options_the_driver_accepts() {
+        let params = mongo_ssl_mode_to_uri_params(Some("on"), None, None)
+            .expect("on should map to insecure TLS params");
+        let uri = build_mongodb_uri("127.0.0.1", 27017, None, None, None, &params);
+
+        ClientOptions::parse(&uri)
+            .run()
+            .expect("SSL mode on should produce a URI the driver accepts");
+    }
+
+    #[test]
     fn mongo_ssl_mode_off_returns_empty_params() {
         let params =
             mongo_ssl_mode_to_uri_params(Some("off"), None, None).expect("off should map to empty");
@@ -5007,7 +5035,7 @@ mod tests {
             .expect("on should map to insecure TLS params");
         assert!(params.contains("tls=true"));
         assert!(params.contains("tlsAllowInvalidCertificates=true"));
-        assert!(params.contains("tlsAllowInvalidHostnames=true"));
+        assert!(!params.contains("tlsAllowInvalidHostnames"));
     }
 
     #[test]
