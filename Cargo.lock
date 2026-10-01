@@ -3360,6 +3360,7 @@ version = "0.9.0-dev.0"
 dependencies = [
  "chrono",
  "reqwest 0.12.28",
+ "rustls 0.23.44",
  "semver",
  "serde",
  "serde_json",
