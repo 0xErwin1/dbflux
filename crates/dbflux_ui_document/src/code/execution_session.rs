@@ -1625,6 +1625,149 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "telemetry", feature = "lua"))]
+    fn assert_real_interpreter_script_pipeline(
+        cx: &mut gpui::TestAppContext,
+        language: dbflux_core::QueryLanguage,
+        failure_body: &str,
+        failure_output: &str,
+        success_body: &str,
+        success_output: &str,
+    ) {
+        let app_state = initialized_app_state(cx);
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
+        let capture = Rc::new(RefCell::new(None));
+        let capture_ref = capture.clone();
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(app_state.clone(), None, language, window, cx)
+            });
+            capture_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = capture.borrow().clone().expect("document");
+        window.run_until_parked();
+
+        for (body, expected_output, successful) in [
+            (failure_body, failure_output, false),
+            (success_body, success_output, true),
+        ] {
+            window.update(|window, cx| {
+                document.update(cx, |doc, cx| {
+                    assert!(
+                        doc.script_executor.is_none(),
+                        "use the default CompositeExecutor"
+                    );
+                    doc.set_content(body, window, cx);
+                    doc.run_query(window, cx);
+                    assert!(
+                        doc.execution
+                            .execution_history
+                            .last()
+                            .expect("started")
+                            .finished_at
+                            .is_none()
+                    );
+                });
+                app_state.update(cx, |app, _| {
+                    let counts = usage_counts(app);
+                    assert!(counts.get("script_run").is_none(), "capture is not credit");
+                    assert!(counts.get("query_run").is_none());
+                });
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                let doc = document.read(cx);
+                let record = doc.execution.execution_history.last().expect("execution");
+                assert!(record.is_script);
+                assert!(
+                    record.finished_at.is_some(),
+                    "foreground owner adopted completion"
+                );
+                let output = record
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.text_body.as_deref());
+                let error = record.error.as_ref().map(ToString::to_string);
+                let terminal_output = output
+                    .or(error.as_deref())
+                    .expect("terminal output or error");
+                assert!(
+                    terminal_output.contains(expected_output),
+                    "actual interpreter output: {terminal_output}"
+                );
+                if successful {
+                    assert!(record.error.is_none(), "canonical success");
+                    assert_eq!(output, Some(success_output));
+                    assert!(!terminal_output.contains("Process exited"));
+                    assert!(!terminal_output.contains("timed out"));
+                }
+                eprintln!("real interpreter: success={successful}, terminal={terminal_output:?}");
+                app_state.update(cx, |app, _| {
+                    let counts = usage_counts(app);
+                    assert_eq!(
+                        counts["script_run"].as_u64().unwrap_or(0),
+                        u64::from(successful)
+                    );
+                    assert!(counts.get("query_run").is_none());
+                });
+            });
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert_eq!(
+                        usage_counts(app)["script_run"].as_u64().unwrap_or(0),
+                        u64::from(successful),
+                        "repeated foreground processing must not duplicate credit"
+                    );
+                });
+            });
+        }
+        window.update(|_, cx| {
+            assert_eq!(document.read(cx).execution.execution_history.len(), 2);
+        });
+    }
+
+    #[cfg(all(feature = "telemetry", feature = "lua"))]
+    #[gpui::test]
+    fn real_interpreter_script_pipeline_bash(cx: &mut gpui::TestAppContext) {
+        assert_real_interpreter_script_pipeline(
+            cx,
+            dbflux_core::QueryLanguage::Bash,
+            "printf 'bash failure\\n'; exit 1",
+            "Process exited with code 1",
+            "printf 'bash success\\n'",
+            "bash success\n",
+        );
+    }
+
+    #[cfg(all(feature = "telemetry", feature = "lua"))]
+    #[gpui::test]
+    fn real_interpreter_script_pipeline_python(cx: &mut gpui::TestAppContext) {
+        assert_real_interpreter_script_pipeline(
+            cx,
+            dbflux_core::QueryLanguage::Python,
+            "raise RuntimeError('python failure')",
+            "RuntimeError: python failure",
+            "print('python success')",
+            "python success\n",
+        );
+    }
+
+    #[cfg(all(feature = "telemetry", feature = "lua"))]
+    #[gpui::test]
+    fn real_interpreter_script_pipeline_lua(cx: &mut gpui::TestAppContext) {
+        assert_real_interpreter_script_pipeline(
+            cx,
+            dbflux_core::QueryLanguage::Lua,
+            "error('lua failure')",
+            "lua failure",
+            "dbflux.log.info('lua success')",
+            "[INFO] lua success",
+        );
+    }
+
     #[cfg(feature = "telemetry")]
     #[gpui::test]
     fn destroyed_document_does_not_credit_completed_script(cx: &mut gpui::TestAppContext) {
