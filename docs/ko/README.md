@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](../../README.md) · [Español](../es/README.md) · **한국어** · [简体中文](../zh_Hans/README.md)
+[English](../../README.md) · [Español](../es/README.md) · **한국어** · [简体中文](../zh_Hans/README.md) · [Português (Brasil)](../pt_BR/README.md)
 
 Rust + GPUI 데스크톱 클라이언트로 제공되는, 확장 가능한 키보드 우선 데이터 플랫폼입니다.
 
