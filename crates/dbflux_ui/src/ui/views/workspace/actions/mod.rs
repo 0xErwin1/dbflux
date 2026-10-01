@@ -762,7 +762,7 @@ mod tests {
         ];
 
         let mut items = Vec::new();
-        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), &mut items);
+        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), None, &mut items);
 
         assert_eq!(items.len(), 2);
         match &items[0] {
@@ -773,6 +773,40 @@ mod tests {
             } => {
                 assert_eq!(name, "query.sql");
                 assert_eq!(relative_path, "query.sql");
+            }
+            _ => panic!("Expected Script item"),
+        }
+    }
+
+    #[test]
+    fn flatten_script_entries_prefixes_external_folder_scripts_with_its_label() {
+        let entries = vec![ScriptEntry::Folder {
+            path: PathBuf::from("/srv/shared-sql/reports"),
+            name: "reports".to_string(),
+            children: vec![ScriptEntry::File {
+                path: PathBuf::from("/srv/shared-sql/reports/daily.sql"),
+                name: "daily.sql".to_string(),
+                extension: "sql".to_string(),
+            }],
+        }];
+
+        let mut items = Vec::new();
+        Workspace::flatten_script_entries(
+            &entries,
+            Path::new("/srv/shared-sql"),
+            Some("shared-sql"),
+            &mut items,
+        );
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            PaletteItem::Script {
+                path,
+                relative_path,
+                ..
+            } => {
+                assert_eq!(path, &PathBuf::from("/srv/shared-sql/reports/daily.sql"));
+                assert_eq!(relative_path, "shared-sql/reports/daily.sql");
             }
             _ => panic!("Expected Script item"),
         }
@@ -794,7 +828,7 @@ mod tests {
         ];
 
         let mut items = Vec::new();
-        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), &mut items);
+        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), None, &mut items);
 
         assert_eq!(items.len(), 1);
         match &items[0] {
@@ -830,7 +864,7 @@ mod tests {
         }];
 
         let mut items = Vec::new();
-        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), &mut items);
+        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), None, &mut items);
 
         assert_eq!(items.len(), 2);
 

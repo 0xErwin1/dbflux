@@ -31,6 +31,7 @@ impl SchemaNodeKind {
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::ScriptFile
+                | Self::ScriptsRoot
                 | Self::DependentsFolder
                 | Self::Routine
                 | Self::MetricsFolder
@@ -75,6 +76,7 @@ impl SchemaNodeKind {
                 | Self::Database
                 | Self::CustomType
                 | Self::ScriptsFolder
+                | Self::ScriptsRoot
                 | Self::DependentsFolder
                 | Self::MetricsFolder
                 | Self::MetricNamespaceFolder

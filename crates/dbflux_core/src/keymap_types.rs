@@ -75,6 +75,9 @@ pub enum Command {
     SaveQuery,
     SaveFileAs,
     OpenScriptFile,
+    /// Register a folder outside the managed scripts directory whose scripts
+    /// the sidebar lists in place.
+    AddExternalScriptsFolder,
     ToggleComment,
 
     // === Results ===
@@ -309,6 +312,7 @@ impl Command {
             "toggle_notifications" => Some(Command::ToggleNotifications),
             "show_connections_view" => Some(Command::ShowConnectionsView),
             "show_scripts_view" => Some(Command::ShowScriptsView),
+            "add_external_scripts_folder" => Some(Command::AddExternalScriptsFolder),
             "show_dashboards_view" => Some(Command::ShowDashboardsView),
             #[cfg(feature = "mcp")]
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
@@ -382,6 +386,7 @@ impl Command {
             Command::SaveQuery => "Save",
             Command::SaveFileAs => "Save file as…",
             Command::OpenScriptFile => "Open script file…",
+            Command::AddExternalScriptsFolder => "Add external scripts folder…",
             Command::ToggleComment => "Toggle line comment",
 
             Command::ExportResults => "Export results",
@@ -578,6 +583,7 @@ impl Command {
             Command::SaveQuery => "save_query",
             Command::SaveFileAs => "save_file_as",
             Command::OpenScriptFile => "open_script_file",
+            Command::AddExternalScriptsFolder => "add_external_scripts_folder",
             Command::ToggleComment => "toggle_comment",
 
             Command::ExportResults => "export_results",
@@ -792,6 +798,7 @@ impl Command {
             Command::SaveQuery,
             Command::SaveFileAs,
             Command::OpenScriptFile,
+            Command::AddExternalScriptsFolder,
             Command::ToggleComment,
             Command::ExportResults,
             Command::ClearFilter,
@@ -982,6 +989,7 @@ impl Command {
             | Command::SaveQuery
             | Command::SaveFileAs
             | Command::OpenScriptFile
+            | Command::AddExternalScriptsFolder
             | Command::ToggleComment => "Editor",
 
             Command::ExportResults
@@ -1123,6 +1131,7 @@ impl Command {
             Command::ToggleCommandPalette
                 | Command::NewQueryTab
                 | Command::OpenScriptFile
+                | Command::AddExternalScriptsFolder
                 | Command::CloseCurrentTab
                 | Command::NextTab
                 | Command::PrevTab
@@ -1752,6 +1761,7 @@ mod tests {
             Command::ShowConnectionsView,
             Command::ShowScriptsView,
             Command::ShowDashboardsView,
+            Command::AddExternalScriptsFolder,
         ] {
             assert_eq!(Command::from_palette_id(command.id()), Some(command));
             assert!(command.is_global(), "{command:?} is a workspace command");

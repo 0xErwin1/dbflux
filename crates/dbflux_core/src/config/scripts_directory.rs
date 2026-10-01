@@ -1,7 +1,9 @@
 use crate::DbError;
 use crate::connection::hook::ScriptLanguage;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 /// An entry in the scripts directory tree.
 #[derive(Debug, Clone)]
@@ -36,13 +38,159 @@ impl ScriptEntry {
     }
 }
 
-/// Manages the centralized scripts directory at `~/.local/share/dbflux/scripts/`.
+/// A folder outside the managed scripts root whose scripts DBFlux lists and
+/// edits in place, without copying them.
 ///
-/// Scans the filesystem on demand and provides CRUD operations for script files
-/// and folders. Only files with recognized query language extensions are included.
+/// `path` is the canonical path the folder had when it was registered, so two
+/// registrations of the same folder through different spellings compare equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalScriptRoot {
+    pub id: Uuid,
+    pub path: PathBuf,
+    pub label: String,
+}
+
+impl ExternalScriptRoot {
+    /// Builds a root for `path` with a fresh id, labelled after the folder name.
+    pub fn new(path: PathBuf) -> Self {
+        let label = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+
+        Self {
+            id: Uuid::new_v4(),
+            path,
+            label,
+        }
+    }
+}
+
+/// Whether the folder behind an external root could be listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptRootAvailability {
+    /// Registered but not scanned yet.
+    Pending,
+    Available,
+    /// The folder could not be read: moved, deleted, unmounted or denied.
+    /// The registration is kept so the root comes back once the folder does.
+    Unavailable {
+        reason: String,
+    },
+}
+
+/// An external root together with the result of its last scan.
+#[derive(Debug, Clone)]
+pub struct MountedScriptRoot {
+    root: ExternalScriptRoot,
+    entries: Vec<ScriptEntry>,
+    availability: ScriptRootAvailability,
+}
+
+impl MountedScriptRoot {
+    fn pending(root: ExternalScriptRoot) -> Self {
+        Self {
+            root,
+            entries: Vec::new(),
+            availability: ScriptRootAvailability::Pending,
+        }
+    }
+
+    fn adopt(&mut self, scanned: Result<Vec<ScriptEntry>, String>) {
+        match scanned {
+            Ok(entries) => {
+                self.entries = entries;
+                self.availability = ScriptRootAvailability::Available;
+            }
+            Err(reason) => {
+                self.entries = Vec::new();
+                self.availability = ScriptRootAvailability::Unavailable { reason };
+            }
+        }
+    }
+
+    pub fn root(&self) -> &ExternalScriptRoot {
+        &self.root
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.root.id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.root.path
+    }
+
+    pub fn label(&self) -> &str {
+        &self.root.label
+    }
+
+    pub fn entries(&self) -> &[ScriptEntry] {
+        &self.entries
+    }
+
+    pub fn availability(&self) -> &ScriptRootAvailability {
+        &self.availability
+    }
+}
+
+/// The roots to scan, detached from [`ScriptsDirectory`] so the walk can run
+/// on a background thread.
+#[derive(Debug, Clone)]
+pub struct ScriptsScanRequest {
+    managed: PathBuf,
+    external: Vec<(Uuid, PathBuf)>,
+}
+
+impl ScriptsScanRequest {
+    /// Walks every root. Blocks for as long as the slowest folder takes to
+    /// answer, so call it off the thread that renders.
+    pub fn run(self) -> ScriptsScan {
+        let managed = scan_directory(&self.managed);
+
+        let external = self
+            .external
+            .into_iter()
+            .map(|(id, path)| {
+                let scanned =
+                    scan_tree(&path, ScanFilter::OpenableOnly).map_err(|error| error.to_string());
+                (id, path, scanned)
+            })
+            .collect();
+
+        ScriptsScan {
+            managed_root: self.managed,
+            managed,
+            external,
+        }
+    }
+}
+
+/// The outcome of a [`ScriptsScanRequest`], applied with
+/// [`ScriptsDirectory::adopt_full_scan`].
+#[derive(Debug, Clone)]
+pub struct ScriptsScan {
+    managed_root: PathBuf,
+    managed: Vec<ScriptEntry>,
+    external: Vec<(Uuid, PathBuf, Result<Vec<ScriptEntry>, String>)>,
+}
+
+/// Manages the scripts the sidebar lists.
+///
+/// The managed root at `~/.local/share/dbflux/scripts/` belongs to DBFlux: new
+/// queries and hook scripts are created there. External roots are folders the
+/// user registered; their files are listed and edited where they are and are
+/// never copied. Every filesystem operation is confined to one root: a path
+/// outside all of them, or an operation that would cross from one root into
+/// another, is refused.
+///
+/// The roots never overlap: an external root cannot sit inside the managed root
+/// or another external root, nor contain one. That keeps "which root owns this
+/// path" a single answer.
 pub struct ScriptsDirectory {
     root: PathBuf,
     entries: Vec<ScriptEntry>,
+    external: Vec<MountedScriptRoot>,
 }
 
 impl ScriptsDirectory {
@@ -56,15 +204,35 @@ impl ScriptsDirectory {
 
         let entries = scan_directory(&root);
 
-        Ok(Self { root, entries })
+        Ok(Self {
+            root,
+            entries,
+            external: Vec::new(),
+        })
     }
 
+    /// The managed root, where DBFlux creates its own scripts.
     pub fn root_path(&self) -> &Path {
         &self.root
     }
 
+    /// The entries of the managed root.
     pub fn entries(&self) -> &[ScriptEntry] {
         &self.entries
+    }
+
+    /// The registered external roots, in registration order.
+    pub fn external_roots(&self) -> &[MountedScriptRoot] {
+        &self.external
+    }
+
+    pub fn external_root(&self, id: Uuid) -> Option<&MountedScriptRoot> {
+        self.external.iter().find(|mounted| mounted.id() == id)
+    }
+
+    /// The external root registered at exactly `path`.
+    pub fn external_root_at(&self, path: &Path) -> Option<&MountedScriptRoot> {
+        self.external.iter().find(|mounted| mounted.path() == path)
     }
 
     pub fn hooks_directory(&self) -> Result<PathBuf, DbError> {
@@ -81,12 +249,207 @@ impl ScriptsDirectory {
         self.entries.is_empty()
     }
 
-    /// Re-scan the filesystem and update the cached entry tree.
-    pub fn refresh(&mut self) {
-        self.adopt_scan(Self::scan(&self.root));
+    /// Registers external roots without scanning them.
+    ///
+    /// They stay [`ScriptRootAvailability::Pending`] until a scan is adopted, so
+    /// startup never waits on a slow or unmounted folder. Replaces any roots
+    /// registered before.
+    pub fn register_external_roots(&mut self, roots: Vec<ExternalScriptRoot>) {
+        self.external = roots.into_iter().map(MountedScriptRoot::pending).collect();
     }
 
-    /// Scans the scripts root, without touching the cached tree.
+    /// Resolves `path` to the canonical folder an external root would use, and
+    /// refuses a folder that cannot be one.
+    ///
+    /// Touches the filesystem (canonicalization), so a caller on the UI thread
+    /// should run it in the background.
+    pub fn validate_external_root(&self, path: &Path) -> Result<PathBuf, DbError> {
+        Self::validate_external_root_against(&self.root, &self.external_paths(), path)
+    }
+
+    /// The pure form of [`Self::validate_external_root`], for callers that only
+    /// hold the root paths (for example on a background thread).
+    pub fn validate_external_root_against(
+        managed_root: &Path,
+        external_roots: &[PathBuf],
+        path: &Path,
+    ) -> Result<PathBuf, DbError> {
+        let canonical = fs::canonicalize(path).map_err(DbError::IoError)?;
+
+        if !canonical.is_dir() {
+            return Err(io_error(format!("Not a folder: {}", canonical.display())));
+        }
+
+        let managed = fs::canonicalize(managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
+
+        if overlaps(&canonical, &managed) {
+            return Err(io_error(format!(
+                "{} overlaps the DBFlux scripts folder",
+                canonical.display()
+            )));
+        }
+
+        if let Some(existing) = external_roots
+            .iter()
+            .find(|existing| overlaps(&canonical, existing))
+        {
+            return Err(io_error(format!(
+                "{} overlaps the external folder {}",
+                canonical.display(),
+                existing.display()
+            )));
+        }
+
+        Ok(canonical)
+    }
+
+    /// Registers an external root and scans it.
+    ///
+    /// The root's path must already be canonical, as
+    /// [`Self::validate_external_root`] returns it; the overlap checks run again
+    /// here against the current registrations.
+    pub fn add_external_root(&mut self, root: ExternalScriptRoot) -> Result<(), DbError> {
+        self.ensure_no_overlap(&root.path)?;
+
+        let mut mounted = MountedScriptRoot::pending(root);
+        mounted
+            .adopt(scan_tree(mounted.path(), ScanFilter::OpenableOnly).map_err(|e| e.to_string()));
+        self.external.push(mounted);
+
+        Ok(())
+    }
+
+    /// Registers an external root without scanning it, for callers that scan in
+    /// the background afterwards.
+    pub fn add_external_root_pending(&mut self, root: ExternalScriptRoot) -> Result<(), DbError> {
+        self.ensure_no_overlap(&root.path)?;
+        self.external.push(MountedScriptRoot::pending(root));
+        Ok(())
+    }
+
+    /// Forgets an external root. The folder and its files are left untouched.
+    pub fn remove_external_root(&mut self, id: Uuid) -> Option<ExternalScriptRoot> {
+        let index = self
+            .external
+            .iter()
+            .position(|mounted| mounted.id() == id)?;
+        Some(self.external.remove(index).root)
+    }
+
+    fn external_paths(&self) -> Vec<PathBuf> {
+        self.external
+            .iter()
+            .map(|mounted| mounted.path().to_path_buf())
+            .collect()
+    }
+
+    fn ensure_no_overlap(&self, path: &Path) -> Result<(), DbError> {
+        if overlaps(path, &self.root) {
+            return Err(io_error(format!(
+                "{} overlaps the DBFlux scripts folder",
+                path.display()
+            )));
+        }
+
+        if let Some(existing) = self
+            .external
+            .iter()
+            .find(|mounted| overlaps(path, mounted.path()))
+        {
+            return Err(io_error(format!(
+                "{} overlaps the external folder {}",
+                path.display(),
+                existing.path().display()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// The root `path` belongs to, or `None` when it is outside every root.
+    pub fn owning_root(&self, path: &Path) -> Option<&Path> {
+        if path.starts_with(&self.root) {
+            return Some(&self.root);
+        }
+
+        self.external
+            .iter()
+            .map(MountedScriptRoot::path)
+            .find(|root| path.starts_with(root))
+    }
+
+    /// Whether `path` is the managed root or an external root itself.
+    pub fn is_root(&self, path: &Path) -> bool {
+        path == self.root || self.external_root_at(path).is_some()
+    }
+
+    fn require_owning_root(&self, path: &Path, what: &str) -> Result<PathBuf, DbError> {
+        self.owning_root(path)
+            .map(Path::to_path_buf)
+            .ok_or_else(|| io_error(format!("{what} is outside the script folders")))
+    }
+
+    /// Re-scan every root synchronously and update the cached trees.
+    ///
+    /// Blocks on every external folder; prefer [`Self::scan_request`] from the
+    /// UI thread.
+    pub fn refresh(&mut self) {
+        let scan = self.scan_request().run();
+        self.adopt_full_scan(scan);
+    }
+
+    /// Re-scan only the root that owns `path`.
+    fn refresh_root_of(&mut self, path: &Path) {
+        if path.starts_with(&self.root) {
+            self.adopt_scan(Self::scan(&self.root));
+            return;
+        }
+
+        if let Some(mounted) = self
+            .external
+            .iter_mut()
+            .find(|mounted| path.starts_with(mounted.path()))
+        {
+            let scanned =
+                scan_tree(mounted.path(), ScanFilter::OpenableOnly).map_err(|e| e.to_string());
+            mounted.adopt(scanned);
+        }
+    }
+
+    /// The roots a full scan would walk, detached so the walk can run on a
+    /// background thread.
+    pub fn scan_request(&self) -> ScriptsScanRequest {
+        ScriptsScanRequest {
+            managed: self.root.clone(),
+            external: self
+                .external
+                .iter()
+                .map(|mounted| (mounted.id(), mounted.path().to_path_buf()))
+                .collect(),
+        }
+    }
+
+    /// Applies a full scan.
+    ///
+    /// A root removed or re-registered at another path since the request was
+    /// taken keeps its current state, so a late scan never resurrects a root.
+    pub fn adopt_full_scan(&mut self, scan: ScriptsScan) {
+        if scan.managed_root == self.root {
+            self.entries = scan.managed;
+        }
+
+        for (id, path, scanned) in scan.external {
+            if let Some(mounted) = self
+                .external
+                .iter_mut()
+                .find(|mounted| mounted.id() == id && mounted.path() == path)
+            {
+                mounted.adopt(scanned);
+            }
+        }
+    }
+
+    /// Scans the managed root, without touching the cached tree.
     ///
     /// Split from [`Self::refresh`] so the walking can happen off the thread that
     /// renders: a directory on a stalled mount blocks for as long as the disk
@@ -95,7 +458,7 @@ impl ScriptsDirectory {
         scan_directory(root)
     }
 
-    /// Replaces the cached tree with entries scanned elsewhere.
+    /// Replaces the managed root's cached tree with entries scanned elsewhere.
     ///
     /// The entries are taken as given: this does not check that they still
     /// describe the root, because only the caller that scanned them knows how
@@ -133,7 +496,7 @@ impl ScriptsDirectory {
         }
     }
 
-    /// Refuses a path that is not a removable entry of the scripts root.
+    /// Refuses a path that is not a removable entry of `root`.
     fn ensure_deletable(root: &Path, path: &Path) -> Result<(), DbError> {
         if !path.starts_with(root) {
             return Err(DbError::IoError(std::io::Error::other(
@@ -151,9 +514,9 @@ impl ScriptsDirectory {
     }
 
     /// Returns the next available name like "Query 1", "Query 2", etc.
-    /// that doesn't collide with existing root-level files.
+    /// that doesn't collide with existing files at the managed root.
     pub fn next_available_name(&self, prefix: &str, extension: &str) -> String {
-        let existing: std::collections::HashSet<String> = self
+        let existing: HashSet<String> = self
             .entries
             .iter()
             .filter_map(|entry| match entry {
@@ -172,19 +535,16 @@ impl ScriptsDirectory {
         unreachable!()
     }
 
-    /// Create an empty script file. Returns the full path of the created file.
+    /// Create an empty script file. `parent` defaults to the managed root.
+    /// Returns the full path of the created file.
     pub fn create_file(
         &mut self,
         parent: Option<&Path>,
         name: &str,
         extension: &str,
     ) -> Result<PathBuf, DbError> {
-        let dir = parent.unwrap_or(&self.root);
-        if !dir.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Target directory is outside scripts root",
-            )));
-        }
+        let dir = parent.unwrap_or(&self.root).to_path_buf();
+        self.require_owning_root(&dir, "Target directory")?;
 
         let filename = if name.contains('.') {
             name.to_string()
@@ -194,73 +554,67 @@ impl ScriptsDirectory {
 
         let path = dir.join(&filename);
         if path.exists() {
-            return Err(DbError::IoError(std::io::Error::other(format!(
-                "File already exists: {}",
-                filename
-            ))));
+            return Err(io_error(format!("File already exists: {}", filename)));
         }
 
         fs::write(&path, "").map_err(DbError::IoError)?;
-        self.refresh();
+        self.refresh_root_of(&path);
         Ok(path)
     }
 
-    /// Create a subdirectory. Returns the full path.
+    /// Create a subdirectory. `parent` defaults to the managed root.
+    /// Returns the full path.
     pub fn create_folder(&mut self, parent: Option<&Path>, name: &str) -> Result<PathBuf, DbError> {
-        let dir = parent.unwrap_or(&self.root);
-        if !dir.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Target directory is outside scripts root",
-            )));
-        }
+        let dir = parent.unwrap_or(&self.root).to_path_buf();
+        self.require_owning_root(&dir, "Target directory")?;
 
         let path = dir.join(name);
         if path.exists() {
-            return Err(DbError::IoError(std::io::Error::other(format!(
-                "Folder already exists: {}",
-                name
-            ))));
+            return Err(io_error(format!("Folder already exists: {}", name)));
         }
 
         fs::create_dir_all(&path).map_err(DbError::IoError)?;
-        self.refresh();
+        self.refresh_root_of(&path);
         Ok(path)
     }
 
     /// Rename a file or folder. Returns the new path.
+    ///
+    /// A root itself cannot be renamed: renaming an external root would rename
+    /// the user's folder, which is not DBFlux's to rename.
     pub fn rename(&mut self, old_path: &Path, new_name: &str) -> Result<PathBuf, DbError> {
         if new_name.contains('/') || new_name.contains('\\') || new_name.contains("..") {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Invalid name: must not contain path separators or '..'",
-            )));
+            return Err(io_error(
+                "Invalid name: must not contain path separators or '..'".to_string(),
+            ));
         }
 
-        if !old_path.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Path is outside scripts root",
-            )));
+        self.require_owning_root(old_path, "Path")?;
+
+        if self.is_root(old_path) {
+            return Err(io_error("Cannot rename a scripts root".to_string()));
         }
 
         let parent = old_path
             .parent()
-            .ok_or_else(|| DbError::IoError(std::io::Error::other("Cannot rename root")))?;
+            .ok_or_else(|| io_error("Cannot rename root".to_string()))?;
 
         let new_path = parent.join(new_name);
         if new_path.exists() {
-            return Err(DbError::IoError(std::io::Error::other(format!(
-                "Already exists: {}",
-                new_name
-            ))));
+            return Err(io_error(format!("Already exists: {}", new_name)));
         }
 
         fs::rename(old_path, &new_path).map_err(DbError::IoError)?;
-        self.refresh();
+        self.refresh_root_of(&new_path);
         Ok(new_path)
     }
 
-    /// Delete a file or folder (recursive for folders).
+    /// Delete a file or folder (recursive for folders) inside any root.
+    /// A root itself is never deleted; an external root is unregistered with
+    /// [`Self::remove_external_root`] instead.
     pub fn delete(&mut self, path: &Path) -> Result<(), DbError> {
-        Self::ensure_deletable(&self.root, path)?;
+        let root = self.require_owning_root(path, "Path")?;
+        Self::ensure_deletable(&root, path)?;
 
         if path.is_dir() {
             fs::remove_dir_all(path).map_err(DbError::IoError)?;
@@ -268,41 +622,37 @@ impl ScriptsDirectory {
             fs::remove_file(path).map_err(DbError::IoError)?;
         }
 
-        self.refresh();
+        self.refresh_root_of(&root);
         Ok(())
     }
 
-    /// Move a file or folder to a different directory within the scripts root.
+    /// Move a file or folder to a different directory of the same root.
     /// Returns the new path of the moved entry.
+    ///
+    /// Moving between roots is refused: it would move a file out of the user's
+    /// folder (or into it), and across filesystems `rename` cannot do it anyway.
     pub fn move_entry(&mut self, source: &Path, target_dir: &Path) -> Result<PathBuf, DbError> {
-        if !source.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Source is outside scripts root",
-            )));
+        let source_root = self.require_owning_root(source, "Source")?;
+        let target_root = self.require_owning_root(target_dir, "Target")?;
+
+        if source_root != target_root {
+            return Err(io_error(
+                "Cannot move between different script folders".to_string(),
+            ));
         }
 
-        if !target_dir.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Target is outside scripts root",
-            )));
-        }
-
-        if source == self.root {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Cannot move scripts root",
-            )));
+        if self.is_root(source) {
+            return Err(io_error("Cannot move a scripts root".to_string()));
         }
 
         // Prevent moving a folder into itself or its descendants
         if source.is_dir() && target_dir.starts_with(source) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Cannot move a folder into itself",
-            )));
+            return Err(io_error("Cannot move a folder into itself".to_string()));
         }
 
         let file_name = source
             .file_name()
-            .ok_or_else(|| DbError::IoError(std::io::Error::other("Source has no file name")))?;
+            .ok_or_else(|| io_error("Source has no file name".to_string()))?;
 
         let dest = target_dir.join(file_name);
 
@@ -312,43 +662,46 @@ impl ScriptsDirectory {
         }
 
         if dest.exists() {
-            return Err(DbError::IoError(std::io::Error::other(format!(
-                "Already exists: {}",
-                dest.display()
-            ))));
+            return Err(io_error(format!("Already exists: {}", dest.display())));
         }
 
         fs::create_dir_all(target_dir).map_err(DbError::IoError)?;
         fs::rename(source, &dest).map_err(DbError::IoError)?;
-        self.refresh();
+        self.refresh_root_of(&dest);
         Ok(dest)
     }
 
-    /// Copy an external file into the scripts directory (or a subfolder).
+    /// Copy an external file into a folder of any root (the managed root by
+    /// default).
     pub fn import(&mut self, source: &Path, target_dir: Option<&Path>) -> Result<PathBuf, DbError> {
-        let dir = target_dir.unwrap_or(&self.root);
-        if !dir.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Target directory is outside scripts root",
-            )));
-        }
+        let dir = target_dir.unwrap_or(&self.root).to_path_buf();
+        self.require_owning_root(&dir, "Target directory")?;
 
         let filename = source
             .file_name()
-            .ok_or_else(|| DbError::IoError(std::io::Error::other("Source has no filename")))?;
+            .ok_or_else(|| io_error("Source has no filename".to_string()))?;
 
         let dest = dir.join(filename);
         if dest.exists() {
-            return Err(DbError::IoError(std::io::Error::other(format!(
+            return Err(io_error(format!(
                 "File already exists: {}",
                 filename.to_string_lossy()
-            ))));
+            )));
         }
 
         fs::copy(source, &dest).map_err(DbError::IoError)?;
-        self.refresh();
+        self.refresh_root_of(&dest);
         Ok(dest)
     }
+}
+
+fn io_error(message: String) -> DbError {
+    DbError::IoError(std::io::Error::other(message))
+}
+
+/// Whether one of the two folders contains the other (or they are the same).
+fn overlaps(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
 }
 
 pub fn hook_script_path(hooks_dir: &Path, hook_id: &str, language: ScriptLanguage) -> PathBuf {
@@ -365,8 +718,44 @@ fn has_file_extension(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some()
 }
 
-/// Recursively scan a directory, returning sorted entries (folders first, then files).
+/// Which files a scan keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanFilter {
+    /// Every file with an extension: the managed root holds only what DBFlux
+    /// or the user put there for it.
+    AnyExtension,
+    /// Only files the editor opens, and only folders that lead to one: an
+    /// external folder is often a repository full of unrelated files.
+    OpenableOnly,
+}
+
+/// Recursively scan the managed root, returning sorted entries (folders first,
+/// then files). A root that cannot be read yields an empty tree.
 fn scan_directory(dir: &Path) -> Vec<ScriptEntry> {
+    scan_tree(dir, ScanFilter::AnyExtension).unwrap_or_else(|e| {
+        log::warn!("Failed to read scripts directory {:?}: {}", dir, e);
+        Vec::new()
+    })
+}
+
+/// Recursively scan `root`, returning sorted entries (folders first, then
+/// files).
+///
+/// Fails only when `root` itself cannot be read; an unreadable subfolder is
+/// logged and listed empty. Each folder is walked once by its canonical path, so
+/// a symlink back to an ancestor does not repeat the tree.
+fn scan_tree(root: &Path, filter: ScanFilter) -> Result<Vec<ScriptEntry>, std::io::Error> {
+    let read_dir = fs::read_dir(root)?;
+
+    let mut visited = HashSet::new();
+    if let Ok(canonical) = fs::canonicalize(root) {
+        visited.insert(canonical);
+    }
+
+    Ok(scan_entries(read_dir, filter, &mut visited))
+}
+
+fn scan_folder(dir: &Path, filter: ScanFilter, visited: &mut HashSet<PathBuf>) -> Vec<ScriptEntry> {
     let read_dir = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -375,6 +764,14 @@ fn scan_directory(dir: &Path) -> Vec<ScriptEntry> {
         }
     };
 
+    scan_entries(read_dir, filter, visited)
+}
+
+fn scan_entries(
+    read_dir: fs::ReadDir,
+    filter: ScanFilter,
+    visited: &mut HashSet<PathBuf>,
+) -> Vec<ScriptEntry> {
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -391,13 +788,34 @@ fn scan_directory(dir: &Path) -> Vec<ScriptEntry> {
         }
 
         if path.is_dir() {
-            let children = scan_directory(&path);
+            let first_visit = match fs::canonicalize(&path) {
+                Ok(canonical) => visited.insert(canonical),
+                Err(e) => {
+                    log::warn!("Failed to resolve scripts folder {:?}: {}", path, e);
+                    false
+                }
+            };
+
+            if !first_visit {
+                continue;
+            }
+
+            let children = scan_folder(&path, filter, visited);
+
+            if filter == ScanFilter::OpenableOnly && children.is_empty() {
+                continue;
+            }
+
             folders.push(ScriptEntry::Folder {
                 path,
                 name,
                 children,
             });
         } else if has_file_extension(&path) {
+            if filter == ScanFilter::OpenableOnly && !is_openable_script(&path) {
+                continue;
+            }
+
             let extension = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -488,7 +906,222 @@ mod tests {
         ScriptsDirectory {
             root: root.to_path_buf(),
             entries: scan_directory(root),
+            external: Vec::new(),
         }
+    }
+
+    /// A managed root and an external folder in separate temp directories,
+    /// with the external folder registered and scanned.
+    fn with_external_root() -> (TempDir, TempDir, ScriptsDirectory, Uuid) {
+        let managed = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let mut dir = make_dir(managed.path());
+
+        let canonical = dir.validate_external_root(external.path()).unwrap();
+        let root = ExternalScriptRoot::new(canonical);
+        let id = root.id;
+        dir.add_external_root(root).unwrap();
+
+        (managed, external, dir, id)
+    }
+
+    fn external_path(dir: &ScriptsDirectory, id: Uuid) -> PathBuf {
+        dir.external_root(id).unwrap().path().to_path_buf()
+    }
+
+    #[test]
+    fn external_root_lists_scripts_in_place_without_copying() {
+        let managed = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        fs::write(external.path().join("report.sql"), "SELECT 1;").unwrap();
+        fs::create_dir(external.path().join("migrations")).unwrap();
+        fs::write(external.path().join("migrations/001.sql"), "SELECT 2;").unwrap();
+
+        let mut dir = make_dir(managed.path());
+        let canonical = dir.validate_external_root(external.path()).unwrap();
+        let root = ExternalScriptRoot::new(canonical.clone());
+        let id = root.id;
+        dir.add_external_root(root).unwrap();
+
+        let mounted = dir.external_root(id).unwrap();
+        assert_eq!(mounted.availability(), &ScriptRootAvailability::Available);
+        assert_eq!(mounted.entries().len(), 2);
+        assert_eq!(mounted.entries()[0].name(), "migrations");
+        assert_eq!(mounted.entries()[1].path(), canonical.join("report.sql"));
+
+        assert!(
+            dir.entries().is_empty(),
+            "nothing is copied into the managed root"
+        );
+    }
+
+    #[test]
+    fn external_root_lists_only_openable_scripts_and_prunes_empty_folders() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+
+        fs::write(root.join("README.md"), "# docs").unwrap();
+        fs::write(root.join("query.sql"), "SELECT 1;").unwrap();
+        fs::create_dir(root.join("assets")).unwrap();
+        fs::write(root.join("assets/logo.png"), "png").unwrap();
+        fs::create_dir(root.join("empty")).unwrap();
+        dir.refresh();
+
+        let names: Vec<&str> = dir
+            .external_root(id)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(ScriptEntry::name)
+            .collect();
+        assert_eq!(names, vec!["query.sql"]);
+    }
+
+    #[test]
+    fn missing_external_root_is_kept_and_reported_unavailable() {
+        let managed = TempDir::new().unwrap();
+        let mut dir = make_dir(managed.path());
+        let gone = managed
+            .path()
+            .with_file_name("dbflux-missing-external-root");
+
+        dir.register_external_roots(vec![ExternalScriptRoot::new(gone.clone())]);
+        assert_eq!(
+            dir.external_roots()[0].availability(),
+            &ScriptRootAvailability::Pending
+        );
+
+        dir.refresh();
+
+        let mounted = &dir.external_roots()[0];
+        assert!(matches!(
+            mounted.availability(),
+            ScriptRootAvailability::Unavailable { .. }
+        ));
+        assert!(mounted.entries().is_empty());
+        assert_eq!(mounted.path(), gone);
+    }
+
+    #[test]
+    fn operations_work_inside_an_external_root() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+
+        let folder = dir.create_folder(Some(&root), "reports").unwrap();
+        let file = dir.create_file(Some(&folder), "daily", "sql").unwrap();
+        assert!(file.exists());
+        assert_eq!(dir.external_root(id).unwrap().entries().len(), 1);
+
+        let renamed = dir.rename(&file, "weekly.sql").unwrap();
+        assert!(renamed.exists());
+
+        let moved = dir.move_entry(&renamed, &root).unwrap();
+        assert_eq!(moved, root.join("weekly.sql"));
+
+        dir.delete(&moved).unwrap();
+        assert!(!moved.exists());
+    }
+
+    #[test]
+    fn roots_themselves_cannot_be_renamed_deleted_or_moved() {
+        let (managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+
+        assert!(dir.rename(&root, "renamed").is_err());
+        assert!(dir.delete(&root).is_err());
+        assert!(dir.rename(managed.path(), "renamed").is_err());
+        assert!(dir.delete(managed.path()).is_err());
+        assert!(root.is_dir(), "an external root is never touched on disk");
+    }
+
+    #[test]
+    fn moving_between_roots_is_refused() {
+        let (managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+
+        let managed_file = dir.create_file(None, "local", "sql").unwrap();
+        let external_file = dir.create_file(Some(&root), "shared", "sql").unwrap();
+
+        assert!(dir.move_entry(&managed_file, &root).is_err());
+        assert!(dir.move_entry(&external_file, managed.path()).is_err());
+        assert!(managed_file.exists());
+        assert!(external_file.exists());
+    }
+
+    #[test]
+    fn removing_an_external_root_keeps_its_files() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let file = dir.create_file(Some(&root), "keep", "sql").unwrap();
+
+        let removed = dir.remove_external_root(id).unwrap();
+
+        assert_eq!(removed.path, root);
+        assert!(dir.external_roots().is_empty());
+        assert!(file.exists(), "unregistering never deletes the folder");
+        assert!(
+            dir.delete(&file).is_err(),
+            "a forgotten root is outside the script folders again"
+        );
+    }
+
+    #[test]
+    fn overlapping_external_roots_are_refused() {
+        let (managed, external, dir, _id) = with_external_root();
+
+        let nested = external.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let inside_managed = managed.path().join("inner");
+        fs::create_dir(&inside_managed).unwrap();
+
+        assert!(dir.validate_external_root(external.path()).is_err());
+        assert!(dir.validate_external_root(&nested).is_err());
+        assert!(dir.validate_external_root(&inside_managed).is_err());
+        assert!(dir.validate_external_root(managed.path()).is_err());
+    }
+
+    #[test]
+    fn validating_a_missing_or_non_folder_path_fails() {
+        let managed = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+        let dir = make_dir(managed.path());
+        let file = other.path().join("file.sql");
+        fs::write(&file, "SELECT 1;").unwrap();
+
+        assert!(
+            dir.validate_external_root(&other.path().join("nope"))
+                .is_err()
+        );
+        assert!(dir.validate_external_root(&file).is_err());
+    }
+
+    #[test]
+    fn a_late_scan_does_not_resurrect_a_removed_root() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+
+        let request = dir.scan_request();
+        dir.remove_external_root(id);
+        dir.adopt_full_scan(request.run());
+
+        assert!(dir.external_roots().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_back_to_an_ancestor_is_walked_once() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/query.sql"), "SELECT 1;").unwrap();
+        std::os::unix::fs::symlink(tmp.path(), tmp.path().join("sub/loop")).unwrap();
+
+        let dir = make_dir(tmp.path());
+
+        assert_eq!(dir.entries().len(), 1);
+        let ScriptEntry::Folder { children, .. } = &dir.entries()[0] else {
+            panic!("Expected folder");
+        };
+        let names: Vec<&str> = children.iter().map(ScriptEntry::name).collect();
+        assert_eq!(names, vec!["query.sql"]);
     }
 
     #[test]

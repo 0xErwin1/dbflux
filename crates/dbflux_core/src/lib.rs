@@ -34,9 +34,10 @@ pub use auth::{
 
 pub use config::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
-    EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
-    GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
-    RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, ServiceRpcApiContract,
+    EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, ExternalScriptRoot, GeneralSettings,
+    GlobalOverrides, GovernanceSettings, LoadedAppConfig, MountedScriptRoot, PolicyRoleConfig,
+    RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry, ScriptRootAvailability,
+    ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ServiceConfig, ServiceRpcApiContract,
     StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
     driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
 };

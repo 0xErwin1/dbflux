@@ -351,7 +351,7 @@ fn command_icon(id: &str) -> AppIcon {
         "new_query_tab" => AppIcon::Plus,
         "run_query" | "run_query_in_new_tab" => AppIcon::Play,
         "save_query" | "save_file_as" => AppIcon::Save,
-        "open_script_file" => AppIcon::Folder,
+        "open_script_file" | "add_external_scripts_folder" => AppIcon::Folder,
         "toggle_comment" | "focus_editor" => AppIcon::Code,
         "open_history" => AppIcon::History,
         "cancel_query" | "close_tab" => AppIcon::CircleX,

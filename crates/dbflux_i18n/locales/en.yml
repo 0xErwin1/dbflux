@@ -3263,6 +3263,8 @@ palette:
       name: Save file as…
     open_script_file:
       name: Open script file…
+    add_external_scripts_folder:
+      name: "Add external scripts folder…"
     toggle_comment:
       name: Toggle line comment
     open_history:
@@ -3603,6 +3605,7 @@ settings:
       save_query: Save
       save_file_as: Save file as…
       open_script_file: Open script file…
+      add_external_scripts_folder: "Add external scripts folder…"
       toggle_comment: Toggle line comment
       export_results: Export results
       clear_filter: Clear filter
@@ -4380,6 +4383,7 @@ sidebar:
   dialog:
     import_script_title: Import Script
     script_files_filter: Script files
+    add_external_folder_title: Add External Scripts Folder
   empty:
     connections_title: No connections yet
     connections_hint: Use + to add a new connection
@@ -4441,6 +4445,8 @@ sidebar:
     rename_ellipsis: Rename…
     copy_metric_id: Copy metric ID
     copy_inspector_id: Copy inspector ID
+    remove_external_folder: Remove from sidebar
+    refresh_scripts: Refresh
   overlay:
     add_folder: New folder
     add_connection: New connection
@@ -4460,12 +4466,15 @@ sidebar:
     skipped_tables:
       one: 1 table outside the active profile/database was skipped
       many: "%{count} tables outside the active profile/database were skipped"
+    add_external_folder: Add external folder
   status:
     connected: "%{count} connected"
     idle: "%{count} idle"
     no_connections: "No connections yet"
     connection_summary: "%{connected} connected · %{idle} idle"
     profile_fallback_name: connection
+    external_folders: "%{count} external folders"
+    unavailable_folders: "%{count} unavailable"
   tabs:
     dashboards: "Dashboards"
     connections: CONNECTIONS
@@ -4546,6 +4555,9 @@ sidebar:
       config: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' has an invalid configuration: %{summary}"
       launch: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' did not start: %{summary}"
       probe: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' failed during driver probe: %{summary}"
+    add_external_folder_failed: "Could not add the folder: %{error}"
+    remove_external_folder_failed: "Could not remove the folder: %{error}"
+    script_operation_failed: "The script operation failed: %{error}"
   tree:
     container:
       relational: Tables (%{count})
@@ -4610,6 +4622,8 @@ sidebar:
       metrics: No metrics available
       inspectors: No inspectors available
       remote_dashboards: No dashboards in this account/region
+    scripts_root_scanning: "%{label} (scanning…)"
+    scripts_root_unavailable: "%{label} (unavailable)"
   dashboards:
     unassigned: "No connection"
     empty_title: "No dashboards yet"

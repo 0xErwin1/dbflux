@@ -63,6 +63,7 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::SchemaForeignKey
         | SchemaNodeKind::ScriptsFolder
         | SchemaNodeKind::ScriptFile
+        | SchemaNodeKind::ScriptsRoot
         | SchemaNodeKind::DashboardsFolder
         | SchemaNodeKind::DashboardItem
         | SchemaNodeKind::RemoteDashboardsFolder
@@ -135,6 +136,7 @@ pub(crate) fn menu_caption(item_id: &str) -> Option<String> {
         | SchemaNodeId::CustomType { schema, name, .. } => Some(qualified(&schema, &name)),
         SchemaNodeId::Collection { database, name, .. } => Some(qualified(&database, &name)),
         SchemaNodeId::Database { name, .. } => Some(name),
+        SchemaNodeId::ScriptsRoot { path } => Some(path),
         _ => None,
     }
 }
@@ -1091,6 +1093,57 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::ScriptsRoot => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_script_file"),
+                            ContextMenuAction::NewScriptFile,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_script_folder"),
+                            ContextMenuAction::NewScriptFolder,
+                        ),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.refresh_scripts"),
+                        ContextMenuAction::RefreshScripts,
+                    )],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.reveal_file_manager"),
+                            ContextMenuAction::RevealInFileManager,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.copy_path"),
+                            ContextMenuAction::CopyPath,
+                        ),
+                    ],
+                );
+
+                // Not a danger item: it only forgets the registration.
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.remove_external_folder"),
+                        ContextMenuAction::RemoveExternalScriptsFolder,
+                    )],
+                );
+
+                items
+            }
+
             SchemaNodeKind::ScriptFile => {
                 let mut items = Vec::new();
 
@@ -1888,6 +1941,12 @@ impl Sidebar {
             }
             ContextMenuAction::CopyPath => {
                 self.copy_path_to_clipboard(&item_id, cx);
+            }
+            ContextMenuAction::RefreshScripts => {
+                self.rescan_scripts(cx);
+            }
+            ContextMenuAction::RemoveExternalScriptsFolder => {
+                self.remove_external_scripts_folder(&item_id, cx);
             }
             ContextMenuAction::RefreshDatabase => {
                 self.refresh_schema_database(&item_id, cx);

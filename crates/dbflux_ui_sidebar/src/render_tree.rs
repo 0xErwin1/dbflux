@@ -211,6 +211,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::RoutinesFolder
                 | SchemaNodeKind::CustomType
                 | SchemaNodeKind::ScriptsFolder
+                | SchemaNodeKind::ScriptsRoot
                 | SchemaNodeKind::Collection
                 | SchemaNodeKind::CollectionChild
                 | SchemaNodeKind::CollectionsFolder
@@ -936,115 +937,123 @@ pub(super) fn render_tree_item(
                     },
                 )
                 // Scripts folder drop target (before/into/after zones)
-                .when(node_kind == SchemaNodeKind::ScriptsFolder, |el| {
-                    let sidebar_for_drop = sidebar_entity.clone();
-                    let sidebar_for_move = sidebar_entity.clone();
-                    let item_id_for_drop = item_id.to_string();
-                    let item_id_for_move = item_id.to_string();
-                    let item_id_for_move_drag_move = item_id_for_move.clone();
-                    let drop_target_bg = theme.drop_target;
+                .when(
+                    matches!(
+                        node_kind,
+                        SchemaNodeKind::ScriptsFolder | SchemaNodeKind::ScriptsRoot
+                    ),
+                    |el| {
+                        let sidebar_for_drop = sidebar_entity.clone();
+                        let sidebar_for_move = sidebar_entity.clone();
+                        let item_id_for_drop = item_id.to_string();
+                        let item_id_for_move = item_id.to_string();
+                        let item_id_for_move_drag_move = item_id_for_move.clone();
+                        let drop_target_bg = theme.drop_target;
 
-                    let scripts_drop_target = params.scripts_drop_target.as_ref();
-                    let is_scripts_drop_into = scripts_drop_target.is_some_and(|t| {
-                        t.item_id == item_id.as_ref() && t.position == DropPosition::Into
-                    });
-                    let is_scripts_drop_before = scripts_drop_target.is_some_and(|t| {
-                        t.item_id == item_id.as_ref() && t.position == DropPosition::Before
-                    });
-                    let is_scripts_drop_after = scripts_drop_target.is_some_and(|t| {
-                        t.item_id == item_id.as_ref() && t.position == DropPosition::After
-                    });
+                        let scripts_drop_target = params.scripts_drop_target.as_ref();
+                        let is_scripts_drop_into = scripts_drop_target.is_some_and(|t| {
+                            t.item_id == item_id.as_ref() && t.position == DropPosition::Into
+                        });
+                        let is_scripts_drop_before = scripts_drop_target.is_some_and(|t| {
+                            t.item_id == item_id.as_ref() && t.position == DropPosition::Before
+                        });
+                        let is_scripts_drop_after = scripts_drop_target.is_some_and(|t| {
+                            t.item_id == item_id.as_ref() && t.position == DropPosition::After
+                        });
 
-                    let el = if is_scripts_drop_into {
-                        el.bg(drop_target_bg)
-                    } else {
-                        el
-                    };
+                        let el = if is_scripts_drop_into {
+                            el.bg(drop_target_bg)
+                        } else {
+                            el
+                        };
 
-                    let el = if is_scripts_drop_before {
-                        el.border_t_2().border_color(ChromeColors::tint(theme))
-                    } else if is_scripts_drop_after {
-                        el.border_b_2().border_color(ChromeColors::tint(theme))
-                    } else {
-                        el
-                    };
+                        let el = if is_scripts_drop_before {
+                            el.border_t_2().border_color(ChromeColors::tint(theme))
+                        } else if is_scripts_drop_after {
+                            el.border_b_2().border_color(ChromeColors::tint(theme))
+                        } else {
+                            el
+                        };
 
-                    el.drag_over::<ScriptsDragState>(move |style, _, _, _| style)
-                        .on_drag_move::<ScriptsDragState>(move |event, _, cx| {
-                            let target_id = parse_node_id(&item_id_for_move_drag_move);
-                            let is_root_target = matches!(
-                                target_id,
-                                Some(SchemaNodeId::ScriptsFolder { path: None })
-                            );
+                        el.drag_over::<ScriptsDragState>(move |style, _, _, _| style)
+                            .on_drag_move::<ScriptsDragState>(move |event, _, cx| {
+                                let target_id = parse_node_id(&item_id_for_move_drag_move);
+                                let is_root_target = matches!(
+                                    target_id,
+                                    Some(SchemaNodeId::ScriptsFolder { path: None })
+                                        | Some(SchemaNodeId::ScriptsRoot { .. })
+                                );
 
-                            let target_path = match target_id.as_ref() {
-                                Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
-                                    Some(std::path::PathBuf::from(p))
-                                }
-                                Some(SchemaNodeId::ScriptsFolder { path: None }) => {
-                                    dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
-                                }
-                                _ => None,
-                            };
-
-                            let source_paths = event.drag(cx).all_paths();
-                            let invalid_target = target_path.as_ref().is_some_and(|target| {
-                                source_paths
-                                    .iter()
-                                    .any(|source| *target == *source || target.starts_with(source))
-                            });
-
-                            if invalid_target {
-                                sidebar_for_move.update(cx, |this, cx| {
-                                    if this.scripts_drop_target.is_some() {
-                                        this.scripts_drop_target = None;
-                                        cx.notify();
+                                let target_path = match target_id.as_ref() {
+                                    Some(SchemaNodeId::ScriptsFolder { path: Some(p) })
+                                    | Some(SchemaNodeId::ScriptsRoot { path: p }) => {
+                                        Some(std::path::PathBuf::from(p))
                                     }
+                                    Some(SchemaNodeId::ScriptsFolder { path: None }) => {
+                                        dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
+                                    }
+                                    _ => None,
+                                };
+
+                                let source_paths = event.drag(cx).all_paths();
+                                let invalid_target = target_path.as_ref().is_some_and(|target| {
+                                    source_paths.iter().any(|source| {
+                                        *target == *source || target.starts_with(source)
+                                    })
                                 });
-                                return;
-                            }
 
-                            let top = event.bounds.origin.y;
-                            let height = event.bounds.size.height;
-                            let zone_top = top + (height / 3.0);
-                            let zone_bottom = top + (height * (2.0 / 3.0));
-
-                            let drop_position = if is_root_target {
-                                DropPosition::Into
-                            } else if event.event.position.y < zone_top {
-                                DropPosition::Before
-                            } else if event.event.position.y > zone_bottom {
-                                DropPosition::After
-                            } else {
-                                DropPosition::Into
-                            };
-
-                            sidebar_for_move.update(cx, |this, cx| {
-                                this.scripts_drop_target = Some(DropTarget {
-                                    item_id: item_id_for_move_drag_move.clone(),
-                                    position: drop_position,
-                                });
-                                cx.notify();
-                            });
-                        })
-                        .on_drop(move |state: &ScriptsDragState, _, cx| {
-                            sidebar_for_drop.update(cx, |this, cx| {
-                                let target_matches_row = this
-                                    .scripts_drop_target
-                                    .as_ref()
-                                    .is_some_and(|t| t.item_id == item_id_for_drop);
-
-                                if !target_matches_row {
-                                    this.scripts_drop_target = Some(DropTarget {
-                                        item_id: item_id_for_drop.clone(),
-                                        position: DropPosition::Into,
+                                if invalid_target {
+                                    sidebar_for_move.update(cx, |this, cx| {
+                                        if this.scripts_drop_target.is_some() {
+                                            this.scripts_drop_target = None;
+                                            cx.notify();
+                                        }
                                     });
+                                    return;
                                 }
 
-                                this.handle_script_drop_with_position(state, cx);
-                            });
-                        })
-                })
+                                let top = event.bounds.origin.y;
+                                let height = event.bounds.size.height;
+                                let zone_top = top + (height / 3.0);
+                                let zone_bottom = top + (height * (2.0 / 3.0));
+
+                                let drop_position = if is_root_target {
+                                    DropPosition::Into
+                                } else if event.event.position.y < zone_top {
+                                    DropPosition::Before
+                                } else if event.event.position.y > zone_bottom {
+                                    DropPosition::After
+                                } else {
+                                    DropPosition::Into
+                                };
+
+                                sidebar_for_move.update(cx, |this, cx| {
+                                    this.scripts_drop_target = Some(DropTarget {
+                                        item_id: item_id_for_move_drag_move.clone(),
+                                        position: drop_position,
+                                    });
+                                    cx.notify();
+                                });
+                            })
+                            .on_drop(move |state: &ScriptsDragState, _, cx| {
+                                sidebar_for_drop.update(cx, |this, cx| {
+                                    let target_matches_row = this
+                                        .scripts_drop_target
+                                        .as_ref()
+                                        .is_some_and(|t| t.item_id == item_id_for_drop);
+
+                                    if !target_matches_row {
+                                        this.scripts_drop_target = Some(DropTarget {
+                                            item_id: item_id_for_drop.clone(),
+                                            position: DropPosition::Into,
+                                        });
+                                    }
+
+                                    this.handle_script_drop_with_position(state, cx);
+                                });
+                            })
+                    },
+                )
                 // Menu button for items that have context menus
                 .when(has_context_menu, |el| {
                     let sidebar_for_menu = sidebar_entity.clone();
@@ -1311,6 +1320,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::CollectionField => Some(resolve_collection_field_type_icon(label)),
         SchemaNodeKind::CollectionIndex => Some(AppIcon::Hash),
         SchemaNodeKind::ScriptsFolder => Some(AppIcon::Folder),
+        SchemaNodeKind::ScriptsRoot => Some(AppIcon::HardDrive),
         SchemaNodeKind::ScriptFile => {
             let icon = parsed_id
                 .as_ref()
@@ -1420,6 +1430,7 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::CollectionIndex => (Some(AppIcon::Hash), "", params.color_purple),
         SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
+        SchemaNodeKind::ScriptsRoot => (Some(AppIcon::HardDrive), "", params.color_purple),
         SchemaNodeKind::ScriptFile => {
             let icon = parsed_id
                 .as_ref()

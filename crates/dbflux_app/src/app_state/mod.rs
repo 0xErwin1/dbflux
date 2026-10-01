@@ -11,8 +11,8 @@ use dbflux_core::observability::{
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver,
-    DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
+    AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver, DbError,
+    DbSchemaInfo, DriverKey, EffectiveSettings, ExternalScriptRoot, FetchCollectionChildrenParams,
     FetchSchemaColumnsParams, FormValues, GeneralSettings, GlobalOverrides, HistoryEntry,
     HookContext, HookPhase, SavedQuery, SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile,
@@ -20,6 +20,7 @@ use dbflux_core::{
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
+use dbflux_storage::repositories::script_roots::ScriptRootDto;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
@@ -56,6 +57,32 @@ pub use dbflux_core::{
     InstallDatabaseConnectionOutcome, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
     TableDetailsPrepareError,
 };
+
+/// Why an external scripts folder could not be added or removed.
+#[derive(Debug)]
+pub enum ScriptRootError {
+    /// The managed scripts directory failed to initialize, so there is nothing
+    /// to attach a folder to.
+    ScriptsUnavailable,
+    /// The folder overlaps one already registered, or is not a folder.
+    Invalid(DbError),
+    /// No registered folder has that id.
+    UnknownRoot,
+    Storage(dbflux_storage::error::StorageError),
+}
+
+impl std::fmt::Display for ScriptRootError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ScriptsUnavailable => write!(f, "the scripts directory is unavailable"),
+            Self::Invalid(error) => write!(f, "{error}"),
+            Self::UnknownRoot => write!(f, "the scripts folder is not registered"),
+            Self::Storage(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScriptRootError {}
 
 /// Records that `ScriptsDirectory::new()` failed during startup.
 ///
@@ -1722,10 +1749,96 @@ impl AppState {
         self.scripts_directory.as_mut()
     }
 
-    pub fn refresh_scripts(&mut self) {
-        if let Some(dir) = self.scripts_directory.as_mut() {
-            dir.refresh();
+    /// Registers `path` as an external scripts folder and persists it.
+    ///
+    /// `path` must be canonical, as `ScriptsDirectory::validate_external_root`
+    /// returns it. The root starts unscanned: the caller scans it in the
+    /// background. If persisting fails the registration is rolled back, so the
+    /// sidebar never shows a folder that would vanish on restart.
+    pub fn add_external_script_root(
+        &mut self,
+        path: PathBuf,
+    ) -> Result<ExternalScriptRoot, ScriptRootError> {
+        let dir = self
+            .scripts_directory
+            .as_mut()
+            .ok_or(ScriptRootError::ScriptsUnavailable)?;
+
+        let root = ExternalScriptRoot::new(path);
+        dir.add_external_root_pending(root.clone())
+            .map_err(ScriptRootError::Invalid)?;
+
+        let dto = ScriptRootDto {
+            id: root.id.to_string(),
+            path: root.path.to_string_lossy().to_string(),
+            label: root.label.clone(),
+        };
+
+        if let Err(error) = self.storage_runtime.script_roots().insert(&dto) {
+            dir.remove_external_root(root.id);
+
+            self.record_config_event(
+                EventOutcome::Failure,
+                CONFIG_CREATE,
+                "script_root",
+                root.id.to_string(),
+                format!("Failed to add external scripts folder '{}'", root.label),
+                Some(error.to_string()),
+            );
+
+            return Err(ScriptRootError::Storage(error));
         }
+
+        self.record_config_event(
+            EventOutcome::Success,
+            CONFIG_CREATE,
+            "script_root",
+            root.id.to_string(),
+            format!("Added external scripts folder '{}'", root.label),
+            None,
+        );
+
+        Ok(root)
+    }
+
+    /// Unregisters an external scripts folder. The folder and its files are
+    /// never touched. The stored row goes first, so a failed write keeps the
+    /// folder listed rather than reappearing after a restart.
+    pub fn remove_external_script_root(&mut self, id: Uuid) -> Result<(), ScriptRootError> {
+        let label = self
+            .scripts_directory
+            .as_ref()
+            .and_then(|dir| dir.external_root(id))
+            .map(|mounted| mounted.label().to_string())
+            .ok_or(ScriptRootError::UnknownRoot)?;
+
+        if let Err(error) = self.storage_runtime.script_roots().delete(&id.to_string()) {
+            self.record_config_event(
+                EventOutcome::Failure,
+                CONFIG_DELETE,
+                "script_root",
+                id.to_string(),
+                format!("Failed to remove external scripts folder '{label}'"),
+                Some(error.to_string()),
+            );
+
+            return Err(ScriptRootError::Storage(error));
+        }
+
+        if let Some(dir) = self.scripts_directory.as_mut() {
+            dir.remove_external_root(id);
+        }
+
+        self.record_config_event(
+            EventOutcome::Success,
+            CONFIG_DELETE,
+            "script_root",
+            id.to_string(),
+            format!("Removed external scripts folder '{label}'"),
+            None,
+        );
+
+        Ok(())
     }
 
     // --- ArtifactStore (filesystem boundary for scratch/shadow) ---

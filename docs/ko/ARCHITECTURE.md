@@ -985,6 +985,7 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
   - `cfg_auth_profiles` (제공자에 구애받지 않는 인증 프로필 저장소)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
+  - `cfg_script_roots` (제자리에서 나열되는 외부 스크립트 폴더. 행을 삭제해도 폴더는 건드리지 않음)
   - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC 서비스 디스크립터; `cfg_services.service_kind`은 `driver`와 `auth_provider` 중 무엇인지 기록)
   - `cfg_governance_*` 테이블 (역할, 정책, 신뢰할 수 있는 클라이언트)
   - `cfg_drivers` (드라이버별 설정 재정의)
@@ -1002,7 +1003,7 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
   - 가져오기는 멱등적입니다 (`sys_legacy_imports`에서 추적)
 - 세션 데이터 (데이터 디렉터리):
   - `sessions/` 편집기 자동 저장과 복구를 위한 스크래치 및 섀도 파일 (crates/dbflux_storage/src/artifacts.rs).
-  - `scripts/` 사용자 스크립트 폴더 (crates/dbflux_core/src/config/scripts_directory.rs).
+  - `scripts/` 사용자 스크립트 폴더 (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory`는 `cfg_script_roots`에 등록된 외부 폴더도 보관합니다. 모든 파일 작업은 하나의 루트 안에서만 이루어지며, MCP 스크립트 도구는 `scripts/`만 봅니다.
 - 비밀: 비밀번호는 OS 키링에 저장되고, 참조는 프로필 ID에서 파생됩니다. `HasSecretRef` 트레이트는 SSH 터널과 프록시 비밀 작업을 통합합니다 (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## 빌드 및 배포

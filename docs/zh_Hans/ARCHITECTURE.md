@@ -989,6 +989,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - `cfg_auth_profiles`（与提供程序无关的认证配置存储）
   - `cfg_ssh_tunnel_profiles`、`cfg_proxy_profiles`
   - `cfg_hooks`、`cfg_hook_bindings`
+  - `cfg_script_roots`（在原位置列出的外部脚本文件夹；删除一行绝不会触碰该文件夹）
   - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver` 与 `auth_provider`）
   - `cfg_governance_*` 表（角色、策略、受信客户端）
   - `cfg_drivers`（各驱动程序的设置覆盖项）
@@ -1006,7 +1007,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - 导入具幂等性（在 `sys_legacy_imports` 中跟踪）
 - 会话数据（数据目录）：
   - `sessions/` 用于编辑器自动保存与内容恢复的临时与影子文件（crates/dbflux_storage/src/artifacts.rs）。
-  - `scripts/` 用户脚本文件夹（crates/dbflux_core/src/config/scripts_directory.rs）。
+  - `scripts/` 用户脚本文件夹（crates/dbflux_core/src/config/scripts_directory.rs）。`ScriptsDirectory` 还保存在 `cfg_script_roots` 中登记的外部文件夹；每个文件操作都限制在单个根目录内，MCP 脚本工具只能看到 `scripts/`。
 - 密钥：密码存放在操作系统密钥环中；引用由配置 ID 推导。`HasSecretRef` trait 统一了 SSH 隧道与代理的密钥操作（crates/dbflux_core/src/storage/secrets.rs、crates/dbflux_core/src/storage/secret_manager.rs）。
 
 ## 构建与部署

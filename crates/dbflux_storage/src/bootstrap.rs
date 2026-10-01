@@ -22,6 +22,7 @@ use crate::repositories::hook_definitions::HookDefinitionRepository;
 use crate::repositories::keybinding_overrides::KeybindingOverridesRepository;
 use crate::repositories::proxy_profiles::ProxyProfileRepository;
 use crate::repositories::saved_filters::SavedFiltersRepository;
+use crate::repositories::script_roots::ScriptRootsRepository;
 use crate::repositories::services::ServiceRepository;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
 use crate::repositories::state::{
@@ -220,6 +221,11 @@ impl StorageRuntime {
     /// Creates a keybinding overrides repository.
     pub fn keybinding_overrides(&self) -> KeybindingOverridesRepository {
         KeybindingOverridesRepository::new(self.dbflux_db())
+    }
+
+    /// Creates the repository of external script folders.
+    pub fn script_roots(&self) -> ScriptRootsRepository {
+        ScriptRootsRepository::new(self.dbflux_db())
     }
 
     /// Creates a governance settings repository.

@@ -723,6 +723,10 @@ impl Workspace {
     /// the file: a change made outside dbflux, a file that is already gone, a file
     /// that cannot be read, and a document with no trustworthy baseline for the
     /// path (which the pane reports as no candidate at all).
+    ///
+    /// Only scripts in the managed scripts folder are candidates. A file opened
+    /// from anywhere else, an external scripts folder included, belongs to the
+    /// user and is kept even when it was emptied here.
     fn cleanup_empty_script(
         &mut self,
         doc_id: crate::ui::document::DocumentId,
@@ -745,6 +749,10 @@ impl Workspace {
         else {
             return;
         };
+
+        if !cleanup.path.starts_with(&root) {
+            return;
+        }
 
         let app_state = self.app_state.clone();
         cx.spawn(async move |_this, cx| {

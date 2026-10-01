@@ -337,6 +337,11 @@ pub enum SchemaNodeId {
     ScriptFile {
         path: String,
     },
+    /// An external folder registered as a scripts root; `path` is its canonical
+    /// path. Unlike a `ScriptsFolder` it is never renamed, moved or deleted.
+    ScriptsRoot {
+        path: String,
+    },
 
     // Instance metrics sidebar nodes (gated on DriverCapabilities::INSTANCE_METRICS)
     /// Root folder for per-server chartable metric series.
@@ -442,6 +447,7 @@ pub enum SchemaNodeKind {
     DependentItem,
     ScriptsFolder,
     ScriptFile,
+    ScriptsRoot,
     InstanceMetricsFolder,
     InstanceMetricLeaf,
     InstanceInspectorsFolder,
@@ -514,6 +520,7 @@ impl SchemaNodeId {
             Self::DependentItem { .. } => SchemaNodeKind::DependentItem,
             Self::ScriptsFolder { .. } => SchemaNodeKind::ScriptsFolder,
             Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
+            Self::ScriptsRoot { .. } => SchemaNodeKind::ScriptsRoot,
             Self::InstanceMetricsFolder { .. } => SchemaNodeKind::InstanceMetricsFolder,
             Self::InstanceMetricLeaf { .. } => SchemaNodeKind::InstanceMetricLeaf,
             Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
@@ -528,7 +535,8 @@ impl SchemaNodeId {
         match self {
             Self::ConnectionFolder { .. }
             | Self::ScriptsFolder { .. }
-            | Self::ScriptFile { .. } => None,
+            | Self::ScriptFile { .. }
+            | Self::ScriptsRoot { .. } => None,
             Self::Profile { profile_id, .. }
             | Self::DatabasesFolder { profile_id, .. }
             | Self::Database { profile_id, .. }
@@ -641,6 +649,7 @@ const P_BASE_TYPE: &str = "BT";
 const P_PLACEHOLDER: &str = "PH";
 const P_SCRIPTS_FOLDER: &str = "SCF";
 const P_SCRIPT_FILE: &str = "SCR";
+const P_SCRIPTS_ROOT: &str = "SCX";
 const P_DEPENDENTS_FOLDER: &str = "DEPF";
 const P_DEPENDENT_ITEM: &str = "DEP";
 const P_ROUTINES_FOLDER: &str = "RTF";
@@ -1079,6 +1088,9 @@ mod tests {
         assert!(!SchemaNodeKind::ScriptFile.is_expandable_folder());
         assert!(SchemaNodeKind::ScriptFile.shows_pointer_cursor());
 
+        assert!(SchemaNodeKind::ScriptsRoot.is_expandable_folder());
+        assert!(!SchemaNodeKind::ScriptsRoot.shows_pointer_cursor());
+
         assert!(!SchemaNodeKind::Column.needs_click_handler());
         assert!(!SchemaNodeKind::Column.is_expandable_folder());
         assert!(!SchemaNodeKind::Column.shows_pointer_cursor());
@@ -1088,6 +1100,9 @@ mod tests {
     fn pipe_preserving_paths_round_trip_for_script_nodes() {
         roundtrip(SchemaNodeId::ScriptsFolder {
             path: Some("/tmp/dbflux|scripts|archive".into()),
+        });
+        roundtrip(SchemaNodeId::ScriptsRoot {
+            path: "/srv/shared|sql".into(),
         });
         roundtrip(SchemaNodeId::ScriptFile {
             path: "/tmp/dbflux|scripts|query.sql".into(),

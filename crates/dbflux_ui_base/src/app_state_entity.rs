@@ -11,7 +11,7 @@ use dbflux_app::{
 };
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::bootstrap::StorageRuntime;
-use gpui::{Entity, EventEmitter, Global, WindowHandle};
+use gpui::{App, Entity, EventEmitter, Global, WindowHandle};
 use gpui_component::Root;
 use uuid::Uuid;
 
@@ -395,6 +395,37 @@ impl AppStateEntity {
         cx.emit(AppStateChanged);
         cx.notify();
     }
+}
+
+/// Re-scans every scripts root on the background executor, adopts the result
+/// and emits [`AppStateChanged`] so the sidebar redraws.
+///
+/// External folders may sit on slow or unmounted disks, so the walk never runs
+/// on the thread that renders. A scan that lands after a folder was removed
+/// leaves that folder alone (see `ScriptsDirectory::adopt_full_scan`).
+pub fn rescan_scripts_in_background(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    let Some(request) = app_state
+        .read(cx)
+        .scripts_directory()
+        .map(|directory| directory.scan_request())
+    else {
+        return;
+    };
+
+    let scan = cx.background_executor().spawn(async move { request.run() });
+    let app_state = app_state.clone();
+
+    cx.spawn(async move |cx| {
+        let scan = scan.await;
+
+        app_state.update(cx, |state, cx| {
+            if let Some(directory) = state.scripts_directory_mut() {
+                directory.adopt_full_scan(scan);
+            }
+            cx.emit(AppStateChanged);
+        });
+    })
+    .detach();
 }
 
 impl std::ops::Deref for AppStateEntity {

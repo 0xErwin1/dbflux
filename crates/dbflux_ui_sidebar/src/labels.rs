@@ -607,6 +607,39 @@ pub(crate) fn script_files_filter_label() -> String {
     dbflux_i18n::t!("sidebar.dialog.script_files_filter")
 }
 
+/// Translated toast reported when a script create, rename, move, delete or
+/// import the user triggered fails.
+pub(crate) fn script_operation_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.script_operation_failed", error = error)
+}
+
+/// Translated title for the folder picker that registers an external scripts
+/// folder.
+pub(crate) fn add_external_folder_dialog_title() -> String {
+    dbflux_i18n::t!("sidebar.dialog.add_external_folder_title")
+}
+
+/// Translated toast reported when an external scripts folder cannot be added.
+pub(crate) fn add_external_folder_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.add_external_folder_failed", error = error)
+}
+
+/// Translated toast reported when an external scripts folder cannot be
+/// unregistered.
+pub(crate) fn remove_external_folder_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.remove_external_folder_failed", error = error)
+}
+
+/// Sidebar label of an external scripts folder that has not been scanned yet.
+pub(crate) fn scripts_root_scanning_label(label: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.scripts_root_scanning", label = label)
+}
+
+/// Sidebar label of an external scripts folder that could not be read.
+pub(crate) fn scripts_root_unavailable_label(label: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.scripts_root_unavailable", label = label)
+}
+
 /// Translated warning shown when an Export/Migrate Tables action skipped
 /// tables outside the active profile/database, e.g. `"3 tables outside the
 /// active profile/database were skipped"`.
@@ -1615,6 +1648,38 @@ mod tests {
         "sidebar.dialog.script_files_filter",
         "sidebar.toast.schema_snapshot_failed",
     ];
+
+    const SCRIPT_ROOT_KEYS: [&str; 12] = [
+        "sidebar.toast.script_operation_failed",
+        "sidebar.status.external_folders",
+        "sidebar.status.unavailable_folders",
+        "sidebar.dialog.add_external_folder_title",
+        "sidebar.overlay.add_external_folder",
+        "sidebar.menu.remove_external_folder",
+        "sidebar.menu.refresh_scripts",
+        "sidebar.toast.add_external_folder_failed",
+        "sidebar.toast.remove_external_folder_failed",
+        "sidebar.tree.scripts_root_scanning",
+        "sidebar.tree.scripts_root_unavailable",
+        "sidebar.overlay.import_file",
+    ];
+
+    #[test]
+    fn script_root_keys_resolve_in_both_locales() {
+        for key in SCRIPT_ROOT_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn script_root_status_labels_keep_the_folder_label() {
+        assert!(super::scripts_root_scanning_label("shared-sql").contains("shared-sql"));
+        assert!(super::scripts_root_unavailable_label("shared-sql").contains("shared-sql"));
+    }
 
     #[test]
     fn d2_keys_resolve_in_both_locales() {

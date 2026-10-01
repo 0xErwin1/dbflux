@@ -3263,6 +3263,8 @@ palette:
       name: 다른 이름으로 저장…
     open_script_file:
       name: 스크립트 파일 열기…
+    add_external_scripts_folder:
+      name: "외부 스크립트 폴더 추가…"
     toggle_comment:
       name: 주석 전환
     open_history:
@@ -3603,6 +3605,7 @@ settings:
       save_query: 저장
       save_file_as: 다른 이름으로 저장…
       open_script_file: 스크립트 파일 열기…
+      add_external_scripts_folder: "외부 스크립트 폴더 추가…"
       toggle_comment: 주석 전환
       export_results: 결과 내보내기
       clear_filter: 필터 지우기
@@ -4379,6 +4382,7 @@ sidebar:
   dialog:
     import_script_title: 스크립트 가져오기
     script_files_filter: 스크립트 파일
+    add_external_folder_title: 외부 스크립트 폴더 추가
   empty:
     connections_title: 아직 연결이 없습니다
     connections_hint: +를 눌러 새 연결을 추가하세요
@@ -4440,6 +4444,8 @@ sidebar:
     rename_ellipsis: 이름 바꾸기…
     copy_metric_id: 지표 ID 복사
     copy_inspector_id: 검사기 ID 복사
+    remove_external_folder: 사이드바에서 제거
+    refresh_scripts: 새로 고침
   overlay:
     add_folder: 새 폴더
     add_connection: 새 연결
@@ -4459,12 +4465,15 @@ sidebar:
     skipped_tables:
       one: 활성 프로필/데이터베이스 외부의 1개 테이블을 건너뛰었습니다
       many: "활성 프로필/데이터베이스 외부의 %{count}개 테이블을 건너뛰었습니다"
+    add_external_folder: 외부 폴더 추가
   status:
     connected: "%{count}개 연결됨"
     idle: "%{count}개 유휴"
     no_connections: "아직 연결이 없습니다"
     connection_summary: "%{connected} 연결됨 · %{idle} 유휴"
     profile_fallback_name: 연결
+    external_folders: "외부 폴더 %{count}개"
+    unavailable_folders: "%{count}개 사용할 수 없음"
   tabs:
     dashboards: "대시보드"
     connections: 연결
@@ -4545,6 +4554,9 @@ sidebar:
       config: "외부 드라이버 '%{driver_id}'을(를) 사용할 수 없습니다. 서비스 '%{socket_id}'의 구성이 올바르지 않습니다: %{summary}"
       launch: "외부 드라이버 '%{driver_id}'을(를) 사용할 수 없습니다. 서비스 '%{socket_id}'이(가) 시작되지 않았습니다: %{summary}"
       probe: "외부 드라이버 '%{driver_id}'을(를) 사용할 수 없습니다. 서비스 '%{socket_id}'이(가) 드라이버 프로브 중에 실패했습니다: %{summary}"
+    add_external_folder_failed: "폴더를 추가하지 못했습니다: %{error}"
+    remove_external_folder_failed: "폴더를 제거하지 못했습니다: %{error}"
+    script_operation_failed: "스크립트 작업에 실패했습니다: %{error}"
   tree:
     container:
       relational: 테이블 (%{count})
@@ -4609,6 +4621,8 @@ sidebar:
       metrics: 사용할 수 있는 지표가 없습니다
       inspectors: 사용할 수 있는 검사기가 없습니다
       remote_dashboards: 이 계정/리전에 대시보드가 없습니다
+    scripts_root_scanning: "%{label} (검색 중…)"
+    scripts_root_unavailable: "%{label} (사용할 수 없음)"
   dashboards:
     unassigned: "연결 없음"
     empty_title: "아직 대시보드가 없습니다"

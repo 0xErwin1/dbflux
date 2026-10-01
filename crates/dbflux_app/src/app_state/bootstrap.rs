@@ -1,14 +1,17 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+
+use uuid::Uuid;
 
 use dbflux_core::observability::actions::CONFIG_CHANGE;
 use dbflux_core::observability::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
 use dbflux_core::{
-    AuthProfile, ConnectionProfile, DbDriver, DriverKey, FormValues, GeneralSettings,
-    GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory, ServiceConfig, SessionFacade,
-    SshTunnelProfile,
+    AuthProfile, ConnectionProfile, DbDriver, DriverKey, ExternalScriptRoot, FormValues,
+    GeneralSettings, GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory,
+    ServiceConfig, SessionFacade, SshTunnelProfile,
 };
 
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -171,7 +174,11 @@ impl AppState {
     ) -> Result<Self, dbflux_storage::error::StorageError> {
         let mut scripts_directory_diagnostics = Vec::new();
         let scripts_directory = match ScriptsDirectory::new() {
-            Ok(directory) => Some(directory),
+            Ok(mut directory) => {
+                directory
+                    .register_external_roots(Self::load_external_script_roots(&storage_runtime));
+                Some(directory)
+            }
             Err(error) => {
                 log::warn!("Failed to initialize scripts directory: {}", error);
                 scripts_directory_diagnostics.push(ScriptsDirectoryDiagnostic {
@@ -263,6 +270,33 @@ impl AppState {
         Self::run_post_construction_bootstraps(&mut state);
 
         Ok(state)
+    }
+
+    /// Reads the registered external scripts folders. A read failure or a row
+    /// with a malformed id is logged and skipped, so the managed scripts still
+    /// load; the folders themselves are scanned later, off the startup path.
+    fn load_external_script_roots(storage_runtime: &StorageRuntime) -> Vec<ExternalScriptRoot> {
+        let rows = match storage_runtime.script_roots().list() {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!("Failed to load external scripts folders: {error}");
+                return Vec::new();
+            }
+        };
+
+        rows.into_iter()
+            .filter_map(|row| match Uuid::parse_str(&row.id) {
+                Ok(id) => Some(ExternalScriptRoot {
+                    id,
+                    path: PathBuf::from(row.path),
+                    label: row.label,
+                }),
+                Err(error) => {
+                    log::warn!("Skipping external scripts folder with malformed id: {error}");
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Initializes the audit backend used during startup, falling back to a

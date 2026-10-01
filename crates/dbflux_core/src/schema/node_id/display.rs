@@ -13,9 +13,9 @@ use super::{
     P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE,
     P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA,
     P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
-    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM,
-    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT,
+    P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER,
+    P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl fmt::Display for SchemaNodeId {
@@ -80,7 +80,9 @@ impl fmt::Display for SchemaNodeId {
             | Self::MetricNamespaceFolder { .. }
             | Self::MetricLeaf { .. } => fmt_metric_variants(self, f),
 
-            Self::ScriptsFolder { .. } | Self::ScriptFile { .. } => fmt_scripts_variants(self, f),
+            Self::ScriptsFolder { .. } | Self::ScriptFile { .. } | Self::ScriptsRoot { .. } => {
+                fmt_scripts_variants(self, f)
+            }
 
             Self::DashboardsFolder { .. }
             | Self::DashboardItem { .. }
@@ -607,6 +609,9 @@ fn fmt_scripts_variants(id: &SchemaNodeId, f: &mut fmt::Formatter<'_>) -> fmt::R
         },
         SchemaNodeId::ScriptFile { path } => {
             write!(f, "{}|{}", P_SCRIPT_FILE, path)
+        }
+        SchemaNodeId::ScriptsRoot { path } => {
+            write!(f, "{}|{}", P_SCRIPTS_ROOT, path)
         }
         _ => unreachable!("fmt_scripts_variants called with an unexpected variant"),
     }

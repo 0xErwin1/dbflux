@@ -524,6 +524,66 @@ impl Sidebar {
         )
     }
 
+    /// Build the Scripts tab: the managed root's entries at the top level, then
+    /// one node per external folder, all filtered by `query`.
+    pub(super) fn scripts_tree_items(state: &AppStateEntity, query: &str) -> Vec<TreeItem> {
+        let Some(dir) = state.scripts_directory() else {
+            return Vec::new();
+        };
+
+        let mut items =
+            Self::build_scripts_tree_items(&dbflux_core::filter_entries(dir.entries(), query));
+
+        items.extend(
+            dir.external_roots()
+                .iter()
+                .filter_map(|mounted| Self::external_root_tree_item(mounted, query)),
+        );
+
+        items
+    }
+
+    /// The node of an external folder. A folder that is still scanning or
+    /// cannot be read keeps its node, labelled with its state, so the user can
+    /// still find and remove it. While filtering, it is kept when its label or a
+    /// descendant matches.
+    fn external_root_tree_item(
+        mounted: &dbflux_core::MountedScriptRoot,
+        query: &str,
+    ) -> Option<TreeItem> {
+        let children = dbflux_core::filter_entries(mounted.entries(), query);
+
+        let label_matches = mounted
+            .label()
+            .to_lowercase()
+            .contains(&query.to_lowercase());
+
+        if !query.is_empty() && !label_matches && children.is_empty() {
+            return None;
+        }
+
+        let label = match mounted.availability() {
+            dbflux_core::ScriptRootAvailability::Available => mounted.label().to_string(),
+            dbflux_core::ScriptRootAvailability::Pending => {
+                crate::labels::scripts_root_scanning_label(mounted.label())
+            }
+            dbflux_core::ScriptRootAvailability::Unavailable { .. } => {
+                crate::labels::scripts_root_unavailable_label(mounted.label())
+            }
+        };
+
+        let id = SchemaNodeId::ScriptsRoot {
+            path: mounted.path().to_string_lossy().to_string(),
+        }
+        .to_string();
+
+        Some(
+            TreeItem::new(id, label)
+                .expanded(true)
+                .children(Self::build_scripts_tree_items(&children)),
+        )
+    }
+
     /// Build tree items for the Scripts tab from ScriptsDirectory entries.
     pub(super) fn build_scripts_tree_items(entries: &[dbflux_core::ScriptEntry]) -> Vec<TreeItem> {
         entries
@@ -1185,14 +1245,8 @@ impl Sidebar {
                 Self::find_item_index_in_tree(&items, item_id, &mut 0)
             }
             SidebarTab::Scripts => {
-                let state = self.app_state.read(cx);
-                let entries = match state.scripts_directory() {
-                    Some(dir) => {
-                        dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query)
-                    }
-                    None => return None,
-                };
-                let items = Self::build_scripts_tree_items(&entries);
+                let items =
+                    Self::scripts_tree_items(self.app_state.read(cx), &self.scripts_search_query);
                 Self::find_item_index_in_tree(&items, item_id, &mut 0)
             }
             SidebarTab::Dashboards => {

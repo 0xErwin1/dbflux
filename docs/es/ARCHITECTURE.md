@@ -1820,6 +1820,7 @@ IA con una capa completa de gobernanza:
   - `cfg_auth_profiles` (storage de auth profile agnóstico del provider)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
+  - `cfg_script_roots` (carpetas externas de scripts listadas en su lugar; quitar una fila nunca toca la carpeta)
   - `cfg_services`, `cfg_service_args`, `cfg_service_env` (descriptores de
     servicio RPC; `cfg_services.service_kind` registra `driver` vs
     `auth_provider`)
@@ -1848,7 +1849,10 @@ IA con una capa completa de gobernanza:
   - `sessions/` archivos scratch y shadow para el auto-save del editor y la
     recuperación (crates/dbflux_storage/src/artifacts.rs).
   - `scripts/` carpeta de scripts del usuario
-    (crates/dbflux_core/src/config/scripts_directory.rs).
+    (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory`
+    también contiene las carpetas externas registradas en `cfg_script_roots`;
+    cada operación de archivos se queda dentro de una sola raíz, y las
+    herramientas MCP de scripts solo ven `scripts/`.
 - Secrets: los passwords se almacenan en el keyring del sistema operativo; las
   referencias se derivan de los profile IDs. El trait `HasSecretRef` unifica las
   operaciones de secret de SSH tunnel y proxy

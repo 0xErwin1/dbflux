@@ -15,7 +15,9 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
-use dbflux_ui_base::app_state_entity::drain_scripts_directory_diagnostics;
+use dbflux_ui_base::app_state_entity::{
+    drain_scripts_directory_diagnostics, rescan_scripts_in_background,
+};
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
@@ -458,6 +460,10 @@ impl Workspace {
         for error in scripts_directory_errors {
             report_error(error, cx);
         }
+
+        // External scripts folders are registered unscanned at startup so a
+        // slow or unmounted folder never delays the window.
+        rescan_scripts_in_background(&app_state, cx);
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
@@ -1796,6 +1802,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "add_external_scripts_folder",
+                dbflux_i18n::t!("palette.command.add_external_scripts_folder.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "toggle_comment",
                 dbflux_i18n::t!("palette.command.toggle_comment.name"),
                 dbflux_i18n::t!("palette.category.editor"),
@@ -2251,8 +2262,16 @@ impl Workspace {
         }
 
         if let Some(dir) = app_state.scripts_directory() {
-            let root = dir.root_path().to_path_buf();
-            Self::flatten_script_entries(dir.entries(), &root, &mut items);
+            Self::flatten_script_entries(dir.entries(), dir.root_path(), None, &mut items);
+
+            for external in dir.external_roots() {
+                Self::flatten_script_entries(
+                    external.entries(),
+                    external.path(),
+                    Some(external.label()),
+                    &mut items,
+                );
+            }
         }
 
         // Add the "Import Dashboard from JSON" entry only when the active
@@ -2286,9 +2305,13 @@ impl Workspace {
     }
 
     /// Recursively flatten script directory entries into palette items.
+    /// Lists the openable scripts under `scripts_root` as palette items. An
+    /// external folder passes its label as `root_label`, so its scripts read
+    /// `label/relative/path` and stay apart from same-named managed scripts.
     fn flatten_script_entries(
         entries: &[dbflux_core::ScriptEntry],
         scripts_root: &std::path::Path,
+        root_label: Option<&str>,
         items: &mut Vec<PaletteItem>,
     ) {
         use dbflux_core::ScriptEntry;
@@ -2304,6 +2327,12 @@ impl Workspace {
                         .unwrap_or(path)
                         .to_string_lossy()
                         .to_string();
+
+                    let relative_path = match root_label {
+                        Some(label) => format!("{label}/{relative_path}"),
+                        None => relative_path,
+                    };
+
                     items.push(PaletteItem::Script {
                         path: path.clone(),
                         name: name.clone(),
@@ -2311,7 +2340,7 @@ impl Workspace {
                     });
                 }
                 ScriptEntry::Folder { children, .. } => {
-                    Self::flatten_script_entries(children, scripts_root, items);
+                    Self::flatten_script_entries(children, scripts_root, root_label, items);
                 }
             }
         }

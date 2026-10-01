@@ -998,6 +998,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
+  - `cfg_script_roots` (external scripts folders listed in place; removing a row never touches the folder)
   - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC service descriptors; `cfg_services.service_kind` records `driver` vs `auth_provider`)
   - `cfg_governance_*` tables (roles, policies, trusted clients)
   - `cfg_drivers` (per-driver settings overrides)
@@ -1015,7 +1016,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - Import is idempotent (tracked in `sys_legacy_imports`)
 - Session data (data dir):
   - `sessions/` scratch and shadow files for editor auto-save and recovery (crates/dbflux_storage/src/artifacts.rs).
-  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs).
+  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory` also holds the external folders registered in `cfg_script_roots`; every file operation stays inside one root, and the MCP script tools only see `scripts/`.
 - Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## Build & Deploy
