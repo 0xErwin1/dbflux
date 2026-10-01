@@ -132,7 +132,7 @@ jobs:
         run: python3 scripts/check_release_links.py artifacts
 
       - name: Install git-cliff
-        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063  # v2
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e  # v2
         with:
           tool: git-cliff
           version: 2.13.1
