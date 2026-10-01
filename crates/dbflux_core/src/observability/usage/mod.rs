@@ -139,6 +139,12 @@ impl UsageSource {
     }
 }
 impl UsageTicket {
+    /// Check lifecycle permission without consuming any feature credit.
+    pub fn is_current(&self) -> Result<bool, UsageError> {
+        let gate = self.gate.lock().map_err(|_| UsageError::Poisoned)?;
+        Ok(gate.enabled && (gate.permission)() && gate.generation == self.generation)
+    }
+
     /// Call only on success. Rejected or duplicate credits return false.
     pub fn record(&self, feature: UsageFeature) -> Result<bool, UsageError> {
         let mut gate = self.gate.lock().map_err(|_| UsageError::Poisoned)?;
@@ -271,6 +277,70 @@ mod tests {
         assert_eq!(counts(&mut owner), [1, 0, 0, 0, 0, 0]);
         assert_eq!(counts(&mut owner), [0; 6]);
     }
+    #[test]
+    fn usage_validity_is_side_effect_free_and_preserves_feature_credits() {
+        let mut owner = UsageController::new();
+        owner.set_enabled(true).expect("enable");
+        let ticket = owner.source().ticket().expect("gate").expect("ticket");
+        for _ in 0..3 {
+            assert!(ticket.is_current().expect("current"));
+            assert!(ticket.clone().is_current().expect("clone current"));
+        }
+        assert_eq!(counts(&mut owner), [0; 6]);
+        for feature in UsageFeature::ALL {
+            assert!(ticket.record(feature).expect("first credit"));
+            assert!(ticket.is_current().expect("current after credit"));
+            assert!(!ticket.record(feature).expect("duplicate credit"));
+        }
+        assert_eq!(counts(&mut owner), [1; 6]);
+    }
+
+    #[test]
+    fn usage_validity_tracks_permission_enabled_generation_and_owner_drop() {
+        let permission = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut owner = UsageController::with_permission({
+            let permission = permission.clone();
+            Arc::new(move || permission.load(Ordering::SeqCst))
+        });
+        owner.set_enabled(true).expect("enable");
+        let ticket = owner.source().ticket().expect("gate").expect("ticket");
+        assert!(ticket.is_current().expect("current"));
+        owner.set_enabled(false).expect("disable");
+        assert!(!ticket.is_current().expect("disabled"));
+        owner.set_enabled(true).expect("enable");
+        permission.store(false, Ordering::SeqCst);
+        assert!(!ticket.is_current().expect("permission denied"));
+        permission.store(true, Ordering::SeqCst);
+        assert!(ticket.is_current().expect("permission restored"));
+        owner.invalidate().expect("new generation");
+        owner.set_enabled(true).expect("enable new generation");
+        assert!(!ticket.is_current().expect("stale"));
+        let current = owner.source().ticket().expect("gate").expect("ticket");
+        drop(owner);
+        assert!(!current.is_current().expect("owner dropped"));
+    }
+
+    #[test]
+    fn usage_validity_reports_poisoned_gate_without_crediting() {
+        let mut owner = UsageController::new();
+        owner.set_enabled(true).expect("enable");
+        let ticket = owner.source().ticket().expect("gate").expect("ticket");
+        let gate = ticket.gate.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = gate.lock().expect("gate");
+                panic!("poison test gate");
+            })
+            .join()
+            .is_err()
+        );
+        assert_eq!(ticket.is_current(), Err(UsageError::Poisoned));
+        assert_eq!(
+            ticket.record(UsageFeature::McpTool),
+            Err(UsageError::Poisoned)
+        );
+    }
+
     #[test]
     fn usage_counts_saturate_at_canonical_bound() {
         let mut owner = UsageController::new();
