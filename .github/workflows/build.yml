@@ -205,8 +205,8 @@ jobs:
           free -h
           cat "$SAMPLES"
 
-      - name: Check AppImage packaging contracts
-        run: python3 -m unittest discover -s scripts -p 'test_appimage*.py'
+      - name: Check packaging and release script contracts
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Create package
         run: |

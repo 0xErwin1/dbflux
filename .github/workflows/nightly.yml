@@ -125,6 +125,12 @@ jobs:
           pattern: "*"
           merge-multiple: false
 
+      - name: Check documentation download links
+        # The docs link to the latest stable release, but nightly builds the
+        # same assets from main, so a link that a future release would break
+        # fails here first instead of at release time.
+        run: python3 scripts/check_release_links.py artifacts
+
       - name: Install git-cliff
         uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063  # v2
         with:
