@@ -17,7 +17,7 @@ const RANK_KEYWORD: u8 = 2;
 /// `(database, schema, table)` fetch key for a table-details prefetch.
 type PrefetchKey = (String, Option<String>, String);
 
-pub(super) struct QueryCompletionProvider {
+pub(crate) struct QueryCompletionProvider {
     query_language: dbflux_core::QueryLanguage,
     app_state: Entity<AppStateEntity>,
     connection_id: Option<Uuid>,
@@ -41,7 +41,7 @@ pub(super) struct QueryCompletionProvider {
 }
 
 impl QueryCompletionProvider {
-    pub(super) fn new(
+    pub(crate) fn new(
         query_language: dbflux_core::QueryLanguage,
         app_state: Entity<AppStateEntity>,
         connection_id: Option<Uuid>,

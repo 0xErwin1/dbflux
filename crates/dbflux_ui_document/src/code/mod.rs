@@ -76,8 +76,8 @@ mod statements;
 mod vim;
 
 use code_actions::SqlCodeActionProvider;
-use completion::QueryCompletionProvider;
-use execution_session::ExecutionSessionBinding;
+pub(crate) use completion::QueryCompletionProvider;
+pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 pub use vim::VimMode;
 

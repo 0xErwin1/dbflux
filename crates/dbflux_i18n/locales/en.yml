@@ -1334,6 +1334,7 @@ document:
     destructive_body: "This command can delete data and cannot be undone."
     connection_inactive: "The connection is closed. Connect again to run commands."
     connecting: "Still connecting to %{database}. Try again in a moment."
+    tab_title: "Console · %{connection} · %{database}"
   dashboard:
     pane_actions:
       open_panel: "Open panel"
@@ -4425,6 +4426,7 @@ sidebar:
     delete_count: "Delete %{count} items"
     close: Close
     new_query: New query
+    open_console: Open console
     drop_database: Drop database
     new_connection: New connection
     new_folder: New folder

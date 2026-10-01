@@ -11,6 +11,7 @@
 ## 기능
 
 - 하나의 크레이트에 MySQL과 MariaDB 관계형 드라이버 구현을 모두 포함합니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - SQL 실행, 스키마 탐색, 인덱스, 외래 키, CHECK 제약 조건, UNIQUE 제약 조건을 지원합니다.
 - 인증, SSH 터널링, URI/수동 연결 모드를 지원합니다.
 - 다섯 가지 고유 SSL 모드(`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`)를 갖춘 TLS: `VERIFY_CA`는 호스트 이름 검증을 건너뛰면서 서버 인증서 체인을 검증하고, `VERIFY_IDENTITY`는 둘 다 검증합니다. 검증 모드에서는 사용자 지정 루트 CA가 시스템 신뢰 저장소를 대체하며, 클라이언트 인증서 + 키로 상호 TLS를 활성화할 수 있습니다. `rustls`/`aws-lc-rs` 백엔드를 사용합니다.

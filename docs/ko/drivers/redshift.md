@@ -13,6 +13,7 @@ Amazon Redshift 드라이버(읽기 전용 v1)로, `dbflux_driver_postgres` 위�
 ## 기능
 
 - Redshift 클러스터 또는 Redshift Serverless 엔드포인트에 대해 PostgreSQL 와이어 프로토콜로 통신하는 관계형 드라이버(`DatabaseCategory::Relational`, `QueryLanguage::Sql`)입니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL을 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 요청 단위 행 제한을 거부하므로 콘솔 명령은 행 제한 없이 실행됩니다.
 - 호스트, 포트(기본값 `5439`), 데이터베이스, 사용자, 비밀번호, SSL/`sslmode`(`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`), 연결 URI 모드(`redshift://...`, 내부적으로 `postgresql://...`로 정규화), SSH 터널링을 갖춘 연결 폼입니다.
 - 사용자 지정 TLS 신뢰와 상호 TLS: TLS가 활성화된 모드에서는 고정된 private 루트 CA(PEM)가 시스템 루트 위에 신뢰 저장소에 추가되고, 클라이언트 인증서 + 개인 키(PEM/PKCS#8)가 상호 TLS를 활성화합니다. 인증서 자료는 폼에서 구성된 경로에서 연결별로 로드되며, 검증은 절대 약화되지 않습니다(`verify-ca`/`verify-full`은 여전히 신뢰할 수 없는 인증서를 거부합니다). 누락되었거나 읽을 수 없거나 형식이 잘못된 인증서/키 파일은 시스템 신뢰 저장소로 조용히 대체되는 대신 명확한 연결 오류로 표면화되며, 개인 키 내용은 절대 로깅되지 않습니다.
 - 데이터베이스, 스키마, 테이블, 뷰, 열에 대한 `information_schema` 기반 스키마 인트로스펙션. 표준 PostgreSQL OID를 따르는 `ColumnKind` 분류(timestamp/integer/float/text)를 포함합니다.

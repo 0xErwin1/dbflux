@@ -94,6 +94,8 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 및 put, update, delete 명령)에서는 에디터 쿼리가 "Operation not supported" 오류로
 실패합니다. 제한 값을 바꿔도 이 동작은 바뀌지 않습니다. 이 제한은 시간 제한을
 추가하지 않으며 Lua, Python, Bash 스크립트, 연결 훅, 메트릭에는 적용되지 않습니다.
+[콘솔](CONSOLE.md)은 제한을 적용할 수 있는 드라이버에는 같은 제한을 보내고, 나머지
+드라이버에서는 제한 없이 명령을 실행합니다.
 
 ### 스토리지(나이틀리 빌드 전용)
 

@@ -1049,6 +1049,12 @@ impl Workspace {
                 } => {
                     this.open_global_schema_viz_document(*profile_id, database.clone(), window, cx);
                 }
+                SidebarEvent::OpenConsole {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_console_document(*profile_id, Some(database.clone()), window, cx);
+                }
                 SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
                     this.open_object_store_buckets_document(*profile_id, window, cx);
                 }

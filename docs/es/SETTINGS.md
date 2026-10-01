@@ -104,7 +104,9 @@ con un error "Operation not supported" en MongoDB, Redis, Turso, InfluxDB, Click
 Redshift, CloudWatch, drivers RPC externos y escrituras de DynamoDB (PartiQL
 `INSERT`/`UPDATE`/`DELETE` y los comandos put, update y delete). Cambiar el
 límite no cambia esto. El límite no agrega un timeout y no se aplica a scripts
-Lua, Python o Bash, hooks de conexión ni métricas.
+Lua, Python o Bash, hooks de conexión ni métricas. La
+[consola](CONSOLE.md) envía el mismo límite a los drivers que pueden aplicarlo y
+ejecuta sus comandos sin él en los demás.
 
 ### Almacenamiento (solo builds Nightly)
 

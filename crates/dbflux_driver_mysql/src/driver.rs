@@ -45,6 +45,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
@@ -208,6 +210,8 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()

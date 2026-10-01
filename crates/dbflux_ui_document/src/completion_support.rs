@@ -188,9 +188,17 @@ pub(crate) fn single_line_completion_editor(
 pub(crate) fn frameless_single_line_completion_editor(
     state: &Entity<EditorState>,
 ) -> gpui_component::input::Editor {
-    let leading = (dbflux_components::tokens::Heights::ROW_COMPACT
-        - FontSizes::BASE * EDITOR_LINE_HEIGHT)
-        / 2.0;
+    frameless_single_line_completion_editor_sized(state, FontSizes::BASE)
+}
+
+/// [`frameless_single_line_completion_editor`] at `text_size`, for hosts
+/// whose surrounding text is not `FontSizes::BASE` (the native console).
+pub(crate) fn frameless_single_line_completion_editor_sized(
+    state: &Entity<EditorState>,
+    text_size: Pixels,
+) -> gpui_component::input::Editor {
+    let leading =
+        (dbflux_components::tokens::Heights::ROW_COMPACT - text_size * EDITOR_LINE_HEIGHT) / 2.0;
 
     gpui_component::input::Editor::new(state)
         .appearance(false)
@@ -199,7 +207,7 @@ pub(crate) fn frameless_single_line_completion_editor(
         .px(px(0.0))
         .font_family(dbflux_components::typography::AppFonts::MONO)
         .font_weight(gpui::FontWeight::NORMAL)
-        .text_size(FontSizes::BASE)
+        .text_size(text_size)
 }
 
 /// The line height gpui-component's `Editor::render` applies, relative to the

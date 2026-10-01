@@ -29,6 +29,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::MULTIPLE_DATABASES.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::VIEWS.bits()

@@ -20,6 +20,7 @@ Remote Turso / libSQL database over HTTP.
 
 - Hrana-over-HTTP transport through the `turso_serverless` SDK, driven by a
   per-connection Tokio runtime so the synchronous driver contract is preserved.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time with the editor's validation, dangerous-query confirmation, audit rows and query history. It runs in its own isolated session, so a transaction opened by one command stays open for the next. The driver refuses request row limits, so console commands run without one.
 - Arbitrary SQL with bound parameters; multi-statement scripts run as one
   pipelined batch that stops at the first failing statement.
 - Schema discovery from `sqlite_master` and the `table_info`, `index_list`,

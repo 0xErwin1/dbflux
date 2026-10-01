@@ -13,6 +13,7 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 ## 주요 기능
 
 - SQL 쿼리 실행과 스키마 검색을 지원하는 SQL Server / Azure SQL 관계형 드라이버입니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - SQL Server 로그인(사용자 이름 + 비밀번호)을 통한 인증을 지원합니다. URI 모드에서는 ADO, JDBC, `sqlserver://user:pass@host:port/db` 형식의 연결 문자열을 받습니다.
 - 연결 문자열이나 URI가 이미 `Application Name`을 설정하고 있지 않는 한 `Application Name`을 `dbflux/<version>`으로 보고하며, 이미 설정되어 있다면 사용자가 지정한 값이 항상 우선합니다. 이를 위해 `sqlserver://`/`mssql://` URL 스킴은 `applicationname` 쿼리 파라미터를 받습니다.
 - TLS 암호화 모드(`off`, `on`, `required`)는 tiberius `EncryptionLevel`을 통해 제공됩니다. 폼은 **SSL Mode** 드롭다운 하나만 노출하며, `TrustServerCertificate` 플래그는 자동으로 도출됩니다:

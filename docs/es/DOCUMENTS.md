@@ -70,9 +70,5 @@ página.
 - Los drivers que ofrecen una consola nativa (MongoDB) la acoplan bajo la
   colección: `` Ctrl+` `` la muestra u oculta. Ejecuta un comando de shell a la
   vez, como `db.orders.find({"status": "paid"})`, contra la base de datos de la
-  colección e imprime los documentos como un objeto JSON por línea. Los comandos
-  pasan por la misma validación y confirmación de queries peligrosas que el
-  editor, quedan registrados en el registro de auditoría y se suman al
-  historial de consultas, que `Up`/`Down` recorren. Un comando que escribe
-  refresca los documentos en pantalla. La consola muestra como máximo 200
-  líneas de un resultado; usa el editor para resultados más grandes.
+  colección e imprime los documentos como un objeto JSON por línea. Un comando
+  que escribe refresca los documentos en pantalla. Ver [Consola](CONSOLE.md).

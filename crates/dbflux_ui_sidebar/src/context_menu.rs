@@ -810,6 +810,16 @@ impl Sidebar {
                         )],
                     );
 
+                    if self.database_has_native_console(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                dbflux_i18n::t!("sidebar.menu.open_console"),
+                                ContextMenuAction::OpenConsole,
+                            )],
+                        );
+                    }
+
                     // Compare Schema (relational only), scoped to this database.
                     if self.node_supports_schema_diff(item_id, cx) {
                         Self::append_menu_section(
@@ -1562,6 +1572,20 @@ impl Sidebar {
     ///
     /// Used to show the "New Query" action on bucket/database nodes for
     /// time-series drivers without branching on a specific driver ID.
+    /// Whether the node's connection offers a native console. Generic: read
+    /// from the driver's capabilities, never from its id.
+    fn database_has_native_console(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|conn| conn.connection.metadata().native_console().is_some())
+    }
+
     fn database_is_time_series(&self, item_id: &str, cx: &App) -> bool {
         let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
             return false;
@@ -1828,6 +1852,14 @@ impl Sidebar {
             }
             ContextMenuAction::QueryCollection => {
                 self.query_collection(&item_id, cx);
+            }
+            ContextMenuAction::OpenConsole => {
+                if let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(&item_id) {
+                    cx.emit(SidebarEvent::OpenConsole {
+                        profile_id,
+                        database: name,
+                    });
+                }
             }
             ContextMenuAction::NewQueryForDatabase => {
                 self.new_query_for_database(&item_id, cx);

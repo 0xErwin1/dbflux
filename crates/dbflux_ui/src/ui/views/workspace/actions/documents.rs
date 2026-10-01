@@ -892,6 +892,54 @@ impl Workspace {
             database
         );
     }
+
+    /// Opens (or activates) the native console tab of `database` on
+    /// `profile_id`. Does nothing when the connection is closed or its driver
+    /// offers no console.
+    pub(in crate::ui::views::workspace) fn open_console_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{ConsoleDocument, DocumentKey};
+
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &DocumentKey::Console {
+                profile_id,
+                database: database.clone(),
+            },
+            cx,
+        );
+
+        if let Some(existing_id) = existing_id {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.activate(existing_id, cx));
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+            return;
+        }
+
+        let Some(profile) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.connection.metadata().native_console())
+        else {
+            return;
+        };
+
+        let app_state = self.app_state.clone();
+        let doc =
+            cx.new(|cx| ConsoleDocument::new(profile_id, database, profile, app_state, window, cx));
+
+        let pane = ConsoleDocument::into_pane(doc, cx);
+        self.tab_manager
+            .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
 }
 
 #[cfg(test)]

@@ -253,6 +253,9 @@ crates/
       console/              # NativeConsole: reusable command console docked under a document
         mod.rs              # Entity, execution, audit, history recall, render
         format.rs           # Dangerous-command gate, result formatting, recall list
+      console_document/     # ConsoleDocument: a native console in its own tab
+        mod.rs
+        pane.rs             # ConsoleDocument::into_pane constructor
       key_value/            # Redis/key-value-specific document tab
         mod.rs              # KeyValueDocument entity
         pane.rs             # KeyValueDocument::into_pane constructor
@@ -920,15 +923,21 @@ consultas de documentos guardadas usan la migración
   SortedSet, Stream), paginación, mutations y menú contextual. Se integra con el
   workspace vía un `PaneHandle` construido en `key_value/pane.rs`.
 - **Native console**: `crates/dbflux_ui_document/src/console/` es una consola de
-  comandos que un document acopla bajo su contenido cuando el driver de la
-  conexión anuncia `DriverCapabilities::NATIVE_CONSOLE`;
-  `DriverMetadata::native_console()` deriva su prompt y su ejemplo del lenguaje
-  de consulta. Los comandos se ejecutan mediante `Connection::execute` tras la
-  validación y la detección de comandos peligrosos del `LanguageService` del
-  driver, llevan el techo confirmado tras una confirmación, emiten las mismas
-  filas de auditoría `query_execute` que el editor y quedan en el historial de
-  consultas compartido. La alojan el document clave-valor y el `DataDocument`
-  de colección.
+  comandos para conexiones cuyo driver anuncia
+  `DriverCapabilities::NATIVE_CONSOLE`; `DriverMetadata::native_console()`
+  deriva su prompt y su ejemplo del lenguaje de consulta. Los comandos se
+  ejecutan mediante `Connection::execute` (a través del `ExecutionSessionBinding`
+  del editor cuando el driver ofrece sesiones aisladas) tras la validación y la
+  detección de comandos peligrosos del `LanguageService` del driver, llevan el
+  techo confirmado tras una confirmación, emiten las mismas filas de auditoría
+  `query_execute` que el editor y quedan en el historial de consultas
+  compartido. El límite de filas del editor solo se envía a los drivers que
+  anuncian `DriverCapabilities::REQUEST_ROW_LIMIT`. El autocompletado de la
+  entrada reutiliza el `QueryCompletionProvider` del editor. La acoplan el
+  document clave-valor y el `DataDocument` de tabla y de colección;
+  `ConsoleDocument` (`console_document/`, `DocumentKey::Console`) la aloja en su
+  propia pestaña, que se abre desde el menú de una base de datos en la barra
+  lateral.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provee `SchemaGraph`
   (nodos de tabla y aristas de clave foránea), algoritmos de layout (LeftRight,
   Snowflake, Compact), exportación a DBML y

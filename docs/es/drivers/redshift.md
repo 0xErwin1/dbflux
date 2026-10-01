@@ -20,6 +20,12 @@ directamente sobre el cliente de wire protocol
 - Driver relacional (`DatabaseCategory::Relational`, `QueryLanguage::Sql`) que
   habla el protocolo wire de PostgreSQL contra un cluster de Redshift o un
   endpoint de Redshift Serverless.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea SQL a la vez mediante `Connection::execute` con la
+  validación del editor, la confirmación de queries peligrosas, las filas de
+  auditoría y el historial de consultas. El driver rechaza los límites de filas
+  por request, así que los comandos de la consola se ejecutan sin límite.
 - Formulario de conexión con host, port (por defecto `5439`), database, user,
   password, SSL/`sslmode`
   (`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`), un modo de

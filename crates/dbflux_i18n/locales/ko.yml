@@ -1334,6 +1334,7 @@ document:
     destructive_body: "이 명령은 데이터를 삭제할 수 있으며 되돌릴 수 없습니다."
     connection_inactive: "연결이 닫혀 있습니다. 명령을 실행하려면 다시 연결하세요."
     connecting: "아직 %{database}에 연결하는 중입니다. 잠시 후 다시 시도하세요."
+    tab_title: "콘솔 · %{connection} · %{database}"
   dashboard:
     pane_actions:
       open_panel: "패널 열기"
@@ -4424,6 +4425,7 @@ sidebar:
     delete_count: "%{count}개 항목 삭제"
     close: 닫기
     new_query: 새 쿼리
+    open_console: 콘솔 열기
     drop_database: 데이터베이스 삭제
     new_connection: 새 연결
     new_folder: 새 폴더

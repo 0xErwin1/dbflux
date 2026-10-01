@@ -13,6 +13,13 @@ Base de datos relacional open-source avanzada.
 
 - Driver relacional de PostgreSQL con ejecución de queries SQL y descubrimiento
   de schema.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Soporta schemas, tablas, vistas, índices, foreign keys, constraints CHECK,
   constraints UNIQUE, y tipos personalizados.
 - Expone routines almacenadas (funciones, procedures, agregados, funciones

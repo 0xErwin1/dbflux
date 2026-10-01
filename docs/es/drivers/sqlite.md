@@ -12,6 +12,13 @@ Base de datos embebida basada en archivos.
 
 - Driver relacional SQLite embebido usando rutas de base de datos basadas en
   archivos.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Soporta ejecución de SQL, descubrimiento de schema, vistas, índices, foreign
   keys, constraints CHECK, y constraints UNIQUE.
 - Soporta cancelación de queries vía los handles de interrupt de SQLite,

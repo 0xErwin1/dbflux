@@ -38,11 +38,27 @@ impl DataDocument {
         cx: &mut Context<Self>,
     ) -> Self {
         let title = table.qualified_name();
+        let schema = table.schema.clone();
+        let console_database = database.clone();
         let data_grid = cx.new(|cx| {
-            DataGridPanel::new_for_table(profile_id, table, database, app_state, window, cx)
+            DataGridPanel::new_for_table(profile_id, table, database, app_state.clone(), window, cx)
         });
 
-        Self::new_with_grid(title, DataSourceKind::Table, data_grid, window, cx)
+        let mut document = Self::new_with_grid(title, DataSourceKind::Table, data_grid, window, cx);
+
+        let label = console_database
+            .clone()
+            .or(schema)
+            .or_else(|| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|connected| connected.profile.name.clone())
+            })
+            .unwrap_or_default();
+        document.attach_console(profile_id, console_database, label, app_state, window, cx);
+        document
     }
 
     pub fn new_for_collection(
@@ -60,16 +76,25 @@ impl DataDocument {
 
         let mut document =
             Self::new_with_grid(title, DataSourceKind::Collection, data_grid, window, cx);
-        document.attach_console(profile_id, database, app_state, window, cx);
+        document.attach_console(
+            profile_id,
+            Some(database.clone()),
+            database,
+            app_state,
+            window,
+            cx,
+        );
         document
     }
 
-    /// Docks the native console under the collection when the connection's
-    /// driver advertises one. Commands run against the collection's database.
+    /// Docks the native console under the table or collection when the
+    /// connection's driver advertises one. Commands run against `database`
+    /// (the connection's own when `None`); `label` names it in the header.
     fn attach_console(
         &mut self,
         profile_id: Uuid,
-        database: String,
+        database: Option<String>,
+        label: String,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -85,8 +110,8 @@ impl DataDocument {
 
         let target = NativeConsoleTarget {
             profile_id,
-            database: Some(database.clone()),
-            label: database,
+            database,
+            label,
         };
 
         let console = cx.new(|cx| {
@@ -462,5 +487,46 @@ mod tests {
     #[allow(dead_code)]
     fn _assert_result_panel_field_type(doc: &DataDocument) -> &Entity<ResultPanel> {
         &doc.result_panel
+    }
+}
+
+#[cfg(test)]
+mod console_tests {
+    use super::DataDocument;
+    use dbflux_core::TableRef;
+    use gpui::AppContext as _;
+
+    /// A table document for a connection of `kind`, and whether it docked a
+    /// console.
+    fn table_has_console(cx: &mut gpui::TestAppContext, kind: dbflux_core::DbKind) -> bool {
+        use crate::keyboard_test_support::{connected_app_state, init_keyboard_runtime};
+        use dbflux_test_support::fake_driver::FakeDriver;
+
+        init_keyboard_runtime(cx);
+        let driver = FakeDriver::new(kind);
+        let (app_state, profile_id) = connected_app_state(cx, &driver, "shop");
+
+        let (document, window) = cx.add_window_view(move |window, cx| {
+            DataDocument::new_for_table(
+                profile_id,
+                TableRef::new("orders"),
+                None,
+                app_state,
+                window,
+                cx,
+            )
+        });
+
+        window.update(|_, cx| document.read(cx).console.is_some())
+    }
+
+    #[gpui::test]
+    fn sql_tables_dock_the_console_their_driver_offers(cx: &mut gpui::TestAppContext) {
+        assert!(table_has_console(cx, dbflux_core::DbKind::Postgres));
+    }
+
+    #[gpui::test]
+    fn tables_without_a_console_render_as_before(cx: &mut gpui::TestAppContext) {
+        assert!(!table_has_console(cx, dbflux_core::DbKind::SQLite));
     }
 }

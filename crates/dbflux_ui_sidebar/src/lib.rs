@@ -123,6 +123,11 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: String,
     },
+    /// Open the native console of a database in its own tab.
+    OpenConsole {
+        profile_id: Uuid,
+        database: String,
+    },
     /// Request to open a read-only code document showing a routine's definition.
     OpenRoutineDefinition {
         profile_id: Uuid,
@@ -517,6 +522,9 @@ pub enum ContextMenuAction {
     ///
     /// Available for database nodes belonging to a time-series connection.
     NewQueryForDatabase,
+    /// Open the connection's native console against this database, in its
+    /// own tab. Offered where the driver advertises `NATIVE_CONSOLE`.
+    OpenConsole,
     // Schema DDL actions
     RefreshDatabase,
     RefreshObject,
@@ -672,6 +680,7 @@ impl ContextMenuAction {
             Self::GenerateCollectionCode(_) => Some(AppIcon::Code),
             Self::QueryCollection => Some(AppIcon::Code),
             Self::NewQueryForDatabase => Some(AppIcon::Code),
+            Self::OpenConsole => Some(AppIcon::SquareTerminal),
             Self::RefreshDatabase => Some(AppIcon::RefreshCcw),
             Self::RefreshObject => Some(AppIcon::RefreshCcw),
             Self::DropDatabase => Some(AppIcon::Delete),

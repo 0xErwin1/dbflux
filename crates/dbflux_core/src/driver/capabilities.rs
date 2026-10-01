@@ -655,6 +655,12 @@ bitflags! {
         /// and the driver's `LanguageService`. The console's presentation
         /// comes from [`DriverMetadata::native_console`].
         const NATIVE_CONSOLE = 1 << 62;
+
+        /// `Connection::execute` enforces `QueryRequest::limit`: it stops
+        /// reading rows at the limit and marks the result truncated, instead
+        /// of refusing the request. The native console sends the editor row
+        /// limit only to drivers that advertise this.
+        const REQUEST_ROW_LIMIT = 1 << 63;
     }
 }
 
@@ -705,6 +711,11 @@ mod capability_bits_tests {
     #[test]
     fn native_console_bit_value() {
         assert_eq!(DriverCapabilities::NATIVE_CONSOLE.bits(), 1u64 << 62);
+    }
+
+    #[test]
+    fn request_row_limit_bit_value() {
+        assert_eq!(DriverCapabilities::REQUEST_ROW_LIMIT.bits(), 1u64 << 63);
     }
 
     #[test]
@@ -773,6 +784,7 @@ mod capability_bits_tests {
             DriverCapabilities::OBJECT_PREFIX_DELETE,
             DriverCapabilities::SCRIPT_EXECUTION,
             DriverCapabilities::NATIVE_CONSOLE,
+            DriverCapabilities::REQUEST_ROW_LIMIT,
         ];
 
         let mut seen_bits: u64 = 0;
@@ -2180,6 +2192,7 @@ impl NativeConsoleProfile {
         let example_command = match language {
             QueryLanguage::RedisCommands => "PING",
             QueryLanguage::MongoQuery => "db.collection.find({})",
+            QueryLanguage::Sql => "SELECT 1",
             _ => "",
         };
 
