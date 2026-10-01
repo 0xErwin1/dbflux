@@ -61,6 +61,10 @@ const AUDIT_COMPACT_JSON_LIMIT: usize = 160;
 /// detail, since the row truncates them.
 const AUDIT_LONG_SUMMARY: usize = 100;
 
+/// Action of the telemetry producer's audit events. Their `payload` detail
+/// holds the frozen payload bytes as a JSON string to preserve them exactly.
+const TELEMETRY_DELIVERY_ACTION: &str = "telemetry.delivery";
+
 /// Column widths of the event table (P1Audit: 26, 110, 70, 130, 1fr, 140,
 /// 70, 90); an external stream uses a partition and an event id column.
 struct AuditColumns;
@@ -1065,10 +1069,10 @@ impl AuditDocument {
 
     /// A code block of a detail: 8 px cut, panel fill, line border, 12 px
     /// mono at 1.7 line height, JSON keys and values colored.
-    fn detail_json_block(json: &str, cx: &App) -> Div {
+    fn detail_json_block(action: Option<&str>, json: &str, cx: &App) -> Div {
         let theme = cx.theme();
         let colors = SyntaxColors::for_current(cx);
-        let text = Self::display_json(json);
+        let text = Self::display_event_details(action, json);
         let highlights = json_highlights(&text, &colors);
 
         div()
@@ -1102,6 +1106,43 @@ impl AuditDocument {
         }
 
         serde_json::to_string_pretty(&value).unwrap_or(compact)
+    }
+
+    /// Display text of an event's details JSON. The stored bytes are shown
+    /// as they are, except that a `telemetry.delivery` event's `payload`
+    /// detail — stored as a JSON string to preserve the raw payload bytes —
+    /// is decoded into its object form for reading. Display-only: the
+    /// event, its storage and every copy/export path keep the original
+    /// bytes, and only the `payload` key of that one action is decoded.
+    pub(super) fn display_event_details(action: Option<&str>, json: &str) -> String {
+        if action != Some(TELEMETRY_DELIVERY_ACTION) {
+            return Self::display_json(json);
+        }
+
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+            return Self::display_json(json);
+        };
+
+        let Some(details) = value.as_object_mut() else {
+            return Self::display_json(json);
+        };
+
+        let decoded = match details.get("payload") {
+            // Already an object: leave the stored value untouched.
+            Some(serde_json::Value::Object(_)) => return Self::display_json(json),
+            Some(serde_json::Value::String(payload)) => payload
+                .parse::<serde_json::Value>()
+                .ok()
+                .filter(serde_json::Value::is_object),
+            _ => None,
+        };
+
+        let Some(decoded) = decoded else {
+            return Self::display_json(json);
+        };
+
+        details.insert("payload".to_string(), decoded);
+        Self::display_json(&value.to_string())
     }
 
     /// Adds the spaces of the board's inline JSON (`{ "a": 1, "b": 2 }`) to
@@ -1306,7 +1347,7 @@ impl AuditDocument {
                 )
             })
             .when_some(details_json, |detail, json| {
-                detail.child(Self::detail_json_block(&json, cx))
+                detail.child(Self::detail_json_block(event.action.as_deref(), &json, cx))
             })
             .child(
                 div()
@@ -1880,5 +1921,156 @@ mod tests {
         let label: String = dbflux_i18n::t!("document.audit.detail.time");
 
         assert!(!label.is_empty());
+    }
+
+    // The real frozen v1 wire payload (closed schema of dbflux_telemetry),
+    // stored by dbflux_app/src/telemetry `record` under "payload" as a JSON
+    // string. These are formatter tests: they prove the display, not the
+    // protocol.
+    const TELEMETRY_PAYLOAD: &str = r#"{"schema":"dbflux.telemetry-event/v1","install_id":"0d8f8a2e-9c34-4f5a-8d1e-2b3c4d5e6f70","delivery_id":"1e9f9b3f-0d45-406b-9e2f-3c4d5e6f7081","sent_at":"2026-01-01T00:00:00Z","version":"1.2.3","channel":"stable","os":"linux","arch":"amd64","event":"ping"}"#;
+    const TELEMETRY_DETAILS: &str = r#"{"payload":"{\"schema\":\"dbflux.telemetry-event/v1\",\"install_id\":\"0d8f8a2e-9c34-4f5a-8d1e-2b3c4d5e6f70\",\"delivery_id\":\"1e9f9b3f-0d45-406b-9e2f-3c4d5e6f7081\",\"sent_at\":\"2026-01-01T00:00:00Z\",\"version\":\"1.2.3\",\"channel\":\"stable\",\"os\":\"linux\",\"arch\":\"amd64\",\"event\":\"ping\"}","level":"basic","phase":"attempt","code":"stored","attempt_id":"0a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d"}"#;
+
+    #[test]
+    fn telemetry_delivery_payload_renders_as_nested_object_not_escaped_string() {
+        let displayed = super::AuditDocument::display_event_details(
+            Some("telemetry.delivery"),
+            TELEMETRY_DETAILS,
+        );
+
+        assert!(
+            displayed.contains("\"install_id\":"),
+            "payload should render as a nested object, got: {displayed}"
+        );
+        assert!(
+            !displayed.contains("\\\"install_id\\\""),
+            "payload should not stay an escaped string, got: {displayed}"
+        );
+        // Metadata of the event stays visible and unchanged.
+        for metadata in [
+            "\"level\": \"basic\"",
+            "\"phase\": \"attempt\"",
+            "\"code\": \"stored\"",
+            "\"attempt_id\": \"0a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d\"",
+        ] {
+            assert!(
+                displayed.contains(metadata),
+                "metadata {metadata} missing from display, got: {displayed}"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_delivery_large_payload_renders_pretty_multiline() {
+        let payload = TELEMETRY_PAYLOAD;
+        let details = format!(
+            r#"{{"payload":{},"level":"off","phase":"outcome","code":"stored"}}"#,
+            serde_json::to_string(payload).expect("fixture serializes"),
+        );
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), &details);
+
+        assert!(
+            displayed.contains("\n"),
+            "large payload should pretty-print over multiple lines, got: {displayed}"
+        );
+        assert!(!displayed.contains("\\\"install_id\\\""));
+    }
+
+    #[test]
+    fn unrelated_actions_keep_the_existing_details_presentation() {
+        let expected = super::AuditDocument::display_json(TELEMETRY_DETAILS);
+
+        for action in [Some("query.run"), Some("other.action"), None] {
+            let displayed = super::AuditDocument::display_event_details(action, TELEMETRY_DETAILS);
+
+            assert_eq!(
+                displayed, expected,
+                "action {action:?} must keep the existing presentation"
+            );
+            assert!(displayed.contains("\\\"install_id\\\""));
+        }
+    }
+
+    #[test]
+    fn telemetry_delivery_decodes_only_the_payload_key() {
+        let details =
+            r#"{"payload":"{\"install_id\":\"abc\"}","config":"{\"secret_key\":\"hush\"}"}"#;
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), details);
+
+        assert!(displayed.contains("\"install_id\":"));
+        assert!(
+            displayed.contains("\\\"secret_key\\\""),
+            "unrelated JSON-looking strings must stay untouched, got: {displayed}"
+        );
+    }
+
+    #[test]
+    fn telemetry_delivery_malformed_details_fall_back_to_existing_presentation() {
+        let malformed = "not json {";
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), malformed);
+
+        assert_eq!(displayed, malformed);
+    }
+
+    #[test]
+    fn telemetry_delivery_malformed_payload_falls_back_to_existing_presentation() {
+        let details = r#"{"payload":"{not json","level":"basic"}"#;
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), details);
+
+        assert_eq!(displayed, super::AuditDocument::display_json(details));
+        assert!(
+            displayed.contains("\"{not json\""),
+            "malformed payload must stay a displayed string, got: {displayed}"
+        );
+    }
+
+    #[test]
+    fn telemetry_delivery_non_object_payload_falls_back_to_existing_presentation() {
+        let details = r#"{"payload":"5","level":"basic"}"#;
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), details);
+
+        assert_eq!(displayed, super::AuditDocument::display_json(details));
+    }
+
+    #[test]
+    fn telemetry_delivery_already_object_payload_is_not_mangled() {
+        let details = r#"{"payload":{"install_id":"abc"},"level":"basic"}"#;
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), details);
+
+        assert_eq!(displayed, super::AuditDocument::display_json(details));
+        assert!(displayed.contains("\"install_id\": \"abc\""));
+    }
+
+    #[test]
+    fn telemetry_delivery_missing_payload_falls_back_to_existing_presentation() {
+        let details = r#"{"level":"basic","phase":"attempt"}"#;
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), details);
+
+        assert_eq!(displayed, super::AuditDocument::display_json(details));
+    }
+
+    #[test]
+    fn display_event_details_never_mutates_the_stored_details_string() {
+        let stored = TELEMETRY_DETAILS.to_string();
+        let before = stored.clone();
+
+        let displayed =
+            super::AuditDocument::display_event_details(Some("telemetry.delivery"), &stored);
+
+        assert_eq!(stored, before, "stored details must stay untouched");
+        assert!(displayed.contains("\"install_id\":"));
     }
 }
