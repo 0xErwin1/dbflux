@@ -11,6 +11,7 @@ All notable changes to DBFlux will be documented in this file.
 ### Fixed
 
 * **Linux install script** — The installation command on the website no longer stops with "Checksum verification failed!": the downloaded release now passes its checksum check, and a mismatch prints the expected and actual hashes. The release signature is now checked against the DBFlux signing key's full fingerprint, using a temporary keyring fetched over HTTPS, so it no longer needs `dirmngr` or the keyserver port and no longer writes to your own keyring. Installing from an extracted release without a terminal installs that release instead of downloading another, `--build` no longer reads its confirmation from the piped script, and `--version 0.8.5` is accepted as `v0.8.5`.
+* **.deb and .rpm download links** — The `.deb` and `.rpm` commands in the installation guide and its translations returned 404, because the packages are named after their version. Releases now also publish them as `dbflux-linux-amd64.deb`, `dbflux-linux-arm64.deb`, `dbflux-linux-amd64.rpm` and `dbflux-linux-arm64.rpm`, each with a `.asc` signature and a `.sha256` checksum, so the documented `releases/latest/download/` links download the latest packages.
 
 ## [0.8.5] - 2026-09-30
 
