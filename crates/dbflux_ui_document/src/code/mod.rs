@@ -483,6 +483,8 @@ pub struct CodeDocument {
 
     /// Deferred action slots drained at the top of each render cycle.
     pending: PendingActions,
+    #[cfg(all(test, feature = "telemetry"))]
+    script_executor: Option<Arc<dyn dbflux_core::HookExecutor>>,
 
     /// Set when a save was started by the interrupted-close flow, so a write
     /// that lands also asks the workspace to close the tab.
@@ -493,6 +495,14 @@ pub struct CodeDocument {
 }
 
 struct PendingQueryResult {
+    #[cfg(feature = "telemetry")]
+    usage_ticket: Option<dbflux_core::observability::usage::UsageTicket>,
+    #[cfg(feature = "telemetry")]
+    usage_success: bool,
+    #[cfg(feature = "telemetry")]
+    usage_cancel: dbflux_core::CancelToken,
+    #[cfg(feature = "telemetry")]
+    usage_session_generation: Option<u64>,
     task_id: dbflux_core::TaskId,
     exec_id: Uuid,
     query: String,
@@ -508,8 +518,17 @@ pub(super) struct ActiveQueryTask {
     uses_isolated_session: bool,
 }
 
+// Delayed confirmations must preserve the original trigger, not turn an
+// automatic execution into a user execution merely because it was approved.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecutionOrigin {
+    User,
+    Automatic,
+}
+
 /// Pending dangerous query confirmation.
 struct PendingDangerousQuery {
+    origin: ExecutionOrigin,
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
@@ -522,6 +541,7 @@ struct PendingDangerousQuery {
 /// Raised when the user runs without a selection, the buffer holds more than
 /// one statement, and the driver advertises `MULTI_STATEMENT`.
 struct PendingScriptConfirm {
+    origin: ExecutionOrigin,
     query: String,
     in_new_tab: bool,
     statement_count: usize,
@@ -541,6 +561,7 @@ enum DriftAction {
 
 /// A query paused by the schema-drift preflight or drift modal awaiting execution.
 struct PendingDriftQuery {
+    origin: ExecutionOrigin,
     query: String,
     in_new_tab: bool,
     action: DriftAction,
@@ -1107,6 +1128,8 @@ impl CodeDocument {
                 shutdown_flush_written: None,
             },
             pending: PendingActions::default(),
+            #[cfg(all(test, feature = "telemetry"))]
+            script_executor: None,
             close_after_save: false,
             vim,
         };

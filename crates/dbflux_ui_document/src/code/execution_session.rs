@@ -268,6 +268,7 @@ mod tests {
         request_limits: Mutex<Vec<(Option<u32>, Option<std::time::Duration>)>>,
         execute_gate: Option<Arc<ExecuteGate>>,
         truncate_rows: AtomicBool,
+        show_time_window: AtomicBool,
     }
 
     impl FakeConnection {
@@ -280,6 +281,7 @@ mod tests {
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
+                show_time_window: AtomicBool::new(false),
             })
         }
 
@@ -296,6 +298,7 @@ mod tests {
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate,
                 truncate_rows: AtomicBool::new(false),
+                show_time_window: AtomicBool::new(false),
             })
         }
     }
@@ -313,6 +316,21 @@ mod tests {
                 )
                 .build()
             })
+        }
+
+        fn source_context_spec(&self) -> Option<dbflux_core::SourceContextSpec> {
+            self.show_time_window
+                .load(Ordering::SeqCst)
+                .then(|| dbflux_core::SourceContextSpec {
+                    targets_label: String::new(),
+                    targets_placeholder: String::new(),
+                    default_target: None,
+                    start_label: "Start".into(),
+                    end_label: "End".into(),
+                    query_mode_label: None,
+                    query_modes: Vec::new(),
+                    default_query_mode: None,
+                })
         }
 
         fn ping(&self) -> Result<(), DbError> {
@@ -719,9 +737,41 @@ mod tests {
         assert_eq!(root.queries.load(Ordering::SeqCst), 1);
     }
 
+    #[cfg(feature = "telemetry")]
+    fn enable_usage(app: &mut AppStateEntity) {
+        app.initialize_telemetry(
+            dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                .expect("config without transport"),
+            chrono::Utc::now(),
+        )
+        .expect("scheduler");
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        scheduler
+            .set_basic(true, chrono::Utc::now())
+            .expect("basic");
+        scheduler
+            .disclosure_dismissed(chrono::Utc::now())
+            .expect("disclosure");
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn usage_counts(app: &mut AppStateEntity) -> serde_json::Value {
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        let _preparation = scheduler
+            .prepare(chrono::Utc::now(), "en")
+            .expect("prepare without I/O");
+        serde_json::to_value(scheduler.state()).expect("state")["counters"].clone()
+    }
+
     #[gpui::test]
     fn real_run_query_reuses_session_after_result_processing(cx: &mut gpui::TestAppContext) {
         let app_state = initialized_app_state(cx);
+        #[cfg(feature = "telemetry")]
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                enable_usage(app);
+            });
+        });
         let (root, factory, isolated) = factory_backed_root();
         let profile_id = add_test_profile(cx, &app_state, root);
         let document = Rc::new(RefCell::new(None));
@@ -769,6 +819,43 @@ mod tests {
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 2);
         assert_eq!(factory.session.closes.load(Ordering::SeqCst), 0);
+        #[cfg(feature = "telemetry")]
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(usage_counts(app)["query_run"], 2);
+            });
+        });
+
+        #[cfg(feature = "telemetry")]
+        {
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    document.pending.auto_refresh = true;
+                    document.process_pending_auto_refresh(window, cx);
+                });
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert_eq!(
+                        usage_counts(app)["query_run"],
+                        2,
+                        "automatic completion must not count"
+                    );
+                })
+            });
+            window.update(|window, cx| {
+                document.update(cx, |doc, cx| doc.run_statement(0..8, window, cx));
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert_eq!(usage_counts(app)["query_run"], 3, "manual gutter counts");
+                })
+            });
+        }
 
         let (replacement_root, replacement_factory, replacement_isolated) = factory_backed_root();
         window.update(|_, cx| {
@@ -802,6 +889,8 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let app_state = initialized_app_state(cx);
+        #[cfg(feature = "telemetry")]
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
         let execute_gate = Arc::new(ExecuteGate {
             entered: AtomicBool::new(false),
         });
@@ -899,6 +988,12 @@ mod tests {
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(session.closes.load(Ordering::SeqCst), 1);
+        #[cfg(feature = "telemetry")]
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert!(usage_counts(app).get("query_run").is_none());
+            })
+        });
         assert!(window.update(|_, cx| {
             let document = document.read(cx);
             let record = document
@@ -920,6 +1015,185 @@ mod tests {
                 }
             }
         }));
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn terminal_usage_is_credited_only_after_current_owner_adoption(cx: &mut gpui::TestAppContext) {
+        use crate::code::{ExecutionRecord, PendingQueryResult};
+        let app_state = initialized_app_state(cx);
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
+        let document_ref = Rc::new(RefCell::new(None));
+        let capture = document_ref.clone();
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+            capture.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document_ref.borrow().clone().expect("document");
+        window.run_until_parked();
+
+        for case in [
+            "query",
+            "script",
+            "partial",
+            "timeout",
+            "nonzero",
+            "unknown",
+            "error",
+            "cancel",
+            "stale",
+            "missing",
+            "new_run",
+            "off",
+            "late_basic",
+            "duplicate",
+            "closed",
+        ] {
+            window.update(|window, cx| {
+                app_state.update(cx, |app, _| {
+                    app.telemetry_mut()
+                        .expect("scheduler")
+                        .set_basic(case != "late_basic", chrono::Utc::now())
+                        .expect("level");
+                });
+                let ticket = app_state.update(cx, |app, _| {
+                    app.telemetry_usage_source(chrono::Utc::now())
+                        .and_then(|source| source.ticket().expect("capture"))
+                });
+                if matches!(case, "off" | "late_basic") {
+                    app_state.update(cx, |app, _| {
+                        app.telemetry_mut()
+                            .expect("scheduler")
+                            .set_basic(case == "late_basic", chrono::Utc::now())
+                            .expect("toggle");
+                    });
+                }
+                let before = app_state.update(cx, |app, _| usage_counts(app));
+                document.update(cx, |doc, cx| {
+                    let exec_id = uuid::Uuid::new_v4();
+                    let (task_id, cancel) =
+                        doc.runner
+                            .start_primary(dbflux_core::TaskKind::Query, "fixture", cx);
+                    if case == "cancel" {
+                        cancel.cancel();
+                    }
+                    let generation = doc.execution_session.current_generation();
+                    if case == "stale" {
+                        doc.execution_session.invalidate();
+                    }
+                    let is_script = matches!(case, "script" | "timeout" | "nonzero" | "unknown");
+                    let hook_result = dbflux_core::HookResult {
+                        exit_code: if case == "unknown" {
+                            None
+                        } else if case == "nonzero" {
+                            Some(1)
+                        } else {
+                            Some(0)
+                        },
+                        timed_out: case == "timeout",
+                        detached: false,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        warnings: Vec::new(),
+                    };
+                    doc.execution.execution_history.push(ExecutionRecord {
+                        id: exec_id,
+                        started_at: std::time::Instant::now(),
+                        finished_at: None,
+                        result: None,
+                        error: None,
+                        rows_affected: None,
+                        is_script,
+                    });
+                    doc.execution.active_execution_index =
+                        Some(doc.execution.execution_history.len() - 1);
+                    if case == "new_run" {
+                        doc.execution.execution_history.push(ExecutionRecord {
+                            id: uuid::Uuid::new_v4(),
+                            started_at: std::time::Instant::now(),
+                            finished_at: None,
+                            result: None,
+                            error: None,
+                            rows_affected: None,
+                            is_script: false,
+                        });
+                        doc.execution.active_execution_index =
+                            Some(doc.execution.execution_history.len() - 1);
+                    }
+                    let mut result = QueryResult::empty();
+                    if is_script {
+                        result.shape = dbflux_core::QueryResultShape::Text;
+                        result.text_body = Some("fixture".into());
+                    }
+                    if case == "partial" {
+                        result.metadata_extra = Some(std::collections::HashMap::from([(
+                            "script_failure".into(),
+                            serde_json::json!({}),
+                        )]));
+                    }
+                    let make_pending = |ticket| PendingQueryResult {
+                        task_id,
+                        exec_id: if case == "missing" {
+                            uuid::Uuid::nil()
+                        } else {
+                            exec_id
+                        },
+                        query: String::new(),
+                        result: if case == "error" {
+                            Err(DbError::query_failed("fixture"))
+                        } else {
+                            Ok(result.clone())
+                        },
+                        is_script,
+                        usage_ticket: ticket,
+                        usage_success: !is_script || hook_result.is_success(),
+                        usage_cancel: cancel.clone(),
+                        usage_session_generation: Some(generation),
+                    };
+                    if case == "closed" {
+                        drop(make_pending(ticket));
+                        return;
+                    }
+                    doc.pending.result = Some(make_pending(ticket.clone()));
+                    doc.process_pending_result(window, cx);
+                    // A replay carries the same operation ticket, never a fresh one.
+                    doc.pending.result = Some(make_pending(ticket));
+                    doc.process_pending_result(window, cx);
+                });
+                let after = app_state.update(cx, |app, _| usage_counts(app));
+                for feature in ["query_run", "script_run"] {
+                    let increment = u64::from(
+                        (feature == "query_run" && matches!(case, "query" | "duplicate"))
+                            || (feature == "script_run" && case == "script"),
+                    );
+                    assert_eq!(
+                        after[feature].as_u64().unwrap_or(0),
+                        before[feature].as_u64().unwrap_or(0) + increment,
+                        "{case}: {feature}"
+                    );
+                }
+            });
+        }
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                // Off deliberately erased the earlier successful operations.
+                let counts = usage_counts(app);
+                assert_eq!(
+                    counts["query_run"], 1,
+                    "only fresh duplicate case credits once"
+                );
+                assert!(counts.get("script_run").is_none());
+            });
+        });
     }
 
     #[gpui::test]
@@ -1119,6 +1393,287 @@ mod tests {
                 .expect("test request limit collection"),
             vec![(Some(10_000), None), (Some(5_000), None)]
         );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn programmatic_time_panel_seed_and_recreation_do_not_credit_query(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let capture = Rc::new(RefCell::new(None));
+        let capture_ref = capture.clone();
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            capture_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = capture.borrow().clone().expect("document");
+        window.run_until_parked();
+        window.update(|window, cx| document.update(cx, |doc, cx| doc.run_query(window, cx)));
+        window.run_until_parked();
+        window.run_until_parked();
+        assert_eq!(root.queries.load(Ordering::SeqCst), 1);
+        for expected_queries in [2, 3] {
+            root.show_time_window.store(true, Ordering::SeqCst);
+            window.update(|_, cx| {
+                document.update(cx, |doc, cx| {
+                    assert!(
+                        !doc.result_tabs.result_tabs.is_empty(),
+                        "existing result required"
+                    );
+                    doc.source.source_time_range_panel = None;
+                    doc.source._source_time_range_sub = None;
+                    doc.source.exec_ctx.source = None;
+                    cx.notify();
+                })
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                let doc = document.read(cx);
+                assert!(
+                    doc.source.source_time_range_panel.is_some(),
+                    "render created panel"
+                );
+                assert!(
+                    doc.source.exec_ctx.source.is_some(),
+                    "emit_initial reached subscriber"
+                );
+                assert!(!doc.pending.chart_reexecute, "render dispatched rerun");
+                assert_eq!(
+                    root.queries.load(Ordering::SeqCst),
+                    expected_queries,
+                    "actual rerun completed"
+                );
+                app_state.update(cx, |app, _| {
+                    assert_eq!(
+                        usage_counts(app)["query_run"],
+                        1,
+                        "programmatic seed must not credit"
+                    );
+                });
+            });
+        }
+        root.show_time_window.store(false, Ordering::SeqCst);
+        window.update(|window, cx| document.update(cx, |doc, cx| doc.run_query(window, cx)));
+        window.run_until_parked();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(
+                    usage_counts(app)["query_run"],
+                    2,
+                    "explicit Run still credits"
+                );
+            })
+        });
+        window.update(|window, cx| document.update(cx, |doc, cx| doc.run_explain(window, cx)));
+        window.run_until_parked();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(
+                    usage_counts(app)["query_run"],
+                    2,
+                    "derived Explain probe is not Run"
+                );
+            })
+        });
+    }
+
+    #[cfg(feature = "telemetry")]
+    struct ScriptExecutorFixture {
+        outcome: &'static str,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl dbflux_core::HookExecutor for ScriptExecutorFixture {
+        fn execute_hook(
+            &self,
+            _: &dbflux_core::ConnectionHook,
+            _: &dbflux_core::HookContext,
+            cancel: &dbflux_core::CancelToken,
+            _: Option<&dbflux_core::CancelToken>,
+            _: Option<&dbflux_core::OutputSender>,
+            _: Option<&dbflux_core::DetachedProcessSender>,
+        ) -> Result<dbflux_core::HookResult, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.outcome == "cancel" {
+                cancel.cancel();
+            }
+            if self.outcome == "error" {
+                return Err("fixture failure".into());
+            }
+            Ok(dbflux_core::HookResult {
+                exit_code: match self.outcome {
+                    "nonzero" => Some(1),
+                    "unknown" => None,
+                    _ => Some(0),
+                },
+                stdout: "fixture output".into(),
+                stderr: String::new(),
+                timed_out: self.outcome == "timeout",
+                detached: self.outcome == "detached",
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn real_script_pipeline_credits_only_canonical_success(cx: &mut gpui::TestAppContext) {
+        let app_state = initialized_app_state(cx);
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
+        for outcome in [
+            "late_basic",
+            "success",
+            "nonzero",
+            "timeout",
+            "unknown",
+            "detached",
+            "error",
+            "cancel",
+        ] {
+            if outcome == "late_basic" {
+                cx.update(|cx| {
+                    app_state.update(cx, |app, _| {
+                        app.telemetry_mut()
+                            .expect("scheduler")
+                            .set_basic(false, chrono::Utc::now())
+                            .expect("off");
+                    })
+                });
+            }
+            let calls = Arc::new(AtomicUsize::new(0));
+            let capture = Rc::new(RefCell::new(None));
+            let capture_ref = capture.clone();
+            let (_, window) = cx.add_window_view(|window, cx| {
+                let document = cx.new(|cx| {
+                    let mut document = CodeDocument::new_with_language(
+                        app_state.clone(),
+                        None,
+                        dbflux_core::QueryLanguage::Bash,
+                        window,
+                        cx,
+                    );
+                    document.script_executor = Some(Arc::new(ScriptExecutorFixture {
+                        outcome,
+                        calls: calls.clone(),
+                    }));
+                    document.set_content("fixture", window, cx);
+                    document
+                });
+                capture_ref.replace(Some(document.clone()));
+                Root::new(document, window, cx)
+            });
+            let document = capture.borrow().clone().expect("document");
+            window.run_until_parked();
+            window.update(|window, cx| {
+                document.update(cx, |doc, cx| doc.run_query(window, cx));
+                if outcome == "late_basic" {
+                    app_state.update(cx, |app, _| {
+                        app.telemetry_mut()
+                            .expect("scheduler")
+                            .set_basic(true, chrono::Utc::now())
+                            .expect("basic after capture");
+                    });
+                }
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "{outcome}: actual executor invocation"
+            );
+            window.update(|_, cx| {
+                let record = document
+                    .read(cx)
+                    .execution
+                    .execution_history
+                    .last()
+                    .expect("run");
+                assert!(
+                    record.finished_at.is_some(),
+                    "{outcome}: terminal owner adoption"
+                );
+                app_state.update(cx, |app, _| {
+                    let counts = usage_counts(app);
+                    assert_eq!(
+                        counts["script_run"].as_u64().unwrap_or(0),
+                        u64::from(outcome != "late_basic"),
+                        "{outcome}"
+                    );
+                    assert!(counts.get("query_run").is_none());
+                });
+            });
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn destroyed_document_does_not_credit_completed_script(cx: &mut gpui::TestAppContext) {
+        let app_state = initialized_app_state(cx);
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let capture = Rc::new(RefCell::new(None));
+        let capture_ref = capture.clone();
+        let (host, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    dbflux_core::QueryLanguage::Bash,
+                    window,
+                    cx,
+                );
+                document.script_executor = Some(Arc::new(ScriptExecutorFixture {
+                    outcome: "success",
+                    calls: calls.clone(),
+                }));
+                document.set_content("fixture", window, cx);
+                document
+            });
+            capture_ref.replace(Some(document.clone()));
+            MountedDocuments(vec![document])
+        });
+        let document = capture.borrow_mut().take().expect("document");
+        let weak = document.downgrade();
+        window.run_until_parked();
+        window.update(|window, cx| {
+            document.update(cx, |doc, cx| doc.run_query(window, cx));
+            host.update(cx, |host, cx| {
+                host.0.clear();
+                cx.notify();
+            });
+        });
+        drop(document);
+        window.run_until_parked();
+        window.run_until_parked();
+        assert!(weak.upgrade().is_none(), "actual entity destroyed");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "worker actually completed");
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                let counts = usage_counts(app);
+                assert!(counts.get("script_run").is_none());
+                assert!(counts.get("query_run").is_none());
+            })
+        });
     }
 
     #[gpui::test]
