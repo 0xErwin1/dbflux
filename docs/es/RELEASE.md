@@ -233,6 +233,21 @@ en `web/public/brand/`. Se vuelve a ejecutar dentro de una shell de Nix cuando
 faltan `rsvg-convert`, `icotool`, `png2icns` o Python con `fonttools` y
 `uharfbuzz`.
 
+### Nombres de descarga estables
+
+Los paquetes `.deb` y `.rpm` llevan la versión en el nombre del archivo
+(`dbflux_0.8.5_linux_amd64.deb`, `dbflux-0.8.5-1.x86_64.rpm`), así que un
+enlace `releases/latest/download/` no puede apuntar a ellos. `build.yml`
+publica además copias idénticas byte a byte llamadas `dbflux-linux-<arch>.deb`
+y `dbflux-linux-<arch>.rpm`, cada una con su propio `.asc` y `.sha256`, y son
+los nombres a los que enlaza [Instalación](INSTALL.md).
+
+Antes de publicar, `release.yml` y `nightly.yml` ejecutan
+`scripts/check_release_links.py` sobre los artefactos descargados. Un enlace
+`releases/latest/download/` en la documentación, sus traducciones o la sección
+de instalación del sitio que nombre un archivo que el release no incluye hace
+fallar el job en lugar de publicar un 404.
+
 ## Procedimiento de Corte: `main` → `release/vX.Y`
 
 1. Verifica que estás en `main`, árbol limpio, actualizado con `origin/main`.

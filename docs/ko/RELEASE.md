@@ -142,6 +142,21 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
 
 그 옆의 macOS `.icns` 파일들(`dbflux.icns`, `dbflux-nightly.icns`)은 `libicns`의 `png2icns`로 같은 방식으로 빌드되며, 512와 1024 px 크기를 추가하고, 번들에는 `AppIcon.icns`로 들어갑니다.
 
+### 고정된 다운로드 파일 이름
+
+`.deb`와 `.rpm` 패키지는 파일 이름에 버전을 포함하므로
+(`dbflux_0.8.5_linux_amd64.deb`, `dbflux-0.8.5-1.x86_64.rpm`)
+`releases/latest/download/` 링크가 이를 가리킬 수 없습니다. `build.yml`은
+바이트 단위로 동일한 사본을 `dbflux-linux-<arch>.deb`와
+`dbflux-linux-<arch>.rpm`이라는 이름으로 함께 게시하며, 각 사본에는 자체
+`.asc`와 `.sha256`이 있습니다. [설치](INSTALL.md) 문서가 링크하는 이름이
+바로 이것입니다.
+
+게시하기 전에 `release.yml`과 `nightly.yml`은 내려받은 아티팩트를 대상으로
+`scripts/check_release_links.py`를 실행합니다. 문서, 번역 또는 사이트 설치
+섹션의 `releases/latest/download/` 링크가 해당 릴리스에 없는 파일을
+가리키면 404를 게시하는 대신 작업이 실패합니다.
+
 ## 생성 절차: `main` → `release/vX.Y`
 
 1. `main`에 있고, 트리가 깨끗하며, `origin/main`과 최신 상태인지 확인합니다.

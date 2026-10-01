@@ -157,6 +157,19 @@ PNG、各渠道目录中的应用内 PNG 与组合标识 `wordmark.svg`，以及
 `web/public/brand/` 中的网站副本。缺少 `rsvg-convert`、`icotool`、`png2icns`
 或带 `fonttools` 与 `uharfbuzz` 的 Python 时，脚本会在 Nix shell 中重新运行自身。
 
+### 固定的下载文件名
+
+`.deb` 和 `.rpm` 包的文件名带有版本号（`dbflux_0.8.5_linux_amd64.deb`、
+`dbflux-0.8.5-1.x86_64.rpm`），因此 `releases/latest/download/` 链接无法指向它们。
+`build.yml` 还会发布逐字节相同、名为 `dbflux-linux-<arch>.deb` 和
+`dbflux-linux-<arch>.rpm` 的副本，各自带有 `.asc` 和 `.sha256`，
+[安装](INSTALL.md) 链接的正是这些文件名。
+
+发布之前，`release.yml` 和 `nightly.yml` 会对下载的制品运行
+`scripts/check_release_links.py`。文档、其翻译或网站安装区块中的
+`releases/latest/download/` 链接若指向本次发布不包含的文件，任务会失败，
+而不是发布一个 404 链接。
+
 ## 切出流程：`main` → `release/vX.Y`
 
 1. 确认你在 `main` 上、工作树干净、且与 `origin/main` 同步。

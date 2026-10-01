@@ -163,6 +163,12 @@ jobs:
           cp -r /tmp/artifacts/* artifacts/
           ls -R artifacts
 
+      - name: Check documentation download links
+        # docs/INSTALL.md, its translations and the site link to
+        # releases/latest/download/<name>. Fail before publishing when this
+        # release would not carry one of those names.
+        run: python3 scripts/check_release_links.py artifacts
+
       - name: Install git-cliff
         uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063  # v2
         with:
