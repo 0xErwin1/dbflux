@@ -191,6 +191,9 @@ impl Workspace {
     pub(in crate::ui::views::workspace) fn open_dashboard(
         &mut self,
         dashboard_id: uuid::Uuid,
+        #[cfg(feature = "telemetry")] usage_ticket: Option<
+            dbflux_core::observability::usage::UsageTicket,
+        >,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -205,6 +208,22 @@ impl Workspace {
                 mgr.activate(id, cx);
             });
             self.set_focus(FocusTarget::Document, window, cx);
+            #[cfg(feature = "telemetry")]
+            if self
+                .app_state
+                .read(cx)
+                .dashboards
+                .dashboard_by_id(dashboard_id)
+                .is_some()
+            {
+                if let Some(ticket) = usage_ticket {
+                    if let Err(error) = ticket
+                        .record(dbflux_core::observability::usage::UsageFeature::DashboardOpen)
+                    {
+                        log::warn!("Usage completion failed: {error:?}");
+                    }
+                }
+            }
             return;
         }
 
@@ -432,6 +451,14 @@ impl Workspace {
             mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
         self.set_focus(FocusTarget::Document, window, cx);
+        #[cfg(feature = "telemetry")]
+        if let Some(ticket) = usage_ticket {
+            if let Err(error) =
+                ticket.record(dbflux_core::observability::usage::UsageFeature::DashboardOpen)
+            {
+                log::warn!("Usage completion failed: {error:?}");
+            }
+        }
     }
 
     /// Runs the dashboard import flow after the user confirms JSON input.
@@ -678,7 +705,13 @@ impl Workspace {
             .meta_right(now_hms())
             .push(cx);
 
-        self.open_dashboard(dashboard_id, window, cx);
+        self.open_dashboard(
+            dashboard_id,
+            #[cfg(feature = "telemetry")]
+            None,
+            window,
+            cx,
+        );
     }
 
     /// Open a dashboard fetched live from the connection's upstream source,
@@ -1036,7 +1069,13 @@ impl Workspace {
                 self.app_state.update(cx, |_state, cx| {
                     cx.emit(AppStateChanged);
                 });
-                self.open_dashboard(dashboard_id, window, cx);
+                self.open_dashboard(
+                    dashboard_id,
+                    #[cfg(feature = "telemetry")]
+                    None,
+                    window,
+                    cx,
+                );
             }
             Err(e) => {
                 report_error(

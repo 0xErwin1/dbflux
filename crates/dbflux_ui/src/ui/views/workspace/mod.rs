@@ -1234,7 +1234,24 @@ impl Workspace {
                     );
                 }
                 SidebarEvent::OpenDashboard { dashboard_id } => {
-                    this.open_dashboard(*dashboard_id, window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.app_state.update(cx, |state, _| {
+                        let source = state.telemetry_usage_source(chrono::Utc::now())?;
+                        match source.ticket() {
+                            Ok(ticket) => ticket,
+                            Err(error) => {
+                                log::warn!("Usage ticket capture failed: {error:?}");
+                                None
+                            }
+                        }
+                    });
+                    this.open_dashboard(
+                        *dashboard_id,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
                     this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
@@ -2556,6 +2573,132 @@ mod tab_close_request_tests {
             .clone()
             .expect("workspace should be created");
         (workspace, app_state, window)
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn dashboard_sidebar_usage_counts_only_valid_explicit_opens(cx: &mut TestAppContext) {
+        let profile_id = uuid::Uuid::new_v4();
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime =
+                    dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("storage");
+                runtime
+                    .viz_connection()
+                    .expect("connection")
+                    .lock()
+                    .expect("lock")
+                    .execute(
+                        "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, 'test')",
+                        [profile_id.to_string()],
+                    )
+                    .expect("profile");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("app")
+            })
+        });
+        let (workspace, app_state, window) = new_workspace_with(cx, app_state);
+        let dashboard_ids = window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                state
+                    .initialize_telemetry(
+                        dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                            .expect("no transport"),
+                        chrono::Utc::now(),
+                    )
+                    .expect("scheduler");
+                ["Undisclosed", "Explicit", "Automatic"].map(|name| {
+                    state
+                        .dashboards
+                        .create_dashboard(
+                            name.into(),
+                            None,
+                            profile_id,
+                            None,
+                            dbflux_components::SavedChartRefreshPolicy::Off,
+                        )
+                        .expect("persist dashboard")
+                })
+            })
+        });
+        for (case, dashboard_id, expected) in [
+            ("undisclosed", dashboard_ids[0], 0),
+            ("off", dashboard_ids[0], 0),
+            ("new", dashboard_ids[1], 1),
+            ("existing", dashboard_ids[1], 2),
+            ("automatic new", dashboard_ids[2], 2),
+            ("automatic existing", dashboard_ids[2], 2),
+            ("refocus", dashboard_ids[1], 3),
+            ("automatic switch", dashboard_ids[2], 3),
+            ("orphan refocus", dashboard_ids[1], 3),
+            ("invalid", uuid::Uuid::new_v4(), 3),
+            ("off after basic", dashboard_ids[1], 0),
+        ] {
+            window.update(|_, cx| {
+                app_state.update(cx, |state, _| {
+                    let scheduler = state.telemetry_mut().expect("scheduler");
+                    match case {
+                        "undisclosed" | "new" => scheduler
+                            .set_basic(true, chrono::Utc::now())
+                            .expect("basic"),
+                        "off" | "off after basic" => {
+                            scheduler.set_basic(false, chrono::Utc::now()).expect("off");
+                            scheduler
+                                .disclosure_dismissed(chrono::Utc::now())
+                                .expect("disclosure");
+                        }
+                        _ => {}
+                    }
+                });
+            });
+            if case == "orphan refocus" {
+                window.update(|_, cx| {
+                    app_state.update(cx, |state, _| {
+                        state
+                            .dashboards
+                            .delete_dashboard(dashboard_id)
+                            .expect("delete metadata without workspace delete flow");
+                        assert!(state.dashboards.dashboard_by_id(dashboard_id).is_none());
+                    });
+                });
+            }
+            if case.starts_with("automatic") {
+                window.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.open_dashboard(dashboard_id, None, window, cx);
+                    });
+                });
+            } else {
+                window.update(|_, cx| {
+                    let sidebar = workspace.read(cx).sidebar.clone();
+                    sidebar.update(cx, |_, cx| {
+                        cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenDashboard { dashboard_id });
+                    });
+                });
+            }
+            window.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                let tab = workspace.tab_manager.read(cx).find_by_key(
+                    &crate::ui::document::DocumentKey::Dashboard { dashboard_id },
+                    cx,
+                );
+                assert_eq!(tab.is_some(), case != "invalid", "{case}");
+                if case != "invalid" {
+                    assert_eq!(workspace.tab_manager.read(cx).active_id(), tab, "{case}");
+                }
+                app_state.update(cx, |state, _| {
+                    let scheduler = state.telemetry_mut().expect("scheduler");
+                    let _preparation = scheduler
+                        .prepare(chrono::Utc::now(), "en")
+                        .expect("flush without I/O");
+                    let counters = serde_json::to_value(scheduler.state()).expect("state");
+                    assert_eq!(
+                        counters["counters"]["dashboard_open"].as_u64().unwrap_or(0),
+                        expected,
+                        "{case}"
+                    );
+                });
+            });
+        }
     }
 
     /// Opens an empty query tab and returns its document id.
