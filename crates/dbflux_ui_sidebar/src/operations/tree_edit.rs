@@ -289,14 +289,15 @@ impl Sidebar {
 
             let result = self.app_state.update(cx, |state, _cx| {
                 let dir = state.scripts_directory_mut()?;
-                dir.rename(&old_path, new_name.trim()).ok()
+                Some(dir.rename(&old_path, new_name.trim()))
             });
 
-            if result.is_some() {
-                self.app_state.update(cx, |state, _cx| {
-                    state.refresh_scripts();
-                });
-                self.refresh_scripts_tree(cx);
+            match result {
+                Some(Ok(new_path)) => self.after_script_change(&new_path, cx),
+                Some(Err(error)) => {
+                    crate::operations::script_ops::report_script_operation_failure(error, cx)
+                }
+                None => {}
             }
 
             cx.emit(SidebarEvent::RequestFocus);

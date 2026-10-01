@@ -113,7 +113,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | DDL | `create_type` | admin | Create a user-defined type |
 | DDL Destructive | `drop_table` | admin_destructive | Drop a table |
 | DDL Destructive | `drop_database` | admin_destructive | Drop a database |
-| Scripts | `list_scripts` | metadata | List saved scripts in the scripts directory |
+| Scripts | `list_scripts` | metadata | List saved scripts in the scripts directory (external scripts folders are not exposed) |
 | Scripts | `get_script` | read | Retrieve the source of a specific saved script |
 | Scripts | `create_script` | write | Save a new script to the scripts directory |
 | Scripts | `update_script` | write | Overwrite an existing saved script |

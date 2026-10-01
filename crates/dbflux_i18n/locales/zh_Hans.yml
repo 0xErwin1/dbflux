@@ -3263,6 +3263,8 @@ palette:
       name: 文件另存为…
     open_script_file:
       name: 打开脚本文件…
+    add_external_scripts_folder:
+      name: "添加外部脚本文件夹…"
     toggle_comment:
       name: 切换注释
     open_history:
@@ -3603,6 +3605,7 @@ settings:
       save_query: 保存
       save_file_as: 文件另存为…
       open_script_file: 打开脚本文件…
+      add_external_scripts_folder: "添加外部脚本文件夹…"
       toggle_comment: 切换注释
       export_results: 导出结果
       clear_filter: 清除筛选
@@ -4378,6 +4381,7 @@ sidebar:
   dialog:
     import_script_title: 导入脚本
     script_files_filter: 脚本文件
+    add_external_folder_title: 添加外部脚本文件夹
   empty:
     connections_title: 还没有连接
     connections_hint: 使用 + 添加新连接
@@ -4439,6 +4443,9 @@ sidebar:
     rename_ellipsis: 重命名…
     copy_metric_id: 复制指标 ID
     copy_inspector_id: 复制检查器 ID
+    remove_external_folder: 从侧栏移除
+    refresh_scripts: 刷新
+    unavailable_reason: "不可用：%{reason}"
   overlay:
     add_folder: 新建文件夹
     add_connection: 新建连接
@@ -4458,12 +4465,15 @@ sidebar:
     skipped_tables:
       one: 跳过了 1 张活动配置 / 数据库之外的表
       many: "跳过了 %{count} 张活动配置 / 数据库之外的表"
+    add_external_folder: 添加外部文件夹
   status:
     connected: "%{count} 个已连接"
     idle: "%{count} 个空闲"
     no_connections: "尚无连接"
     connection_summary: "%{connected} 已连接 · %{idle} 空闲"
     profile_fallback_name: 连接
+    external_folders: "%{count} 个外部文件夹"
+    unavailable_folders: "%{count} 个不可用"
   tabs:
     dashboards: "仪表板"
     connections: 连接
@@ -4544,6 +4554,9 @@ sidebar:
       config: "外部驱动 %{driver_id} 不可用：服务 %{socket_id} 的配置无效：%{summary}"
       launch: "外部驱动 %{driver_id} 不可用：服务 %{socket_id} 未能启动：%{summary}"
       probe: "外部驱动 %{driver_id} 不可用：服务 %{socket_id} 在驱动探测期间失败：%{summary}"
+    add_external_folder_failed: "无法添加文件夹：%{error}"
+    remove_external_folder_failed: "无法移除文件夹：%{error}"
+    script_operation_failed: "脚本操作失败：%{error}"
   tree:
     container:
       relational: "表（%{count}）"
@@ -4608,6 +4621,8 @@ sidebar:
       metrics: 无可用指标
       inspectors: 无可用检查器
       remote_dashboards: 此账户 / 区域中没有仪表盘
+    scripts_root_scanning: "%{label}（扫描中…）"
+    scripts_root_unavailable: "%{label}（不可用）"
   dashboards:
     unassigned: "无连接"
     empty_title: "还没有仪表板"

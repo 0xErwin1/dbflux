@@ -3263,6 +3263,8 @@ palette:
       name: Guardar archivo como…
     open_script_file:
       name: Abrir archivo de script…
+    add_external_scripts_folder:
+      name: "Agregar carpeta externa de scripts…"
     toggle_comment:
       name: Alternar comentario
     open_history:
@@ -3603,6 +3605,7 @@ settings:
       save_query: Guardar
       save_file_as: Guardar archivo como…
       open_script_file: Abrir archivo de script…
+      add_external_scripts_folder: "Agregar carpeta externa de scripts…"
       toggle_comment: Alternar comentario
       export_results: Exportar resultados
       clear_filter: Limpiar filtro
@@ -4380,6 +4383,7 @@ sidebar:
   dialog:
     import_script_title: Importar script
     script_files_filter: Archivos de script
+    add_external_folder_title: Agregar carpeta externa de scripts
   empty:
     connections_title: Aún no hay conexiones
     connections_hint: Usa + para agregar una nueva conexión
@@ -4441,6 +4445,9 @@ sidebar:
     rename_ellipsis: Renombrar…
     copy_metric_id: Copiar ID de métrica
     copy_inspector_id: Copiar ID de inspector
+    remove_external_folder: Quitar del panel lateral
+    refresh_scripts: Actualizar
+    unavailable_reason: "No disponible: %{reason}"
   overlay:
     add_folder: Nueva carpeta
     add_connection: Nueva conexión
@@ -4460,12 +4467,15 @@ sidebar:
     skipped_tables:
       one: Se omitió 1 tabla fuera del perfil/base de datos activos
       many: "Se omitieron %{count} tablas fuera del perfil/base de datos activos"
+    add_external_folder: Agregar carpeta externa
   status:
     connected: "%{count} conectadas"
     idle: "%{count} inactivas"
     no_connections: "Todavía no hay conexiones"
     connection_summary: "%{connected} conectadas · %{idle} inactivas"
     profile_fallback_name: conexión
+    external_folders: "%{count} carpetas externas"
+    unavailable_folders: "%{count} no disponibles"
   tabs:
     dashboards: "Dashboards"
     connections: CONEXIONES
@@ -4546,6 +4556,9 @@ sidebar:
       config: "El driver externo '%{driver_id}' no está disponible porque el servicio '%{socket_id}' tiene una configuración inválida: %{summary}"
       launch: "El driver externo '%{driver_id}' no está disponible porque el servicio '%{socket_id}' no inició: %{summary}"
       probe: "El driver externo '%{driver_id}' no está disponible porque el servicio '%{socket_id}' falló durante la prueba del driver: %{summary}"
+    add_external_folder_failed: "No se pudo agregar la carpeta: %{error}"
+    remove_external_folder_failed: "No se pudo quitar la carpeta: %{error}"
+    script_operation_failed: "La operación sobre el script falló: %{error}"
   tree:
     container:
       relational: Tablas (%{count})
@@ -4610,6 +4623,8 @@ sidebar:
       metrics: No hay métricas disponibles
       inspectors: No hay inspectores disponibles
       remote_dashboards: No hay dashboards en esta cuenta/región
+    scripts_root_scanning: "%{label} (escaneando…)"
+    scripts_root_unavailable: "%{label} (no disponible)"
   dashboards:
     unassigned: "Sin conexión"
     empty_title: "Todavía no hay dashboards"

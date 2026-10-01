@@ -1,5 +1,33 @@
 use crate::*;
+use dbflux_ui_base::app_state_entity::{
+    rescan_script_root_in_background, rescan_scripts_in_background,
+};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+
+/// Reports a script file operation the user just triggered that failed, such as
+/// a create, rename, move or delete refused by the filesystem or by the
+/// scripts-folder boundaries.
+pub(crate) fn report_script_operation_failure(error: impl std::fmt::Display, cx: &mut App) {
+    report_error(
+        UserFacingError::new(
+            ErrorKind::User,
+            crate::labels::script_operation_failed_label(&error.to_string()),
+        ),
+        cx,
+    );
+}
+
+/// The error kind a failed external-folder change is reported under: a folder
+/// the user picked that cannot be one is their input; a write that failed is
+/// storage.
+fn script_root_error_kind(error: &dbflux_app::app_state::ScriptRootError) -> ErrorKind {
+    match error {
+        dbflux_app::app_state::ScriptRootError::Storage(_) => ErrorKind::Storage,
+        dbflux_app::app_state::ScriptRootError::Invalid(_) => ErrorKind::User,
+        dbflux_app::app_state::ScriptRootError::ScriptsUnavailable
+        | dbflux_app::app_state::ScriptRootError::UnknownRoot => ErrorKind::Config,
+    }
+}
 
 fn report_reveal_failure(error: std::io::Error, cx: &mut App) {
     report_error(
@@ -18,7 +46,8 @@ impl Sidebar {
         let node_id = parse_node_id(&item_id)?;
 
         match node_id {
-            SchemaNodeId::ScriptsFolder { path: Some(p) } => Some(std::path::PathBuf::from(p)),
+            SchemaNodeId::ScriptsFolder { path: Some(p) }
+            | SchemaNodeId::ScriptsRoot { path: p } => Some(std::path::PathBuf::from(p)),
             SchemaNodeId::ScriptFile { path } => std::path::Path::new(&path)
                 .parent()
                 .map(|p| p.to_path_buf()),
@@ -37,9 +66,8 @@ impl Sidebar {
     /// For folders returns the folder path; for files returns the parent directory.
     pub(crate) fn parent_dir_from_item_id(item_id: &str) -> Option<std::path::PathBuf> {
         match parse_node_id(item_id) {
-            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
-                Some(std::path::PathBuf::from(p))
-            }
+            Some(SchemaNodeId::ScriptsFolder { path: Some(p) })
+            | Some(SchemaNodeId::ScriptsRoot { path: p }) => Some(std::path::PathBuf::from(p)),
             Some(SchemaNodeId::ScriptFile { path }) => std::path::Path::new(&path)
                 .parent()
                 .map(|p| p.to_path_buf()),
@@ -55,19 +83,27 @@ impl Sidebar {
         let extension = self.default_script_extension(cx);
         let name = self.generate_unique_script_name(parent.as_deref(), extension, cx);
 
-        let path = self.app_state.update(cx, |state, _cx| {
+        let created = self.app_state.update(cx, |state, _cx| {
             let dir = state.scripts_directory_mut()?;
-            dir.create_file(parent.as_deref(), &name, extension).ok()
+            Some(dir.create_file(parent.as_deref(), &name, extension))
         });
 
-        if let Some(path) = path {
-            self.app_state.update(cx, |state, _cx| {
-                state.refresh_scripts();
-            });
-            self.refresh_scripts_tree(cx);
-
-            cx.emit(SidebarEvent::OpenScript { path });
+        match created {
+            Some(Ok(path)) => {
+                self.after_script_change(&path, cx);
+                cx.emit(SidebarEvent::OpenScript { path });
+            }
+            Some(Err(error)) => report_script_operation_failure(error, cx),
+            None => {}
         }
+    }
+
+    /// Redraws the scripts tree from the in-memory edit a change just made,
+    /// then rescans that change's root in the background for anything the edit
+    /// cannot know. The UI thread never walks the folder.
+    pub(crate) fn after_script_change(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.refresh_scripts_tree(cx);
+        rescan_script_root_in_background(&self.app_state, path, cx);
     }
 
     pub(crate) fn create_script_file(&mut self, cx: &mut Context<Self>) {
@@ -82,19 +118,21 @@ impl Sidebar {
     ) {
         let name = "new_folder";
 
-        let created_path = self.app_state.update(cx, |state, _cx| {
+        let created = self.app_state.update(cx, |state, _cx| {
             let dir = state.scripts_directory_mut()?;
-            dir.create_folder(parent.as_deref(), name).ok()
+            Some(dir.create_folder(parent.as_deref(), name))
         });
 
-        let Some(path) = created_path else {
-            return;
+        let path = match created {
+            Some(Ok(path)) => path,
+            Some(Err(error)) => {
+                report_script_operation_failure(error, cx);
+                return;
+            }
+            None => return,
         };
 
-        self.app_state.update(cx, |state, _cx| {
-            state.refresh_scripts();
-        });
-        self.refresh_scripts_tree(cx);
+        self.after_script_change(&path, cx);
 
         let item_id = SchemaNodeId::ScriptsFolder {
             path: Some(path.to_string_lossy().to_string()),
@@ -133,22 +171,147 @@ impl Sidebar {
             };
 
             cx.update(|cx| {
-                let path = app_state.update(cx, |state, _cx| {
+                let imported = app_state.update(cx, |state, _cx| {
                     let dir = state.scripts_directory_mut()?;
-                    let imported = dir.import(&source, parent.as_deref()).ok()?;
-                    state.refresh_scripts();
-                    Some(imported)
+                    Some(dir.import(&source, parent.as_deref()))
                 });
 
-                if let Some(path) = path {
-                    sidebar.update(cx, |this, cx| {
-                        this.refresh_scripts_tree(cx);
-                        cx.emit(SidebarEvent::OpenScript { path });
-                    });
+                match imported {
+                    Some(Ok(path)) => {
+                        sidebar.update(cx, |this, cx| {
+                            this.after_script_change(&path, cx);
+                            cx.emit(SidebarEvent::OpenScript { path });
+                        });
+                    }
+                    Some(Err(error)) => report_script_operation_failure(error, cx),
+                    None => {}
                 }
             });
         })
         .detach();
+    }
+
+    /// Asks for a folder and registers it as an external scripts folder.
+    ///
+    /// The picker and the validation (canonicalizing, overlap checks) run off
+    /// the UI thread; the new folder then shows as scanning until the
+    /// background scan lands. Nothing is copied.
+    pub fn add_external_scripts_folder(&mut self, cx: &mut Context<Self>) {
+        let Some((managed_root, external_roots)) =
+            self.app_state.read(cx).scripts_directory().map(|dir| {
+                let external = dir
+                    .external_roots()
+                    .iter()
+                    .map(|mounted| mounted.path().to_path_buf())
+                    .collect::<Vec<_>>();
+                (dir.root_path().to_path_buf(), external)
+            })
+        else {
+            return;
+        };
+
+        let title = crate::labels::add_external_folder_dialog_title();
+        let app_state = self.app_state.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let Some(picked) = rfd::AsyncFileDialog::new()
+                .set_title(title.as_str())
+                .pick_folder()
+                .await
+            else {
+                return;
+            };
+
+            let picked = picked.path().to_path_buf();
+            let validated = cx
+                .background_executor()
+                .spawn(async move {
+                    dbflux_core::ScriptsDirectory::validate_external_root_against(
+                        &managed_root,
+                        &external_roots,
+                        &picked,
+                    )
+                })
+                .await;
+
+            cx.update(|cx| {
+                let path = match validated {
+                    Ok(path) => path,
+                    Err(error) => {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::User,
+                                crate::labels::add_external_folder_failed_label(&error.to_string()),
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                };
+
+                let added = app_state.update(cx, |state, cx| {
+                    let added = state.add_external_script_root(path);
+                    if added.is_ok() {
+                        cx.emit(AppStateChanged);
+                    }
+                    added
+                });
+
+                match added {
+                    Ok(_) => rescan_scripts_in_background(&app_state, cx),
+                    Err(error) => report_error(
+                        UserFacingError::new(
+                            script_root_error_kind(&error),
+                            crate::labels::add_external_folder_failed_label(&error.to_string()),
+                        ),
+                        cx,
+                    ),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Unregisters the external scripts folder `item_id` names. The folder and
+    /// its files are never touched.
+    pub(crate) fn remove_external_scripts_folder(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::ScriptsRoot { path }) = parse_node_id(item_id) else {
+            return;
+        };
+
+        let Some(id) = self
+            .app_state
+            .read(cx)
+            .scripts_directory()
+            .and_then(|dir| dir.external_root_at(std::path::Path::new(&path)))
+            .map(dbflux_core::MountedScriptRoot::id)
+        else {
+            return;
+        };
+
+        let removed = self.app_state.update(cx, |state, cx| {
+            let removed = state.remove_external_script_root(id);
+            if removed.is_ok() {
+                cx.emit(AppStateChanged);
+            }
+            removed
+        });
+
+        if let Err(error) = removed {
+            report_error(
+                UserFacingError::new(
+                    script_root_error_kind(&error),
+                    crate::labels::remove_external_folder_failed_label(&error.to_string()),
+                ),
+                cx,
+            );
+        }
+    }
+
+    /// Re-scans every scripts root in the background, picking up files added,
+    /// changed or removed outside DBFlux and folders that came back.
+    pub(crate) fn rescan_scripts(&mut self, cx: &mut Context<Self>) {
+        rescan_scripts_in_background(&self.app_state, cx);
     }
 
     pub(crate) fn handle_script_drop_with_position(
@@ -279,19 +442,17 @@ impl Sidebar {
             None => return false,
         };
 
-        let root = match self.app_state.read(cx).scripts_directory() {
-            Some(dir) => dir.root_path().to_path_buf(),
-            None => return false,
+        let Some(dir) = self.app_state.read(cx).scripts_directory() else {
+            return false;
         };
 
-        if current_parent == root {
+        if dir.is_root(&current_parent) {
             return false;
         }
 
-        let target_dir = current_parent
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or(root);
+        let Some(target_dir) = current_parent.parent().map(std::path::Path::to_path_buf) else {
+            return false;
+        };
 
         self.move_scripts(&sources, &target_dir, cx)
     }
@@ -313,6 +474,11 @@ impl Sidebar {
                 Some(std::path::PathBuf::from(p))
             }
             Some(SchemaNodeId::ScriptsFolder { path: None }) => root.clone(),
+            // A root has no siblings to land between: anything dropped on it
+            // goes inside it.
+            Some(SchemaNodeId::ScriptsRoot { path }) => {
+                return Some(std::path::PathBuf::from(path));
+            }
             _ => None,
         }?;
 
@@ -348,7 +514,20 @@ impl Sidebar {
                 .any(|candidate| candidate != source && source.starts_with(candidate))
         });
 
+        // Moves never cross roots. The drag feedback already refuses such a
+        // target; this covers the drops and keys that reach here without it.
+        let same_root = self
+            .app_state
+            .read(cx)
+            .scripts_directory()
+            .is_some_and(|dir| dir.share_root(&normalized_sources, target_dir));
+
+        if !same_root {
+            return false;
+        }
+
         let mut moved_any = false;
+        let mut first_error = None;
         self.app_state.update(cx, |state, _cx| {
             let Some(dir) = state.scripts_directory_mut() else {
                 return;
@@ -363,17 +542,21 @@ impl Sidebar {
                     continue;
                 }
 
-                if dir.move_entry(source, target_dir).is_ok() {
-                    moved_any = true;
+                match dir.move_entry(source, target_dir) {
+                    Ok(_) => moved_any = true,
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
                 }
             }
         });
 
+        if let Some(error) = first_error {
+            report_script_operation_failure(error, cx);
+        }
+
         if moved_any {
-            self.app_state.update(cx, |state, _cx| {
-                state.refresh_scripts();
-            });
-            self.refresh_scripts_tree(cx);
+            self.after_script_change(target_dir, cx);
         }
 
         moved_any
@@ -382,23 +565,21 @@ impl Sidebar {
     pub(crate) fn delete_script(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         let path = path.to_path_buf();
         let result = self.app_state.update(cx, |state, _cx| {
-            state.scripts_directory_mut()?.delete(&path).ok()
+            Some(state.scripts_directory_mut()?.delete(&path))
         });
 
-        if result.is_some() {
-            self.app_state.update(cx, |state, _cx| {
-                state.refresh_scripts();
-            });
-            self.refresh_scripts_tree(cx);
+        match result {
+            Some(Ok(())) => self.after_script_change(&path, cx),
+            Some(Err(error)) => report_script_operation_failure(error, cx),
+            None => {}
         }
     }
 
     fn resolve_script_path(item_id: &str) -> Option<std::path::PathBuf> {
         match parse_node_id(item_id) {
             Some(SchemaNodeId::ScriptFile { path }) => Some(std::path::PathBuf::from(path)),
-            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
-                Some(std::path::PathBuf::from(p))
-            }
+            Some(SchemaNodeId::ScriptsFolder { path: Some(p) })
+            | Some(SchemaNodeId::ScriptsRoot { path: p }) => Some(std::path::PathBuf::from(p)),
             Some(SchemaNodeId::ScriptsFolder { path: None }) => {
                 dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
             }

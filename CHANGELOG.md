@@ -6,6 +6,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **External scripts folders** — The Scripts view can list scripts from folders outside DBFlux's own scripts folder, such as a repository of SQL files shared across projects, without copying them. Add one with Add external folder in the Scripts view's + menu or Add external scripts folder… in the command palette. Scripts open and save in place, and creating, renaming, moving and deleting inside the folder work as in DBFlux's own folder. Press R on the folder to pick up changes made outside DBFlux; a folder that is moved or unmounted stays listed as unavailable, and Remove from sidebar forgets it without touching its files. See Browsing the Schema.
 * **Native console** — PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, Redshift, ClickHouse, Turso, MongoDB and Redis offer a console that runs one native command at a time and prints the result as text. It is docked under tables, document collections and the key-value browser (Ctrl+` shows or hides it), and Open console in a database's sidebar menu opens one in its own tab. Commands go through the editor's validation and dangerous-query confirmation, are recorded in the audit log, join the query history (Up and Down walk it) and complete like the editor. Drivers that enforce a row limit apply the editor row limit to console commands. See the new Console page of the documentation.
 
 ### Fixed

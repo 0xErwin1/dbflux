@@ -113,7 +113,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | DDL | `create_type` | admin | 创建用户自定义类型 |
 | 破坏性 DDL | `drop_table` | admin_destructive | 删除表 |
 | 破坏性 DDL | `drop_database` | admin_destructive | 删除数据库 |
-| 脚本 | `list_scripts` | metadata | 列出脚本目录中的已保存脚本 |
+| 脚本 | `list_scripts` | metadata | 列出脚本目录中的已保存脚本（不包含外部脚本文件夹） |
 | 脚本 | `get_script` | read | 获取某个已保存脚本的源码 |
 | 脚本 | `create_script` | write | 将新脚本保存到脚本目录 |
 | 脚本 | `update_script` | write | 覆盖已有的已保存脚本 |

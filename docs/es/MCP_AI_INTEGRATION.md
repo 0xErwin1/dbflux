@@ -138,7 +138,7 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | DDL             | `create_type`             | admin                                  | Crea un tipo definido por el usuario                                                                                 |
 | DDL Destructive | `drop_table`              | admin_destructive                      | Elimina una tabla                                                                                                    |
 | DDL Destructive | `drop_database`           | admin_destructive                      | Elimina una base de datos                                                                                            |
-| Scripts         | `list_scripts`            | metadata                               | Lista los scripts guardados en el directorio de scripts                                                              |
+| Scripts         | `list_scripts`            | metadata                               | Lista los scripts guardados en el directorio de scripts (las carpetas externas no se exponen)                        |
 | Scripts         | `get_script`              | read                                   | Obtiene el source de un script guardado específico                                                                   |
 | Scripts         | `create_script`           | write                                  | Guarda un nuevo script en el directorio de scripts                                                                   |
 | Scripts         | `update_script`           | write                                  | Sobrescribe un script guardado existente                                                                             |

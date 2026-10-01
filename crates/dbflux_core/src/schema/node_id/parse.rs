@@ -15,9 +15,9 @@ use super::{
     P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE,
     P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA,
     P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
-    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM,
-    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT,
+    P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER,
+    P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl FromStr for SchemaNodeId {
@@ -91,6 +91,8 @@ impl FromStr for SchemaNodeId {
             }
 
             P_SCRIPT_FILE => parse_script_file(&parts, err),
+
+            P_SCRIPTS_ROOT => parse_scripts_root(&parts, err),
 
             P_ROUTINES_FOLDER | P_ROUTINES_LOADING | P_ROUTINE => {
                 parse_routine_variants(prefix, &parts, err)
@@ -671,6 +673,18 @@ fn parse_script_file(
         return Err(err());
     }
     Ok(SchemaNodeId::ScriptFile { path })
+}
+
+fn parse_scripts_root(
+    parts: &[&str],
+    err: impl Fn() -> ParseSchemaNodeIdError,
+) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
+    // Path may contain pipe characters, so rejoin everything after the prefix
+    let path = parts[1..].join("|");
+    if path.is_empty() {
+        return Err(err());
+    }
+    Ok(SchemaNodeId::ScriptsRoot { path })
 }
 
 fn parse_routine_variants(

@@ -26,6 +26,36 @@ from the rail collapses the sidebar.
 - `r` refreshes the schema; `d` disconnects the active connection.
 - `m` opens the context menu for the selected item.
 
+## External scripts folders
+
+The Scripts view can list scripts that live outside DBFlux's own scripts
+folder, such as a repository of SQL files shared across projects, without
+copying them. Choose **Add external folder** from the `+` menu of the Scripts
+view, or run **Add external scripts folder…** from the command palette, and
+pick the folder.
+
+- The folder appears below your own scripts, with its name as the label. Only
+  files the editor opens (`.sql`, `.js`, `.redis`, `.lua`, `.py`, `.sh` and the
+  other script types) are listed. Subfolders that hold only other files are
+  hidden; empty ones are shown, so a folder you just created stays visible.
+  Symbolic links that lead out of the folder are not listed, and nothing is
+  written through them.
+- Scripts open and save in place, so the files stay in sync with the folder.
+  Creating, renaming and deleting files and subfolders inside it works as in
+  your own scripts folder. Moving a file between two different folders is
+  refused.
+- DBFlux does not watch the folder. Press `r` on the folder, or choose
+  **Refresh** from its menu, to pick up files added or changed outside DBFlux.
+  The folders are also scanned in the background each time DBFlux starts.
+- If the folder is moved, deleted, unmounted or cannot be read, it stays in the
+  list marked **unavailable** until it comes back or you remove it. Its menu
+  says why it could not be read.
+- **Remove from sidebar** (`x`) only forgets the folder. Its files are never
+  touched, and the folder itself cannot be renamed, moved or deleted from
+  DBFlux.
+- External folders are not shared with AI clients: the MCP script tools only
+  see DBFlux's own scripts folder.
+
 ## Lazy loading
 
 Schema is loaded lazily. On connect, DBFlux fetches shallow metadata (names).

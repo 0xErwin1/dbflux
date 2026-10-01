@@ -30,6 +30,36 @@ pantalla contrae el sidebar.
 - `r` refresca el schema; `d` desconecta la conexión activa.
 - `m` abre el menú contextual del elemento seleccionado.
 
+## Carpetas externas de scripts
+
+La vista Scripts puede listar scripts que están fuera de la carpeta de scripts
+de DBFlux, como un repositorio de archivos SQL compartido entre proyectos, sin
+copiarlos. Elige **Agregar carpeta externa** en el menú `+` de la vista Scripts,
+o ejecuta **Agregar carpeta externa de scripts…** desde la paleta de comandos, y
+selecciona la carpeta.
+
+- La carpeta aparece debajo de tus propios scripts, con su nombre como etiqueta.
+  Solo se listan los archivos que abre el editor (`.sql`, `.js`, `.redis`,
+  `.lua`, `.py`, `.sh` y los demás tipos de script). Se ocultan las subcarpetas
+  que solo contienen otros archivos; las vacías se muestran, así que una carpeta
+  que acabas de crear sigue visible. Los enlaces simbólicos que salen de la
+  carpeta no se listan, y nada se escribe a través de ellos.
+- Los scripts se abren y se guardan en su lugar, así que los archivos quedan
+  sincronizados con la carpeta. Crear, renombrar y eliminar archivos y
+  subcarpetas dentro de ella funciona igual que en tu propia carpeta de scripts.
+  Mover un archivo entre dos carpetas distintas se rechaza.
+- DBFlux no vigila la carpeta. Pulsa `r` sobre la carpeta, o elige **Actualizar**
+  en su menú, para ver archivos agregados o modificados fuera de DBFlux. Las
+  carpetas también se escanean en segundo plano cada vez que DBFlux arranca.
+- Si la carpeta se mueve, se elimina, se desmonta o no se puede leer, sigue en
+  la lista marcada como **no disponible** hasta que vuelva o la quites. Su menú
+  indica por qué no se pudo leer.
+- **Quitar del panel lateral** (`x`) solo olvida la carpeta. Sus archivos nunca
+  se tocan, y la carpeta en sí no se puede renombrar, mover ni eliminar desde
+  DBFlux.
+- Las carpetas externas no se comparten con clientes de IA: las herramientas MCP
+  de scripts solo ven la carpeta de scripts de DBFlux.
+
 ## Carga diferida (lazy loading)
 
 El schema se carga de forma diferida. Al conectar, DBFlux obtiene metadatos

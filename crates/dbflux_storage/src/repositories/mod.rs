@@ -37,6 +37,7 @@ pub mod hook_environment;
 pub mod keybinding_overrides;
 pub mod proxy_auth;
 pub mod proxy_profiles;
+pub mod script_roots;
 pub mod service_args;
 pub mod service_env;
 pub mod services;

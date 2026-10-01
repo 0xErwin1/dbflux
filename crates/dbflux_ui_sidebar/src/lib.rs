@@ -539,6 +539,10 @@ pub enum ContextMenuAction {
     NewScriptFolder,
     RevealInFileManager,
     CopyPath,
+    /// Re-scan every scripts root, external folders included, off the UI thread.
+    RefreshScripts,
+    /// Unregister an external scripts folder. The folder stays on disk.
+    RemoveExternalScriptsFolder,
     // Dashboard actions
     NewDashboard,
     ImportDashboard,
@@ -636,13 +640,14 @@ impl ContextMenuAction {
 
         match self {
             Self::Open | Self::OpenDatabase | Self::OpenScript => Some(Command::Execute),
-            Self::Refresh | Self::RefreshObject | Self::RefreshDatabase => {
+            Self::Refresh | Self::RefreshObject | Self::RefreshDatabase | Self::RefreshScripts => {
                 Some(Command::RefreshSchema)
             }
             Self::RenameFolder | Self::RenameScript => Some(Command::Rename),
             Self::Delete
             | Self::DeleteFolder
             | Self::DeleteScript
+            | Self::RemoveExternalScriptsFolder
             | Self::DropTable
             | Self::DropCollection
             | Self::DropDatabase => Some(Command::Delete),
@@ -693,6 +698,8 @@ impl ContextMenuAction {
             Self::NewScriptFolder => Some(AppIcon::Folder),
             Self::RevealInFileManager => Some(AppIcon::Folder),
             Self::CopyPath => None,
+            Self::RefreshScripts => Some(AppIcon::RefreshCcw),
+            Self::RemoveExternalScriptsFolder => Some(AppIcon::X),
             // Dashboard actions
             Self::NewDashboard => Some(AppIcon::Layers),
             Self::ImportDashboard => Some(AppIcon::Download),
@@ -1523,13 +1530,10 @@ impl Sidebar {
     }
 
     fn refresh_scripts_tree(&mut self, cx: &mut Context<Self>) {
-        let state = self.app_state.read(cx);
-        let entries = match state.scripts_directory() {
-            Some(dir) => dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query),
-            None => Vec::new(),
-        };
-
-        let items = self.apply_expansion_overrides_public(Self::build_scripts_tree_items(&entries));
+        let items = self.apply_expansion_overrides_public(Self::scripts_tree_items(
+            self.app_state.read(cx),
+            &self.scripts_search_query,
+        ));
         self.scripts_gutter_metadata = compute_gutter_map(&items);
         self.prune_scripts_selection(&items);
         self.scripts_tree_state.update(cx, |state, cx| {
@@ -2046,12 +2050,10 @@ impl Sidebar {
         &self,
         cx: &Context<Self>,
     ) -> Vec<TreeItem> {
-        let state = self.app_state.read(cx);
-        let entries = match state.scripts_directory() {
-            Some(dir) => dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query),
-            None => Vec::new(),
-        };
-        self.apply_expansion_overrides_public(Self::build_scripts_tree_items(&entries))
+        self.apply_expansion_overrides_public(Self::scripts_tree_items(
+            self.app_state.read(cx),
+            &self.scripts_search_query,
+        ))
     }
 
     fn find_item_expanded(items: &[TreeItem], target_id: &str) -> Option<bool> {

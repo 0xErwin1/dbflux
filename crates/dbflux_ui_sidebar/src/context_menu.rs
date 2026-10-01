@@ -63,6 +63,7 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::SchemaForeignKey
         | SchemaNodeKind::ScriptsFolder
         | SchemaNodeKind::ScriptFile
+        | SchemaNodeKind::ScriptsRoot
         | SchemaNodeKind::DashboardsFolder
         | SchemaNodeKind::DashboardItem
         | SchemaNodeKind::RemoteDashboardsFolder
@@ -118,6 +119,27 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
     }
 }
 
+impl Sidebar {
+    /// The read error of the unavailable external scripts folder `item_id`
+    /// names, or `None` when it is readable or not an external folder.
+    fn unavailable_script_root_reason(&self, item_id: &str, cx: &App) -> Option<String> {
+        let Some(SchemaNodeId::ScriptsRoot { path }) = parse_node_id(item_id) else {
+            return None;
+        };
+
+        let mounted = self
+            .app_state
+            .read(cx)
+            .scripts_directory()?
+            .external_root_at(std::path::Path::new(&path))?;
+
+        match mounted.availability() {
+            dbflux_core::ScriptRootAvailability::Unavailable { reason } => Some(reason.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// The mono caption at the top of a schema object's menu: its qualified
 /// name (`public.orders`), like the column and row the cell menu names.
 pub(crate) fn menu_caption(item_id: &str) -> Option<String> {
@@ -135,6 +157,7 @@ pub(crate) fn menu_caption(item_id: &str) -> Option<String> {
         | SchemaNodeId::CustomType { schema, name, .. } => Some(qualified(&schema, &name)),
         SchemaNodeId::Collection { database, name, .. } => Some(qualified(&database, &name)),
         SchemaNodeId::Database { name, .. } => Some(name),
+        SchemaNodeId::ScriptsRoot { path } => Some(path),
         _ => None,
     }
 }
@@ -1091,6 +1114,65 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::ScriptsRoot => {
+                let mut items = Vec::new();
+
+                // Why the folder could not be read; the tree row only says that
+                // it could not.
+                if let Some(reason) = self.unavailable_script_root_reason(item_id, cx) {
+                    items.push(ContextMenuItem::header(
+                        crate::labels::scripts_root_unavailable_reason_label(&reason),
+                    ));
+                }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_script_file"),
+                            ContextMenuAction::NewScriptFile,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_script_folder"),
+                            ContextMenuAction::NewScriptFolder,
+                        ),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.refresh_scripts"),
+                        ContextMenuAction::RefreshScripts,
+                    )],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.reveal_file_manager"),
+                            ContextMenuAction::RevealInFileManager,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.copy_path"),
+                            ContextMenuAction::CopyPath,
+                        ),
+                    ],
+                );
+
+                // Not a danger item: it only forgets the registration.
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.remove_external_folder"),
+                        ContextMenuAction::RemoveExternalScriptsFolder,
+                    )],
+                );
+
+                items
+            }
+
             SchemaNodeKind::ScriptFile => {
                 let mut items = Vec::new();
 
@@ -1889,6 +1971,12 @@ impl Sidebar {
             ContextMenuAction::CopyPath => {
                 self.copy_path_to_clipboard(&item_id, cx);
             }
+            ContextMenuAction::RefreshScripts => {
+                self.rescan_scripts(cx);
+            }
+            ContextMenuAction::RemoveExternalScriptsFolder => {
+                self.remove_external_scripts_folder(&item_id, cx);
+            }
             ContextMenuAction::RefreshDatabase => {
                 self.refresh_schema_database(&item_id, cx);
             }
@@ -2326,7 +2414,7 @@ mod menu_availability_tests {
     use uuid::Uuid;
 
     /// Every `SchemaNodeKind`, in declaration order.
-    const ALL_KINDS: [SchemaNodeKind; 63] = [
+    const ALL_KINDS: [SchemaNodeKind; 64] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2385,6 +2473,7 @@ mod menu_availability_tests {
         SchemaNodeKind::DependentItem,
         SchemaNodeKind::ScriptsFolder,
         SchemaNodeKind::ScriptFile,
+        SchemaNodeKind::ScriptsRoot,
         SchemaNodeKind::InstanceMetricsFolder,
         SchemaNodeKind::InstanceMetricLeaf,
         SchemaNodeKind::InstanceInspectorsFolder,
@@ -2393,7 +2482,7 @@ mod menu_availability_tests {
     ];
 
     /// Kinds whose rows open a context menu.
-    const KINDS_WITH_MENU: [SchemaNodeKind; 23] = [
+    const KINDS_WITH_MENU: [SchemaNodeKind; 24] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2408,6 +2497,7 @@ mod menu_availability_tests {
         SchemaNodeKind::SchemaForeignKey,
         SchemaNodeKind::ScriptsFolder,
         SchemaNodeKind::ScriptFile,
+        SchemaNodeKind::ScriptsRoot,
         SchemaNodeKind::DashboardsFolder,
         SchemaNodeKind::DashboardItem,
         SchemaNodeKind::RemoteDashboardsFolder,

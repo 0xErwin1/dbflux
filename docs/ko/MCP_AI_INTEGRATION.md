@@ -113,7 +113,7 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | DDL | `create_type` | admin | 사용자 정의 타입을 만듭니다 |
 | DDL 파괴적 | `drop_table` | admin_destructive | 테이블을 삭제합니다 |
 | DDL 파괴적 | `drop_database` | admin_destructive | 데이터베이스를 삭제합니다 |
-| 스크립트 | `list_scripts` | metadata | 스크립트 디렉터리에 저장된 스크립트를 나열합니다 |
+| 스크립트 | `list_scripts` | metadata | 스크립트 디렉터리에 저장된 스크립트를 나열합니다(외부 스크립트 폴더는 제외) |
 | 스크립트 | `get_script` | read | 특정 저장 스크립트의 소스를 가져옵니다 |
 | 스크립트 | `create_script` | write | 새 스크립트를 스크립트 디렉터리에 저장합니다 |
 | 스크립트 | `update_script` | write | 기존 저장 스크립트를 덮어씁니다 |
