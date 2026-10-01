@@ -38,6 +38,7 @@ struct Gate {
     generation: u64,
     enabled: bool,
     counts: [u16; 6],
+    permission: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 #[derive(Clone)]
@@ -60,11 +61,15 @@ pub struct UsageController {
 
 impl UsageController {
     pub fn new() -> Self {
+        Self::with_permission(Arc::new(|| true))
+    }
+    pub fn with_permission(permission: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
         Self {
             gate: Arc::new(Mutex::new(Gate {
                 generation: 0,
                 enabled: false,
                 counts: [0; 6],
+                permission,
             })),
             foreground: PhantomData,
         }
@@ -126,7 +131,7 @@ impl UsageSource {
     /// Capture at operation start, never at asynchronous completion.
     pub fn ticket(&self) -> Result<Option<UsageTicket>, UsageError> {
         let gate = self.gate.lock().map_err(|_| UsageError::Poisoned)?;
-        Ok(gate.enabled.then(|| UsageTicket {
+        Ok((gate.enabled && (gate.permission)()).then(|| UsageTicket {
             gate: self.gate.clone(),
             generation: gate.generation,
             used: Arc::new(AtomicU8::new(0)),
@@ -137,7 +142,7 @@ impl UsageTicket {
     /// Call only on success. Rejected or duplicate credits return false.
     pub fn record(&self, feature: UsageFeature) -> Result<bool, UsageError> {
         let mut gate = self.gate.lock().map_err(|_| UsageError::Poisoned)?;
-        if !gate.enabled || gate.generation != self.generation {
+        if !gate.enabled || !(gate.permission)() || gate.generation != self.generation {
             return Ok(false);
         }
         let index = feature as usize;
@@ -222,6 +227,49 @@ mod tests {
         drop(owner);
         assert!(source.ticket().expect("gate").is_none());
         assert!(!ticket.record(UsageFeature::QueryRun).expect("record"));
+    }
+    #[test]
+    fn usage_permission_is_checked_by_retained_sources_and_tickets() {
+        let permission = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut owner = UsageController::with_permission({
+            let permission = permission.clone();
+            Arc::new(move || permission.load(Ordering::SeqCst))
+        });
+        owner.set_enabled(true).expect("enable");
+        let source = owner.source();
+        let ticket = source.ticket().expect("gate").expect("ticket");
+        permission.store(false, Ordering::SeqCst);
+        assert!(source.ticket().expect("gate").is_none());
+        assert!(!ticket.record(UsageFeature::QueryRun).expect("denied"));
+        assert_eq!(counts(&mut owner), [0; 6]);
+    }
+    #[test]
+    fn usage_commit_serializes_concurrent_credit_without_losing_delta() {
+        let mut owner = UsageController::new();
+        owner.set_enabled(true).expect("enable");
+        let first = owner.source().ticket().expect("gate").expect("first");
+        assert!(first.record(UsageFeature::QueryRun).expect("first credit"));
+        let next = owner.source().ticket().expect("gate").expect("next");
+        let (send, receive) = std::sync::mpsc::sync_channel(0);
+        let mut snapshot = [0; 6];
+        let mut worker = None;
+        owner
+            .commit(|counts| {
+                snapshot = counts;
+                worker = Some(std::thread::spawn(move || {
+                    send.send(()).expect("attempt credit");
+                    next.record(UsageFeature::QueryRun)
+                        .expect("concurrent credit")
+                }));
+                receive.recv().expect("producer started while gate held");
+                Ok::<(), ()>(())
+            })
+            .expect("gate")
+            .expect("persist");
+        assert!(worker.expect("worker").join().expect("join"));
+        assert_eq!(snapshot, [1, 0, 0, 0, 0, 0]);
+        assert_eq!(counts(&mut owner), [1, 0, 0, 0, 0, 0]);
+        assert_eq!(counts(&mut owner), [0; 6]);
     }
     #[test]
     fn usage_counts_saturate_at_canonical_bound() {

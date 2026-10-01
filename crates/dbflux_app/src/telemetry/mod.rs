@@ -2,6 +2,7 @@
 //! job to a background executor. No SQLite connection crosses that boundary.
 
 use chrono::{DateTime, Utc};
+use dbflux_core::observability::usage::{UsageController, UsageFeature, UsageSource};
 use dbflux_core::observability::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
@@ -471,6 +472,13 @@ pub struct TelemetryScheduler {
     // Nonretryable responses retain their frozen queue but are not dispatched
     // again during this session. A restart may make one new diagnostic attempt.
     suppressed: HashSet<Uuid>,
+    usage: UsageController,
+    audit_available: Arc<dyn Fn() -> bool + Send + Sync>,
+    // A failed withdrawal/rotation cannot be repaired by an ordinary timer tick.
+    runtime_failure: bool,
+    reset_pending: bool,
+    // Unlike withdrawal, a count-save failure retains the same consent epoch.
+    count_save_failed: bool,
 }
 impl Drop for TelemetryScheduler {
     fn drop(&mut self) {
@@ -486,10 +494,15 @@ impl TelemetryScheduler {
         config: TelemetryConfig,
         identity: Result<BuildIdentity, TelemetryError>,
         audit: Arc<dyn EventSink>,
+        audit_available: Arc<dyn Fn() -> bool + Send + Sync>,
         now: DateTime<Utc>,
     ) -> Result<Self, TelemetryError> {
         let state = repository
             .update(now, |_| Ok(()))
+            .map_err(|_| TelemetryError::Storage)?;
+        let mut usage = UsageController::with_permission(audit_available.clone());
+        usage
+            .set_enabled(state.level() == Level::Basic && state.disclosure_dismissed())
             .map_err(|_| TelemetryError::Storage)?;
         Ok(Self {
             repository,
@@ -499,6 +512,11 @@ impl TelemetryScheduler {
             audit,
             lease: None,
             suppressed: HashSet::new(),
+            usage,
+            audit_available,
+            runtime_failure: false,
+            reset_pending: false,
+            count_save_failed: false,
         })
     }
     /// Last successfully committed state on this owner; no mutable cache access.
@@ -519,11 +537,121 @@ impl TelemetryScheduler {
         now: DateTime<Utc>,
         change: impl FnOnce(&mut TelemetryState) -> Result<(), TelemetryRepositoryError>,
     ) -> Result<(), TelemetryError> {
-        self.state = self
-            .repository
-            .update(now, change)
+        let old_id = self.state.install_id();
+        let usage = &mut self.usage;
+        let lease = &self.lease;
+        let mut identity_changed = false;
+        let result = self.repository.update(now, |state| {
+            if state.rotation_due(now) {
+                state.rotate(now);
+            }
+            if state.install_id() != old_id {
+                identity_changed = true;
+                usage
+                    .invalidate()
+                    .map_err(|_| TelemetryRepositoryError::Update)?;
+                if let Some(lease) = lease {
+                    lease.cancel_queued();
+                }
+            }
+            change(state)?;
+            if state.install_id() != old_id && !identity_changed {
+                identity_changed = true;
+                usage
+                    .invalidate()
+                    .map_err(|_| TelemetryRepositoryError::Update)?;
+                if let Some(lease) = lease {
+                    lease.cancel_queued();
+                }
+            }
+            Ok(())
+        });
+        if identity_changed && result.is_err() {
+            self.runtime_failure = true;
+        }
+        self.state = result.map_err(|_| TelemetryError::Storage)?;
+        self.sync_usage()
+    }
+    fn sync_usage(&mut self) -> Result<(), TelemetryError> {
+        self.usage
+            .set_enabled(
+                !self.runtime_failure
+                    && !self.count_save_failed
+                    && (self.audit_available)()
+                    && self.state.level() == Level::Basic
+                    && self.state.disclosure_dismissed(),
+            )
+            .map_err(|_| TelemetryError::Storage)
+    }
+    /// Capture before work starts. The source cannot control consent or storage.
+    pub fn usage_source(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> Result<Option<UsageSource>, TelemetryError> {
+        self.ensure_current_epoch(now)?;
+        self.sync_usage()?;
+        let source = self.usage.source();
+        Ok(source
+            .ticket()
+            .map_err(|_| TelemetryError::Storage)?
+            .map(|_| source))
+    }
+    fn fence(&mut self, basic_only: bool) -> Result<(), TelemetryError> {
+        self.runtime_failure = true;
+        if let Some(lease) = &self.lease
+            && (!basic_only || lease.basic)
+        {
+            lease.cancel_queued();
+        }
+        self.usage.invalidate().map_err(|_| TelemetryError::Storage)
+    }
+    fn ensure_current_epoch(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        if self.runtime_failure {
+            return Err(TelemetryError::Storage);
+        }
+        if self.state.rotation_due(now) {
+            return self.reset(now);
+        }
+        self.update(now, |_| Ok(()))
+    }
+    fn flush_usage(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        let expected_id = self.state.install_id();
+        let repository = &self.repository;
+        let cached = &mut self.state;
+        let result = self
+            .usage
+            .commit(|counts| {
+                if counts == [0; 6] {
+                    return Ok(());
+                }
+                let state = repository
+                    .update(now, |state| {
+                        if state.install_id() != expected_id {
+                            return Err(TelemetryRepositoryError::Update);
+                        }
+                        state.increment_batch(UsageFeature::ALL.map(|feature| {
+                            let (index, mapped) = match feature {
+                                UsageFeature::QueryRun => (0, Feature::QueryRun),
+                                UsageFeature::VisualQueryBuilder => {
+                                    (1, Feature::VisualQueryBuilder)
+                                }
+                                UsageFeature::DashboardOpen => (2, Feature::DashboardOpen),
+                                UsageFeature::ScriptRun => (3, Feature::ScriptRun),
+                                UsageFeature::McpTool => (4, Feature::McpTool),
+                                UsageFeature::SchemaInspect => (5, Feature::SchemaInspect),
+                            };
+                            (mapped, counts[index])
+                        }));
+                        Ok(())
+                    })
+                    .map_err(|_| TelemetryError::Storage)?;
+                *cached = state;
+                Ok(())
+            })
             .map_err(|_| TelemetryError::Storage)?;
-        Ok(())
+        self.count_save_failed = result.is_err();
+        result?;
+        self.sync_usage()
     }
     pub fn disclosure_dismissed(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
         self.update(now, |state| {
@@ -532,10 +660,25 @@ impl TelemetryScheduler {
         })
     }
     pub fn set_basic(&mut self, enabled: bool, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        if !enabled {
+            self.fence(true)?;
+        }
+        let recover = self.runtime_failure;
+        let reset_pending = self.reset_pending;
         self.update(now, |state| {
+            if recover {
+                state.set_level(Level::Off);
+            }
+            if reset_pending {
+                state.rotate(now);
+            }
             state.set_level(if enabled { Level::Basic } else { Level::Off });
             Ok(())
         })?;
+        self.runtime_failure = false;
+        self.reset_pending = false;
+        self.count_save_failed = false;
+        self.sync_usage()?;
         if !enabled
             && let Some(lease) = &self.lease
             && lease.basic
@@ -545,6 +688,8 @@ impl TelemetryScheduler {
         Ok(())
     }
     pub fn reset(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        self.reset_pending = true;
+        self.fence(false)?;
         self.update(now, |state| {
             state.rotate(now);
             Ok(())
@@ -553,13 +698,20 @@ impl TelemetryScheduler {
             lease.cancel_queued();
         }
         self.suppressed.clear();
-        Ok(())
+        self.reset_pending = false;
+        self.count_save_failed = false;
+        self.runtime_failure = false;
+        self.sync_usage()
     }
     pub fn increment(
         &mut self,
         feature: Feature,
         now: DateTime<Utc>,
     ) -> Result<(), TelemetryError> {
+        self.ensure_current_epoch(now)?;
+        if !(self.audit_available)() || !self.state.disclosure_dismissed() {
+            return Ok(());
+        }
         self.update(now, |state| {
             state.increment(feature);
             Ok(())
@@ -570,6 +722,14 @@ impl TelemetryScheduler {
         now: DateTime<Utc>,
         system_locale: &str,
     ) -> Result<Preparation, TelemetryError> {
+        self.ensure_current_epoch(now)?;
+        if !(self.audit_available)() {
+            self.usage
+                .set_enabled(false)
+                .map_err(|_| TelemetryError::Storage)?;
+            return Err(TelemetryError::Audit);
+        }
+        self.flush_usage(now)?;
         let Some(endpoint) = self.config.endpoint.clone() else {
             return Ok(Preparation::Skipped(SkipReason::NoEndpoint));
         };
@@ -638,6 +798,9 @@ impl TelemetryScheduler {
         completion: DeliveryCompletion,
         now: DateTime<Utc>,
     ) -> Result<CompletionDisposition, TelemetryError> {
+        if self.runtime_failure {
+            return Ok(CompletionDisposition::Stale);
+        }
         if !self.lease.as_ref().is_some_and(|lease| {
             lease.id == completion.id && Arc::ptr_eq(&lease.phase, &completion.phase)
         }) {
@@ -720,6 +883,10 @@ mod tests {
                 Architecture::Amd64,
             ),
             Arc::new(audit.clone()),
+            {
+                let audit = audit.clone();
+                Arc::new(move || audit.is_enabled())
+            },
             now(),
         )
         .expect("scheduler");
@@ -753,6 +920,234 @@ mod tests {
             ))
         })
     }
+    fn usage_ticket(
+        scheduler: &mut TelemetryScheduler,
+    ) -> dbflux_core::observability::usage::UsageTicket {
+        scheduler
+            .usage_source(now())
+            .expect("source")
+            .expect("enabled")
+            .ticket()
+            .expect("capture")
+            .expect("ticket")
+    }
+    fn fail_writes(storage: &StorageRuntime) {
+        storage.dbflux_db().execute_batch("CREATE TRIGGER fail_telemetry BEFORE UPDATE ON cfg_telemetry BEGIN SELECT RAISE(FAIL, 'fixture'); END;").expect("failure injection");
+    }
+    fn restore_writes(storage: &StorageRuntime) {
+        storage
+            .dbflux_db()
+            .execute_batch("DROP TRIGGER fail_telemetry;")
+            .expect("restore fixture writes");
+    }
+    #[test]
+    fn telemetry_bridge_requires_basic_disclosure_and_live_audit() {
+        let (mut scheduler, audit, _) = configured();
+        assert!(scheduler.usage_source(now()).expect("off").is_none());
+        scheduler.set_basic(true, now()).expect("basic");
+        assert!(
+            scheduler
+                .usage_source(now())
+                .expect("undisclosed")
+                .is_none()
+        );
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let ticket = usage_ticket(&mut scheduler);
+        audit.set_enabled(false);
+        assert!(
+            !ticket
+                .record(UsageFeature::QueryRun)
+                .expect("live audit gate")
+        );
+        assert!(
+            scheduler
+                .usage_source(now())
+                .expect("disabled audit")
+                .is_none()
+        );
+        assert!(matches!(
+            scheduler.prepare(now(), "en"),
+            Err(TelemetryError::Audit)
+        ));
+        assert!(scheduler.state().pending().is_empty());
+    }
+    #[test]
+    fn telemetry_bridge_batches_six_once_and_ack_preserves_newer_credits() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.set_basic(true, now()).expect("basic");
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let ticket = usage_ticket(&mut scheduler);
+        for feature in UsageFeature::ALL {
+            assert!(ticket.record(feature).expect("credit"));
+            assert!(!ticket.clone().record(feature).expect("duplicate"));
+            assert!(usage_ticket(&mut scheduler).record(feature).expect("fresh"));
+        }
+        let revision_before: i64 = storage
+            .dbflux_db()
+            .query_row("SELECT revision FROM cfg_telemetry WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .expect("revision");
+        scheduler.flush_usage(now()).expect("atomic batch");
+        let revision_after: i64 = storage
+            .dbflux_db()
+            .query_row("SELECT revision FROM cfg_telemetry WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .expect("revision");
+        assert_eq!(revision_after, revision_before + 1);
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping");
+        let basic = job(&mut scheduler, now());
+        let frozen: serde_json::Value = serde_json::from_str(basic.payload()).expect("json");
+        assert_eq!(frozen["features"].as_object().expect("six").len(), 6);
+        assert!(
+            frozen["features"]
+                .as_object()
+                .expect("six")
+                .values()
+                .all(|value| *value == 2)
+        );
+        assert!(
+            usage_ticket(&mut scheduler)
+                .record(UsageFeature::QueryRun)
+                .expect("newer")
+        );
+        scheduler.flush_usage(now()).expect("newer batch");
+        scheduler
+            .complete(acknowledged(&basic), now())
+            .expect("ack snapshot");
+        let next = job(&mut scheduler, now() + chrono::Duration::days(7));
+        let value: serde_json::Value = serde_json::from_str(next.payload()).expect("json");
+        assert_eq!(value["features"]["query_run"], 1);
+    }
+    #[test]
+    fn telemetry_bridge_count_save_failure_retries_same_epoch_exactly_once() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.set_basic(true, now()).expect("basic");
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let ticket = usage_ticket(&mut scheduler);
+        assert!(ticket.record(UsageFeature::ScriptRun).expect("credit"));
+        fail_writes(&storage);
+        assert_eq!(scheduler.flush_usage(now()), Err(TelemetryError::Storage));
+        assert!(
+            !ticket
+                .record(UsageFeature::QueryRun)
+                .expect("disabled until retry")
+        );
+        restore_writes(&storage);
+        assert!(scheduler.usage_source(now()).expect("retry gate").is_none());
+        scheduler.flush_usage(now()).expect("retry");
+        scheduler.flush_usage(now()).expect("no double credit");
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping");
+        let basic = job(&mut scheduler, now());
+        let value: serde_json::Value = serde_json::from_str(basic.payload()).expect("json");
+        assert_eq!(value["features"]["script_run"], 1);
+        assert!(value["features"].get("query_run").is_none());
+    }
+    #[test]
+    fn telemetry_bridge_epoch_fences_off_reset_rotation_failures_and_drop() {
+        for scenario in 0..7 {
+            let (mut scheduler, _, storage) = configured();
+            scheduler.set_basic(true, now()).expect("basic");
+            scheduler.disclosure_dismissed(now()).expect("dismiss");
+            let ticket = usage_ticket(&mut scheduler);
+            assert!(ticket.record(UsageFeature::QueryRun).expect("old credit"));
+            let old_id = scheduler.state().install_id();
+            match scenario {
+                0 => {
+                    scheduler.set_basic(false, now()).expect("off");
+                    scheduler.set_basic(true, now()).expect("on");
+                }
+                1 => {
+                    scheduler.reset(now()).expect("reset");
+                }
+                2 => {
+                    scheduler
+                        .prepare(now() + chrono::Duration::days(90), "en")
+                        .expect("rotate");
+                }
+                3 | 4 => {
+                    fail_writes(&storage);
+                    let result = if scenario == 3 {
+                        scheduler.set_basic(false, now())
+                    } else {
+                        scheduler.reset(now())
+                    };
+                    assert_eq!(result, Err(TelemetryError::Storage));
+                    restore_writes(&storage);
+                    assert!(
+                        scheduler.prepare(now(), "en").is_err(),
+                        "failure fence survives next tick"
+                    );
+                    scheduler.set_basic(true, now()).expect("durable recovery");
+                }
+                5 => {
+                    fail_writes(&storage);
+                    assert!(
+                        scheduler
+                            .prepare(now() + chrono::Duration::days(90), "en")
+                            .is_err()
+                    );
+                    assert!(
+                        !ticket
+                            .record(UsageFeature::ScriptRun)
+                            .expect("failed rotation rejects stale")
+                    );
+                    restore_writes(&storage);
+                    assert!(scheduler.prepare(now(), "en").is_err());
+                    scheduler
+                        .reset(now() + chrono::Duration::days(90))
+                        .expect("durable rotation");
+                }
+                _ => {
+                    let source = scheduler.usage.source();
+                    drop(scheduler);
+                    assert!(source.ticket().expect("dead owner").is_none());
+                    assert!(!ticket.record(UsageFeature::QueryRun).expect("stale"));
+                    continue;
+                }
+            }
+            assert!(!ticket.record(UsageFeature::ScriptRun).expect("stale"));
+            if matches!(scenario, 1 | 2 | 4 | 5) {
+                assert_ne!(scheduler.state().install_id(), old_id);
+            }
+            assert!(
+                usage_ticket(&mut scheduler)
+                    .record(UsageFeature::ScriptRun)
+                    .expect("fresh epoch")
+            );
+            scheduler.flush_usage(now()).expect("flush");
+            let value = serde_json::to_value(scheduler.state()).expect("state");
+            assert!(value["counters"].get("query_run").is_none());
+            assert_eq!(value["counters"]["script_run"], 1);
+        }
+    }
+
+    #[test]
+    fn telemetry_failed_withdrawal_cancels_queued_basic_before_storage() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping");
+        let basic = job(&mut scheduler, now());
+        storage.dbflux_db().execute_batch("CREATE TRIGGER fail_telemetry BEFORE UPDATE ON cfg_telemetry BEGIN SELECT RAISE(FAIL, 'fixture'); END;").expect("failure injection");
+        assert_eq!(
+            scheduler.set_basic(false, now()),
+            Err(TelemetryError::Storage)
+        );
+        assert_eq!(basic.phase.load(Ordering::SeqCst), CANCELLED);
+        assert!(scheduler.prepare(now(), "en").is_err());
+    }
+
     #[test]
     fn telemetry_last_report_reads_byte_exact_payload_from_durable_audit_after_ack() {
         let (mut scheduler, audit, storage) = configured();
@@ -990,7 +1385,8 @@ mod tests {
                 Platform::Linux,
                 Architecture::Amd64,
             ),
-            Arc::new(audit),
+            Arc::new(audit.clone()),
+            Arc::new(move || audit.is_enabled()),
             now(),
         )
         .expect("restart");

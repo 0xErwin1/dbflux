@@ -634,6 +634,23 @@ impl TelemetryState {
             self.counters.clear();
         }
     }
+    /// Fixed-size foreground batch; callers persist the resulting state atomically.
+    pub fn increment_batch(&mut self, counts: [(Feature, u16); 6]) {
+        if self.level != Level::Basic {
+            return;
+        }
+        for (feature, amount) in counts {
+            if amount != 0 {
+                let count = self.counters.entry(feature).or_default();
+                *count = count.saturating_add(amount).min(10_000);
+            }
+        }
+    }
+
+    pub fn rotation_due(&self, now: DateTime<Utc>) -> bool {
+        now.signed_duration_since(self.rotated_at) >= Duration::days(90)
+    }
+
     pub fn increment(&mut self, feature: Feature) {
         if self.level == Level::Basic {
             let count = self.counters.entry(feature).or_default();
@@ -1010,6 +1027,26 @@ mod tests {
                 .is_err()
         );
         assert_eq!(state, previous);
+    }
+
+    #[test]
+    fn telemetry_batch_caps_all_six_and_respects_off() {
+        let features = [
+            Feature::QueryRun,
+            Feature::VisualQueryBuilder,
+            Feature::DashboardOpen,
+            Feature::ScriptRun,
+            Feature::McpTool,
+            Feature::SchemaInspect,
+        ];
+        let batch = features.map(|feature| (feature, u16::MAX));
+        let mut state = TelemetryState::new(clock());
+        state.increment_batch(batch);
+        assert!(state.counters.is_empty());
+        state.set_level(Level::Basic);
+        state.increment_batch(batch);
+        assert_eq!(state.counters.len(), 6);
+        assert!(state.counters.values().all(|count| *count == 10_000));
     }
 
     fn pending_basic() -> TelemetryState {

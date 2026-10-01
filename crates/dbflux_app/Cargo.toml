@@ -51,7 +51,7 @@ reqwest.workspace = true
 semver.workspace = true
 
 [features]
-telemetry = ["dep:dbflux_telemetry", "dbflux_storage/telemetry"]
+telemetry = ["dep:dbflux_telemetry", "dbflux_storage/telemetry", "dbflux_core/telemetry"]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "mssql"]
 # Per-driver features enable the driver crate (for registration here) and, when
 # the MCP server is compiled in, forward the matching driver feature to it. This

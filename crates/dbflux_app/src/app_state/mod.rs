@@ -142,6 +142,11 @@ impl AppState {
                 config,
                 crate::telemetry::BuildIdentity::compiled(),
                 Arc::new(self.audit_service.clone()),
+                {
+                    let audit = self.audit_service.clone();
+                    let degraded = self.audit_degraded;
+                    Arc::new(move || !degraded && audit.is_enabled())
+                },
                 now,
             )?);
         }
@@ -151,6 +156,24 @@ impl AppState {
     #[cfg(feature = "telemetry")]
     pub fn telemetry(&self) -> Option<&crate::telemetry::TelemetryScheduler> {
         self.telemetry.as_ref()
+    }
+
+    /// Capture the source before starting work; failures never fail the user's operation.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_usage_source(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<dbflux_core::observability::usage::UsageSource> {
+        if self.audit_degraded || !self.audit_service.is_enabled() {
+            return None;
+        }
+        match self.telemetry.as_mut()?.usage_source(now) {
+            Ok(source) => source,
+            Err(error) => {
+                log::error!("{error}");
+                None
+            }
+        }
     }
 
     #[cfg(feature = "telemetry")]
@@ -3068,6 +3091,38 @@ mod tests {
         ServiceRpcApiContract,
     };
     use dbflux_driver_ipc::IpcDriver;
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn telemetry_app_source_is_absent_uninitialized_and_degraded() {
+        let directory = std::env::temp_dir().join(format!("dbflux-bridge-app-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).expect("private fixture");
+        let runtime =
+            dbflux_storage::bootstrap::StorageRuntime::for_path(directory.join("fixture.sqlite"))
+                .expect("storage");
+        let mut state = AppState::new_with_storage_runtime(runtime).expect("app");
+        let now = chrono::Utc::now();
+        assert!(state.telemetry_usage_source(now).is_none());
+        state.audit_degraded = true;
+        state
+            .initialize_telemetry(crate::telemetry::TelemetryConfig::default(), now)
+            .expect("initialize");
+        state.set_telemetry_basic(true, now).expect("basic");
+        state
+            .telemetry_mut()
+            .expect("scheduler")
+            .disclosure_dismissed(now)
+            .expect("dismiss");
+        assert!(state.telemetry_usage_source(now).is_none());
+        assert!(
+            state
+                .telemetry_mut()
+                .expect("scheduler")
+                .usage_source(now)
+                .expect("degraded gate")
+                .is_none()
+        );
+    }
 
     #[test]
     fn profile_session_generation_absent_profile_is_none() {
