@@ -269,6 +269,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_portuguese_locales_map_to_brazilian_portuguese() {
+        let brazilian = Language::from_storage_str("pt_BR").expect("pt_BR.yml ships a catalog");
+
+        for locale in ["pt-BR", "pt_BR", "pt-PT", "pt"] {
+            assert_eq!(resolve(None, Some(locale)), brazilian, "{locale}");
+        }
+        assert_eq!(brazilian.native_name(), "Português (Brasil)");
+    }
+
+    #[test]
     fn resolve_es419_maps_to_spanish() {
         assert_eq!(resolve(None, Some("es-419")), spanish());
     }
