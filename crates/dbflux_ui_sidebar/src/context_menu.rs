@@ -2385,7 +2385,7 @@ mod menu_availability_tests {
     use uuid::Uuid;
 
     /// Every `SchemaNodeKind`, in declaration order.
-    const ALL_KINDS: [SchemaNodeKind; 63] = [
+    const ALL_KINDS: [SchemaNodeKind; 64] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2444,6 +2444,7 @@ mod menu_availability_tests {
         SchemaNodeKind::DependentItem,
         SchemaNodeKind::ScriptsFolder,
         SchemaNodeKind::ScriptFile,
+        SchemaNodeKind::ScriptsRoot,
         SchemaNodeKind::InstanceMetricsFolder,
         SchemaNodeKind::InstanceMetricLeaf,
         SchemaNodeKind::InstanceInspectorsFolder,
@@ -2452,7 +2453,7 @@ mod menu_availability_tests {
     ];
 
     /// Kinds whose rows open a context menu.
-    const KINDS_WITH_MENU: [SchemaNodeKind; 23] = [
+    const KINDS_WITH_MENU: [SchemaNodeKind; 24] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2467,6 +2468,7 @@ mod menu_availability_tests {
         SchemaNodeKind::SchemaForeignKey,
         SchemaNodeKind::ScriptsFolder,
         SchemaNodeKind::ScriptFile,
+        SchemaNodeKind::ScriptsRoot,
         SchemaNodeKind::DashboardsFolder,
         SchemaNodeKind::DashboardItem,
         SchemaNodeKind::RemoteDashboardsFolder,
