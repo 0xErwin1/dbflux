@@ -3178,6 +3178,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "tokio",
  "uuid",
 ]
 
@@ -3242,6 +3243,7 @@ dependencies = [
  "dbflux_ssm",
  "dbflux_storage",
  "dbflux_test_support",
+ "interprocess",
  "log",
  "rmcp 2.2.0",
  "rusqlite",

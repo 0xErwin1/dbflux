@@ -94,6 +94,14 @@ fn handle_connection(
     }
 
     let response_body = match request.body {
+        #[cfg(feature = "telemetry")]
+        IpcMessage::BeginMcpToolUsage { .. } => {
+            IpcResponse::McpToolUsageCapability { capability: None }
+        }
+        #[cfg(feature = "telemetry")]
+        IpcMessage::FinishMcpToolUsage { .. } => {
+            IpcResponse::McpToolUsageFinished { accepted: false }
+        }
         IpcMessage::Ping => IpcResponse::Pong {
             version: env!("CARGO_PKG_VERSION").to_string(),
         },

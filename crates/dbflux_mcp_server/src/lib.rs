@@ -5,6 +5,8 @@ mod handlers;
 mod helper;
 pub mod server;
 pub mod state;
+#[cfg(feature = "telemetry")]
+mod telemetry_usage;
 pub mod tools;
 
 use std::path::PathBuf;

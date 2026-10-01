@@ -8,7 +8,11 @@ repository.workspace = true
 homepage.workspace = true
 license.workspace = true
 
+[features]
+telemetry = ["dep:tokio", "interprocess/tokio"]
+
 [dependencies]
+tokio = { workspace = true, optional = true, features = ["net", "io-util", "time"] }
 serde = { workspace = true, features = ["derive"] }
 postcard = { workspace = true }
 interprocess.workspace = true
