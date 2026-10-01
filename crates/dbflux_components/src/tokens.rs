@@ -1599,9 +1599,11 @@ impl ShellMetrics {
     /// The task row the keyboard points at: a 10% tint wash.
     pub const TASK_SELECTED_ALPHA: f32 = 0.10;
 
-    /// Empty workspace: 620 px column, 26 px between blocks, 16 px between
-    /// the glyph and the title and between the cards.
-    pub const EMPTY_WIDTH: Pixels = px(620.0);
+    /// Empty workspace: 700 px column, 26 px between blocks, 16 px between
+    /// the glyph and the title and between the cards. Wide enough that
+    /// longer translations of "Command palette" stay on one line next to
+    /// their shortcut keys.
+    pub const EMPTY_WIDTH: Pixels = px(700.0);
     pub const EMPTY_GAP: Pixels = px(26.0);
     pub const EMPTY_HEAD_GAP: Pixels = px(16.0);
     pub const EMPTY_GLYPH: Pixels = px(44.0);
