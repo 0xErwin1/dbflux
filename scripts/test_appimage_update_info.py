@@ -158,7 +158,8 @@ class VerifyStepExecutionTests(unittest.TestCase):
                     "dbflux-x86_64.AppImage.asc", "dbflux_0.0_amd64.deb",
                     "dbflux_0.0_amd64.deb.asc", "dbflux_amd64.deb.sha256",
                     "dbflux_0.0_amd64.rpm", "dbflux_0.0_amd64.rpm.asc",
-                    "dbflux_amd64.rpm.sha256",
+                    "dbflux_amd64.rpm.sha256", "dbflux-linux-amd64.deb.sha256",
+                    "dbflux-linux-amd64.rpm.sha256",
                 ):
                     (root / name).write_bytes(b"x")
                 body = body.replace("/tmp/artifacts", str(root / "published"))

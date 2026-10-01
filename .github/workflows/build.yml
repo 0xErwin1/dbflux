@@ -205,8 +205,8 @@ jobs:
           free -h
           cat "$SAMPLES"
 
-      - name: Check AppImage packaging contracts
-        run: python3 -m unittest discover -s scripts -p 'test_appimage*.py'
+      - name: Check packaging and release script contracts
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Create package
         run: |
@@ -454,6 +454,27 @@ jobs:
           sha256sum *.deb > dbflux_${{ matrix.arch }}.deb.sha256
           sha256sum *.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
 
+      - name: Add stable names for the Linux packages
+        # The .deb and .rpm names carry the version, so a
+        # releases/latest/download/ link to them can never resolve. Publish
+        # byte-identical copies under fixed names, which docs/INSTALL.md links
+        # to. They are made after signing and checksumming so the versioned
+        # packages' .sha256 files keep a single entry; the detached signature
+        # does not depend on the file name, so it is copied as is.
+        run: |
+          for extension in deb rpm; do
+            packages=(*."$extension")
+            if [ "${#packages[@]}" -ne 1 ] || [ ! -f "${packages[0]}" ]; then
+              echo "::error::Expected exactly one .$extension package, found: ${packages[*]}"
+              exit 1
+            fi
+
+            stable_name="dbflux-linux-${{ matrix.arch }}.$extension"
+            cp "${packages[0]}" "$stable_name"
+            cp "${packages[0]}.asc" "$stable_name.asc"
+            sha256sum "$stable_name" > "$stable_name.sha256"
+          done
+
       - name: Upload artifacts
         if: env.ACT != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -470,9 +491,11 @@ jobs:
             *.deb
             *.deb.asc
             dbflux_${{ matrix.arch }}.deb.sha256
+            dbflux-linux-${{ matrix.arch }}.deb.sha256
             *.rpm
             *.rpm.asc
             dbflux_${{ matrix.arch }}.rpm.sha256
+            dbflux-linux-${{ matrix.arch }}.rpm.sha256
           retention-days: 90
 
       - name: (act) Store artifacts locally
@@ -493,9 +516,11 @@ jobs:
           cp *.deb /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
 
   build-macos:
     name: Build macOS ${{ matrix.arch }}

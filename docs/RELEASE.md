@@ -179,6 +179,21 @@ stay manual. The sidecar and the embedded string are produced by appimagetool
 performed by an external tool such as AppImageUpdate — DBFlux itself does not
 self-update.
 
+### Stable download names
+
+The `.deb` and `.rpm` packages carry their version in the file name
+(`dbflux_0.8.5_linux_amd64.deb`, `dbflux-0.8.5-1.x86_64.rpm`), so a
+`releases/latest/download/` link cannot point at them. `build.yml` also
+publishes byte-identical copies named `dbflux-linux-<arch>.deb` and
+`dbflux-linux-<arch>.rpm`, each with its own `.asc` and `.sha256`, and those
+are the names [Installation](INSTALL.md) links to.
+
+Before publishing, `release.yml` and `nightly.yml` run
+`scripts/check_release_links.py` against the downloaded artifacts. A
+`releases/latest/download/` link in the documentation, its translations or the
+site's install section that names a file the release does not carry fails the
+job instead of shipping a 404.
+
 ## Cut Procedure: `main` → `release/vX.Y`
 
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
