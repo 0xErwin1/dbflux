@@ -1166,6 +1166,129 @@ mod tests {
         );
     }
 
+    // The Lua editor pipeline routes the whole buffer through the default
+    // CompositeExecutor/LuaExecutor, so the log buffer becomes the adopted
+    // result text without ever touching the bound connection.
+    #[cfg(feature = "lua")]
+    #[gpui::test]
+    fn lua_script_output_pipeline_success_adopts_buffered_info_output(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                document.set_content("dbflux.log.info('lua success')", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| {
+            let record = &document.read(cx).execution.execution_history[0];
+            record.is_script
+                && record.finished_at.is_some()
+                && record.error.is_none()
+                && record
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.text_body.as_deref())
+                    == Some("[INFO] lua success")
+        }));
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(window.update(|_, cx| {
+            document.read(cx).execution.active_query_task.is_none()
+                && document.read(cx).state() == crate::types::DocumentState::Clean
+        }));
+    }
+
+    // A Lua runtime error maps to the generic script failure contract: the
+    // executor returns an exit-code-1 result carrying the error text, so the
+    // record adopts the canonical failure marker while the task stays terminal
+    // through the normal completion path.
+    #[cfg(feature = "lua")]
+    #[gpui::test]
+    fn lua_script_output_pipeline_error_surfaces_canonical_failure_output(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                document.set_content("error('lua failure')", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| {
+            let record = &document.read(cx).execution.execution_history[0];
+            record.is_script
+                && record.finished_at.is_some()
+                && record.error.is_none()
+                && record
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.text_body.as_deref())
+                    .is_some_and(|output| {
+                        output.contains("lua failure")
+                            && output.contains("Process exited with code 1")
+                    })
+        }));
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(window.update(|_, cx| {
+            document.read(cx).execution.active_query_task.is_none()
+                && document.read(cx).state() == crate::types::DocumentState::Clean
+                && app_state
+                    .read(cx)
+                    .tasks()
+                    .recent_tasks(10)
+                    .into_iter()
+                    .filter(|task| task.kind == dbflux_core::TaskKind::Query)
+                    .all(|task| task.status == dbflux_core::TaskStatus::Completed)
+        }));
+    }
+
     /// The sequence the workspace funnel runs for one tab: ask the document what
     /// closing means, then remove it when the answer is `CloseNow`.
     ///
