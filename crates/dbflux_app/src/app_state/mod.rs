@@ -65,7 +65,7 @@ pub enum ScriptRootError {
     /// to attach a folder to.
     ScriptsUnavailable,
     /// The folder overlaps one already registered, or is not a folder.
-    Invalid(DbError),
+    Invalid(Box<DbError>),
     /// No registered folder has that id.
     UnknownRoot,
     Storage(dbflux_storage::error::StorageError),
@@ -1766,7 +1766,7 @@ impl AppState {
 
         let root = ExternalScriptRoot::new(path);
         dir.add_external_root_pending(root.clone())
-            .map_err(ScriptRootError::Invalid)?;
+            .map_err(|error| ScriptRootError::Invalid(Box::new(error)))?;
 
         let dto = ScriptRootDto {
             id: root.id.to_string(),
