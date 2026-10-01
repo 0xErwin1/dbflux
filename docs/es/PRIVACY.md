@@ -10,8 +10,11 @@ tráfico en su camino hacia ti.
 
 1. La aplicación envía datos únicamente a los servidores de base de datos que
    configuras, y solo lo necesario para ejecutar las consultas que pides.
-2. No hay telemetría, ni reporte de fallos, ni analítica de uso, ni cuenta de
-   usuario. Nada llama a casa.
+2. La telemetría existe, pero es opcional y está apagada por defecto. El envío
+   necesita un destino configurado explícitamente, que ninguna compilación
+   publicada tiene, así que por defecto no se envía nada. Nunca envía
+   consultas, resultados, credenciales, rutas de archivos ni metadatos de
+   conexión. Los detalles están en [Telemetría](#telemetría-opcional).
 3. El sitio web y la documentación son páginas estáticas. No usan cookies, no
    cargan scripts de terceros y no guardan registro de visitantes
    individuales. Una medición anónima del uso de las páginas, gestionada por el
@@ -23,7 +26,7 @@ tráfico en su camino hacia ti.
 
 | Pregunta | Respuesta |
 |----------|-----------|
-| ¿DBFlux envía datos de uso a algún sitio? | No. No hay telemetría ni reporte de fallos. |
+| ¿DBFlux envía datos de uso a algún sitio? | Solo después de cerrar el aviso de bienvenida y con un destino configurado, que ninguna compilación publicada tiene. Las estadísticas de uso (Básico) son una activación separada. Ver [Telemetría](#telemetría-opcional). |
 | ¿Comprueba si hay actualizaciones? | No. Las actualizaciones se encuentran en la página de releases de GitHub. |
 | ¿Qué conexiones de red abre? | Solo las que configuras: servidores de base de datos, túneles SSH, proxies y APIs cloud de los drivers que uses. |
 | ¿Dónde viven mis datos? | En tu máquina, en un único archivo SQLite más el llavero del sistema operativo para los secretos. |
@@ -37,6 +40,42 @@ opera ninguno de esos servidores y no tiene visibilidad de ese tráfico.
 [Tus datos en este equipo](#tus-datos-en-este-equipo) documenta los archivos que DBFlux
 escribe, qué registra el log de auditoría, cómo se guardan los secretos y cómo
 hacer copia de seguridad o reiniciar la aplicación por completo.
+
+### Telemetría (opcional)
+
+DBFlux incluye un módulo de telemetría opcional. Es una funcionalidad
+compilada que puede excluirse por completo con `--no-default-features`, como
+las demás funcionalidades por defecto. No se envía nada salvo que se cumplan
+dos condiciones: hay un destino configurado (ninguna compilación publicada lo
+tiene, así que el envío no está disponible por defecto) y cerraste el aviso de
+bienvenida. Cerrar el aviso no es una activación de Básico: el nivel de
+estadísticas de uso es una elección separada, y sin destino configurado no se
+envía nada de ninguna manera.
+
+| Nivel | Qué envía |
+|-------|-----------|
+| Apagado (por defecto) | A lo sumo un aviso mínimo de versión por instalación y compilación: sistema operativo, arquitectura, versión y canal de la app, y un identificador aleatorio. |
+| Básico (activación) | Suma un informe semanal: idioma del sistema (no el de la interfaz) y país. Los contadores de funciones existen en el protocolo pero aún no están instrumentados, así que hoy Básico envía un mapa de recuentos vacío. |
+
+Datos que no cambian según el nivel:
+
+- El identificador es un UUID aleatorio que rota cada 90 días
+  aproximadamente. Es **seudónimo, no anónimo**, y no está ligado a ti ni a tu
+  máquina.
+- Nunca se envían: consultas, resultados, credenciales, rutas de archivos,
+  metadatos de conexión ni texto de error sin restricciones. No hay
+  estadísticas públicas, recuentos de motores, reportes de errores ni
+  tiempos de rendimiento.
+- Cada informe —el contenido completo, el nivel y el resultado— queda
+  registrado en el [log de auditoría](#auditoría-y-privacidad) local antes y
+  después del intento.
+- Reiniciar el id de instalación en Configuración › Actualizaciones y
+  privacidad rota el identificador de inmediato y cancela los envíos
+  pendientes; las compilaciones ya confirmadas siguen confirmadas.
+
+El nivel y los informes están en Configuración › Actualizaciones y
+privacidad. El nivel se aplica al guardar; reiniciar a los valores por
+defecto deja Apagado sin tocar el id de instalación.
 
 ## Tus datos en este equipo
 

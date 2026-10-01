@@ -10,9 +10,13 @@ to you.
 
 1. The application sends data only to the database servers you configure, and
    only what is needed to run the queries you ask for.
-2. There is no telemetry, no crash reporting, no usage analytics, and no
-   account. Nothing phones home.
-3. The website and documentation are static pages. They set no cookies, load
+2. Telemetry exists but is optional and off by default. Delivery needs an
+   explicitly configured endpoint, which no shipped build has, so nothing is
+   sent by default. It sends no queries, results, credentials, file paths, or
+   connection metadata — ever. Details are in [Telemetry](#telemetry-optional).
+3. There is no crash reporting, no usage analytics beyond the telemetry above,
+   and no account. The application does not phone home.
+4. The website and documentation are static pages. They set no cookies, load
    no third-party script, and keep no record of individual visitors. An
    anonymous measurement of page usage, handled by the project's own server,
    is described under [Website usage measurement](#website-usage-measurement);
@@ -22,7 +26,7 @@ to you.
 
 | Question | Answer |
 |----------|--------|
-| Does DBFlux send usage data anywhere? | No. There is no telemetry and no crash reporter. |
+| Does DBFlux send usage data anywhere? | Only after you have dismissed the welcome disclosure and an endpoint is configured, which no shipped build has. Usage statistics (Basic) are a separate opt-in. See [Telemetry](#telemetry-optional). |
 | Does it check for updates? | No. Updates are found on the GitHub releases page. |
 | What network connections does it open? | Only the ones you configure: database servers, SSH tunnels, proxies, and cloud APIs for the drivers you use. |
 | Where does my data live? | On your machine, in one SQLite file plus the operating system keyring for secrets. |
@@ -36,6 +40,38 @@ of those servers and has no visibility into that traffic.
 [Your data on this machine](#your-data-on-this-machine) documents the files
 DBFlux writes, what the audit log records, how secrets are stored, and how to
 back up or fully reset the application.
+
+### Telemetry (optional)
+
+DBFlux ships with an optional telemetry module. It is a compiled-in feature
+that can be excluded entirely with `--no-default-features`, like the other
+default features. Nothing is sent unless two conditions hold: an endpoint is
+configured (no shipped build has one, so delivery is unavailable by default)
+and you have dismissed the welcome disclosure. Dismissing the disclosure is
+not a Basic opt-in: the usage-statistics level is a separate choice, and with
+no endpoint configured nothing is delivered either way.
+
+| Level | What it sends |
+|-------|---------------|
+| Off (default) | At most one minimal version ping per installation and build: OS, architecture, app version and channel, and a random identifier. |
+| Basic (opt-in) | Adds a weekly report: system language (not the UI language) and country. Feature counters exist in the protocol but are not instrumented yet, so today Basic sends an empty count map. |
+
+Facts that do not change with the level:
+
+- The identifier is a random UUID that rotates about every 90 days. It is
+  **pseudonymous, not anonymous**, and is not tied to you or your machine.
+- Never sent: queries, results, credentials, file paths, connection metadata,
+  or unrestricted error text. There are no public statistics, engine counts,
+  error reports, or performance timings.
+- Every report — the full payload, the level and the outcome — is recorded in
+  the local [audit log](#audit-and-privacy) before and after the attempt.
+- Resetting the installation id in Settings › Updates & privacy rotates the
+  identifier at once and cancels pending sends; already-acknowledged builds
+  stay acknowledged.
+
+The level and the reports live in Settings › Updates & privacy. The staged
+level applies when you save; resetting to defaults stages Off without
+touching the installation id.
 
 ## Your data on this machine
 

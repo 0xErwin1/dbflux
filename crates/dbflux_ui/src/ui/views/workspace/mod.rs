@@ -502,6 +502,15 @@ impl Workspace {
         )
         .detach();
 
+        // Saved Settings preferences (or any app-state change) wake the
+        // retained telemetry worker so a due delivery is prepared at once;
+        // no new worker or emitter is created.
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(&app_state, |this, _, _: &AppStateChanged, _| {
+            this.telemetry_wake.wake();
+        })
+        .detach();
+
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
         let modal_active_query = cx.new(crate::ui::overlays::modals::ModalActiveQuery::new);

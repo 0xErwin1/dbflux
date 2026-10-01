@@ -4,6 +4,7 @@ pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
 pub mod import_dashboard;
+pub mod json_report_preview;
 pub mod modal;
 pub mod mutation_confirm;
 pub mod parts;
@@ -25,6 +26,7 @@ pub use drop_table::{DropTableOutcome, DropTableRequest, ModalDropTable};
 pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };
+pub use json_report_preview::{JsonReportPreviewRequest, ModalJsonReportPreview};
 pub use modal::{MODAL_KEY_CONTEXT, Modal, ModalFocus, ModalVariant};
 pub use mutation_confirm::{
     ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmHardRequest,

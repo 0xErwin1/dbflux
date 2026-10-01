@@ -394,7 +394,10 @@ enum EventKind {
 }
 
 /// Validate the actual frozen bytes without reserializing or repairing them.
-pub(crate) fn validate_payload(json: &str) -> Result<(), ProtocolError> {
+/// This is the canonical strict closed-schema check for one delivery payload
+/// (duplicate keys rejected via the raw-byte scan); shared with read helpers
+/// such as the audit-backed last-report lookup in `dbflux_app`.
+pub fn validate_payload(json: &str) -> Result<(), ProtocolError> {
     let value = strict_json(json.as_bytes(), 4096)?;
     wire_uuid(&value["install_id"])?;
     wire_uuid(&value["delivery_id"])?;

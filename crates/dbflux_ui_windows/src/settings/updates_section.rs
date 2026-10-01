@@ -4,7 +4,11 @@ use dbflux_app::keymap::Modifiers;
 use dbflux_app::updates::{CheckedAgo, UpdateCheckOutcome, UpdateCheckState, UpdateSettings};
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
+#[cfg(feature = "telemetry")]
+use dbflux_components::modals::{JsonReportPreviewRequest, ModalJsonReportPreview};
 use dbflux_components::primitives::{Icon, Text};
+#[cfg(feature = "telemetry")]
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
 use dbflux_core::ReleaseChannel;
 use dbflux_core::chrono::Utc;
@@ -18,6 +22,8 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+#[cfg(feature = "telemetry")]
+use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::scroll::ScrollableElement;
 
 /// Width of the label column in a settings row.
@@ -34,10 +40,23 @@ enum UpdatesRow {
     ShowWhatsNew,
     OpenWhatsNew,
     ShowWelcome,
+    /// The staged Off/Basic telemetry choice (a segmented field).
+    #[cfg(feature = "telemetry")]
+    TelemetryLevel,
+    /// Opens the confirm dialog that resets the installation id.
+    #[cfg(feature = "telemetry")]
+    InstallReset,
+    /// Opens the read-only viewer for the last confirmed report.
+    #[cfg(feature = "telemetry")]
+    ViewReport,
+    /// Opens the audit viewer at the last report's correlation id.
+    #[cfg(feature = "telemetry")]
+    OpenInAudit,
     Reset,
     Save,
 }
 
+#[cfg(not(feature = "telemetry"))]
 const ROWS: [UpdatesRow; 7] = [
     UpdatesRow::CheckOnStartup,
     UpdatesRow::CheckNow,
@@ -48,12 +67,53 @@ const ROWS: [UpdatesRow; 7] = [
     UpdatesRow::Save,
 ];
 
+#[cfg(feature = "telemetry")]
+const ROWS: [UpdatesRow; 11] = [
+    UpdatesRow::CheckOnStartup,
+    UpdatesRow::CheckNow,
+    UpdatesRow::ShowWhatsNew,
+    UpdatesRow::OpenWhatsNew,
+    UpdatesRow::ShowWelcome,
+    UpdatesRow::TelemetryLevel,
+    UpdatesRow::InstallReset,
+    UpdatesRow::ViewReport,
+    UpdatesRow::OpenInAudit,
+    UpdatesRow::Reset,
+    UpdatesRow::Save,
+];
+
+/// Where the cached last-report lookup stands. The lookup itself is cached
+/// outside render and queried on a background executor.
+#[cfg(feature = "telemetry")]
+#[derive(Clone, Default)]
+enum ReportState {
+    #[default]
+    Loading,
+    /// No confirmed report in the durable audit (nothing sent yet). Only a
+    /// successful `Ok(None)` lookup may produce this state.
+    None,
+    /// The audit lookup failed; the truth is unknown, not "nothing sent".
+    Failed,
+    Ready(dbflux_app::telemetry::TelemetryLastReport),
+}
+
 /// Settings › Updates: the update-check and changelog preferences, the
 /// result of the latest check, and entry points to the two dialogs.
 pub(super) struct UpdatesSection {
     app_state: Entity<AppStateEntity>,
     check_on_startup: bool,
     show_whats_new: bool,
+    /// Staged Basic opt-in, applied only by Save.
+    #[cfg(feature = "telemetry")]
+    telemetry_basic: bool,
+    /// Staged confirmation state of the install-id reset dialog.
+    #[cfg(feature = "telemetry")]
+    pending_install_reset: bool,
+    /// Cached newest confirmed report, refreshed outside render.
+    #[cfg(feature = "telemetry")]
+    report_state: ReportState,
+    #[cfg(feature = "telemetry")]
+    report_preview: Entity<ModalJsonReportPreview>,
     content_focused: bool,
     cursor: usize,
     _subscriptions: Vec<Subscription>,
@@ -70,14 +130,93 @@ impl UpdatesSection {
             cx.notify();
         });
 
-        Self {
+        #[cfg(feature = "telemetry")]
+        let telemetry_subscription =
+            cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.refresh_last_report(cx);
+            });
+
+        #[cfg_attr(not(feature = "telemetry"), allow(unused_mut))]
+        let mut section = Self {
             app_state,
             check_on_startup: saved.check_for_updates_on_startup,
             show_whats_new: saved.show_whats_new_after_update,
+            #[cfg(feature = "telemetry")]
+            telemetry_basic: false,
+            #[cfg(feature = "telemetry")]
+            pending_install_reset: false,
+            #[cfg(feature = "telemetry")]
+            report_state: ReportState::Loading,
+            #[cfg(feature = "telemetry")]
+            report_preview: cx.new(|cx| ModalJsonReportPreview::new(cx)),
             content_focused: false,
             cursor: 0,
             _subscriptions: vec![subscription],
+        };
+
+        #[cfg(feature = "telemetry")]
+        {
+            section.telemetry_basic = section
+                .app_state
+                .read(cx)
+                .telemetry_basic_level()
+                .unwrap_or(false);
+            section.refresh_last_report(cx);
+            section._subscriptions.push(telemetry_subscription);
         }
+
+        section
+    }
+
+    /// Queries the newest confirmed report from the durable audit on the
+    /// background executor and caches the metadata outside render. No query
+    /// runs while the optional telemetry module is unavailable.
+    #[cfg(feature = "telemetry")]
+    fn refresh_last_report(&mut self, cx: &mut Context<Self>) {
+        if self.app_state.read(cx).telemetry().is_none() {
+            self.report_state = ReportState::Failed;
+            cx.notify();
+            return;
+        }
+        self.report_state = ReportState::Loading;
+        let audit = self.app_state.read(cx).audit_service().clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { dbflux_app::telemetry::last_report(&audit) });
+        cx.spawn(async move |section, cx| {
+            let result = task.await;
+            let applied = section.update(cx, |section, cx| {
+                section.report_state = match result {
+                    Ok(Some(report)) => ReportState::Ready(report),
+                    Ok(None) => ReportState::None,
+                    Err(_) => {
+                        // First catch site: one finite user-facing error; the
+                        // payload or raw audit text never reaches the toast.
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Storage,
+                                dbflux_i18n::t!("updates.settings.report_load_failed"),
+                            ),
+                            cx,
+                        );
+                        ReportState::Failed
+                    }
+                };
+                cx.notify();
+            });
+            if applied.is_err() {
+                // The section (or its window) closed while the query ran:
+                // nothing to update, nothing to report to the user.
+                log::debug!("updates.report_query_dropped: section gone");
+            }
+        })
+        .detach();
+    }
+
+    /// Row label of the cached report state, for rendering and regressions.
+    #[cfg(feature = "telemetry")]
+    fn report_meta_label(&self) -> String {
+        report_meta_label(&self.report_state)
     }
 
     fn saved_settings(&self, cx: &App) -> UpdateSettings {
@@ -87,8 +226,19 @@ impl UpdatesSection {
     fn has_unsaved_changes(&self, cx: &App) -> bool {
         let saved = self.saved_settings(cx);
 
-        saved.check_for_updates_on_startup != self.check_on_startup
-            || saved.show_whats_new_after_update != self.show_whats_new
+        let update_changes = saved.check_for_updates_on_startup != self.check_on_startup
+            || saved.show_whats_new_after_update != self.show_whats_new;
+
+        if update_changes {
+            return true;
+        }
+
+        #[cfg(feature = "telemetry")]
+        if self.app_state.read(cx).telemetry_basic_level() != Some(self.telemetry_basic) {
+            return true;
+        }
+
+        false
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
@@ -115,6 +265,29 @@ impl UpdatesSection {
             return;
         }
 
+        // First catch site: persist the staged level on the storage owner, in
+        // the foreground. On failure the staged value stays dirty and the
+        // saved state stays truthful; no success toast is shown.
+        #[cfg(feature = "telemetry")]
+        {
+            let telemetry_result = self.app_state.update(cx, |state, _| {
+                state.set_telemetry_basic(self.telemetry_basic, Utc::now())
+            });
+            if let Err(_error) = telemetry_result {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        dbflux_i18n::t!("updates.settings.telemetry_save_failed"),
+                    ),
+                    cx,
+                );
+                self.refresh_last_report(cx);
+                cx.notify();
+                return;
+            }
+            self.refresh_last_report(cx);
+        }
+
         Toast::success(dbflux_i18n::t!("updates.settings.saved"))
             .meta_right(now_hms())
             .push(cx);
@@ -125,6 +298,12 @@ impl UpdatesSection {
         let defaults = UpdateSettings::default();
         self.check_on_startup = defaults.check_for_updates_on_startup;
         self.show_whats_new = defaults.show_whats_new_after_update;
+        // Defaults stage Off only: the install id and the saved level are
+        // untouched until Save, and no telemetry write happens here.
+        #[cfg(feature = "telemetry")]
+        {
+            self.telemetry_basic = false;
+        }
         cx.notify();
     }
 
@@ -143,10 +322,57 @@ impl UpdatesSection {
                 self.request_dialog(UpdateDialogRequest::WhatsNew { since: None }, cx)
             }
             UpdatesRow::ShowWelcome => self.request_dialog(UpdateDialogRequest::Welcome, cx),
+            #[cfg(feature = "telemetry")]
+            UpdatesRow::TelemetryLevel => {
+                self.telemetry_basic = !self.telemetry_basic;
+            }
+            #[cfg(feature = "telemetry")]
+            UpdatesRow::InstallReset => self.pending_install_reset = true,
+            #[cfg(feature = "telemetry")]
+            UpdatesRow::ViewReport => self.open_report_preview(cx),
+            #[cfg(feature = "telemetry")]
+            UpdatesRow::OpenInAudit => self.open_last_report_in_audit(cx),
             UpdatesRow::Reset => self.reset_to_defaults(cx),
             UpdatesRow::Save => self.save(cx),
         }
         cx.notify();
+    }
+
+    /// Opens the read-only viewer over the cached report; nothing renders for
+    /// an empty cache, so no fake empty report can appear.
+    #[cfg(feature = "telemetry")]
+    fn open_report_preview(&mut self, cx: &mut Context<Self>) {
+        let ReportState::Ready(report) = &self.report_state else {
+            return;
+        };
+        let when = report_time_label(report.ack_at_epoch_ms);
+        let level = report_level_label(report.level.as_deref());
+        let request = JsonReportPreviewRequest {
+            title: dbflux_i18n::t!("updates.settings.reports").into(),
+            meta: Some(
+                dbflux_i18n::t!(
+                    "updates.settings.last_sent",
+                    when = when,
+                    level = level,
+                    size = report_size_label(report.payload_len)
+                )
+                .into(),
+            ),
+            raw: report.payload.clone(),
+        };
+        self.report_preview
+            .update(cx, |preview, cx| preview.open(request, cx));
+    }
+
+    /// Opens the audit viewer at the last report's real correlation id.
+    #[cfg(feature = "telemetry")]
+    fn open_last_report_in_audit(&mut self, cx: &mut Context<Self>) {
+        let ReportState::Ready(report) = &self.report_state else {
+            return;
+        };
+        self.app_state.update(cx, |state, cx| {
+            state.request_open_audit(report.correlation, cx);
+        });
     }
 
     fn select(&mut self, row: UpdatesRow) {
@@ -321,7 +547,8 @@ impl UpdatesSection {
 
         let group_header = self.render_group_header(cx);
 
-        div()
+        #[cfg_attr(not(feature = "telemetry"), allow(unused_mut))]
+        let mut body = div()
             .flex()
             .flex_col()
             .child(group_header)
@@ -330,8 +557,208 @@ impl UpdatesSection {
                 new_versions,
             ))
             .child(self.render_row(dbflux_i18n::t!("updates.settings.status"), status))
-            .child(self.render_row(dbflux_i18n::t!("updates.settings.changelog"), changelog))
+            .child(self.render_row(dbflux_i18n::t!("updates.settings.changelog"), changelog));
+
+        #[cfg(feature = "telemetry")]
+        {
+            body = body.child(self.render_usage_group(cx));
+        }
+
+        body.into_any_element()
+    }
+
+    /// Usage statistics: the staged Off/Basic level, what is sent, the
+    /// install id and the last confirmed report.
+    #[cfg(feature = "telemetry")]
+    fn render_usage_group(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let tint = ChromeColors::tint(theme);
+
+        let level = SegmentedControl::new(
+            vec![
+                SegmentedItem::new("off", dbflux_i18n::t!("updates.settings.level_off")),
+                SegmentedItem::new("basic", dbflux_i18n::t!("updates.settings.level_basic")),
+            ],
+            if self.telemetry_basic { "basic" } else { "off" },
+            {
+                let state = cx.entity();
+                move |id, _, cx| {
+                    state.update(cx, |section, cx| {
+                        section.telemetry_basic = id.as_ref() == "basic";
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .group("telemetry-level")
+        .focused(self.content_focused && self.is_at(UpdatesRow::TelemetryLevel));
+
+        let level_row = self.focus_frame(UpdatesRow::TelemetryLevel, cx, div().child(level));
+
+        let what_is_sent = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XXS)
+            .child(
+                Text::caption(dbflux_i18n::t!("updates.settings.counts_not_instrumented"))
+                    .text_color(muted),
+            )
+            .child(self.collected_row(
+                dbflux_i18n::t!("updates.settings.collected_build"),
+                true,
+                true,
+            ))
+            .child(self.collected_row(
+                dbflux_i18n::t!("updates.settings.collected_language"),
+                false,
+                true,
+            ))
+            .child(self.collected_row(
+                dbflux_i18n::t!("updates.settings.collected_counts"),
+                false,
+                true,
+            ));
+
+        let install_id = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(
+                Text::code(
+                    self.app_state
+                        .read(cx)
+                        .telemetry_install_id_masked()
+                        .unwrap_or_else(|| "—".to_owned()),
+                )
+                .font_size(FontSizes::SM)
+                .text_color(ChromeColors::strong(theme)),
+            )
+            .child(self.render_button(
+                "updates-install-reset",
+                UpdatesRow::InstallReset,
+                dbflux_i18n::t!("updates.settings.reset_install_id"),
+                AppIcon::RotateCcw,
+                cx,
+            ));
+
+        let delivery_configured = self.app_state.read(cx).telemetry_delivery_configured();
+        let reports = self.render_reports_controls(cx);
+
+        div()
+            .flex()
+            .flex_col()
+            .pt(Spacing::MD)
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("updates.settings.usage_heading"),
+                Some(AppIcon::Activity.into()),
+                cx,
+            ))
+            .child(
+                self.render_row(
+                    dbflux_i18n::t!("updates.settings.usage_level"),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(Spacing::XXS)
+                        .child(level_row)
+                        .child(
+                            Text::caption(dbflux_i18n::t!("updates.settings.level_hint"))
+                                .text_color(muted),
+                        )
+                        .children((delivery_configured == Some(false)).then(|| {
+                            Text::caption(dbflux_i18n::t!("updates.settings.delivery_unavailable"))
+                                .text_color(tint)
+                        })),
+                ),
+            )
+            .child(self.render_row(
+                dbflux_i18n::t!("updates.settings.what_is_sent"),
+                what_is_sent,
+            ))
+            .child(
+                self.render_row(
+                    dbflux_i18n::t!("updates.settings.install_id"),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(Spacing::XXS)
+                        .child(install_id)
+                        .child(
+                            Text::caption(dbflux_i18n::t!("updates.settings.install_id_hint"))
+                                .text_color(muted),
+                        ),
+                ),
+            )
+            .child(self.render_row(dbflux_i18n::t!("updates.settings.reports"), reports))
             .into_any_element()
+    }
+
+    /// One honest row of the "what is sent" summary: the collected item and
+    /// whether the minimal ping / Basic level includes it.
+    #[cfg(feature = "telemetry")]
+    fn collected_row(&self, label: String, in_minimal: bool, in_basic: bool) -> Div {
+        let mark = |included: bool| {
+            Text::caption(if included {
+                dbflux_i18n::t!("updates.settings.collected_yes")
+            } else {
+                dbflux_i18n::t!("updates.settings.collected_no")
+            })
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap(Spacing::LG)
+            .child(Text::caption(label))
+            .child(div().flex_1())
+            .child(mark(in_minimal))
+            .child(mark(in_basic))
+    }
+
+    /// Last-sent line plus the two report actions, both disabled without a
+    /// confirmed report so no fake empty report can be opened.
+    #[cfg(feature = "telemetry")]
+    fn render_reports_controls(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+
+        let meta = Text::caption(self.report_meta_label()).text_color(muted);
+
+        let has_report = matches!(self.report_state, ReportState::Ready(_));
+        let view = Button::new(
+            "updates-view-report",
+            dbflux_i18n::t!("updates.settings.view_report"),
+        )
+        .secondary()
+        .icon(AppIcon::Braces)
+        .disabled(!has_report)
+        .focused(self.is_at(UpdatesRow::ViewReport))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.select(UpdatesRow::ViewReport);
+            this.activate(UpdatesRow::ViewReport, cx);
+        }));
+
+        let can_open_audit = matches!(&self.report_state, ReportState::Ready(report) if report.correlation.is_some());
+        let open = Button::new(
+            "updates-open-in-audit",
+            dbflux_i18n::t!("updates.settings.open_in_audit"),
+        )
+        .secondary()
+        .icon(AppIcon::ExternalLink)
+        .disabled(!can_open_audit)
+        .focused(self.is_at(UpdatesRow::OpenInAudit))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.select(UpdatesRow::OpenInAudit);
+            this.activate(UpdatesRow::OpenInAudit, cx);
+        }));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XXS)
+            .child(meta)
+            .child(div().flex().gap(Spacing::SM).child(view).child(open))
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -359,6 +786,22 @@ impl UpdatesSection {
                 if let Some(row) = ROWS.get(self.cursor).copied() {
                     self.activate(row, cx);
                 }
+            }
+            #[cfg(feature = "telemetry")]
+            ("h", modifiers) | ("left", modifiers)
+                if modifiers == Modifiers::none()
+                    && ROWS.get(self.cursor).copied() == Some(UpdatesRow::TelemetryLevel) =>
+            {
+                self.telemetry_basic = false;
+                cx.notify();
+            }
+            #[cfg(feature = "telemetry")]
+            ("l", modifiers) | ("right", modifiers)
+                if modifiers == Modifiers::none()
+                    && ROWS.get(self.cursor).copied() == Some(UpdatesRow::TelemetryLevel) =>
+            {
+                self.telemetry_basic = true;
+                cx.notify();
             }
             ("escape", modifiers) if modifiers == Modifiers::none() => {
                 cx.emit(SectionFocusEvent::RequestFocusReturn);
@@ -507,7 +950,8 @@ impl Render for UpdatesSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = self.render_body(cx);
 
-        div()
+        #[cfg_attr(not(feature = "telemetry"), allow(unused_mut))]
+        let mut shell = div()
             .flex_1()
             .min_h_0()
             .flex()
@@ -534,7 +978,129 @@ impl Render for UpdatesSection {
                     .px(crate::tokens::SettingsMetrics::BODY_PADDING_X)
                     .pb(Spacing::XL)
                     .child(body),
-            )
+            );
+
+        #[cfg(feature = "telemetry")]
+        {
+            shell = shell
+                .children(self.render_install_reset_confirm(cx))
+                .child(self.report_preview.clone());
+        }
+
+        shell
+    }
+}
+
+impl UpdatesSection {
+    /// The safe confirmation of the install-id reset, following the section
+    /// dialog convention (proxies delete, hooks delete, ...).
+    #[cfg(feature = "telemetry")]
+    fn render_install_reset_confirm(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.pending_install_reset {
+            return None;
+        }
+
+        let entity = cx.entity().clone();
+        let entity_cancel = entity.clone();
+        Some(
+            Dialog::new(cx)
+                .title(dbflux_i18n::t!("updates.settings.reset_install_id_title"))
+                .button_props(DialogButtonProps::default().show_cancel(true))
+                .overlay_closable(false)
+                .close_button(false)
+                .on_ok(move |_, _, cx| {
+                    entity.update(cx, |section, cx| section.confirm_install_reset(cx));
+                    true
+                })
+                .on_cancel(move |_, _, cx| {
+                    entity_cancel.update(cx, |section, cx| {
+                        section.pending_install_reset = false;
+                        cx.notify();
+                    });
+                    true
+                })
+                .child(
+                    div()
+                        .text_sm()
+                        .child(dbflux_i18n::t!("updates.settings.reset_install_id_body")),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Rotates the installation identity immediately, in the foreground.
+    /// Cancels old-identity pending work; acknowledged history survives. The
+    /// app-state change also wakes the retained telemetry worker.
+    #[cfg(feature = "telemetry")]
+    fn confirm_install_reset(&mut self, cx: &mut Context<Self>) {
+        self.pending_install_reset = false;
+        let result = self.app_state.update(cx, |state, cx| {
+            let result = state.reset_telemetry_install_id(Utc::now());
+            cx.emit(AppStateChanged);
+            result
+        });
+        if let Err(_error) = result {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("updates.settings.telemetry_reset_failed"),
+                ),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+}
+
+/// Row label of the cached lookup state. Each state tells the truth: a
+/// running lookup is checking, a failed lookup says so, and only a successful
+/// empty lookup may claim that no report was ever sent.
+#[cfg(feature = "telemetry")]
+fn report_meta_label(state: &ReportState) -> String {
+    match state {
+        ReportState::Ready(report) => dbflux_i18n::t!(
+            "updates.settings.last_sent",
+            when = report_time_label(report.ack_at_epoch_ms),
+            level = report_level_label(report.level.as_deref()),
+            size = report_size_label(report.payload_len)
+        ),
+        ReportState::Loading => {
+            dbflux_i18n::t!("updates.settings.checking_last_report")
+        }
+        ReportState::Failed => dbflux_i18n::t!("updates.settings.report_load_failed"),
+        ReportState::None => dbflux_i18n::t!("updates.settings.no_report_sent_yet"),
+    }
+}
+
+/// Calendar time label of an epoch-millisecond value, in the local zone.
+#[cfg(feature = "telemetry")]
+fn report_time_label(epoch_ms: i64) -> String {
+    dbflux_core::chrono::DateTime::<dbflux_core::chrono::Utc>::from_timestamp_millis(epoch_ms)
+        .map(|utc| {
+            utc.with_timezone(&dbflux_core::chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// Readable level label of the stored `"off"`/`"basic"` marker.
+#[cfg(feature = "telemetry")]
+fn report_level_label(level: Option<&str>) -> String {
+    match level {
+        Some("basic") => dbflux_i18n::t!("updates.settings.level_basic_display"),
+        Some("off") | None => dbflux_i18n::t!("updates.settings.level_off_display"),
+        Some(other) => other.to_owned(),
+    }
+}
+
+/// Readable size of the stored payload bytes.
+#[cfg(feature = "telemetry")]
+fn report_size_label(len: usize) -> String {
+    if len >= 1024 {
+        format!("{:.1} KiB", len as f64 / 1024.0)
+    } else {
+        format!("{len} B")
     }
 }
 
@@ -636,6 +1202,33 @@ mod tests {
             "updates.settings.save",
             "updates.settings.saved",
             "updates.settings.save_error",
+            "updates.settings.usage_heading",
+            "updates.settings.usage_level",
+            "updates.settings.level_off",
+            "updates.settings.level_basic",
+            "updates.settings.level_hint",
+            "updates.settings.what_is_sent",
+            "updates.settings.collected_build",
+            "updates.settings.collected_language",
+            "updates.settings.collected_counts",
+            "updates.settings.collected_minimal",
+            "updates.settings.collected_basic",
+            "updates.settings.counts_not_instrumented",
+            "updates.settings.install_id",
+            "updates.settings.install_id_hint",
+            "updates.settings.reset_install_id",
+            "updates.settings.reset_install_id_title",
+            "updates.settings.reset_install_id_body",
+            "updates.settings.reports",
+            "updates.settings.no_report_sent_yet",
+            "updates.settings.checking_last_report",
+            "updates.settings.delivery_unavailable",
+            "updates.settings.report_load_failed",
+            "updates.settings.last_sent",
+            "updates.settings.view_report",
+            "updates.settings.open_in_audit",
+            "updates.settings.telemetry_save_failed",
+            "updates.settings.telemetry_reset_failed",
             "updates.ago.just_now",
             "updates.ago.minutes",
             "updates.ago.hours",
@@ -650,7 +1243,418 @@ mod tests {
                     format!("{locale}.{key}"),
                     "{key} missing in {locale}"
                 );
+                // Version-format keys are shared across locales; prose keys
+                // must be translated.
+                let is_prose = key.contains("usage_")
+                    || key.contains("level_")
+                    || key.contains("collected_")
+                    || key.contains("install_")
+                    || key.contains("reset_install")
+                    || key.contains("report")
+                    || key.contains("telemetry_")
+                    || key.contains("delivery_")
+                    || key.starts_with("updates.settings.what_is_sent");
+                if locale != "en" && is_prose {
+                    assert_ne!(
+                        value,
+                        dbflux_i18n::t!(key, locale = "en"),
+                        "English fallback for {key} in {locale}"
+                    );
+                }
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+mod telemetry_tests {
+    // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
+    // resolve to `gpui::test`, whose expansion recurses without bound.
+    use super::{ReportState, UpdatesRow, UpdatesSection};
+    use dbflux_app::telemetry::{TelemetryConfig, TelemetryLastReport};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, ParentElement as _, TestAppContext, VisualTestContext};
+
+    /// A real v1 ping payload (closed wire schema), so the UI test never
+    /// normalizes a fake report shape.
+    const REPORT_PAYLOAD_FIXTURE: &str = r#"{"schema":"dbflux.telemetry-event/v1","install_id":"0d8f8a2e-9c34-4f5a-8d1e-2b3c4d5e6f70","delivery_id":"1e9f9b3f-0d45-406b-9e2f-3c4d5e6f7081","sent_at":"2026-01-01T00:00:00Z","version":"1.2.3","channel":"stable","os":"linux","arch":"amd64","event":"ping"}"#;
+
+    struct Harness {
+        app_state: Entity<AppStateEntity>,
+        section: Entity<UpdatesSection>,
+    }
+
+    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+        open_on(cx, app_state)
+    }
+
+    /// Opens the section over an existing app state, so a test can change the
+    /// saved state between two section lifetimes.
+    fn open_on<'a>(
+        cx: &'a mut TestAppContext,
+        app_state: Entity<AppStateEntity>,
+    ) -> (Harness, &'a mut VisualTestContext) {
+        cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                state.initialize_telemetry(
+                    TelemetryConfig::default(),
+                    dbflux_core::chrono::Utc::now(),
+                )
+            })
+        })
+        .expect("telemetry initialized");
+
+        struct SectionView {
+            section: Entity<UpdatesSection>,
+        }
+
+        impl gpui::Render for SectionView {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div().child(self.section.clone())
+            }
+        }
+
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot_for_view = slot.clone();
+        let app_for_view = app_state.clone();
+        let (_view, window) = cx.add_window_view(move |window, cx| {
+            let section = cx.new(|cx| UpdatesSection::new(app_for_view.clone(), window, cx));
+            slot_for_view.borrow_mut().replace(section.clone());
+            SectionView { section }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("section built");
+        (Harness { app_state, section }, window)
+    }
+
+    fn saved_level(harness: &Harness, window: &mut VisualTestContext) -> Option<bool> {
+        window.update(|_, cx| harness.app_state.read(cx).telemetry_basic_level())
+    }
+
+    fn masked_id(harness: &Harness, window: &mut VisualTestContext) -> Option<String> {
+        window.update(|_, cx| harness.app_state.read(cx).telemetry_install_id_masked())
+    }
+
+    #[gpui::test]
+    fn the_staged_level_does_not_change_the_saved_level_until_save(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+        let app_state = harness.app_state.clone();
+        window
+            .update(|_, cx| {
+                app_state.update(cx, |state, _| {
+                    state.set_telemetry_basic(true, dbflux_core::chrono::Utc::now())
+                })
+            })
+            .expect("saved basic");
+
+        // Reopening stages the saved level.
+        let (harness, window) = open_on(cx, app_state);
+        assert_eq!(saved_level(&harness, window), Some(true));
+
+        // Toggling stages Off; nothing is persisted and nothing is queued.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.activate(UpdatesRow::TelemetryLevel, cx)
+            });
+        });
+        assert_eq!(
+            saved_level(&harness, window),
+            Some(true),
+            "staging never writes"
+        );
+
+        // Save applies the staged level.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| section.save(cx));
+        });
+        window.run_until_parked();
+        assert_eq!(saved_level(&harness, window), Some(false));
+    }
+
+    #[gpui::test]
+    fn reset_defaults_stages_off_without_touching_storage_or_the_install_id(
+        cx: &mut TestAppContext,
+    ) {
+        let (harness, window) = open(cx);
+        let app_state = harness.app_state.clone();
+        window
+            .update(|_, cx| {
+                app_state.update(cx, |state, _| {
+                    state.set_telemetry_basic(true, dbflux_core::chrono::Utc::now())
+                })
+            })
+            .expect("saved basic");
+
+        let (harness, window) = open_on(cx, app_state);
+        let before = masked_id(&harness, window);
+
+        window.update(|_, cx| {
+            harness
+                .section
+                .update(cx, |section, cx| section.reset_to_defaults(cx));
+        });
+
+        assert_eq!(
+            saved_level(&harness, window),
+            Some(true),
+            "reset stages, never persists"
+        );
+        assert_eq!(masked_id(&harness, window), before, "reset keeps the id");
+    }
+
+    #[gpui::test]
+    fn the_report_viewer_opens_only_over_a_cached_report(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+
+        // Without a cached report the action is a no-op: no fake viewer, and
+        // focus never moves into it.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.activate(UpdatesRow::ViewReport, cx)
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            !window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .report_preview
+                    .read(cx)
+                    .is_visible()
+            }),
+            "no viewer without a report"
+        );
+        assert!(
+            !window.update(|window, cx| harness
+                .section
+                .read(cx)
+                .report_preview
+                .read(cx)
+                .contains_focus(window, cx)),
+            "focus stays out of the viewer without a report"
+        );
+
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, _| {
+                section.report_state = ReportState::Ready(TelemetryLastReport {
+                    payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
+                    payload_len: REPORT_PAYLOAD_FIXTURE.len(),
+                    level: Some("basic".to_owned()),
+                    ack_at_epoch_ms: 1_767_225_600_000,
+                    correlation: Some(uuid::Uuid::nil()),
+                });
+            });
+        });
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.activate(UpdatesRow::ViewReport, cx)
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .report_preview
+                    .read(cx)
+                    .is_visible()
+            }),
+            "the viewer opens over the cached report"
+        );
+        assert!(
+            window.update(|window, cx| harness
+                .section
+                .read(cx)
+                .report_preview
+                .read(cx)
+                .contains_focus(window, cx)),
+            "opening the viewer moves focus into it"
+        );
+    }
+
+    /// Failed and Loading must never read "No report sent yet": only a
+    /// successful Ok(None) lookup may claim that. Buttons stay disabled in
+    /// every non-Ready state, so a failed lookup can neither open the viewer
+    /// nor invent metadata or a payload.
+    #[test]
+    fn report_states_have_distinct_truthful_labels() {
+        use super::report_meta_label;
+
+        let none = report_meta_label(&ReportState::None);
+        let loading = report_meta_label(&ReportState::Loading);
+        let failed = report_meta_label(&ReportState::Failed);
+
+        assert_eq!(
+            failed,
+            dbflux_i18n::t!("updates.settings.report_load_failed"),
+            "a failed lookup must say so, not pretend nothing was sent"
+        );
+        assert_eq!(
+            loading,
+            dbflux_i18n::t!("updates.settings.checking_last_report"),
+            "a running lookup must say it is checking"
+        );
+        assert_eq!(none, dbflux_i18n::t!("updates.settings.no_report_sent_yet"));
+        assert_ne!(failed, none);
+        assert_ne!(loading, none);
+        assert_ne!(failed, loading);
+
+        let ready = report_meta_label(&ReportState::Ready(TelemetryLastReport {
+            payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
+            payload_len: REPORT_PAYLOAD_FIXTURE.len(),
+            level: Some("basic".to_owned()),
+            ack_at_epoch_ms: 1_767_225_600_000,
+            correlation: Some(uuid::Uuid::nil()),
+        }));
+        assert_eq!(
+            ready,
+            dbflux_i18n::t!(
+                "updates.settings.last_sent",
+                when = super::report_time_label(1_767_225_600_000),
+                level = super::report_level_label(Some("basic")),
+                size = super::report_size_label(REPORT_PAYLOAD_FIXTURE.len())
+            ),
+            "a cached report keeps its real metadata"
+        );
+        assert_ne!(ready, none);
+    }
+
+    #[gpui::test]
+    fn a_missing_scheduler_invalidates_the_cached_report(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+        window.update(|_, cx| {
+            let unavailable = cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            });
+            assert!(unavailable.read(cx).telemetry().is_none());
+            harness.section.update(cx, |section, cx| {
+                section.report_state = ReportState::Ready(TelemetryLastReport {
+                    payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
+                    payload_len: REPORT_PAYLOAD_FIXTURE.len(),
+                    level: None,
+                    ack_at_epoch_ms: 1_767_225_600_000,
+                    correlation: Some(uuid::Uuid::nil()),
+                });
+                section.app_state = unavailable;
+                section.refresh_last_report(cx);
+                assert!(
+                    matches!(section.report_state, ReportState::Failed),
+                    "an unavailable scheduler leaves the report unknown, not absent"
+                );
+                section.activate(UpdatesRow::ViewReport, cx);
+                assert!(!section.report_preview.read(cx).is_visible());
+                assert_eq!(
+                    section.report_meta_label(),
+                    dbflux_i18n::t!("updates.settings.report_load_failed")
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn a_failed_lookup_never_opens_the_viewer(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, _| {
+                section.report_state = ReportState::Failed;
+            });
+        });
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.activate(UpdatesRow::ViewReport, cx)
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            !window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .report_preview
+                    .read(cx)
+                    .is_visible()
+            }),
+            "a failed lookup opens no viewer"
+        );
+        assert!(
+            !window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .report_meta_label()
+                    .contains(REPORT_PAYLOAD_FIXTURE)
+            }),
+            "the failed row never shows payload bytes"
+        );
+    }
+
+    #[gpui::test]
+    fn only_a_successful_empty_lookup_says_no_report_sent_yet(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+
+        // The constructor's refresh runs against the working in-memory audit:
+        // a real Ok(None) is the only path to the None state.
+        window.run_until_parked();
+        let state = window.update(|_, cx| {
+            let state = harness.section.read(cx).report_state.clone();
+            super::report_meta_label(&state)
+        });
+        assert_eq!(
+            state,
+            dbflux_i18n::t!("updates.settings.no_report_sent_yet"),
+            "Ok(None) after a real query is the truthful no-report state"
+        );
+
+        // A later failed refresh must not keep claiming "no report sent yet".
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, _| {
+                section.report_state = ReportState::Failed;
+            });
+        });
+        let label = window.update(|_, cx| harness.section.read(cx).report_meta_label());
+        assert_ne!(
+            label,
+            dbflux_i18n::t!("updates.settings.no_report_sent_yet"),
+            "a failed lookup is not a truthful no-report claim"
+        );
+    }
+
+    #[test]
+    fn report_labels_are_bounded_and_readable() {
+        use super::{report_level_label, report_size_label};
+
+        assert_eq!(
+            report_level_label(Some("basic")),
+            dbflux_i18n::t!("updates.settings.level_basic_display")
+        );
+        assert_eq!(
+            report_level_label(None),
+            dbflux_i18n::t!("updates.settings.level_off_display")
+        );
+        assert_eq!(report_size_label(512), "512 B");
+        assert_eq!(report_size_label(2048), "2.0 KiB");
     }
 }

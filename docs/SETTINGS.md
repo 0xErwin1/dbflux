@@ -9,6 +9,7 @@ window is organized into sections down the left side.
 | Section | Covers |
 |---------|--------|
 | [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
+| [Updates & privacy](#updates--privacy) | Update checks, the changelog, and the optional telemetry levels. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
@@ -109,6 +110,46 @@ Lua, Python, or Bash scripts, connection hooks, or metrics.
 
 See [Data & Privacy](../PRIVACY.md#data-locations) for how the Nightly and
 stable databases are separated.
+
+---
+
+## Updates & privacy
+
+The update-check and changelog preferences, plus the optional telemetry
+levels. Changes are staged until you **Save** (Ctrl+S); **Reset to defaults**
+stages the defaults without saving.
+
+### Updates
+
+| Setting | Effect |
+|---------|--------|
+| Check GitHub for a new release at startup | Runs the update check when the app starts. |
+| Show what is new after each update | Opens the changelog once, the first time a new version starts. |
+| Check now | Runs an update check immediately. |
+| Open what is new / Show welcome again | Reopens the two dialogs. |
+
+### Usage statistics
+
+DBFlux has an optional telemetry module with two levels:
+
+- **Off** (default) — nothing about your usage. Even at Off, DBFlux may send
+  one minimal version ping per installation and build after you dismiss the
+  welcome disclosure: OS, architecture, version, channel and a random
+  rotating identifier.
+- **Basic** (opt-in) — adds a weekly report with the system language (not the
+  UI language) and country. The feature counters are **not instrumented yet**,
+  so Basic currently sends an empty count map.
+
+Delivery needs a configured endpoint; no shipped build has one, so delivery is
+unavailable by default. Never sent: queries, results, credentials, file paths
+or connection metadata. See [Data & Privacy](../PRIVACY.md#telemetry-optional)
+for the full list of what a report contains.
+
+| Control | Effect |
+|---------|--------|
+| Level (Off / Basic) | The staged level; Left and Right or a click change it, Save applies it. |
+| Install id | A masked display of the pseudonymous identifier. **Reset id** rotates it at once, cancels pending sends, and keeps acknowledged builds. |
+| Reports | The last confirmed report, read from the durable audit log. **View last report** opens a read-only viewer over the stored payload; **Open in Audit** opens the audit viewer at the report's correlation id. |
 
 ---
 

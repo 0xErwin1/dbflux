@@ -34,7 +34,7 @@ mod welcome_tests {
 
 #[cfg(feature = "telemetry")]
 impl TelemetryWake {
-    fn wake(&self) {
+    pub(in crate::ui::views::workspace) fn wake(&self) {
         self.pending.set(true);
         if let Some(waker) = self.waker.borrow_mut().take() {
             waker.wake();

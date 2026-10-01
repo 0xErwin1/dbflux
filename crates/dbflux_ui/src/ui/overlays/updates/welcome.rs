@@ -8,31 +8,37 @@ use dbflux_components::tokens::{ChamferCut, ChromeColors, FontSizes, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{LogErr, ReleaseChannel};
 use dbflux_ui_base::AppStateEntity;
+#[cfg(feature = "telemetry")]
+use dbflux_ui_base::keymap::RunCommand;
 use dbflux_ui_base::updates::channel_label;
+#[cfg(feature = "telemetry")]
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
 use super::{
-    LINK_TEXT_SIZE, UpdatePreference, full_changelog_link, labeled_heading, preference_row,
-    release_header, render_section, scroll_region, set_update_preference,
+    LINK_TEXT_SIZE, UpdatePreference, full_changelog_link, labeled_heading, release_header,
+    render_section, scroll_region, set_update_preference,
 };
+#[cfg(feature = "telemetry")]
+use dbflux_components::primitives::{ChamferRing, focus_underline};
 
-const DIALOG_WIDTH: Pixels = px(1000.0);
-const WHATS_NEW_COLUMN_WIDTH: Pixels = px(330.0);
-const MARK_SIZE: Pixels = px(56.0);
-const TITLE_SIZE: Pixels = px(24.0);
+const DIALOG_WIDTH: Pixels = px(800.0);
+const WHATS_NEW_COLUMN_WIDTH: Pixels = px(300.0);
+const MARK_SIZE: Pixels = px(44.0);
+const TITLE_SIZE: Pixels = px(20.0);
 const HEADER_GAP: Pixels = Spacing::LG;
 const HEADER_PADDING_X: Pixels = px(28.0);
-const HEADER_PADDING_TOP: Pixels = px(26.0);
-const HEADER_PADDING_BOTTOM: Pixels = px(22.0);
+const HEADER_PADDING_TOP: Pixels = px(10.0);
+const HEADER_PADDING_BOTTOM: Pixels = px(10.0);
 const COLUMN_PADDING_X: Pixels = Spacing::XL;
-const COLUMN_PADDING_Y: Pixels = px(20.0);
+const COLUMN_PADDING_Y: Pixels = px(14.0);
 const WHATS_NEW_COLUMN_GAP: Pixels = Spacing::XS;
 const UPDATES_COLUMN_GAP: Pixels = Spacing::XXS;
 const FULL_CHANGELOG_PADDING_TOP: Pixels = px(10.0);
 const FOOTER_GAP: Pixels = px(10.0);
-const FOOTER_PADDING_Y: Pixels = px(14.0);
+const FOOTER_PADDING_Y: Pixels = px(5.0);
 const FOOTER_ICON_SIZE: Pixels = px(14.0);
 const BADGE_HEIGHT: Pixels = px(20.0);
 const BADGE_PADDING_X: Pixels = px(7.0);
@@ -42,6 +48,59 @@ const BADGE_FILL_OPACITY: f32 = 0.12;
 
 /// Element id of the scrolling release highlights.
 const HIGHLIGHTS_ID: &str = "welcome-whats-new-list";
+
+/// Roving index of the two telemetry level choices (0 = Off, 1 = Basic).
+#[cfg(feature = "telemetry")]
+const TELEMETRY_OFF: usize = 0;
+#[cfg(feature = "telemetry")]
+const TELEMETRY_BASIC: usize = 1;
+
+/// Padding of the telemetry choice cards.
+#[cfg(feature = "telemetry")]
+const TELEMETRY_CARD_PADDING: Pixels = px(8.0);
+/// Gap between the two telemetry choice cards.
+#[cfg(feature = "telemetry")]
+const TELEMETRY_CARD_GAP: Pixels = Spacing::SM;
+/// Gap inside a telemetry card between label and description.
+#[cfg(feature = "telemetry")]
+const TELEMETRY_CARD_TEXT_GAP: Pixels = Spacing::XXS;
+/// Padding of the privacy summary strip under the cards.
+#[cfg(feature = "telemetry")]
+const TELEMETRY_SUMMARY_PADDING_X: Pixels = px(4.0);
+#[cfg(feature = "telemetry")]
+const TELEMETRY_SUMMARY_PADDING_Y: Pixels = Spacing::XXS;
+
+fn compact_preference_row(
+    id: &'static str,
+    label: String,
+    hint: Option<String>,
+    checked: bool,
+    on_toggle: impl Fn(bool, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(6.0))
+        .py(px(3.0))
+        .line_height(px(14.0))
+        .child(
+            dbflux_components::controls::Checkbox::new(id)
+                .checked(checked)
+                .aria_label(label.clone())
+                .on_click(move |value: &bool, window, cx| on_toggle(*value, window, cx)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(Text::body(label).font_size(px(12.0)))
+                .when_some(hint, |column, hint| {
+                    column.child(Text::caption(hint).font_size(px(11.0)))
+                }),
+        )
+}
 
 /// Highlights listed per changelog section, as the board shows them: four
 /// additions, two of anything else. The full changelog is one link away.
@@ -66,6 +125,10 @@ pub struct WelcomeDialog {
     visible: bool,
     #[cfg(feature = "telemetry")]
     disclosure_rendered: bool,
+    /// Roving choice of the two telemetry level cards; Left and Right move
+    /// it (and select), clicks select directly.
+    #[cfg(feature = "telemetry")]
+    telemetry_roving: usize,
     release: Option<&'static ChangelogRelease>,
     focus: ModalFocus,
     highlights_scroll: ScrollHandle,
@@ -78,6 +141,8 @@ impl WelcomeDialog {
             visible: false,
             #[cfg(feature = "telemetry")]
             disclosure_rendered: false,
+            #[cfg(feature = "telemetry")]
+            telemetry_roving: TELEMETRY_OFF,
             release: None,
             focus: ModalFocus::new(cx),
             highlights_scroll: ScrollHandle::new(),
@@ -146,7 +211,9 @@ impl WelcomeDialog {
             .flex()
             .flex_shrink_0()
             .items_center()
+            .debug_selector(|| "welcome-header".to_string())
             .gap(HEADER_GAP)
+            .line_height(px(14.0))
             .px(HEADER_PADDING_X)
             .pt(HEADER_PADDING_TOP)
             .pb(HEADER_PADDING_BOTTOM)
@@ -165,11 +232,13 @@ impl WelcomeDialog {
                             .font_family(AppFonts::DISPLAY)
                             .font_weight(FontWeight::BLACK)
                             .text_size(TITLE_SIZE)
+                            .line_height(px(24.0))
                             .text_color(ChromeColors::strong(theme))
                             .child(dbflux_i18n::t!("updates.welcome.title").to_uppercase()),
                     )
                     .child(
-                        Text::body(dbflux_i18n::t!("updates.welcome.tagline"))
+                        Text::caption(dbflux_i18n::t!("updates.welcome.tagline"))
+                            .font_size(px(11.0))
                             .text_color(theme.muted_foreground),
                     ),
             )
@@ -244,7 +313,7 @@ impl WelcomeDialog {
             )
     }
 
-    fn render_updates_column(&self, cx: &App) -> impl IntoElement {
+    fn render_updates_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let settings = self.app_state.read(cx).update_settings().clone();
         let check_state = self.app_state.clone();
@@ -263,7 +332,7 @@ impl WelcomeDialog {
                 ChromeColors::tint(theme),
                 dbflux_i18n::t!("updates.welcome.updates"),
             ))
-            .child(preference_row(
+            .child(compact_preference_row(
                 "welcome-check-for-updates",
                 dbflux_i18n::t!("updates.welcome.notify"),
                 Some(dbflux_i18n::t!("updates.welcome.notify_hint")),
@@ -272,7 +341,7 @@ impl WelcomeDialog {
                     set_update_preference(&check_state, UpdatePreference::CheckOnStartup, value, cx)
                 },
             ))
-            .child(preference_row(
+            .child(compact_preference_row(
                 "welcome-show-whats-new",
                 dbflux_i18n::t!("updates.welcome.show_whats_new"),
                 Some(dbflux_i18n::t!("updates.welcome.show_whats_new_hint")),
@@ -286,12 +355,228 @@ impl WelcomeDialog {
                     )
                 },
             ))
+            .children(self.render_telemetry_block(cx))
+    }
+
+    /// Heading, the two level cards and the privacy summary. `None` without
+    /// the optional telemetry feature.
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn render_telemetry_block(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        #[cfg(feature = "telemetry")]
+        {
+            let (tint, muted) = {
+                let theme = cx.theme();
+                (ChromeColors::tint(theme), theme.muted_foreground)
+            };
+            let heading = labeled_heading(
+                AppIcon::ChartNoAxesColumn,
+                tint,
+                dbflux_i18n::t!("updates.welcome.telemetry_heading"),
+            );
+            let cards = self.render_telemetry_cards(cx);
+            let summary = div()
+                .debug_selector(|| "welcome-privacy-box".to_string())
+                .min_h(px(56.0))
+                .flex_shrink_0()
+                .px(TELEMETRY_SUMMARY_PADDING_X)
+                .py(TELEMETRY_SUMMARY_PADDING_Y)
+                .border_1()
+                .border_color(cx.theme().border)
+                .flex()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .debug_selector(|| "welcome-privacy-icon".to_string())
+                        .size(px(12.0))
+                        .flex_shrink_0()
+                        .child(Icon::new(AppIcon::Lock).size(px(12.0)).color(muted)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "welcome-privacy-text".to_string())
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .line_height(px(14.0))
+                        .child(
+                            Text::caption(dbflux_i18n::t!("updates.welcome.telemetry_privacy"))
+                                .font_size(px(11.0))
+                                .text_color(muted),
+                        ),
+                );
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(UPDATES_COLUMN_GAP)
+                    .child(heading)
+                    .child(
+                        Text::caption(dbflux_i18n::t!("updates.welcome.telemetry_helper"))
+                            .font_size(px(11.0))
+                            .text_color(muted),
+                    )
+                    .child(cards)
+                    .child(summary)
+                    .into_any_element(),
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        None
+    }
+
+    /// The Off / Basic level cards. Selecting one persists the level
+    /// immediately; it never prepares, enqueues or acknowledges a delivery,
+    /// and it never dismisses the disclosure.
+    #[cfg(feature = "telemetry")]
+    fn render_telemetry_cards(&mut self, cx: &mut Context<Self>) -> Div {
+        let basic_selected = self
+            .app_state
+            .read(cx)
+            .telemetry_basic_level()
+            .unwrap_or(false);
+
+        let off_card = self.telemetry_card(
+            "welcome-telemetry-off",
+            TELEMETRY_OFF,
+            dbflux_i18n::t!("updates.welcome.telemetry_off"),
+            dbflux_i18n::t!("updates.welcome.telemetry_off_description"),
+            !basic_selected,
+            cx,
+        );
+        let basic_card = self.telemetry_card(
+            "welcome-telemetry-basic",
+            TELEMETRY_BASIC,
+            dbflux_i18n::t!("updates.welcome.telemetry_basic"),
+            dbflux_i18n::t!("updates.welcome.telemetry_basic_description"),
+            basic_selected,
+            cx,
+        );
+
+        div()
+            .key_context("FormNavigation")
+            .flex()
+            .gap(TELEMETRY_CARD_GAP)
+            .child(off_card)
+            .child(basic_card)
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn telemetry_card(
+        &self,
+        id: &'static str,
+        index: usize,
+        label: String,
+        description: String,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+        let border = if selected { tint } else { theme.border };
+        let is_roving = self.telemetry_roving == index;
+        let basic = index == TELEMETRY_BASIC;
+
+        div()
+            .id(id)
+            .role(Role::RadioButton)
+            .aria_toggled(if selected {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
+            .aria_label(label.clone())
+            .debug_selector(move || id.to_string())
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(TELEMETRY_CARD_TEXT_GAP)
+            .line_height(px(14.0))
+            .p(TELEMETRY_CARD_PADDING)
+            .cursor_pointer()
+            .relative()
+            .child(
+                Chamfer::new(ChamferCut::CARD)
+                    .fill(if selected {
+                        tint.opacity(0.12)
+                    } else {
+                        theme.popover
+                    })
+                    .ring(ChamferRing::outline(border)),
+            )
+            .when(is_roving, |card| card.child(focus_underline(tint)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select_telemetry_level(basic, cx);
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(TELEMETRY_CARD_TEXT_GAP)
+                    .child(
+                        div()
+                            .size(px(10.0))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(border)
+                            .when(selected, |dot| dot.bg(tint)),
+                    )
+                    .child(
+                        Icon::new(if basic {
+                            AppIcon::ChartNoAxesColumn
+                        } else {
+                            AppIcon::EyeOff
+                        })
+                        .size(px(12.0))
+                        .color(tint),
+                    )
+                    .child(Text::label(label).font_size(px(11.0))),
+            )
+            .child(
+                Text::caption(description)
+                    .font_size(px(11.0))
+                    .text_color(theme.muted_foreground),
+            )
+    }
+
+    /// Persists the chosen level in the foreground. The early guard in
+    /// `TelemetryState::schedule` blocks every queue until the disclosure is
+    /// dismissed, so this cannot send anything before the user acknowledges.
+    #[cfg(feature = "telemetry")]
+    fn select_telemetry_level(&mut self, basic: bool, cx: &mut Context<Self>) {
+        self.telemetry_roving = if basic {
+            TELEMETRY_BASIC
+        } else {
+            TELEMETRY_OFF
+        };
+        let result = self.app_state.update(cx, |state, _| {
+            state.set_telemetry_basic(basic, dbflux_core::chrono::Utc::now())
+        });
+        if let Err(_error) = result {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("updates.welcome.telemetry_save_failed"),
+                ),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn step_telemetry_choice(&mut self, step: isize, cx: &mut Context<Self>) {
+        let target = (self.telemetry_roving as isize + step).clamp(0, 1) as usize;
+        if target != self.telemetry_roving {
+            self.select_telemetry_level(target == TELEMETRY_BASIC, cx);
+        }
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
         div()
+            .debug_selector(|| "welcome-footer".to_string())
             .flex()
             .flex_shrink_0()
             .items_center()
@@ -317,6 +602,7 @@ impl WelcomeDialog {
                     dbflux_i18n::t!("updates.welcome.get_started"),
                 )
                 .primary()
+                .inline()
                 .icon(AppIcon::ChevronRight)
                 .when_some(
                     dbflux_ui_base::keymap::shortcut_label(ContextId::Modal, Command::Execute),
@@ -340,7 +626,9 @@ impl Render for WelcomeDialog {
         // The board draws the header and footer on the app background and
         // only the two columns on the panel fill, with no outline around the
         // card: its ring is clipped away by the cut.
+        let dialog = cx.entity().downgrade();
         let columns = div()
+            .debug_selector(|| "welcome-columns".to_string())
             .flex()
             .min_h_0()
             .bg(theme.popover)
@@ -357,29 +645,21 @@ impl Render for WelcomeDialog {
             .flex_col()
             .min_h_0()
             .child(self.render_header(cx))
-            .when(cfg!(feature = "telemetry"), |card| {
-                #[cfg(feature = "telemetry")]
-                let card = card.child(
-                    div()
-                        .flex_shrink_0()
-                        .px(COLUMN_PADDING_X)
-                        .py(Spacing::XS)
-                        .child(Text::caption(dbflux_i18n::t!(
-                            "updates.welcome.telemetry_disclosure"
-                        ))),
-                );
-                card
-            })
             .child(columns)
             .child(self.render_footer(cx));
 
         let card_fill = cx.theme().background;
-        let dialog = cx.entity().downgrade();
         let dialog_for_enter = dialog.clone();
 
-        Modal::new(dbflux_i18n::t!("updates.welcome.title"))
+        let modal = Modal::new(dbflux_i18n::t!("updates.welcome.title"))
             .id("welcome-dialog")
             .without_header()
+            // Left and Right rove the telemetry level cards in the modal.
+            .when(cfg!(feature = "telemetry"), |modal| {
+                #[cfg(feature = "telemetry")]
+                let modal = modal.key_context("FormNavigation");
+                modal
+            })
             .width(DIALOG_WIDTH)
             .cut(ChamferCut::CARD)
             .fill(card_fill)
@@ -387,15 +667,61 @@ impl Render for WelcomeDialog {
             .child(card)
             .focus_handle(self.focus.handle())
             .scroll_with_keys(&self.highlights_scroll)
-            .on_close(move |_, cx| {
-                dialog.update(cx, |dialog, cx| dialog.close(cx)).log_err();
+            .on_close({
+                let dialog = dialog.clone();
+                move |_, cx| {
+                    dialog.update(cx, |dialog, cx| dialog.close(cx)).log_err();
+                }
             })
             .on_confirm(move |_, cx| {
                 dialog_for_enter
                     .update(cx, |dialog, cx| dialog.close(cx))
                     .log_err();
-            })
-            .into_any_element()
+            });
+
+        // The modal's focus trap sits on its backdrop, so the Left/Right
+        // roving of the telemetry cards is handled on an ancestor of it.
+        // Enter stays the modal confirm (Get started), Escape keeps closing.
+        #[cfg(feature = "telemetry")]
+        {
+            use dbflux_ui_base::keymap::run_command;
+            let dialog_for_keys = dialog.clone();
+            return div()
+                // The workspace mounts this dialog as a flow sibling after
+                // the shell. The host must leave the normal flow or the
+                // absolutely positioned modal lands below the window with
+                // zero height; absolute inset-0 keeps it over the viewport
+                // without taking flow space.
+                .absolute()
+                .inset_0()
+                .debug_selector(|| "welcome-dialog-host".to_string())
+                .on_action(move |action: &RunCommand, _window, cx| {
+                    let Some(command) = run_command(action) else {
+                        return;
+                    };
+                    let handled = match command {
+                        Command::ColumnLeft | Command::FocusLeft => dialog_for_keys
+                            .update(cx, |dialog, cx| dialog.step_telemetry_choice(-1, cx))
+                            .log_err()
+                            .is_some(),
+                        Command::ColumnRight | Command::FocusRight => dialog_for_keys
+                            .update(cx, |dialog, cx| dialog.step_telemetry_choice(1, cx))
+                            .log_err()
+                            .is_some(),
+                        _ => false,
+                    };
+                    if !handled {
+                        cx.propagate();
+                    }
+                })
+                .child(modal)
+                .into_any_element();
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let _ = dialog;
+            modal.into_any_element()
+        }
     }
 }
 
@@ -405,7 +731,14 @@ mod tests {
     // resolve to `gpui::test`, whose expansion recurses without bound.
     use super::super::test_support::{assert_scrolls_by_wheel_and_keys, test_app_state};
     use super::{SectionKind, WelcomeDialog, highlights_per_section};
+    #[cfg(feature = "telemetry")]
+    use crate::keymap::{Command, ContextId};
+    #[cfg(feature = "telemetry")]
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
     use gpui::{TestAppContext, px, size};
+
+    /// Every control of the welcome dialog, including the two telemetry
+    /// level cards, with the dialog chrome.
 
     #[gpui::test]
     fn the_highlights_scroll_when_the_window_is_short(cx: &mut TestAppContext) {
@@ -462,11 +795,393 @@ mod tests {
         assert_eq!(acknowledgements.get(), 1);
     }
 
+    #[cfg(feature = "telemetry")]
+    const WELCOME: dbflux_ui_base::keyboard_coverage::SurfaceRegistry =
+        dbflux_ui_base::keyboard_coverage::SurfaceRegistry {
+            name: "welcome dialog",
+            contexts: &[ContextId::Modal, ContextId::FormNavigation],
+            entries: &[
+                (
+                    "welcome-full-changelog",
+                    dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Execute),
+                ),
+                (
+                    "welcome-check-for-updates",
+                    dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Execute),
+                ),
+                (
+                    "welcome-show-whats-new",
+                    dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Execute),
+                ),
+                (
+                    "welcome-telemetry-*",
+                    dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::ColumnRight),
+                ),
+                (
+                    "welcome-get-started",
+                    dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Execute),
+                ),
+            ],
+        };
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn every_welcome_control_is_covered(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let (dialog, window) = cx.add_window_view(move |_, cx| WelcomeDialog::new(app_state, cx));
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
+        window.run_until_parked();
+
+        let capture = FrameCapture::observe(window);
+        window.update(|window, _| window.refresh());
+        let frame = capture.frame(window);
+        Coverage::new(WELCOME)
+            .with_surface(MODAL_CHROME)
+            .assert_covered(&frame);
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn telemetry_level(
+        app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        window: &mut gpui::VisualTestContext,
+    ) -> Option<bool> {
+        window.update(|_, cx| app_state.read(cx).telemetry_basic_level())
+    }
+
+    /// Initializes the optional telemetry module on the test app state with
+    /// the default configuration (no endpoint), like the workspace does.
+    #[cfg(feature = "telemetry")]
+    fn initialize_telemetry(
+        app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                state.initialize_telemetry(
+                    dbflux_app::telemetry::TelemetryConfig::default(),
+                    dbflux_core::chrono::Utc::now(),
+                )
+            })
+        })
+        .expect("telemetry initialized");
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn selecting_basic_persists_at_once_without_acknowledging_or_queueing(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        initialize_telemetry(&app_state, cx);
+        let state_for_view = app_state.clone();
+        let (dialog, window) =
+            cx.add_window_view(move |_, cx| WelcomeDialog::new(state_for_view, cx));
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
+        window.run_until_parked();
+
+        // The cards are radio choices: a click and the Right key run the same
+        // select path (the coverage test proves the click action is wired).
+        window.simulate_keystrokes("right");
+        window.run_until_parked();
+
+        assert_eq!(telemetry_level(&app_state, window), Some(true));
+        window.update(|_, cx| {
+            let scheduler = app_state.read(cx).telemetry().expect("scheduler");
+            assert!(scheduler.state().pending().is_empty(), "no queue");
+            assert!(!scheduler.is_disclosure_dismissed(), "no acknowledgement");
+        });
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn hiding_after_selecting_still_acknowledges_nothing(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        initialize_telemetry(&app_state, cx);
+        let state_for_view = app_state.clone();
+        let (dialog, window) =
+            cx.add_window_view(move |_, cx| WelcomeDialog::new(state_for_view, cx));
+        let acknowledgements = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let acknowledgements = acknowledgements.clone();
+            cx.subscribe(
+                &dialog,
+                move |_, _: &super::TelemetryDisclosureDismissed, _| {
+                    acknowledgements.set(acknowledgements.get() + 1);
+                },
+            )
+        });
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
+        window.run_until_parked();
+
+        window.simulate_keystrokes("right");
+        window.run_until_parked();
+
+        // A programmatic hide is not an acknowledgement.
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.hide(cx)));
+        window.run_until_parked();
+        assert_eq!(acknowledgements.get(), 0);
+        assert_eq!(telemetry_level(&app_state, window), Some(true));
+        window.update(|_, cx| {
+            let scheduler = app_state.read(cx).telemetry().expect("scheduler");
+            assert!(scheduler.state().pending().is_empty());
+            assert!(!scheduler.is_disclosure_dismissed());
+        });
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn arrows_rove_and_select_the_level_and_enter_still_gets_started(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        initialize_telemetry(&app_state, cx);
+        let state_for_view = app_state.clone();
+        let (dialog, window) =
+            cx.add_window_view(move |_, cx| WelcomeDialog::new(state_for_view, cx));
+        let acknowledgements = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let acknowledgements = acknowledgements.clone();
+            cx.subscribe(
+                &dialog,
+                move |_, _: &super::TelemetryDisclosureDismissed, _| {
+                    acknowledgements.set(acknowledgements.get() + 1);
+                },
+            )
+        });
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
+        window.run_until_parked();
+
+        window.simulate_keystrokes("right");
+        window.run_until_parked();
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(true),
+            "Right picks Basic"
+        );
+
+        window.simulate_keystrokes("left");
+        window.run_until_parked();
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(false),
+            "Left picks Off"
+        );
+        assert_eq!(acknowledgements.get(), 0, "stepping never acknowledges");
+
+        // Enter remains the modal confirm: Get started closes and acks once.
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(acknowledgements.get(), 1);
+        assert!(!window.update(|_, cx| dialog.read(cx).is_visible()));
+    }
+
+    /// The workspace mounts the dialog as a flow sibling after the shell.
+    /// The host around the modal must therefore leave the normal flow
+    /// (viewport-absolute), or the absolutely positioned modal lands below
+    /// the window with zero height: the native 0.9.0-rc.0+local build showed
+    /// the welcome dialog at y=2046, height 0, over a 1908x1023 window.
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn the_welcome_modal_covers_the_workspace_viewport(cx: &mut TestAppContext) {
+        use gpui::{
+            AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+            ParentElement as _, Render, Styled as _, Window, div as gpui_div, px, size,
+        };
+
+        struct WorkspaceLikeHost {
+            welcome: Entity<WelcomeDialog>,
+        }
+
+        impl Render for WorkspaceLikeHost {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                gpui_div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        gpui_div()
+                            .h(px(40.0))
+                            .debug_selector(|| "workspace-title".to_string()),
+                    )
+                    .child(
+                        gpui_div()
+                            .flex_1()
+                            .debug_selector(|| "workspace-body".to_string()),
+                    )
+                    .child(self.welcome.clone())
+            }
+        }
+
+        let app_state = test_app_state(cx);
+        let state_for_view = app_state.clone();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot_for_view = slot.clone();
+        let (_host, window) = cx.add_window_view(move |_window, cx| {
+            let welcome = cx.new(|cx| WelcomeDialog::new(state_for_view.clone(), cx));
+            slot_for_view.borrow_mut().replace(welcome.clone());
+            WorkspaceLikeHost { welcome }
+        });
+        window.simulate_resize(size(px(900.0), px(600.0)));
+        window.run_until_parked();
+
+        let dialog = slot.borrow().clone().expect("dialog built");
+        window.update(|_, cx| {
+            dialog.update(cx, |dialog, cx| dialog.open(cx));
+        });
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+
+        for (width, height) in [(863.0, 513.0), (900.0, 600.0)] {
+            window.simulate_resize(size(px(width), px(height)));
+            window.run_until_parked();
+            window.update(|window, _| window.refresh());
+            // The dialog is actually open and its controls are in the frame.
+            assert!(window.update(|_, cx| dialog.read(cx).is_visible()));
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+            let clickable: Vec<String> = frame
+                .nodes()
+                .filter_map(|(_, node)| frame.accessibility_node(node))
+                .filter(|node| node.supports_action(gpui::AccessibleAction::Click))
+                .map(|_| String::new())
+                .collect();
+            let _ = clickable;
+
+            let host_bounds = window
+                .debug_bounds("welcome-dialog-host")
+                .unwrap_or_else(|| panic!("the welcome host is laid out"));
+            let window_size = window.update(|window, _| window.viewport_size());
+            assert!(
+                host_bounds.size.height > px(0.0),
+                "the modal host must have positive height, got {host_bounds:?}"
+            );
+            assert!(
+                host_bounds.origin.y >= px(0.0) && host_bounds.origin.y < window_size.height,
+                "the modal host must start inside the window, got {host_bounds:?} in {window_size:?}"
+            );
+            assert!(
+                host_bounds.origin.y + host_bounds.size.height <= window_size.height + px(1.0),
+                "the modal host must not spill below the window, got {host_bounds:?} in {window_size:?}"
+            );
+
+            for id in ["welcome-telemetry-off", "welcome-telemetry-basic"] {
+                let bounds = window.debug_bounds(id).expect("card geometry is painted");
+                assert!(
+                    bounds.size.height <= px(100.0),
+                    "compact card {id}: {bounds:?}"
+                );
+                assert!(bounds.size.height > px(0.0));
+                let columns = window
+                    .debug_bounds("welcome-columns")
+                    .expect("panel geometry");
+                let footer = window
+                    .debug_bounds("welcome-footer")
+                    .expect("footer geometry");
+                assert!(bounds.origin.y >= columns.origin.y);
+                assert!(bounds.origin.y + bounds.size.height <= footer.origin.y);
+                eprintln!(
+                    "compact geometry {id}: {bounds:?}; panel: {columns:?}; footer: {footer:?}"
+                );
+            }
+
+            let privacy = window
+                .debug_bounds("welcome-privacy-box")
+                .expect("privacy box");
+            let text = window
+                .debug_bounds("welcome-privacy-text")
+                .expect("privacy text");
+            let icon = window
+                .debug_bounds("welcome-privacy-icon")
+                .expect("privacy icon");
+            assert!(
+                text.size.width <= privacy.size.width - px(28.0),
+                "privacy must fit: {text:?} in {privacy:?}"
+            );
+            assert!(text.size.height > px(22.0), "privacy must wrap: {text:?}");
+            assert!(icon.size.width >= px(12.0) && icon.size.height >= px(12.0));
+            assert!(text.origin.y + text.size.height <= privacy.origin.y + privacy.size.height);
+            let footer = window
+                .debug_bounds("welcome-footer")
+                .expect("footer geometry");
+            let header = window
+                .debug_bounds("welcome-header")
+                .expect("header geometry");
+            let columns = window
+                .debug_bounds("welcome-columns")
+                .expect("panel geometry");
+            assert!(header.origin.y >= px(8.0));
+            assert!(header.origin.y + header.size.height <= columns.origin.y);
+            assert!(privacy.origin.y >= columns.origin.y);
+            assert!(privacy.origin.y + privacy.size.height <= footer.origin.y);
+            assert!(
+                footer.origin.y + footer.size.height <= window_size.height - px(8.0),
+                "footer must fit: {footer:?} in {window_size:?}"
+            );
+            eprintln!(
+                "privacy geometry: box={privacy:?}, text={text:?}, icon={icon:?}; footer={footer:?}"
+            );
+
+            // Get started and the two level cards sit inside the host's bounds:
+            // real geometry, not a visibility flag.
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+            let disclosure = dbflux_i18n::t!("updates.welcome.telemetry_privacy");
+            assert!(
+                frame
+                    .nodes()
+                    .any(|(_, node)| node.content_text().contains(&disclosure))
+            );
+            for required in [
+                "welcome-get-started",
+                "welcome-telemetry-off",
+                "welcome-telemetry-basic",
+            ] {
+                assert!(
+                    frame.nodes().any(|(_, node)| node.id() == required),
+                    "{required} must be in the painted frame"
+                );
+            }
+        }
+    }
+
     #[test]
     fn highlights_follow_the_board_counts() {
         assert_eq!(highlights_per_section(&SectionKind::Added), 4);
         assert_eq!(highlights_per_section(&SectionKind::Fixed), 2);
         assert_eq!(highlights_per_section(&SectionKind::Changed), 2);
+    }
+
+    /// Critical meaning of the telemetry copy, compared against the actual
+    /// source of every locale (not only "differs from English").
+    #[test]
+    fn telemetry_level_copy_keeps_the_critical_meaning_in_every_locale() {
+        const WEEKLY: [&str; 4] = ["week", "semanal", "주간", "周报"];
+        // The old, false claim that Basic sends the same as Off.
+        const EQUIVALENCE_CLAIM: [&str; 4] = [
+            "no more than Off",
+            "no envía más que Apagado",
+            "끔과 보내는 것이 같습니다",
+            "「基本」与「关闭」发送的内容相同",
+        ];
+        const MINIMAL_PING: [&str; 4] = ["ping", "aviso mínimo", "버전 핑", "版本通知"];
+
+        for (index, locale) in ["en", "es", "ko", "zh_Hans"].iter().enumerate() {
+            let basic = dbflux_i18n::t!(
+                "updates.welcome.telemetry_basic_description",
+                locale = locale
+            );
+            assert!(
+                basic.contains(WEEKLY[index]),
+                "{locale}: Basic must promise a weekly report, got: {basic}"
+            );
+            assert!(!basic.contains(EQUIVALENCE_CLAIM[index]));
+
+            let off = dbflux_i18n::t!("updates.welcome.telemetry_off_description", locale = locale);
+            assert!(
+                off.contains(MINIMAL_PING[index]),
+                "{locale}: Off must describe the minimal build ping, got: {off}"
+            );
+        }
     }
 
     #[test]
@@ -483,8 +1198,14 @@ mod tests {
             "updates.welcome.change_later",
             "updates.welcome.get_started",
             "updates.welcome.full_changelog",
-            "updates.welcome.telemetry_disclosure",
             "updates.welcome.telemetry_save_failed",
+            "updates.welcome.telemetry_heading",
+            "updates.welcome.telemetry_off",
+            "updates.welcome.telemetry_off_description",
+            "updates.welcome.telemetry_basic",
+            "updates.welcome.telemetry_basic_description",
+            "updates.welcome.telemetry_privacy",
+            "updates.welcome.telemetry_helper",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);

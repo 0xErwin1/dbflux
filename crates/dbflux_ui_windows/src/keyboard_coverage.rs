@@ -228,6 +228,34 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "updates-show-welcome",
             KeyboardPath::Command(Command::Execute),
         ),
+        // Updates & privacy: the segmented Off/Basic level steps with Left
+        // and Right; the install-id reset, the report viewer and the audit
+        // jump are entered with Enter or Space.
+        (
+            "segmented-telemetry-level-*",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
+            "updates-install-reset",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "updates-view-report",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "updates-open-in-audit",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        // The telemetry report viewer's footer.
+        (
+            "json-report-preview-copy",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "json-report-preview-close",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("about-link-*", KeyboardPath::Command(Command::Execute)),
         ("mcp-client-active", KeyboardPath::Command(Command::Execute)),
         ("mcp-role-*.*", KeyboardPath::Command(Command::Execute)),

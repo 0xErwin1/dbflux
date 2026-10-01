@@ -2143,6 +2143,65 @@ impl AppState {
         &self.audit_service
     }
 
+    /// The saved telemetry level: `Some(true)` when Basic is on, `Some(false)`
+    /// when Off, `None` when the optional telemetry module is unavailable.
+    /// UI surfaces must not branch on the transitive `Level` type.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_basic_level(&self) -> Option<bool> {
+        self.telemetry
+            .as_ref()
+            .map(|scheduler| scheduler.state().level() == dbflux_telemetry::Level::Basic)
+    }
+
+    /// Persists the Basic opt-in (or Off) on the storage owner, in the
+    /// foreground. Off cancels a queued Basic delivery; it never resets the
+    /// installation identity.
+    #[cfg(feature = "telemetry")]
+    pub fn set_telemetry_basic(
+        &mut self,
+        enabled: bool,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.telemetry_mut()
+            .ok_or(crate::telemetry::TelemetryError::Storage)?
+            .set_basic(enabled, now)
+    }
+
+    /// Rotates the installation identity immediately, in the foreground.
+    /// Cancels old-identity pending work; acknowledged build history survives.
+    #[cfg(feature = "telemetry")]
+    pub fn reset_telemetry_install_id(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.telemetry_mut()
+            .ok_or(crate::telemetry::TelemetryError::Storage)?
+            .reset(now)
+    }
+
+    /// The installation identifier for display, masked to its first and last
+    /// four hex characters (`a3f9…71c2`). `None` when telemetry is unavailable.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_install_id_masked(&self) -> Option<String> {
+        let id = self
+            .telemetry
+            .as_ref()?
+            .state()
+            .install_id()
+            .simple()
+            .to_string();
+        Some(format!("{}…{}", &id[..4], &id[id.len() - 4..]))
+    }
+
+    /// Whether a delivery endpoint is configured: `None` when telemetry is
+    /// unavailable, `Some(false)` means delivery is honestly unavailable.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_delivery_configured(&self) -> Option<bool> {
+        self.telemetry
+            .as_ref()
+            .map(crate::telemetry::TelemetryScheduler::endpoint_configured)
+    }
+
     /// Wires the tracing bridge's shared atomics into the audit service so that
     /// `set_log_capture_min_level` can update the bridge threshold at runtime
     /// and `dropped_log_event_count` can report the drop counter.

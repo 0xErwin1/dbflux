@@ -165,6 +165,9 @@ components:
     compact: 紧凑
     cancel: 取消
     save: 保存
+  json_report_preview:
+    copy_raw: 复制原始内容
+    close: 关闭
   value_source:
     literal: 字符
     env: 环境变量
@@ -4331,7 +4334,7 @@ settings:
     general_group: 常规
     general: 常规
     keybindings: 键盘快捷键
-    updates: 更新
+    updates: 更新与隐私
     audit: 审计
     about: 关于
     network: 网络
@@ -4760,8 +4763,8 @@ workspace:
   default_object_type: 对象
 updates:
   settings:
-    title: 更新
-    subtitle: 新版本检查以及更新后的更新日志。
+    title: 更新与隐私
+    subtitle: 新版本检查、更新后的更新日志以及使用统计。
     group: 更新
     new_versions: 新版本
     check_on_startup: 启动时在 GitHub 上检查新版本
@@ -4782,6 +4785,37 @@ updates:
     save: 保存
     saved: 更新设置已保存。
     save_error: "无法保存更新设置：%{error}"
+    usage_heading: 使用统计
+    usage_level: 级别
+    level_off: "关闭"
+    level_basic: "基本"
+    level_hint: "「关闭」不发送任何使用信息。发送需要配置端点，默认不可用。"
+    what_is_sent: 发送内容
+    collected_build: "构建：版本、渠道、操作系统、架构"
+    collected_language: "系统语言和国家，每周"
+    collected_counts: "功能使用计数（查询、仪表板、脚本等）"
+    collected_minimal: 最小通知
+    collected_basic: 基本
+    collected_yes: "✓"
+    collected_no: "—"
+    counts_not_instrumented: "功能计数器尚未埋点：目前「基本」发送的是空的计数表。"
+    install_id: 安装 ID
+    install_id_hint: "随机且轮换，是假名而非匿名。不与您或此机器绑定。重置会取消待发送内容并保留已确认的构建。"
+    reset_install_id: 重置 ID
+    reset_install_id_title: 重置安装 ID？
+    reset_install_id_body: "新的随机 ID 将替换当前 ID。待发送内容会被取消，已确认的构建保持已确认状态。"
+    reports: 报告
+    no_report_sent_yet: 尚未发送过报告
+    checking_last_report: 正在查询最近的报告…
+    delivery_unavailable: "发送不可用：未配置端点。"
+    report_load_failed: 无法加载最近的报告。
+    last_sent: "上次发送 %{when} · %{level} · %{size}"
+    level_off_display: 关闭
+    level_basic_display: 基本
+    view_report: 查看最近报告
+    open_in_audit: 在审计中打开
+    telemetry_save_failed: 无法保存遥测设置。
+    telemetry_reset_failed: 无法重置安装 ID。
   ago:
     just_now: 刚刚
     minutes: "%{count} 分钟前"
@@ -4820,14 +4854,20 @@ updates:
     title: 欢迎使用 DBFlux
     tagline: 面向键盘操作的客户端，支持 SQL、文档、键值、时间序列和对象存储。
     telemetry_save_failed: 无法保存遥测提示的确认状态。
-    telemetry_disclosure: "此构建包含遥测，但仅在配置了接收地址时发送。默认情况下，关闭此提示后，每个安装和构建仅发送一次最小版本报告，包含操作系统、架构和定期轮换的随机标识符。Basic 需要单独选择启用，每周发送操作系统语言、国家和功能使用次数。不发送查询、结果或凭据。完整发送内容记录在本地审计日志中。"
+    telemetry_heading: 使用统计
+    telemetry_helper: "帮助确定开发方向。统计数据保持私密。"
+    telemetry_off: "关闭"
+    telemetry_off_description: "每个构建一次版本通知：版本、OS、架构和轮换 ID。不含使用数据。"
+    telemetry_basic: "基本"
+    telemetry_basic_description: "添加周报：系统语言和国家。使用计数尚未启用。"
+    telemetry_privacy: "轮换假名 ID。绝不发送查询、结果、凭据、路径或连接元数据。完整报告保存在本地 Audit。仅在继续后且配置了收集器时发送，否则不发送任何内容。"
     whats_new: 新功能
     updates: 更新
     notify: 有新版本时通知我
     notify_hint: 启动时 DBFlux 会向 GitHub 查询最新版本，不会发送任何关于您的信息。
     show_whats_new: 每次更新后显示新功能
     show_whats_new_hint: 新版本首次启动时打开一次此更新日志。
-    change_later: 稍后可在 设置 › 更新 中更改
+    change_later: "以后可在设置 › 更新与隐私中更改"
     get_started: 开始使用
     full_changelog: 完整更新日志
 notifications:

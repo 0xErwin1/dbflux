@@ -362,6 +362,105 @@ impl DeliveryCompletion {
     }
 }
 
+/// Read-only view of the newest confirmed telemetry delivery in the durable
+/// audit log, for UI report surfaces. `payload` keeps the stored bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetryLastReport {
+    pub payload: String,
+    pub payload_len: usize,
+    /// `"off"` or `"basic"`, as stored by the delivery bridge.
+    pub level: Option<String>,
+    /// Row creation time of the confirmed `outcome` event.
+    pub ack_at_epoch_ms: i64,
+    pub correlation: Option<Uuid>,
+}
+
+/// Bounds both the SQL `LIMIT` and how many rows are parsed.
+const LAST_REPORT_QUERY_BOUND: usize = 8;
+
+/// Newest confirmed (`stored` / `duplicate`) `telemetry.delivery` outcome in
+/// the durable audit, or `None` when no delivery was ever confirmed. The
+/// success filter is part of the SQL so the row bound applies to candidate
+/// reports, not to the attempt/failure noise around them. Pending attempts,
+/// failures and rows without a real closed-schema v1 payload are not reports.
+/// Audit errors are returned, never swallowed; if the bound could hide a real
+/// confirmed report behind malformed newer rows, that is a conservative
+/// error rather than a pretend "nothing sent yet".
+pub fn last_report(
+    audit: &dbflux_audit::AuditService,
+) -> Result<Option<TelemetryLastReport>, TelemetryError> {
+    let filter = dbflux_audit::query::AuditQueryFilter {
+        category: Some(EventCategory::System.as_str().to_owned()),
+        action: Some("telemetry.delivery".to_owned()),
+        outcome: Some(EventOutcome::Success.as_str().to_owned()),
+        limit: Some(LAST_REPORT_QUERY_BOUND),
+        ..Default::default()
+    };
+    let events = audit
+        .query_extended(&filter)
+        .map_err(|_| TelemetryError::Audit)?;
+
+    // Confirmed candidates are compared by (created_at, id) so the result
+    // never depends on the store's row ordering.
+    let mut best: Option<(
+        &dbflux_storage::repositories::audit::AuditEventDto,
+        serde_json::Value,
+    )> = None;
+    for event in &events {
+        let Some(details_json) = event.details_json.as_deref() else {
+            continue;
+        };
+        let Ok(details) = serde_json::from_str::<serde_json::Value>(details_json) else {
+            continue;
+        };
+        if details["phase"].as_str() != Some("outcome") {
+            continue;
+        }
+        if !matches!(details["code"].as_str(), Some("stored") | Some("duplicate")) {
+            continue;
+        }
+        let Some(payload) = details["payload"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        if dbflux_telemetry::validate_payload(&payload).is_err() {
+            continue;
+        }
+        let is_newer = match &best {
+            Some((current, _)) => {
+                (event.created_at_epoch_ms, event.id) > (current.created_at_epoch_ms, current.id)
+            }
+            None => true,
+        };
+        if is_newer {
+            best = Some((event, details));
+        }
+    }
+    if let Some((event, details)) = best {
+        let payload = details["payload"]
+            .as_str()
+            .expect("confirmed payload")
+            .to_owned();
+        return Ok(Some(TelemetryLastReport {
+            payload_len: payload.len(),
+            level: details["level"].as_str().map(str::to_owned),
+            payload,
+            ack_at_epoch_ms: event.created_at_epoch_ms,
+            correlation: event
+                .correlation_id
+                .as_deref()
+                .and_then(|id| Uuid::parse_str(id).ok()),
+        }));
+    }
+
+    if events.len() >= LAST_REPORT_QUERY_BOUND {
+        // Every candidate inside the bound was malformed or unconfirmed. A
+        // real report may exist just beyond it: fail closed instead of
+        // showing "no report sent yet".
+        return Err(TelemetryError::Audit);
+    }
+    Ok(None)
+}
+
 pub struct TelemetryScheduler {
     repository: TelemetryRepository,
     state: TelemetryState,
@@ -408,6 +507,12 @@ impl TelemetryScheduler {
     }
     pub fn is_disclosure_dismissed(&self) -> bool {
         self.state.disclosure_dismissed()
+    }
+
+    /// Whether a delivery endpoint is configured. Without one, delivery is
+    /// unavailable and nothing is ever queued; UI copy stays honest about it.
+    pub fn endpoint_configured(&self) -> bool {
+        self.config.endpoint.is_some()
     }
     fn update(
         &mut self,
@@ -648,6 +753,200 @@ mod tests {
             ))
         })
     }
+    #[test]
+    fn telemetry_last_report_reads_byte_exact_payload_from_durable_audit_after_ack() {
+        let (mut scheduler, audit, storage) = configured();
+        assert_eq!(last_report(&audit).expect("empty audit"), None);
+
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ack clears the ping");
+        let basic = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&basic), now())
+            .expect("ack clears the basic delivery");
+        assert!(scheduler.state().pending().is_empty());
+
+        // Reopen the real scratch-backed service: the report must survive in
+        // the durable audit, not in any in-memory state.
+        drop(audit);
+        let reopened =
+            dbflux_audit::AuditService::new_sqlite(storage.dbflux_db_path()).expect("reopen");
+        let report = last_report(&reopened)
+            .expect("query")
+            .expect("confirmed report");
+        assert_eq!(report.payload, basic.payload());
+        assert_eq!(report.payload_len, basic.payload().len());
+        assert_eq!(report.level.as_deref(), Some("basic"));
+        assert_eq!(report.correlation, Some(basic.correlation_id()));
+    }
+
+    #[test]
+    fn telemetry_last_report_confirms_only_stored_or_duplicate_outcomes() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+
+        // A failed delivery leaves attempt + failure outcome events: no report.
+        let failed = job(&mut scheduler, now());
+        let completion = failed.attempt_with(now(), |dispatch| {
+            assert!(dispatch());
+            Err(TransportError::Timeout)
+        });
+        scheduler.complete(completion, now()).expect("recorded");
+        assert_eq!(last_report(&audit).expect("query"), None);
+
+        // A later confirmed delivery is the newest report.
+        let delivered = job(&mut scheduler, now() + chrono::Duration::minutes(3));
+        scheduler
+            .complete(acknowledged(&delivered), now())
+            .expect("ack");
+        let report = last_report(&audit).expect("query").expect("report");
+        assert_eq!(report.payload, delivered.payload());
+        assert_eq!(report.correlation, Some(delivered.correlation_id()));
+    }
+
+    /// One confirmed delivery followed by four failed attempts (attempt +
+    /// failure-outcome rows each) must still surface the confirmed report:
+    /// the SQL filter selects success outcomes before the row bound.
+    #[test]
+    fn telemetry_last_report_survives_later_failure_and_pending_rows() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+
+        let delivered = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&delivered), now())
+            .expect("ack");
+
+        for attempt in [1_u32, 5, 10, 20, 40, 80, 160, 320] {
+            let failed = job(
+                &mut scheduler,
+                now() + chrono::Duration::minutes(attempt as i64),
+            );
+            let completion = failed.attempt_with(
+                now() + chrono::Duration::minutes(attempt as i64),
+                |dispatch| {
+                    assert!(dispatch());
+                    Err(TransportError::Timeout)
+                },
+            );
+            scheduler.complete(completion, now()).expect("recorded");
+        }
+
+        let report = last_report(&audit)
+            .expect("query")
+            .expect("confirmed report");
+        assert_eq!(report.payload, delivered.payload());
+        assert_eq!(report.correlation, Some(delivered.correlation_id()));
+    }
+
+    /// A success-labeled row whose payload is not a real closed-schema v1
+    /// delivery is never a report; the older real confirmed payload wins.
+    #[test]
+    fn telemetry_last_report_skips_success_rows_with_fake_payloads() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let delivered = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&delivered), now())
+            .expect("ack");
+
+        for fake in [
+            "{\"event\":\"ping\"}",
+            "any string is not a delivery",
+            r#"{"schema":"dbflux.telemetry-event/v1","event":"ping"}"#,
+        ] {
+            audit
+                .record(
+                    EventRecord::new(
+                        dbflux_core::chrono::Utc::now().timestamp_millis(),
+                        EventSeverity::Info,
+                        EventCategory::System,
+                        EventOutcome::Success,
+                    )
+                    .with_action("telemetry.delivery")
+                    .with_summary("Telemetry delivery")
+                    .with_details_json(
+                        serde_json::json!({
+                            "payload": fake,
+                            "level": "off",
+                            "phase": "outcome",
+                            "code": "stored"
+                        })
+                        .to_string(),
+                    ),
+                )
+                .expect("fake-success row stored");
+        }
+
+        let report = last_report(&audit).expect("query").expect("real report");
+        assert_eq!(report.payload, delivered.payload());
+        assert_eq!(report.correlation, Some(delivered.correlation_id()));
+    }
+
+    /// The canonical `dbflux_telemetry::validate_payload` accepts exactly the
+    /// production wire shapes: the real payloads the scheduler freezes, never
+    /// arbitrary look-alikes.
+    #[test]
+    fn telemetry_report_payload_validation_matches_the_real_wire_schema() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let ping = job(&mut scheduler, now());
+        assert!(dbflux_telemetry::validate_payload(ping.payload()).is_ok());
+
+        scheduler.set_basic(true, now()).expect("basic");
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ack ping");
+        let basic = job(&mut scheduler, now());
+        assert!(dbflux_telemetry::validate_payload(basic.payload()).is_ok());
+
+        assert!(dbflux_telemetry::validate_payload("{\"event\":\"ping\"}").is_err());
+        assert!(dbflux_telemetry::validate_payload("not json").is_err());
+        // Double-encoded JSON is a string, not a delivery object.
+        assert!(dbflux_telemetry::validate_payload(r#""{\"event\":\"ping\"}""#).is_err());
+    }
+
+    #[test]
+    fn telemetry_last_report_skips_malformed_rows_and_bounds_the_query() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let delivered = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&delivered), now())
+            .expect("ack");
+
+        audit
+            .record(
+                EventRecord::new(
+                    now().timestamp_millis(),
+                    EventSeverity::Info,
+                    EventCategory::System,
+                    EventOutcome::Success,
+                )
+                .with_action("telemetry.delivery")
+                .with_summary("Telemetry delivery")
+                .with_details_json(
+                    serde_json::json!({"phase": "outcome", "code": "stored"}).to_string(),
+                ),
+            )
+            .expect("row without payload stored");
+
+        // The malformed newer row is skipped, not reported or fatal.
+        let report = last_report(&audit).expect("query").expect("report");
+        assert_eq!(report.payload, delivered.payload());
+    }
+
+    #[test]
+    fn telemetry_report_source_is_send_for_background_queries() {
+        fn require_send<T: Send>() {}
+        require_send::<dbflux_audit::AuditService>();
+    }
+
     #[test]
     fn telemetry_prepare_persists_frozen_job_only_after_disclosure() {
         let (mut scheduler, _, storage) = configured();

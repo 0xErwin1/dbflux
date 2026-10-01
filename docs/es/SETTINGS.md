@@ -10,6 +10,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
+| [Actualizaciones y privacidad](#actualizaciones-y-privacidad) | Comprobaciones de actualizaciones, el changelog y los niveles de telemetría opcionales. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
@@ -114,6 +115,48 @@ Lua, Python o Bash, hooks de conexión ni métricas.
 
 Ver [Data & Privacy](PRIVACY.md#ubicaciones-de-datos) para cómo se separan
 las bases de datos Nightly y stable.
+
+---
+
+## Actualizaciones y privacidad
+
+Las preferencias de comprobación de actualizaciones y changelog, más los
+niveles de telemetría opcionales. Los cambios quedan en stages hasta que
+pulsas **Save** (Ctrl+S); **Reset to defaults** deja los valores por defecto
+en stages sin guardar.
+
+### Updates
+
+| Ajuste | Efecto |
+|--------|--------|
+| Check GitHub for a new release at startup | Ejecuta la comprobación de actualizaciones al iniciar la app. |
+| Show what is new after each update | Abre el changelog una vez, la primera vez que arranca una versión nueva. |
+| Check now | Ejecuta una comprobación inmediata. |
+| Open what is new / Show welcome again | Reabre los dos diálogos. |
+
+### Estadísticas de uso
+
+DBFlux tiene un módulo de telemetría opcional con dos niveles:
+
+- **Apagado** (por defecto) — nada sobre tu uso. Incluso en Apagado, DBFlux
+  puede enviar un único aviso mínimo de versión por instalación y compilación
+  después de cerrar el aviso de bienvenida: sistema operativo, arquitectura,
+  versión, canal y un identificador aleatorio que rota.
+- **Básico** (activación) — suma un informe semanal con el idioma del sistema
+  (no el de la interfaz) y el país. Los contadores de funciones **aún no están
+  instrumentados**, así que hoy Básico envía un mapa de recuentos vacío.
+
+El envío necesita un destino configurado; ninguna compilación publicada lo
+tiene, así que el envío no está disponible por defecto. Nunca se envían
+consultas, resultados, credenciales, rutas de archivos ni metadatos de
+conexión. Ver [Datos y privacidad](PRIVACY.md#telemetría-opcional) para la
+lista completa de lo que contiene un informe.
+
+| Control | Efecto |
+|---------|--------|
+| Nivel (Apagado / Básico) | El nivel en stages; Left y Right o un clic lo cambian, Save lo aplica. |
+| Id de instalación | Vista enmascarada del identificador seudónimo. **Reiniciar id** lo rota de inmediato, cancela los envíos pendientes y conserva las compilaciones confirmadas. |
+| Informes | El último informe confirmado, leído del audit log duradero. **Ver el último informe** abre un visor de solo lectura sobre el contenido almacenado; **Abrir en auditoría** abre el visor de auditoría con la correlación del informe. |
 
 ---
 
