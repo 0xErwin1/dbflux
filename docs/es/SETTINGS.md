@@ -142,15 +142,49 @@ DBFlux tiene un módulo de telemetría opcional con dos niveles:
   puede enviar un único aviso mínimo de versión por instalación y compilación
   después de cerrar el aviso de bienvenida: sistema operativo, arquitectura,
   versión, canal y un identificador aleatorio que rota.
-- **Básico** (activación) — suma un informe semanal con el idioma del sistema
-  (no el de la interfaz) y el país. Los contadores de funciones **aún no están
-  instrumentados**, así que hoy Básico envía un mapa de recuentos vacío.
+- **Básico** (activación separada) — suma un informe semanal con sistema
+  operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se
+  desconoce) y recuentos acotados de ejecuciones exitosas compatibles de
+  consultas, visual builder, aperturas de dashboards, scripts, operaciones MCP
+  e inspecciones de schema. Son recuentos de operaciones completas, incluidos
+  resultados exitosos con cero filas, no de filas ni de tiempos.
+
+Las actualizaciones en segundo plano, fallos parciales, errores y cancelaciones
+no cuentan. Las aprobaciones del builder sin ejecución no cuentan, ni la
+creación, importación o restauración implícitas de dashboards. Los scripts
+requieren código de salida canónico 0 sin timeout ni ejecución detached; la
+inspección de schema requiere una carga nueva de metadatos completos, no
+reenfocar una pestaña existente.
+
+**MCP solo cuenta operaciones principales revisadas, compatibles y exitosas con
+un propietario de primer plano de una GUI existente, autenticada y en ejecución**,
+no todas las llamadas ni un servidor independiente sin ese propietario.
+`count_records`, `insert_record` y `list_scripts` se excluyen incluso si tienen
+éxito. `update_records` y `delete_records` requieren la finalización de la
+mutación principal con `QueryResult` tipado, no un `DocumentCrudResult` opaco
+exitoso; update/upsert/delete SQL tipados comprobados pueden contar con cero filas
+afectadas. Ayuda/protocolo, herramientas desconocidas, controles de aprobación y
+aprobaciones pendientes no cuentan. El permiso se adquiere después de Allow y
+antes del trabajo; el recuento llega tras completar el trabajo principal y
+registrar con éxito Audit de ejecución. Ver los límites completos en la política
+siguiente.
 
 El envío necesita un destino configurado; ninguna compilación publicada lo
 tiene, así que el envío no está disponible por defecto. Nunca se envían
 consultas, resultados, credenciales, rutas de archivos ni metadatos de
 conexión. Ver [Datos y privacidad](PRIVACY.md#telemetría-opcional) para la
-lista completa de lo que contiene un informe.
+lista completa de lo que contiene un informe y los límites de cobertura.
+Básico debe estar activo y el aviso visible de bienvenida debe haberse cerrado
+realmente antes de comenzar; fuentes no disponibles o Audit desactivado o
+degradado impiden contabilizar. Guardar Básico no garantiza un envío inmediato.
+Apagado borra informes Básico pendientes y contadores; confirmar la entrega
+conserva incrementos posteriores. Los UUID de instalación y entrega son
+seudónimos; no se envían identificadores de operaciones, consultas, clientes o
+personas, nombres de herramientas ni estadísticas por motor. La rotación del ID
+(cada 90 días aproximadamente o al reiniciar) conserva las compilaciones
+confirmadas y no envía vínculos entre IDs viejos y nuevos ni avisos de retirada.
+Las etiquetas legibles no alteran el almacenamiento, la copia, la exportación
+ni el envío del contenido sin procesar.
 
 | Control | Efecto |
 |---------|--------|

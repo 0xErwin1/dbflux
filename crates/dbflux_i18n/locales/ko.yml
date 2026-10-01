@@ -4799,7 +4799,7 @@ updates:
     collected_basic: 기본
     collected_yes: "✓"
     collected_no: "—"
-    counts_not_instrumented: "기능 카운터는 아직 계측되지 않았습니다. 현재 기본은 빈 횟수 맵을 보냅니다."
+    counts_not_instrumented: "지원되는 성공 작업의 상한이 있는 횟수입니다. 새로고침, 실패, 취소는 제외하며 MCP 범위는 제한됩니다. 개인정보 처리방침을 참고하세요."
     install_id: 설치 ID
     install_id_hint: "무작위이며 순환하고, 익명보다는 가명입니다. 사용자나 이 컴퓨터와 연결되지 않습니다. 재설정하면 대기 중인 전송이 취소되고 확인된 빌드는 유지됩니다."
     reset_install_id: ID 재설정
@@ -4860,7 +4860,7 @@ updates:
     telemetry_off: "끔"
     telemetry_off_description: "빌드당 버전 핑: 버전, OS, 아키텍처와 순환 ID. 사용 데이터 없음."
     telemetry_basic: "기본"
-    telemetry_basic_description: "주간 보고서 추가: 시스템 언어와 국가. 사용 횟수 집계는 아직 활성화되지 않았습니다."
+    telemetry_basic_description: "주간 시스템 언어, 국가와 제한된 성공 횟수: 쿼리, 빌더, 대시보드, 스크립트, 지원되는 MCP, 스키마."
     telemetry_privacy: "순환 가명 ID. 쿼리, 결과, 자격 증명, 경로, 연결 메타데이터는 전송하지 않습니다. 전체 보고서는 로컬 Audit에 기록됩니다. 계속한 후 수집기가 설정된 경우에만 전송하며, 없으면 전송하지 않습니다."
     whats_new: 새로운 기능
     updates: 업데이트

@@ -1,21 +1,25 @@
 # Política de privacidad
 
-DBFlux es una aplicación de escritorio local-first. No recopila, transmite ni
-almacena información sobre ti ni sobre tu uso. El sitio web del proyecto no
-usa cookies ni carga scripts de terceros. Este documento explica qué significa
-eso en la práctica y nombra a los proveedores de infraestructura que ven el
-tráfico en su camino hacia ti.
+DBFlux es una aplicación de escritorio local-first. La telemetría opcional puede
+enviar un aviso seudónimo de instalación y compilación y, con la activación
+separada de Básico, recuentos agregados de uso. Nunca envía identificadores de
+personas, consultas, resultados ni metadatos de conexión. El sitio web del proyecto no usa
+cookies ni carga scripts de terceros. Este documento describe esos límites y
+los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 
 ## Ruta rápida
 
-1. La aplicación envía datos únicamente a los servidores de base de datos que
-   configuras, y solo lo necesario para ejecutar las consultas que pides.
+1. El tráfico de base de datos va directamente a los servidores que configuras,
+   con lo necesario para ejecutar las consultas que pides; la telemetría opcional
+   es independiente.
 2. La telemetría existe, pero es opcional y está apagada por defecto. El envío
    necesita un destino configurado explícitamente, que ninguna compilación
    publicada tiene, así que por defecto no se envía nada. Nunca envía
    consultas, resultados, credenciales, rutas de archivos ni metadatos de
    conexión. Los detalles están en [Telemetría](#telemetría-opcional).
-3. El sitio web y la documentación son páginas estáticas. No usan cookies, no
+3. No hay informes de fallos, analítica de uso más allá de la telemetría descrita
+   ni cuentas.
+4. El sitio web y la documentación son páginas estáticas. No usan cookies, no
    cargan scripts de terceros y no guardan registro de visitantes
    individuales. Una medición anónima del uso de las páginas, gestionada por el
    servidor propio del proyecto, se describe en
@@ -28,10 +32,10 @@ tráfico en su camino hacia ti.
 |----------|-----------|
 | ¿DBFlux envía datos de uso a algún sitio? | Solo después de cerrar el aviso de bienvenida y con un destino configurado, que ninguna compilación publicada tiene. Las estadísticas de uso (Básico) son una activación separada. Ver [Telemetría](#telemetría-opcional). |
 | ¿Comprueba si hay actualizaciones? | No. Las actualizaciones se encuentran en la página de releases de GitHub. |
-| ¿Qué conexiones de red abre? | Solo las que configuras: servidores de base de datos, túneles SSH, proxies y APIs cloud de los drivers que uses. |
+| ¿Qué conexiones de red abre? | Las que configuras: servidores de base de datos, túneles SSH, proxies, APIs cloud y un destino de telemetría opcional bajo las condiciones siguientes. |
 | ¿Dónde viven mis datos? | En tu máquina, en un único archivo SQLite más el llavero del sistema operativo para los secretos. |
-| ¿Guarda un registro de lo que hago? | Solo el log de auditoría, en tu máquina. Registra conexiones, consultas y ejecuciones de hooks para que puedas revisarlas, y nunca sale del equipo en el que se escribió. |
-| ¿Se comparte algo con el proyecto? | No. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
+| ¿Guarda un registro de lo que hago? | El historial y el log de auditoría registran el trabajo localmente. Básico también conserva contadores agregados acotados; solo los informes de telemetría pueden enviarse automáticamente bajo las condiciones siguientes. |
+| ¿Se comparte algo con el proyecto? | Los informes de telemetría opcionales pueden llegar a un colector privado configurado. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
 
 Las conexiones a una base de datos, un host SSH, un proxy o un proveedor cloud
 van directamente desde tu máquina al servidor que indicaste. El proyecto no
@@ -47,35 +51,83 @@ DBFlux incluye un módulo de telemetría opcional. Es una funcionalidad
 compilada que puede excluirse por completo con `--no-default-features`, como
 las demás funcionalidades por defecto. No se envía nada salvo que se cumplan
 dos condiciones: hay un destino configurado (ninguna compilación publicada lo
-tiene, así que el envío no está disponible por defecto) y cerraste el aviso de
-bienvenida. Cerrar el aviso no es una activación de Básico: el nivel de
+tiene, así que el envío no está disponible por defecto) y cerraste realmente el
+aviso de bienvenida mostrado de forma visible. Ocultarlo mediante código no
+confirma el aviso. Cerrar el aviso no es una activación de Básico: el nivel de
 estadísticas de uso es una elección separada, y sin destino configurado no se
 envía nada de ninguna manera.
 
 | Nivel | Qué envía |
 |-------|-----------|
 | Apagado (por defecto) | A lo sumo un aviso mínimo de versión por instalación y compilación: sistema operativo, arquitectura, versión y canal de la app, y un identificador aleatorio. |
-| Básico (activación) | Suma un informe semanal: idioma del sistema (no el de la interfaz) y país. Los contadores de funciones existen en el protocolo pero aún no están instrumentados, así que hoy Básico envía un mapa de recuentos vacío. |
+| Básico (activación) | Suma un informe semanal: sistema operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se desconoce) y recuentos acotados de operaciones compatibles exitosas en las seis categorías siguientes. |
+
+#### Qué operaciones cuentan
+
+Los recuentos miden operaciones completas, no filas ni rendimiento. Una operación
+exitosa con cero filas puede contar. Las actualizaciones en segundo plano, los
+fallos parciales, los errores y las cancelaciones no cuentan. Básico y la
+confirmación del aviso deben estar activos antes de comenzar; una fuente no
+disponible o Audit desactivado o degradado impiden contabilizar.
+
+| Categoría | Cobertura |
+|-----------|-----------|
+| `query_run` | Consultas explícitas del usuario desde la barra de herramientas, comandos o margen del editor; no actualizaciones automáticas ni ejecuciones derivadas de Explain. |
+| `visual_query_builder` | Run del usuario con ejecución completa exitosa. Poner una solicitud en cola o aprobarla no es ejecutarla y no cuenta. |
+| `dashboard_open` | Aperturas o reenfoques directos desde la barra lateral con metadatos de dashboard válidos; no creación, importación ni restauración de sesión implícitas. |
+| `script_run` | Ejecuciones explícitas de scripts del editor con código de salida canónico 0, sin timeout ni ejecución detached. |
+| `mcp_tool` | Solo operaciones principales revisadas, compatibles y exitosas a través del propietario de primer plano de una GUI en ejecución y autenticada; ver los límites siguientes. |
+| `schema_inspect` | Inspección explícita enfocada o global que carga por primera vez todos los metadatos requeridos hasta Ready; no reenfocar una pestaña existente. Un alcance deliberadamente acotado a 100 tablas puede contar; los metadatos requeridos fallidos no, pero una recuperación completa sí. |
+
+**La cobertura de MCP es limitada, no un recuento de todas las llamadas.** Un
+servidor independiente sin el propietario de la GUI en ejecución no cuenta.
+Herramientas desconocidas, ayuda/protocolo, controles de aprobación y aprobaciones
+pendientes no cuentan. `count_records`, `insert_record` y `list_scripts` se excluyen
+incluso si tienen éxito porque sus APIs actuales no conservan suficiente evidencia
+de finalización. `update_records` y `delete_records` requieren la finalización
+con un `QueryResult` tipado de la mutación principal; un `DocumentCrudResult`
+opaco exitoso no basta. Las finalizaciones tipadas comprobadas de update, upsert
+y delete SQL pueden contar, incluso con cero filas afectadas. Estas exclusiones
+no cambian si las propias herramientas tienen éxito.
+
+Para operaciones MCP compatibles, el permiso se adquiere después de que la
+autorización permite el trabajo y antes de iniciarlo. El contador se acredita
+solo tras completar la operación principal y registrar con éxito la auditoría
+de ejecución, no al autorizar. Se usa la autenticación local existente, no una
+nueva garantía de identidad de cliente de confianza. Una cancelación puede dejar
+un permiso acotado hasta una futura revisión de caducidad en primer plano (tope
+de 24 horas); la limpieza no es inmediata ni se garantiza cobertura de llamadas
+arbitrariamente largas. Los nombres de herramientas aquí son detalles locales
+de cobertura, nunca campos del contenido de telemetría.
 
 Datos que no cambian según el nivel:
 
-- El identificador es un UUID aleatorio que rota cada 90 días
-  aproximadamente. Es **seudónimo, no anónimo**, y no está ligado a ti ni a tu
-  máquina.
-- Nunca se envían: consultas, resultados, credenciales, rutas de archivos,
-  metadatos de conexión ni texto de error sin restricciones. No hay
-  estadísticas públicas, recuentos de motores, reportes de errores ni
-  tiempos de rendimiento.
-- Cada informe —el contenido completo, el nivel y el resultado— queda
-  registrado en el [log de auditoría](#auditoría-y-privacidad) local antes y
-  después del intento.
+- El identificador de instalación es un UUID aleatorio que rota cada 90 días
+  aproximadamente. Es **seudónimo, no anónimo**: identifica una instalación, no
+  una persona ni un dispositivo único. Cada informe también tiene un UUID de
+  entrega. La rotación no envía avisos de retirada ni vínculos entre IDs viejos
+  y nuevos.
+- Nunca se envían: identificadores de operaciones, consultas, clientes o personas,
+  nombres de herramientas, consultas, resultados, credenciales, rutas de archivos,
+  metadatos de conexión, datos de actores entre procesos ni texto de error sin
+  restricciones. No hay informes Extended, estadísticas públicas, recuentos por
+  motor, reportes de errores ni tiempos de rendimiento.
+- Cada intento de entrega registra el contenido completo correlacionado, el nivel
+  y el resultado en el [log de auditoría](#auditoría-y-privacidad) local. Las
+  etiquetas legibles no cambian el almacenamiento, la copia, la exportación ni
+  el contenido enviado sin procesar. Los informes solo van al colector privado
+  configurado para ayudar a orientar el desarrollo.
 - Reiniciar el id de instalación en Configuración › Actualizaciones y
   privacidad rota el identificador de inmediato y cancela los envíos
   pendientes; las compilaciones ya confirmadas siguen confirmadas.
 
 El nivel y los informes están en Configuración › Actualizaciones y
 privacidad. El nivel se aplica al guardar; reiniciar a los valores por
-defecto deja Apagado sin tocar el id de instalación.
+defecto deja Apagado sin tocar el id de instalación. Elegir Básico o guardar no
+promete un informe de red inmediato. Apagado borra los informes Básico pendientes
+y los contadores; confirmar una instantánea enviada conserva los incrementos
+posteriores. Reiniciar o rotar invalida el trabajo de uso en curso anterior y
+conserva el historial de compilaciones confirmadas.
 
 ## Tus datos en este equipo
 

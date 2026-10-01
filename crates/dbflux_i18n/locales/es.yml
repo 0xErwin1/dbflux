@@ -4800,7 +4800,7 @@ updates:
     collected_basic: Básico
     collected_yes: "✓"
     collected_no: "—"
-    counts_not_instrumented: "Los contadores de funciones aún no están instrumentados: hoy Básico envía un mapa de recuentos vacío."
+    counts_not_instrumented: "Recuentos acotados de operaciones compatibles exitosas. Sin actualizaciones, fallos ni cancelaciones; cobertura MCP limitada. Ver Política de privacidad."
     install_id: Id de instalación
     install_id_hint: "Aleatorio y rotativo, seudónimo más que anónimo. No está ligado a ti ni a esta máquina. Reiniciarlo cancela los envíos pendientes y conserva las compilaciones confirmadas."
     reset_install_id: Reiniciar id
@@ -4861,7 +4861,7 @@ updates:
     telemetry_off: "Apagado"
     telemetry_off_description: "Un aviso mínimo por compilación: versión, SO, arquitectura e ID rotativo. Sin datos de uso."
     telemetry_basic: "Básico"
-    telemetry_basic_description: "Añade un informe semanal: idioma del sistema y país. Los contadores de uso aún no están habilitados."
+    telemetry_basic_description: "Idioma del sistema, país y éxitos acotados semanales: consultas, builder, dashboards, scripts, MCP compatible y schema."
     telemetry_privacy: "ID seudónimo rotativo. Nunca consultas, resultados, credenciales, rutas ni metadatos de conexión. Informes completos en Audit local. Solo tras Continuar con un colector configurado; si no, no se envía nada."
     whats_new: Novedades
     updates: Actualizaciones

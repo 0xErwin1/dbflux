@@ -136,14 +136,42 @@ DBFlux has an optional telemetry module with two levels:
   one minimal version ping per installation and build after you dismiss the
   welcome disclosure: OS, architecture, version, channel and a random
   rotating identifier.
-- **Basic** (opt-in) — adds a weekly report with the system language (not the
-  UI language) and country. The feature counters are **not instrumented yet**,
-  so Basic currently sends an empty count map.
+- **Basic** (separate opt-in) — adds a weekly report with OS, system language
+  (not the UI language), country (`ZZ` when unknown), and bounded counts of
+  supported successful query runs, visual builder runs, dashboard opens,
+  script runs, MCP operations and schema inspections. These are whole-operation
+  counts, including successful zero-row results, not row counts or timings.
+
+Background refreshes, partial failures, errors and cancellations do not count.
+Builder approvals without actual execution do not count; implicit dashboard
+creation, import and restore do not count. Script runs require canonical exit
+code 0 without timeout or detachment; schema inspection requires a new complete
+metadata load, not an existing-tab refocus.
+
+**MCP counts only reviewed, supported successful primary operations with an
+existing authenticated, running GUI foreground owner**, not every tool call or
+a standalone server without that owner. `count_records`, `insert_record` and
+`list_scripts` are excluded even when successful. `update_records` and
+`delete_records` require primary typed `QueryResult` mutation completion, not
+opaque successful `DocumentCrudResult`; proven typed SQL update/upsert/delete
+can count with zero affected rows. Help/protocol, unknown tools, approval
+controls and pending approvals do not count. Permission is acquired after Allow
+and before work; credit follows completed primary work and successful execution
+Audit. See the privacy policy below for the complete coverage limits.
 
 Delivery needs a configured endpoint; no shipped build has one, so delivery is
 unavailable by default. Never sent: queries, results, credentials, file paths
 or connection metadata. See [Data & Privacy](../PRIVACY.md#telemetry-optional)
-for the full list of what a report contains.
+for the full list of what a report contains and the operation coverage limits.
+Basic must be active and the visible welcome disclosure actually dismissed
+before work starts; unavailable sources or disabled/degraded Audit prevent
+credit. Saving Basic does not guarantee an immediate send. Off clears pending
+Basic reports and counters, while delivery acknowledgement preserves newer
+increments. Installation and delivery UUIDs are pseudonymous; operation, query,
+client and person identifiers, tool names and per-engine statistics are not sent.
+ID rotation (about every 90 days or on reset) preserves acknowledged-build
+history and sends no old/new ID link or retirement notice. Readable report
+labels do not alter raw payload storage, copy, export or transmission.
 
 | Control | Effect |
 |---------|--------|

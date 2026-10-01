@@ -1,21 +1,22 @@
 # Privacy Policy
 
-DBFlux is a local-first desktop application. It does not collect, transmit, or
-store any information about you or your usage. The project website sets no
-cookies and loads no third-party scripts. This document says what that means
-in practice and names the infrastructure providers that see traffic on the way
-to you.
+DBFlux is a local-first desktop application. Optional telemetry can send a
+pseudonymous installation/build ping and, with a separate Basic opt-in,
+aggregate usage counts. It never sends person identifiers, queries, results or
+connection metadata. The project website sets no cookies and loads no third-party
+scripts. This document describes those boundaries and the infrastructure
+providers that see traffic on the way to you.
 
 ## Quick path
 
-1. The application sends data only to the database servers you configure, and
-   only what is needed to run the queries you ask for.
+1. Database traffic goes directly to the servers you configure, with only what
+   is needed to run the queries you ask for; optional telemetry is separate.
 2. Telemetry exists but is optional and off by default. Delivery needs an
    explicitly configured endpoint, which no shipped build has, so nothing is
    sent by default. It sends no queries, results, credentials, file paths, or
    connection metadata — ever. Details are in [Telemetry](#telemetry-optional).
 3. There is no crash reporting, no usage analytics beyond the telemetry above,
-   and no account. The application does not phone home.
+   and no account.
 4. The website and documentation are static pages. They set no cookies, load
    no third-party script, and keep no record of individual visitors. An
    anonymous measurement of page usage, handled by the project's own server,
@@ -28,10 +29,10 @@ to you.
 |----------|--------|
 | Does DBFlux send usage data anywhere? | Only after you have dismissed the welcome disclosure and an endpoint is configured, which no shipped build has. Usage statistics (Basic) are a separate opt-in. See [Telemetry](#telemetry-optional). |
 | Does it check for updates? | No. Updates are found on the GitHub releases page. |
-| What network connections does it open? | Only the ones you configure: database servers, SSH tunnels, proxies, and cloud APIs for the drivers you use. |
+| What network connections does it open? | The ones you configure: database servers, SSH tunnels, proxies, cloud APIs, and an optional telemetry endpoint under the conditions below. |
 | Where does my data live? | On your machine, in one SQLite file plus the operating system keyring for secrets. |
-| Does it keep a record of what I do? | Only the audit log, on your machine. It records connections, queries, and hook runs so you can review them, and it never leaves the computer it was written on. |
-| Is anything shared with the project? | No. Bug reports and logs reach the project only when you attach them to an issue yourself. |
+| Does it keep a record of what I do? | Local history and the audit log record work on your machine. Basic also keeps bounded aggregate counters; only telemetry reports can be delivered automatically under the conditions below. |
+| Is anything shared with the project? | Optional telemetry reports can reach a configured private collector. Bug reports and logs reach the project only when you attach them to an issue yourself. |
 
 Connections to a database, an SSH host, a proxy, or a cloud provider go
 directly from your machine to the server you named. The project operates none
@@ -47,31 +48,76 @@ DBFlux ships with an optional telemetry module. It is a compiled-in feature
 that can be excluded entirely with `--no-default-features`, like the other
 default features. Nothing is sent unless two conditions hold: an endpoint is
 configured (no shipped build has one, so delivery is unavailable by default)
-and you have dismissed the welcome disclosure. Dismissing the disclosure is
+and you have actually dismissed the visibly presented welcome disclosure.
+Hiding it programmatically is not acknowledgement. Dismissing the disclosure is
 not a Basic opt-in: the usage-statistics level is a separate choice, and with
 no endpoint configured nothing is delivered either way.
 
 | Level | What it sends |
 |-------|---------------|
 | Off (default) | At most one minimal version ping per installation and build: OS, architecture, app version and channel, and a random identifier. |
-| Basic (opt-in) | Adds a weekly report: system language (not the UI language) and country. Feature counters exist in the protocol but are not instrumented yet, so today Basic sends an empty count map. |
+| Basic (opt-in) | Adds a weekly report: OS, system language (not the UI language), country (`ZZ` when unknown), and bounded counts of supported successful operations in the six categories below. |
+
+#### Which operations count
+
+Counts measure whole operations, not rows or performance. A successful operation
+with zero rows can count. Background refreshes, partial failures, errors and
+cancellations do not count. Basic and the disclosure acknowledgement must already
+be active when work starts; an unavailable source or disabled/degraded Audit
+prevents credit.
+
+| Category | Coverage |
+|----------|----------|
+| `query_run` | Explicit user query runs from the toolbar, commands or gutter; not automatic refreshes or derived Explain runs. |
+| `visual_query_builder` | Actual user Run with full execution success. Queuing or approving a request is not execution and does not count. |
+| `dashboard_open` | Direct sidebar opens or refocuses with valid dashboard metadata; not implicit creation, import or session restoration. |
+| `script_run` | Explicit editor script runs with canonical exit code 0, without timeout or detachment. |
+| `mcp_tool` | Only reviewed, supported successful primary tool operations through an authenticated, running GUI foreground owner; see the limits below. |
+| `schema_inspect` | Explicit focused or global inspection that newly loads complete required metadata to Ready; not focusing an existing tab. A deliberate bounded scope of up to 100 tables can count; failed required metadata cannot, but fully recovered metadata can. |
+
+**MCP coverage is limited, not a count of every tool call.** A standalone server
+without the running GUI owner does not count. Unknown tools, help/protocol calls,
+approval controls and pending approvals do not count. `count_records`,
+`insert_record` and `list_scripts` are excluded even when successful because their
+current APIs do not preserve sufficient completion evidence. `update_records`
+and `delete_records` require the primary mutation's typed `QueryResult` completion;
+an opaque successful `DocumentCrudResult` does not qualify. Proven typed SQL
+update, upsert and delete completions can count, including zero affected rows.
+These exclusions do not change whether the tools themselves succeed.
+
+For supported MCP operations, permission is acquired after authorization allows
+work and before it starts. The counter is credited only after the completed
+primary operation and a successful execution audit, not at authorization. This
+uses existing local authentication, not a new trusted-client identity guarantee.
+Cancellation can leave a bounded permission lease until a future foreground
+expiry pass (24-hour cap); cleanup is not immediate, and arbitrarily long calls
+are not guaranteed coverage. Tool names in this explanation are local coverage
+details, never telemetry payload fields.
 
 Facts that do not change with the level:
 
-- The identifier is a random UUID that rotates about every 90 days. It is
-  **pseudonymous, not anonymous**, and is not tied to you or your machine.
-- Never sent: queries, results, credentials, file paths, connection metadata,
-  or unrestricted error text. There are no public statistics, engine counts,
-  error reports, or performance timings.
-- Every report — the full payload, the level and the outcome — is recorded in
-  the local [audit log](#audit-and-privacy) before and after the attempt.
+- The installation identifier is a random UUID that rotates about every 90
+  days. It is **pseudonymous, not anonymous**: it identifies an installation,
+  not a person or a unique device. Reports also have a delivery UUID. Rotation
+  sends no retirement notice or link between old and new identifiers.
+- Never sent: operation, query, client or person identifiers, tool names,
+  queries, results, credentials, file paths, connection metadata, cross-process
+  actor data or unrestricted error text. There are no Extended reports, public
+  statistics, per-engine counts, error reports or performance timings.
+- Every delivery attempt records the full correlated payload, level and outcome
+  in the local [audit log](#audit-and-privacy). Readable display labels do not
+  change raw storage, copy, export or wire contents. Reports go only to the
+  configured private collector to help guide development.
 - Resetting the installation id in Settings › Updates & privacy rotates the
   identifier at once and cancels pending sends; already-acknowledged builds
   stay acknowledged.
 
 The level and the reports live in Settings › Updates & privacy. The staged
 level applies when you save; resetting to defaults stages Off without
-touching the installation id.
+touching the installation id. Choosing Basic or saving does not promise an
+immediate network report. Off clears pending Basic reports and counters;
+acknowledging a sent snapshot preserves newer increments. Reset or rotation
+invalidates old in-flight usage work while preserving acknowledged-build history.
 
 ## Your data on this machine
 
