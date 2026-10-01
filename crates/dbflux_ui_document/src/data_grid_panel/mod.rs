@@ -732,7 +732,49 @@ struct InspectorState {
 ///
 /// All nine fields are `pub(crate)` — external crates in the same workspace
 /// read or update them (e.g. the builder panel subscription in `mod.rs`).
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+pub(super) struct BuilderUsage {
+    ticket: dbflux_core::observability::usage::UsageTicket,
+    generation: u64,
+    profile_id: Uuid,
+    database: Option<String>,
+    table: TableRef,
+    pagination: Pagination,
+    order_by: Vec<OrderByColumn>,
+    mutation: Option<BuilderMutationUsage>,
+}
+
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+struct BuilderMutationUsage {
+    spec: dbflux_core::VisualMutationSpec,
+    draft: Option<VisualQuerySpec>,
+    owner: WeakEntity<QueryBuilderPanel>,
+}
+
+#[cfg(feature = "telemetry")]
+impl std::fmt::Debug for BuilderUsage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BuilderUsage")
+    }
+}
+
+#[cfg(feature = "telemetry")]
+struct QueuedBuilderUsage {
+    usage: BuilderUsage,
+    spec: VisualQuerySpec,
+    select: SelectQuery,
+    cancel: Option<dbflux_core::CancelToken>,
+}
+
 pub(crate) struct BuilderState {
+    #[cfg(feature = "telemetry")]
+    usage_generation: u64,
+    #[cfg(feature = "telemetry")]
+    queued_usage: Option<QueuedBuilderUsage>,
+    #[cfg(feature = "telemetry")]
+    usage_owner_is_alive: Option<Box<dyn Fn() -> bool>>,
     /// FK metadata for the current (connection, database, schema).
     pub(crate) fk_cache: FkLoadState,
     /// Current state of the relational filter bar chip and inline error area.
@@ -813,6 +855,8 @@ pub struct DataGridPanel {
 /// Pending mutation execution — holds the spec and options while the
 /// confirmation modal is open so the confirm handler can dispatch the executor.
 pub(crate) struct PendingMutationExec {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) spec: dbflux_core::VisualMutationSpec,
     pub(crate) opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
     pub(crate) profile_id: uuid::Uuid,
@@ -840,6 +884,8 @@ pub(crate) enum MutationIntent {
 /// instead of one arm per execution mode.
 #[derive(Clone, Debug)]
 pub(crate) struct MutationRun {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) task_id: TaskId,
     pub(crate) mode: crate::labels::VisualMutationTaskMode,
     pub(crate) table_name: String,
@@ -1562,6 +1608,12 @@ impl DataGridPanel {
                 _value_panel_subscription: None,
             },
             builder: BuilderState {
+                #[cfg(feature = "telemetry")]
+                usage_generation: 0,
+                #[cfg(feature = "telemetry")]
+                queued_usage: None,
+                #[cfg(feature = "telemetry")]
+                usage_owner_is_alive: None,
                 fk_cache: FkLoadState::Loading,
                 relational_filter_state: filter_bar::RelationalFilterState::Inactive,
                 builder_draft_spec: None,
@@ -3880,6 +3932,11 @@ impl DataGridPanel {
     /// Called by the builder's Reset action. The next query falls back to
     /// the `TableBrowseRequest` path.
     pub fn clear_builder_draft_spec(&mut self, cx: &mut Context<Self>) {
+        #[cfg(feature = "telemetry")]
+        {
+            self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+            self.builder.queued_usage = None;
+        }
         self.builder.builder_draft_spec = None;
         self.builder.visual_select = None;
         self.builder.current_visual_spec = None;
@@ -4682,6 +4739,108 @@ impl DataGridPanel {
         .detach();
     }
 
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn bind_builder_usage_owner<T: 'static>(&mut self, owner: WeakEntity<T>) {
+        // A grid can outlive its tab through workers or chart adapters.
+        self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+        self.builder.queued_usage = None;
+        self.builder.usage_owner_is_alive = Some(Box::new(move || owner.upgrade().is_some()));
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn capture_builder_usage(&mut self, cx: &mut Context<Self>) -> Option<BuilderUsage> {
+        self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+        if !self
+            .builder
+            .usage_owner_is_alive
+            .as_ref()
+            .is_some_and(|alive| alive())
+        {
+            return None;
+        }
+        let DataSource::Table {
+            profile_id,
+            database,
+            table,
+            pagination,
+            order_by,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+        let ticket = self.app_state.update(cx, |state, _| {
+            let source = state.telemetry_usage_source(chrono::Utc::now())?;
+            match source.ticket() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    log::warn!("Usage ticket capture failed: {error:?}");
+                    None
+                }
+            }
+        })?;
+        Some(BuilderUsage {
+            ticket,
+            generation: self.builder.usage_generation,
+            profile_id: *profile_id,
+            database: database.clone(),
+            table: table.clone(),
+            pagination: pagination.clone(),
+            order_by: order_by.clone(),
+            mutation: None,
+        })
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn builder_usage_is_current(&self, usage: &BuilderUsage, cx: &App) -> bool {
+        self.builder
+            .usage_owner_is_alive
+            .as_ref()
+            .is_some_and(|alive| alive())
+            && self.builder.usage_generation == usage.generation
+            && usage.mutation.as_ref().is_none_or(|mutation| {
+                self.builder.builder_draft_spec == mutation.draft
+                    && mutation.owner.upgrade().is_some_and(|owner| {
+                        self.builder.builder_panel.as_ref() == Some(&owner)
+                            && owner
+                                .read(cx)
+                                .build_mutation_spec_and_opts()
+                                .is_some_and(|(spec, _)| spec == mutation.spec)
+                    })
+            })
+            && matches!(&self.source, DataSource::Table { profile_id, database, table, pagination, order_by, .. }
+                if *profile_id == usage.profile_id && *database == usage.database && *table == usage.table
+                    && *pagination == usage.pagination && *order_by == usage.order_by)
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn take_queued_builder_usage(&mut self, cx: &App) -> Option<BuilderUsage> {
+        let queued = self.builder.queued_usage.take()?;
+        (self.builder_usage_is_current(&queued.usage, cx)
+            && queued
+                .cancel
+                .as_ref()
+                .is_some_and(|cancel| !cancel.is_cancelled())
+            && self.builder.builder_draft_spec.as_ref() == Some(&queued.spec)
+            && self.builder.visual_select.as_ref() == Some(&queued.select))
+        .then_some(queued.usage)
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn record_builder_usage(&self, usage: Option<BuilderUsage>, cx: &App) {
+        let Some(usage) = usage else {
+            return;
+        };
+        if self.builder_usage_is_current(&usage, cx) {
+            if let Err(error) = usage
+                .ticket
+                .record(dbflux_core::observability::usage::UsageFeature::VisualQueryBuilder)
+            {
+                log::warn!("Usage completion failed: {error:?}");
+            }
+        }
+    }
+
     /// Handles events emitted by the builder panel.
     fn handle_builder_event(
         &mut self,
@@ -4701,12 +4860,38 @@ impl DataGridPanel {
                         return;
                     }
 
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = self.capture_builder_usage(cx);
                     self.apply_builder_draft_spec(spec, cx);
-                    self.refresh(window, cx);
+                    #[cfg(feature = "telemetry")]
+                    {
+                        self.builder.queued_usage = usage_ticket.as_ref().and_then(|usage| {
+                            Some(QueuedBuilderUsage {
+                                usage: usage.clone(),
+                                spec: self.builder.builder_draft_spec.clone()?,
+                                select: self.builder.visual_select.clone()?,
+                                cancel: None,
+                            })
+                        });
+                    }
+                    self.refresh_with_origin(
+                        window,
+                        cx,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                    );
+                    #[cfg(feature = "telemetry")]
+                    if let Some(queued) = self.builder.queued_usage.as_mut() {
+                        queued.cancel = self.runner.primary_token().cloned();
+                    }
                 }
             }
 
             BuilderEvent::SpecChanged(spec) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+                }
                 // Live edit: cache the read for the next Run. A rejected spec is a
                 // transient editing state, so it caches `None` without a toast here;
                 // the failure is surfaced when the user actually Runs (see
@@ -5001,6 +5186,17 @@ impl DataGridPanel {
             MutationPolicy::Allowed => {}
         }
 
+        #[cfg(feature = "telemetry")]
+        let usage = self.capture_builder_usage(cx).and_then(|mut usage| {
+            let owner = self.builder.builder_panel.as_ref()?.downgrade();
+            usage.mutation = Some(BuilderMutationUsage {
+                spec: spec.clone(),
+                draft: self.builder.builder_draft_spec.clone(),
+                owner,
+            });
+            Some(usage)
+        });
+
         let sql_preview = connection
             .query_generator()
             .and_then(|qgen| {
@@ -5042,6 +5238,8 @@ impl DataGridPanel {
         );
 
         self.pending_mutation_exec = Some(PendingMutationExec {
+            #[cfg(feature = "telemetry")]
+            usage,
             spec,
             opts,
             profile_id,
@@ -5141,6 +5339,10 @@ impl DataGridPanel {
             policy,
         };
 
+        #[cfg(feature = "telemetry")]
+        let usage = pending
+            .usage
+            .filter(|usage| self.builder_usage_is_current(usage, cx));
         let spec = pending.spec;
         let mut opts = pending.opts;
         let intent = pending.intent;
@@ -5262,12 +5464,16 @@ impl DataGridPanel {
         );
 
         let run = MutationRun {
+            #[cfg(feature = "telemetry")]
+            usage,
             task_id,
             mode,
             table_name,
             intent,
         };
 
+        #[cfg(feature = "telemetry")]
+        let usage_cancel = cancel_handle.clone();
         cx.spawn(async move |this, cx| {
             use crate::data_grid_panel::mutation_executor::MutationExecutor;
             use dbflux_ui_base::user_error::report_error_async;
@@ -5275,22 +5481,37 @@ impl DataGridPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let executor = MutationExecutor::new(spec, opts, deps);
-                    match mode {
-                        crate::labels::VisualMutationTaskMode::Chunked => {
-                            let pk_refs: Vec<&str> =
-                                pk_columns.iter().map(String::as_str).collect();
-                            executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                    let execute = move || {
+                        let executor = MutationExecutor::new(spec, opts, deps);
+                        match mode {
+                            crate::labels::VisualMutationTaskMode::Chunked => {
+                                let pk_refs: Vec<&str> =
+                                    pk_columns.iter().map(String::as_str).collect();
+                                executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                            }
+                            crate::labels::VisualMutationTaskMode::Direct => {
+                                executor.run_direct(&cancel_handle)
+                            }
+                            crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                                executor.run_single_tx(&cancel_handle)
+                            }
                         }
-                        crate::labels::VisualMutationTaskMode::Direct => {
-                            executor.run_direct(&cancel_handle)
-                        }
-                        crate::labels::VisualMutationTaskMode::SingleTransaction => {
-                            executor.run_single_tx(&cancel_handle)
-                        }
-                    }
+                    };
+                    #[cfg(all(test, feature = "telemetry"))]
+                    return tests::run_builder_fixture_worker(execute).await;
+                    #[cfg(not(all(test, feature = "telemetry")))]
+                    execute()
                 })
                 .await;
+
+            #[cfg(feature = "telemetry")]
+            let run = {
+                let mut run = run;
+                if usage_cancel.is_cancelled() {
+                    run.usage = None;
+                }
+                run
+            };
 
             // Raising the failure needs an `AsyncApp` and recording it needs the
             // entity, so the report travels back out instead of being raised here.
@@ -5330,6 +5551,8 @@ impl DataGridPanel {
         use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
 
         let MutationRun {
+            #[cfg(feature = "telemetry")]
+            usage,
             task_id,
             mode,
             table_name,
@@ -5353,6 +5576,8 @@ impl DataGridPanel {
                 (Some(failure_text(&text)), false)
             }
             Ok(MutationOutcome::Success { rows_affected }) => {
+                #[cfg(feature = "telemetry")]
+                self.record_builder_usage(usage, cx);
                 self.runner.complete_mutation(task_id, cx);
                 dbflux_ui_base::toast::Toast::success(
                     crate::labels::mutation_execution_completed_toast(rows_affected),
@@ -10153,6 +10378,1360 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "telemetry")]
+    static THREADED_BUILDER_FIXTURE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    #[cfg(feature = "telemetry")]
+    static BUILDER_FIXTURE_COMPLETIONS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    #[cfg(feature = "telemetry")]
+    static BUILDER_FIXTURE_WAKERS: std::sync::Mutex<Vec<std::task::Waker>> =
+        std::sync::Mutex::new(Vec::new());
+
+    // Only gated tests leave the deterministic dispatcher: a synchronous driver
+    // cannot wait for foreground edits on the dispatcher's own thread.
+    #[cfg(feature = "telemetry")]
+    pub(super) async fn run_builder_fixture_worker<T: Send + 'static>(
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        if !THREADED_BUILDER_FIXTURE.load(std::sync::atomic::Ordering::SeqCst) {
+            return operation();
+        }
+        let shared = Arc::new(std::sync::Mutex::new((None, None::<std::task::Waker>)));
+        let worker = std::thread::spawn({
+            let shared = shared.clone();
+            move || {
+                let result = operation();
+                let mut state = shared.lock().expect("fixture result");
+                state.0 = Some(result);
+                if let Some(waker) = state.1.take() {
+                    BUILDER_FIXTURE_WAKERS
+                        .lock()
+                        .expect("fixture wakes")
+                        .push(waker);
+                }
+                BUILDER_FIXTURE_COMPLETIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let result = std::future::poll_fn(move |cx| {
+            let mut state = shared.lock().expect("fixture result");
+            if let Some(result) = state.0.take() {
+                std::task::Poll::Ready(result)
+            } else {
+                state.1 = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        })
+        .await;
+        worker.join().expect("fixture worker");
+        result
+    }
+
+    #[cfg(feature = "telemetry")]
+    struct BuilderWorkerGate {
+        prefix: &'static str,
+        armed: std::sync::atomic::AtomicBool,
+        entered: std::sync::atomic::AtomicBool,
+        released: std::sync::Mutex<bool>,
+        wake: std::sync::Condvar,
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl BuilderWorkerGate {
+        fn new(prefix: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                prefix,
+                armed: std::sync::atomic::AtomicBool::new(false),
+                entered: std::sync::atomic::AtomicBool::new(false),
+                released: std::sync::Mutex::new(false),
+                wake: std::sync::Condvar::new(),
+            })
+        }
+
+        fn enter(&self, sql: &str) {
+            if !self.armed.load(std::sync::atomic::Ordering::SeqCst)
+                || !sql.trim_start().starts_with(self.prefix)
+            {
+                return;
+            }
+            self.entered
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut released = self.released.lock().expect("gate");
+            while !*released {
+                released = self.wake.wait(released).expect("gate");
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().expect("gate") = true;
+            self.wake.notify_all();
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    struct BuilderWorkerRelease(Arc<BuilderWorkerGate>);
+
+    #[cfg(feature = "telemetry")]
+    impl Drop for BuilderWorkerRelease {
+        fn drop(&mut self) {
+            self.0.release();
+            THREADED_BUILDER_FIXTURE.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn pump_builder_until(window: &mut gpui::VisualTestContext, mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let is_ready = ready();
+            let wakers =
+                std::mem::take(&mut *BUILDER_FIXTURE_WAKERS.lock().expect("fixture wakes"));
+            for waker in wakers {
+                waker.wake();
+            }
+            window.run_until_parked();
+            if is_ready {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "fixture timed out");
+            std::thread::yield_now();
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    struct UsageBuilderConnection {
+        browse: StubBrowseConnection,
+        executions: Arc<std::sync::atomic::AtomicUsize>,
+        failure: bool,
+        program:
+            std::sync::Mutex<std::collections::VecDeque<Result<QueryResult, dbflux_core::DbError>>>,
+        commits: std::sync::atomic::AtomicUsize,
+        gate: Option<Arc<BuilderWorkerGate>>,
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl UsageBuilderConnection {
+        fn new(
+            result: QueryResult,
+            executions: Arc<std::sync::atomic::AtomicUsize>,
+            failure: bool,
+        ) -> Self {
+            Self {
+                browse: StubBrowseConnection {
+                    rows: Arc::new(std::sync::Mutex::new(result)),
+                },
+                executions,
+                failure,
+                program: Default::default(),
+                commits: std::sync::atomic::AtomicUsize::new(0),
+                gate: None,
+            }
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl dbflux_core::Connection for UsageBuilderConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            dbflux_core::Connection::metadata(&self.browse)
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+
+        fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+            static GENERATOR: dbflux_core::SqlMutationGenerator =
+                dbflux_core::SqlMutationGenerator::new(&dbflux_core::DefaultSqlDialect);
+            Some(&GENERATOR)
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            request: &dbflux_core::QueryRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            self.executions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(gate) = &self.gate {
+                gate.enter(&request.sql);
+            }
+            let programmed = self
+                .program
+                .lock()
+                .map_err(|_| dbflux_core::DbError::NotSupported("poisoned fixture".to_string()))?
+                .pop_front();
+            if let Some(result) = programmed {
+                if result.is_ok() && request.sql.trim() == "COMMIT" {
+                    self.commits
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                return result;
+            }
+            if self.failure {
+                return Err(dbflux_core::DbError::NotSupported(
+                    "fixture failure".to_string(),
+                ));
+            }
+            dbflux_core::Connection::browse_table(
+                &self.browse,
+                &dbflux_core::TableBrowseRequest::new(TableRef::new("users")),
+            )
+        }
+
+        fn browse_table(
+            &self,
+            request: &dbflux_core::TableBrowseRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            dbflux_core::Connection::browse_table(&self.browse, request)
+        }
+
+        fn count_table(
+            &self,
+            _: &dbflux_core::TableCountRequest,
+        ) -> Result<u64, dbflux_core::DbError> {
+            let result =
+                self.browse.rows.lock().map_err(|_| {
+                    dbflux_core::DbError::NotSupported("poisoned fixture".to_string())
+                })?;
+            Ok(result.row_count() as u64)
+        }
+
+        fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn usage_table_document(
+        window: &mut gpui::VisualTestContext,
+        app_state: gpui::Entity<AppStateEntity>,
+        profile_id: Uuid,
+        pk_columns: Vec<String>,
+    ) -> (
+        gpui::Entity<crate::data_document::DataDocument>,
+        gpui::Entity<DataGridPanel>,
+    ) {
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                crate::data_document::DataDocument::new_for_table(
+                    profile_id,
+                    TableRef::with_schema("public", "users"),
+                    Some("app".to_string()),
+                    app_state,
+                    window,
+                    cx,
+                )
+            })
+        });
+        window.run_until_parked();
+        let grid = window.update(|_, cx| document.read(cx).grid_for_usage_test());
+        window.update(|_, cx| grid.update(cx, |grid, _| grid.pk_columns = pk_columns));
+        (document, grid)
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext) {
+        for scenario in ["success", "failure", "cancel"] {
+            let gate = BuilderWorkerGate::new("SELECT");
+            let _release = BuilderWorkerRelease(gate.clone());
+            let mut chartless = keyed_result(&[]);
+            for column in &mut chartless.columns {
+                column.kind = dbflux_core::ColumnKind::Unknown;
+            }
+            let mut connection = UsageBuilderConnection::new(
+                chartless,
+                Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                scenario == "failure",
+            );
+            connection.gate = Some(gate.clone());
+            let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
+            cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
+            let window = cx.add_empty_window();
+            let (document, grid) =
+                usage_table_document(window, app_state.clone(), profile_id, vec![]);
+            let builder = window.update(|window, cx| {
+                grid.update(cx, |grid, cx| {
+                    grid.open_query_builder(window, cx);
+                    grid.builder.builder_panel.clone().expect("builder")
+                })
+            });
+            window.run_until_parked();
+            let weak_document = document.downgrade();
+            let weak_grid = grid.downgrade();
+            window.update(|_, cx| {
+                assert!(
+                    grid.read(cx).chart.chart_shell.is_none(),
+                    "chartless fixture"
+                )
+            });
+            BUILDER_FIXTURE_COMPLETIONS.store(0, std::sync::atomic::Ordering::SeqCst);
+            THREADED_BUILDER_FIXTURE.store(true, std::sync::atomic::Ordering::SeqCst);
+            gate.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+            window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+            window.update(|window, cx| {
+                grid.update(cx, |grid, cx| grid.process_pending_actions(window, cx))
+            });
+            pump_builder_until(window, || {
+                gate.entered.load(std::sync::atomic::Ordering::SeqCst)
+            });
+            let task_id = window.update(|_, cx| {
+                let running = app_state.read(cx).tasks().running_tasks();
+                assert_eq!(running.len(), 1, "one current SELECT");
+                running[0].id
+            });
+            drop(builder);
+            drop(document);
+            drop(grid);
+            window.update(|_, _| {});
+            window.run_until_parked();
+            assert!(
+                weak_document.upgrade().is_none(),
+                "actual document destroyed"
+            );
+            assert!(
+                weak_grid.upgrade().is_none(),
+                "last grid reference released"
+            );
+            if scenario == "cancel" {
+                window.update(|_, cx| {
+                    app_state.update(cx, |app, _| {
+                        assert!(app.tasks_mut().cancel(task_id));
+                    })
+                });
+            }
+            gate.release();
+            pump_builder_until(window, || {
+                BUILDER_FIXTURE_COMPLETIONS.load(std::sync::atomic::Ordering::SeqCst) == 2
+            });
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    let status = app.tasks().get(task_id).expect("tracked task").status;
+                    match scenario {
+                        "success" => assert_eq!(status, dbflux_core::TaskStatus::Completed),
+                        "failure" => assert!(
+                            matches!(status, dbflux_core::TaskStatus::Failed(_)),
+                            "{status:?}"
+                        ),
+                        _ => assert_eq!(status, dbflux_core::TaskStatus::Cancelled),
+                    }
+                    assert!(
+                        builder_usage_counts(app)
+                            .get("visual_query_builder")
+                            .is_none()
+                    );
+                })
+            });
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_actual_mutation_edits_invalidate_blocked_run(cx: &mut TestAppContext) {
+        let mut incorrect_credits = Vec::new();
+        for scenario in [
+            "unchanged",
+            "column",
+            "value",
+            "delete_mode",
+            "select_mode",
+            "reset",
+            "clear_draft",
+        ] {
+            let gate = BuilderWorkerGate::new("UPDATE");
+            let _release = BuilderWorkerRelease(gate.clone());
+            let mut connection = UsageBuilderConnection::new(
+                keyed_result(&[]),
+                Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                false,
+            );
+            connection.gate = Some(gate.clone());
+            let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
+            cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
+            let window = cx.add_empty_window();
+            let (_document, grid) =
+                usage_table_document(window, app_state.clone(), profile_id, vec![]);
+            let builder = window.update(|window, cx| {
+                grid.update(cx, |grid, cx| {
+                    grid.open_query_builder(window, cx);
+                    grid.builder.builder_panel.clone().expect("builder")
+                })
+            });
+            window.run_until_parked();
+            window.update(|_, cx| {
+                builder.update(cx, |builder, cx| {
+                    builder.switch_builder_mode(crate::query_builder::BuilderMode::Update, cx);
+                    let state = builder.mutation_state.as_mut().expect("Update");
+                    state
+                        .assignments
+                        .push(crate::query_builder::mutation_state::AssignmentRow {
+                            assignment: dbflux_core::Assignment {
+                                column: "name".to_string(),
+                                value: dbflux_core::AssignmentValue::Literal(
+                                    dbflux_core::ScalarLiteral::Text("before".to_string()),
+                                ),
+                            },
+                            raw_text: "before".to_string(),
+                        });
+                    state.exec_options.mode =
+                        super::mutation_executor::ExecutionMode::DirectAutocommit;
+                    builder.refresh_mutation_preview_pure();
+                })
+            });
+            window.run_until_parked();
+            BUILDER_FIXTURE_COMPLETIONS.store(0, std::sync::atomic::Ordering::SeqCst);
+            THREADED_BUILDER_FIXTURE.store(true, std::sync::atomic::Ordering::SeqCst);
+            gate.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+            window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+            window.update(|window, cx| {
+                grid.update(cx, |grid, cx| {
+                    assert!(
+                        grid.pending_mutation_exec
+                            .as_ref()
+                            .expect("Run")
+                            .usage
+                            .is_some()
+                    );
+                    grid.handle_mutation_confirm_outcome(
+                        super::MutationConfirmOutcome::Confirmed,
+                        window,
+                        cx,
+                    );
+                })
+            });
+            pump_builder_until(window, || {
+                gate.entered.load(std::sync::atomic::Ordering::SeqCst)
+            });
+            let (task_id, generation) = window.update(|_, cx| {
+                let running = app_state.read(cx).tasks().running_tasks();
+                assert_eq!(running.len(), 1, "mutation is still running");
+                (running[0].id, grid.read(cx).builder.usage_generation)
+            });
+            window.update(|window, cx| match scenario {
+                "column" => builder.update(cx, |builder, cx| {
+                    builder.set_assignment_column(0, "other".to_string(), cx)
+                }),
+                "value" => builder.update(cx, |builder, cx| {
+                    builder.set_assignment_raw_text(0, "after".to_string(), cx)
+                }),
+                "delete_mode" => builder.update(cx, |builder, cx| {
+                    builder.switch_builder_mode(crate::query_builder::BuilderMode::Delete, cx)
+                }),
+                "select_mode" => builder.update(cx, |builder, cx| {
+                    builder.switch_builder_mode(crate::query_builder::BuilderMode::Select, cx)
+                }),
+                "reset" => {
+                    grid.update(cx, |grid, cx| assert!(grid.reset_builder_query(window, cx)))
+                }
+                "clear_draft" => grid.update(cx, |grid, cx| grid.clear_builder_draft_spec(cx)),
+                _ => {}
+            });
+            if matches!(scenario, "column" | "value" | "delete_mode" | "select_mode") {
+                window.update(|_, cx| {
+                    assert_eq!(grid.read(cx).builder.usage_generation, generation);
+                });
+            }
+            gate.release();
+            pump_builder_until(window, || {
+                BUILDER_FIXTURE_COMPLETIONS.load(std::sync::atomic::Ordering::SeqCst) == 1
+            });
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert!(
+                        app.tasks().running_tasks().is_empty(),
+                        "actual executor finished"
+                    );
+                    assert_eq!(
+                        app.tasks().get(task_id).expect("mutation task").status,
+                        dbflux_core::TaskStatus::Completed,
+                        "actual executor success: {scenario}"
+                    );
+                    let credit = builder_usage_counts(app)["visual_query_builder"]
+                        .as_u64()
+                        .unwrap_or(0);
+                    if credit != u64::from(scenario == "unchanged") {
+                        incorrect_credits.push((scenario, credit));
+                    }
+                })
+            });
+        }
+        assert!(
+            incorrect_credits.is_empty(),
+            "stale actual drafts credited: {incorrect_credits:?}"
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_document_owner_liveness_with_retained_grid(cx: &mut TestAppContext) {
+        for scenario in [
+            "select_open",
+            "select_inactive",
+            "select_closed",
+            "select_grouped_closed",
+            "mutation_open",
+            "mutation_inactive",
+            "mutation_closed",
+        ] {
+            let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (app_state, profile_id) = register_stub_connection(
+                cx,
+                Arc::new(UsageBuilderConnection::new(
+                    keyed_result(&[]),
+                    executions.clone(),
+                    false,
+                )),
+            );
+            cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
+            let window = cx.add_empty_window();
+            let (document, grid) =
+                usage_table_document(window, app_state.clone(), profile_id, vec![]);
+            let weak_document = document.downgrade();
+            let weak_grid = grid.downgrade();
+            let builder = window.update(|window, cx| {
+                grid.update(cx, |grid, cx| {
+                    if scenario.contains("grouped") {
+                        let mut spec = make_test_spec();
+                        spec.projection = dbflux_core::Projection::Explicit(vec![]);
+                        spec.aggregates = vec![dbflux_core::VisualAggregateSpec {
+                            function: dbflux_core::AggFn::CountStar,
+                            source_alias: None,
+                            column: None,
+                            alias: "count".to_string(),
+                        }];
+                        grid.builder.builder_draft_spec = Some(spec);
+                    }
+                    grid.open_query_builder(window, cx);
+                    grid.builder.builder_panel.clone().expect("builder")
+                })
+            });
+            window.run_until_parked();
+            let mutation = scenario.starts_with("mutation");
+            if mutation {
+                window.update(|_, cx| {
+                    builder.update(cx, |builder, cx| {
+                        builder.switch_builder_mode(crate::query_builder::BuilderMode::Delete, cx);
+                        builder
+                            .mutation_state
+                            .as_mut()
+                            .expect("mutation state")
+                            .exec_options
+                            .mode = super::mutation_executor::ExecutionMode::DirectAutocommit;
+                    })
+                });
+                window.run_until_parked();
+            }
+            if scenario.ends_with("inactive") {
+                window.update(|_, cx| {
+                    document.update(cx, |document, cx| document.set_active_tab(false, cx))
+                });
+            }
+            let baseline = executions.load(std::sync::atomic::Ordering::SeqCst);
+            window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+            window.update(|window, cx| {
+                grid.update(cx, |grid, cx| {
+                    if mutation {
+                        grid.handle_mutation_confirm_outcome(
+                            super::MutationConfirmOutcome::Confirmed,
+                            window,
+                            cx,
+                        );
+                    } else {
+                        grid.process_pending_actions(window, cx);
+                    }
+                })
+            });
+            let closed = scenario.ends_with("closed");
+            let mut document = Some(document);
+            if closed {
+                drop(document.take());
+                assert!(
+                    weak_document.upgrade().is_none(),
+                    "actual document dropped: {scenario}"
+                );
+                assert!(
+                    weak_grid.upgrade().is_some(),
+                    "grid deliberately retained: {scenario}"
+                );
+            }
+            window.run_until_parked();
+            assert_eq!(
+                executions.load(std::sync::atomic::Ordering::SeqCst) - baseline,
+                if scenario.contains("grouped") { 4 } else { 2 },
+                "primary and probe workers completed: {scenario}"
+            );
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    let counts = builder_usage_counts(app);
+                    assert_eq!(
+                        counts["visual_query_builder"].as_u64().unwrap_or(0),
+                        u64::from(!closed),
+                        "{scenario}"
+                    );
+                })
+            });
+            if !closed {
+                assert!(
+                    weak_document.upgrade().is_some(),
+                    "open owner stays live: {scenario}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_failed_terminal_outcome_rejects_actual_run_ticket(cx: &mut TestAppContext) {
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(UsageBuilderConnection::new(
+                keyed_result(&[]),
+                executions,
+                false,
+            )),
+        );
+        cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
+        let window = cx.add_empty_window();
+        let (_document, grid) = usage_table_document(window, app_state.clone(), profile_id, vec![]);
+        let builder = window.update(|window, cx| {
+            grid.update(cx, |grid, cx| {
+                grid.open_query_builder(window, cx);
+                grid.builder.builder_panel.clone().expect("builder")
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            builder.update(cx, |builder, cx| {
+                builder.switch_builder_mode(crate::query_builder::BuilderMode::Delete, cx);
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+        window.update(|_, cx| {
+            grid.update(cx, |grid, cx| {
+                let pending = grid
+                    .pending_mutation_exec
+                    .take()
+                    .expect("actual Run captured");
+                assert!(pending.usage.is_some(), "eligible operation ticket");
+                let mut run = mutation_run(MutationIntent::Direct);
+                run.usage = pending.usage;
+                let failure = grid.finish_mutation(
+                    run,
+                    Ok(super::mutation_executor::MutationOutcome::Failed {
+                        error: "terminal fixture failure".to_string(),
+                    }),
+                    cx,
+                );
+                assert!(failure.is_some());
+                app_state.update(cx, |app, _| {
+                    assert!(
+                        builder_usage_counts(app)
+                            .get("visual_query_builder")
+                            .is_none()
+                    );
+                });
+            })
+        });
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn enable_builder_usage(app: &mut AppStateEntity) {
+        app.initialize_telemetry(
+            dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                .expect("no transport"),
+            chrono::Utc::now(),
+        )
+        .expect("in-memory scheduler");
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        scheduler
+            .set_basic(true, chrono::Utc::now())
+            .expect("Basic");
+        scheduler
+            .disclosure_dismissed(chrono::Utc::now())
+            .expect("disclosure");
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn builder_usage_counts(app: &mut AppStateEntity) -> serde_json::Value {
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        let _preparation = scheduler
+            .prepare(chrono::Utc::now(), "en")
+            .expect("prepare without I/O");
+        serde_json::to_value(scheduler.state()).expect("state")["counters"].clone()
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_mutation_run_confirm_credits_zero_rows(cx: &mut TestAppContext) {
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(UsageBuilderConnection::new(
+                keyed_result(&[]),
+                executions.clone(),
+                false,
+            )),
+        );
+        cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
+        let window = cx.add_empty_window();
+        let (_document, panel) =
+            usage_table_document(window, app_state.clone(), profile_id, vec![]);
+        let builder = window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.open_query_builder(window, cx);
+                panel.builder.builder_panel.clone().expect("builder")
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            builder.update(cx, |builder, cx| {
+                builder.switch_builder_mode(crate::query_builder::BuilderMode::Delete, cx);
+                builder
+                    .mutation_state
+                    .as_mut()
+                    .expect("mutation state")
+                    .exec_options
+                    .mode = super::mutation_executor::ExecutionMode::DirectAutocommit;
+            })
+        });
+        window.run_until_parked();
+        let baseline = executions.load(std::sync::atomic::Ordering::SeqCst);
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert!(
+                    builder_usage_counts(app)
+                        .get("visual_query_builder")
+                        .is_none()
+                );
+            })
+        });
+        window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                assert!(panel.pending_mutation_exec.is_some());
+                app_state.update(cx, |app, _| {
+                    assert!(
+                        builder_usage_counts(app)
+                            .get("visual_query_builder")
+                            .is_none()
+                    );
+                });
+                panel.handle_mutation_confirm_outcome(
+                    super::MutationConfirmOutcome::Confirmed,
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+        assert_eq!(
+            executions.load(std::sync::atomic::Ordering::SeqCst) - baseline,
+            2,
+            "one preview and one real mutation"
+        );
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(builder_usage_counts(app)["visual_query_builder"], 1);
+            })
+        });
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_user_run_credits_successful_current_result(cx: &mut TestAppContext) {
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(UsageBuilderConnection::new(
+                keyed_result(&[]),
+                executions.clone(),
+                false,
+            )),
+        );
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                app.initialize_telemetry(
+                    dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                        .expect("no transport"),
+                    chrono::Utc::now(),
+                )
+                .expect("in-memory scheduler");
+                let scheduler = app.telemetry_mut().expect("scheduler");
+                scheduler
+                    .set_basic(true, chrono::Utc::now())
+                    .expect("Basic");
+                scheduler
+                    .disclosure_dismissed(chrono::Utc::now())
+                    .expect("disclosure");
+            });
+        });
+        let window = cx.add_empty_window();
+        let (_document, panel) =
+            usage_table_document(window, app_state.clone(), profile_id, vec![]);
+        let builder = window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.builder.builder_draft_spec = Some(make_test_spec());
+                panel.open_query_builder(window, cx);
+                panel.builder.builder_panel.clone().expect("builder")
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                assert!(
+                    panel.pending.refresh,
+                    "actual event subscription queued refresh"
+                );
+                panel.process_pending_actions(window, cx);
+            })
+        });
+        window.run_until_parked();
+        assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 2);
+        window.update(|_, cx| {
+            assert!(matches!(panel.read(cx).refresh.state, GridState::Ready));
+            assert_eq!(panel.read(cx).result.row_count(), 0);
+            app_state.update(cx, |app, _| {
+                let scheduler = app.telemetry_mut().expect("scheduler");
+                let _preparation = scheduler
+                    .prepare(chrono::Utc::now(), "en")
+                    .expect("prepare without I/O");
+                let counters =
+                    serde_json::to_value(scheduler.state()).expect("state")["counters"].clone();
+                assert_eq!(counters["visual_query_builder"], 1);
+                assert!(counters.get("query_run").is_none());
+            });
+        });
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.pending.refresh = true;
+                panel.process_pending_actions(window, cx);
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(builder_usage_counts(app)["visual_query_builder"], 1);
+            })
+        });
+        window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| panel.process_pending_actions(window, cx))
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(builder_usage_counts(app)["visual_query_builder"], 2);
+            })
+        });
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_select_origin_owner_and_epoch_matrix(cx: &mut TestAppContext) {
+        for scenario in [
+            "rows",
+            "inactive",
+            "dedup",
+            "automatic",
+            "filter",
+            "closed",
+            "cancel",
+            "superseded",
+            "spec",
+            "context",
+            "page",
+            "error",
+            "partial",
+            "off",
+            "undisclosed",
+            "late_basic",
+            "reset",
+            "replay",
+            "grouped",
+            "rejected",
+            "unknown_owner",
+        ] {
+            let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut result = keyed_result(&["1", "2"]);
+            if scenario == "partial" {
+                result.metadata_extra = Some(std::collections::HashMap::from([(
+                    "script_failure".to_string(),
+                    serde_json::json!({"message": "fixture"}),
+                )]));
+            }
+            let (app_state, profile_id) = register_stub_connection(
+                cx,
+                Arc::new(UsageBuilderConnection::new(
+                    result,
+                    executions.clone(),
+                    scenario == "error",
+                )),
+            );
+            cx.update(|cx| {
+                app_state.update(cx, |app, _| {
+                    if scenario == "undisclosed" {
+                        app.initialize_telemetry(
+                            dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                                .expect("config"),
+                            chrono::Utc::now(),
+                        )
+                        .expect("scheduler");
+                        app.telemetry_mut()
+                            .expect("scheduler")
+                            .set_basic(true, chrono::Utc::now())
+                            .expect("Basic without disclosure");
+                    } else {
+                        enable_builder_usage(app);
+                    }
+                    let scheduler = app.telemetry_mut().expect("scheduler");
+                    if matches!(scenario, "off" | "late_basic") {
+                        scheduler.set_basic(false, chrono::Utc::now()).expect("Off");
+                    }
+                })
+            });
+            let window = cx.add_empty_window();
+            let (document, panel) =
+                usage_table_document(window, app_state.clone(), profile_id, vec![]);
+            let weak = panel.downgrade();
+            let weak_document = document.downgrade();
+            window.update(|window, cx| {
+                panel.update(cx, |panel, cx| {
+                    if scenario == "unknown_owner" {
+                        panel.builder.usage_owner_is_alive = None;
+                    }
+                    let mut spec = make_test_spec();
+                    if scenario == "grouped" {
+                        spec.projection = dbflux_core::Projection::Explicit(vec![]);
+                        spec.aggregates = vec![dbflux_core::VisualAggregateSpec {
+                            function: dbflux_core::AggFn::CountStar,
+                            source_alias: None,
+                            column: None,
+                            alias: "count".to_string(),
+                        }];
+                    } else if scenario == "rejected" {
+                        spec.projection = dbflux_core::Projection::Explicit(vec![]);
+                        spec.aggregates = vec![dbflux_core::VisualAggregateSpec {
+                            function: dbflux_core::AggFn::Sum,
+                            source_alias: None,
+                            column: None,
+                            alias: "sum".to_string(),
+                        }];
+                    }
+                    panel.builder.builder_draft_spec = Some(spec);
+                    if scenario == "automatic" {
+                        panel.apply_builder_draft_spec(make_test_spec(), cx);
+                    } else {
+                        panel.handle_builder_event(&super::BuilderEvent::RunRequested, window, cx);
+                    }
+                    if scenario == "rejected" {
+                        assert!(
+                            panel.builder.visual_select.is_none(),
+                            "generator rejected spec"
+                        );
+                    }
+                    match scenario {
+                        "inactive" => panel.is_active_tab = false,
+                        "cancel" => {
+                            panel.runner.cancel_primary(cx);
+                        }
+                        "spec" => {
+                            let mut spec = make_test_spec();
+                            spec.limit = Some(7);
+                            panel.handle_builder_event(
+                                &super::BuilderEvent::SpecChanged(Box::new(spec)),
+                                window,
+                                cx,
+                            );
+                        }
+                        "context" => {
+                            if let DataSource::Table { database, .. } = &mut panel.source {
+                                *database = Some("other".to_string());
+                            }
+                        }
+                        "page" => {
+                            if let DataSource::Table { pagination, .. } = &mut panel.source {
+                                *pagination = Pagination::Offset {
+                                    limit: 100,
+                                    offset: 100,
+                                };
+                            }
+                        }
+                        "filter" => panel.replace_filter_and_reload("id = 1", window, cx),
+                        "late_basic" => app_state.update(cx, |app, _| {
+                            app.telemetry_mut()
+                                .expect("scheduler")
+                                .set_basic(true, chrono::Utc::now())
+                                .expect("Basic");
+                        }),
+                        "reset" => app_state.update(cx, |app, _| {
+                            app.telemetry_mut()
+                                .expect("scheduler")
+                                .reset(chrono::Utc::now())
+                                .expect("reset");
+                        }),
+                        "superseded" => panel.handle_builder_event(
+                            &super::BuilderEvent::RunRequested,
+                            window,
+                            cx,
+                        ),
+                        _ => {}
+                    }
+                    if !matches!(scenario, "dedup" | "closed") {
+                        panel.process_pending_actions(window, cx);
+                    }
+                })
+            });
+            if scenario == "closed" {
+                drop(document);
+                window.run_until_parked();
+                assert!(weak_document.upgrade().is_none(), "actual dropped document");
+                assert!(weak.upgrade().is_some(), "grid retained outside document");
+                assert_eq!(
+                    executions.load(std::sync::atomic::Ordering::SeqCst),
+                    1,
+                    "worker completed"
+                );
+            } else {
+                window.run_until_parked();
+                if matches!(scenario, "dedup" | "replay") {
+                    window.update(|window, cx| {
+                        panel.update(cx, |panel, cx| {
+                            if scenario == "replay" {
+                                panel.pending.refresh = true;
+                            }
+                            panel.process_pending_actions(window, cx);
+                        })
+                    });
+                    window.run_until_parked();
+                }
+                if matches!(
+                    scenario,
+                    "rows" | "inactive" | "dedup" | "superseded" | "replay"
+                ) {
+                    window.update(|_, cx| assert_eq!(panel.read(cx).result.row_count(), 2));
+                }
+            }
+            let expected = if matches!(
+                scenario,
+                "rows" | "inactive" | "dedup" | "superseded" | "replay" | "grouped"
+            ) {
+                1
+            } else {
+                0
+            };
+            if scenario == "rejected" {
+                assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
+            }
+            if scenario == "grouped" {
+                assert_eq!(
+                    executions.load(std::sync::atomic::Ordering::SeqCst),
+                    4,
+                    "two primary queries and two count probes credit one operation"
+                );
+            }
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    let counts = builder_usage_counts(app);
+                    assert_eq!(
+                        counts["visual_query_builder"].as_u64().unwrap_or(0),
+                        expected,
+                        "{scenario}"
+                    );
+                    assert!(counts.get("query_run").is_none(), "{scenario}");
+                })
+            });
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn builder_mutation_origin_owner_and_outcome_matrix(cx: &mut TestAppContext) {
+        for scenario in [
+            "rows",
+            "zero",
+            "inactive",
+            "error",
+            "confirm_cancel",
+            "cancel",
+            "closed",
+            "off",
+            "late_basic",
+            "reset",
+            "context",
+            "spec",
+            "newer",
+            "approval",
+            "readonly",
+            "commit_error",
+            "partial_chunked",
+            "undisclosed",
+            "unknown_owner",
+        ] {
+            let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut result = keyed_result(&[]);
+            result.affected_rows = Some(if scenario == "rows" { 3 } else { 0 });
+            let connection = Arc::new(UsageBuilderConnection::new(
+                result,
+                executions.clone(),
+                scenario == "error",
+            ));
+            if matches!(scenario, "commit_error" | "partial_chunked") {
+                let empty = keyed_result(&[]);
+                let mut written = empty.clone();
+                written.affected_rows = Some(1);
+                let failure = || {
+                    Err(dbflux_core::DbError::NotSupported(
+                        "programmed DML/commit failure".to_string(),
+                    ))
+                };
+                let sequence = if scenario == "partial_chunked" {
+                    let mut keys = keyed_result(&["1"]);
+                    keys.columns.truncate(1);
+                    for row in &mut keys.rows {
+                        row.truncate(1);
+                    }
+                    let mut full_chunk = keys.clone();
+                    full_chunk.rows = (0..1_000)
+                        .map(|index| vec![dbflux_core::Value::Text(index.to_string())])
+                        .collect();
+                    vec![
+                        Ok(empty.clone()),
+                        Ok(full_chunk),
+                        Ok(empty.clone()),
+                        Ok(written),
+                        Ok(empty.clone()),
+                        Ok(keys),
+                        Ok(empty.clone()),
+                        failure(),
+                        Ok(empty),
+                    ]
+                } else {
+                    vec![
+                        Ok(empty.clone()),
+                        Ok(empty.clone()),
+                        Ok(written),
+                        failure(),
+                        Ok(empty),
+                    ]
+                };
+                connection.program.lock().expect("program").extend(sequence);
+            }
+            let (app_state, profile_id) = register_stub_connection(cx, connection.clone());
+            cx.update(|cx| {
+                app_state.update(cx, |app, _| {
+                    if scenario == "undisclosed" {
+                        app.initialize_telemetry(
+                            dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                                .expect("config"),
+                            chrono::Utc::now(),
+                        )
+                        .expect("scheduler");
+                        app.telemetry_mut()
+                            .expect("scheduler")
+                            .set_basic(true, chrono::Utc::now())
+                            .expect("Basic without disclosure");
+                    } else {
+                        enable_builder_usage(app);
+                    }
+                    if matches!(scenario, "off" | "late_basic") {
+                        app.telemetry_mut()
+                            .expect("scheduler")
+                            .set_basic(false, chrono::Utc::now())
+                            .expect("Off");
+                    }
+                    let connected = app
+                        .connections_mut()
+                        .get_mut(&profile_id)
+                        .expect("connection");
+                    connected.mutation_policy = match scenario {
+                        "approval" => dbflux_core::MutationPolicy::ApprovalRequired,
+                        "readonly" => dbflux_core::MutationPolicy::ReadOnly,
+                        _ => dbflux_core::MutationPolicy::Allowed,
+                    };
+                })
+            });
+            let window = cx.add_empty_window();
+            let (document, panel) = usage_table_document(
+                window,
+                app_state.clone(),
+                profile_id,
+                vec!["id".to_string()],
+            );
+            let weak = panel.downgrade();
+            let weak_document = document.downgrade();
+            window.update(|window, cx| {
+                panel.update(cx, |panel, cx| {
+                    if scenario == "unknown_owner" {
+                        panel.builder.usage_owner_is_alive = None;
+                    }
+                    let mut opts =
+                        super::mutation_executor::MutationExecOptions::single_transaction();
+                    opts.chunk_size = 1_000;
+                    panel.open_query_builder(window, cx);
+                    panel
+                        .builder
+                        .builder_panel
+                        .clone()
+                        .expect("builder")
+                        .update(cx, |builder, cx| {
+                            builder
+                                .switch_builder_mode(crate::query_builder::BuilderMode::Delete, cx);
+                        });
+                    opts.mode = match scenario {
+                        "partial_chunked" => {
+                            super::mutation_executor::ExecutionMode::ChunkedTransaction
+                        }
+                        "commit_error" => {
+                            super::mutation_executor::ExecutionMode::SingleTransaction
+                        }
+                        _ => super::mutation_executor::ExecutionMode::DirectAutocommit,
+                    };
+                    let event = super::BuilderEvent::MutationRunRequested {
+                        spec: Box::new(dbflux_core::VisualMutationSpec {
+                            from: TableRef::with_schema("public", "users"),
+                            filter: None,
+                            kind: dbflux_core::MutationKind::Delete,
+                        }),
+                        opts: Box::new(opts),
+                        est_rows: Some(0),
+                    };
+                    panel.handle_builder_event(&event, window, cx);
+                    if matches!(scenario, "approval" | "readonly") {
+                        assert!(panel.pending_mutation_exec.is_none());
+                        if scenario == "approval" {
+                            app_state.update(cx, |app, _| {
+                                let queued = app.list_mcp_pending_executions().expect("pending");
+                                assert_eq!(queued.len(), 1, "actual approval queue");
+                                app.approve_mcp_pending_execution(&queued[0].id)
+                                    .expect("approve");
+                            });
+                        }
+                    } else {
+                        assert!(panel.pending_mutation_exec.is_some());
+                        if scenario == "late_basic" {
+                            app_state.update(cx, |app, _| {
+                                app.telemetry_mut()
+                                    .expect("scheduler")
+                                    .set_basic(true, chrono::Utc::now())
+                                    .expect("late Basic");
+                            });
+                        }
+                        panel.handle_mutation_confirm_outcome(
+                            if scenario == "confirm_cancel" {
+                                super::MutationConfirmOutcome::Cancelled
+                            } else {
+                                super::MutationConfirmOutcome::Confirmed
+                            },
+                            window,
+                            cx,
+                        );
+                        match scenario {
+                            "inactive" => panel.is_active_tab = false,
+                            "cancel" => app_state.update(cx, |app, _| {
+                                app.tasks_mut().cancel_all();
+                            }),
+                            "reset" => app_state.update(cx, |app, _| {
+                                app.telemetry_mut()
+                                    .expect("scheduler")
+                                    .reset(chrono::Utc::now())
+                                    .expect("reset");
+                            }),
+                            "context" => {
+                                if let DataSource::Table { database, .. } = &mut panel.source {
+                                    *database = Some("other".to_string());
+                                }
+                            }
+                            "spec" => panel.handle_builder_event(
+                                &super::BuilderEvent::SpecChanged(Box::new(make_test_spec())),
+                                window,
+                                cx,
+                            ),
+                            "newer" => panel.handle_builder_event(&event, window, cx),
+                            _ => {}
+                        }
+                    }
+                })
+            });
+            if scenario == "closed" {
+                drop(document);
+                window.run_until_parked();
+                assert!(
+                    weak_document.upgrade().is_none(),
+                    "actual mutation owner dropped"
+                );
+                assert!(weak.upgrade().is_some(), "grid retained outside document");
+                assert_eq!(
+                    executions.load(std::sync::atomic::Ordering::SeqCst),
+                    2,
+                    "preview and completed worker"
+                );
+            } else {
+                window.run_until_parked();
+            }
+            if matches!(scenario, "approval" | "readonly") {
+                assert_eq!(
+                    executions.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "no preview or execution"
+                );
+            }
+            if scenario == "partial_chunked" {
+                assert_eq!(
+                    connection.commits.load(std::sync::atomic::Ordering::SeqCst),
+                    1,
+                    "first chunk really committed"
+                );
+                assert!(
+                    connection.program.lock().expect("program").is_empty(),
+                    "failed second chunk rolled back"
+                );
+                assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 9);
+            }
+            let expected = if matches!(scenario, "rows" | "zero" | "inactive") {
+                1
+            } else {
+                0
+            };
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    let counts = builder_usage_counts(app);
+                    assert_eq!(
+                        counts["visual_query_builder"].as_u64().unwrap_or(0),
+                        expected,
+                        "{scenario}"
+                    );
+                    assert!(counts.get("query_run").is_none(), "{scenario}");
+                })
+            });
+        }
+    }
+
     /// Registers a connected profile whose table browse returns `reloaded`.
     fn register_browse_stub(
         app_state: &gpui::Entity<AppStateEntity>,
@@ -11445,6 +13024,8 @@ mod tests {
     /// One mutation run, as its completion needs to report it.
     fn mutation_run(intent: MutationIntent) -> MutationRun {
         MutationRun {
+            #[cfg(feature = "telemetry")]
+            usage: None,
             task_id: Uuid::new_v4(),
             mode: crate::labels::VisualMutationTaskMode::SingleTransaction,
             table_name: "orders".to_string(),

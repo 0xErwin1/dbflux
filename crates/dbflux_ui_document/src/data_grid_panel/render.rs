@@ -299,10 +299,17 @@ impl DataGridPanel {
         }
 
         if std::mem::take(&mut self.pending.refresh) {
+            #[cfg(feature = "telemetry")]
+            let usage = self.take_queued_builder_usage(cx);
             if std::mem::take(&mut self.pending.refresh_keeps_edits) {
                 self.refresh_keeping_edits(window, cx);
             } else {
-                self.refresh(window, cx);
+                self.refresh_with_origin(
+                    window,
+                    cx,
+                    #[cfg(feature = "telemetry")]
+                    usage,
+                );
             }
         }
 
