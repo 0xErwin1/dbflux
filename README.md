@@ -1,6 +1,6 @@
 # DBFlux
 
-**English** · [Español](docs/es/README.md) · [한국어](docs/ko/README.md) · [简体中文](docs/zh_Hans/README.md)
+**English** · [Español](docs/es/README.md) · [한국어](docs/ko/README.md) · [简体中文](docs/zh_Hans/README.md) · [Português (Brasil)](docs/pt_BR/README.md)
 
 An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
