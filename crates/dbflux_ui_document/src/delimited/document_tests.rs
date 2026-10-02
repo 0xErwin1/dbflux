@@ -5,7 +5,8 @@ use std::sync::Arc;
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_delimited::{
-    Dialect, Encoding, Page, ReaderOptions, Record, RecordCount, SampleCoverage,
+    Dialect, DialectOverrides, Encoding, Page, PagedReader, ReadError, ReaderOptions, Record,
+    RecordCount, SampleCoverage,
 };
 use dbflux_test_support::fake_driver::FakeDriver;
 use dbflux_ui_base::AppStateEntity;
@@ -17,15 +18,17 @@ use dbflux_ui_base::keyboard_coverage::KeyboardPath;
 use dbflux_ui_base::user_error::ErrorKind;
 
 use super::document::{
-    DelimitedDocument, DelimitedWarning, PAGE_SIZE, READER_OPTIONS, SAMPLE_BYTES, extension_hint,
-    open_error_to_user_facing, open_first_page, read_first_page, sample_coverage,
-    settled_record_count,
+    DelimitedDocument, DelimitedWarning, OpenError, PAGE_SIZE, READER_OPTIONS, SAMPLE_BYTES,
+    extension_hint, open_error_to_user_facing, open_first_page, read_first_page, readable_dialect,
+    refused_dialect_error, sample_coverage, settled_record_count,
 };
 use super::source::{DelimitedLocation, open_source};
 use super::tests::{BUCKET, FakeConnection, KEY, TestDirectory};
+use super::toolbar::encoding_choices;
 use crate::dedup::{DelimitedFileKey, DocumentKey};
 use crate::keyboard_coverage::DELIMITED;
 use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+use crate::pane::PaneActionRun;
 use crate::types::{DocumentKind, DocumentState};
 
 const CITIES: &[u8] = b"name,city\nAna,Lima\nBo,Quito\n";
@@ -178,14 +181,35 @@ fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
 }
 
 /// The ids of the clickable elements the coverage check found in the frame.
-fn covered_ids(window: &mut VisualTestContext) -> Vec<String> {
+fn covered_ids(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Vec<String> {
+    let menu = pane_action_ids(document, window);
     let capture = FrameCapture::observe(window);
 
     Coverage::new(DELIMITED)
+        .with_menu_entries(menu)
         .assert_covered(&capture.frame(window))
         .into_iter()
         .map(|id| id.to_string())
         .collect()
+}
+
+/// The ids of the entries of the pane actions menu, as the workspace lists
+/// them.
+fn pane_action_ids(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Vec<String> {
+    window.update(|_, cx| {
+        document
+            .read(cx)
+            .pane_actions(document)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    })
 }
 
 fn column_titles(
@@ -340,15 +364,10 @@ fn a_missing_file_ends_in_the_error_state_and_reports_one_error(cx: &mut TestApp
     assert_eq!(title.as_deref(), Some("Could not open absent.csv"));
 }
 
-/// Pipe-delimited Shift_JIS is a dialect the reader refuses: a pipe byte can
-/// be the second byte of a Shift_JIS character.
-///
-/// The dialect comes from detection, so this test holds only while the
-/// statistical encoding detector reads this text as Shift_JIS.
-/// `a_refused_dialect_is_reported_as_a_user_error` covers the refusal with a
-/// dialect it states itself.
-#[gpui::test]
-fn a_dialect_the_reader_refuses_ends_in_the_error_state(cx: &mut TestAppContext) {
+/// Pipe-delimited Shift_JIS text, which detection reads as such and the
+/// reader refuses: a pipe byte can be the second byte of a Shift_JIS
+/// character.
+fn shift_jis_with_pipes() -> Vec<u8> {
     let shift_jis = Encoding::for_label(b"shift_jis").expect("a known encoding label");
 
     let text = "名前|都市|備考\n".to_string()
@@ -356,20 +375,162 @@ fn a_dialect_the_reader_refuses_ends_in_the_error_state(cx: &mut TestAppContext)
     let (bytes, _, unmappable) = shift_jis.encode(&text);
     assert!(!unmappable);
 
+    bytes.into_owned()
+}
+
+/// The detected dialect is refused, so the file opens with the first
+/// delimiter the reader accepts as an override, and says so above the table
+/// instead of failing.
+#[gpui::test]
+fn a_refused_detected_dialect_opens_under_a_delimiter_the_reader_accepts(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("document-refused");
-    let (path, _) = directory.file("names.txt", &bytes);
+    let (path, _) = directory.file("names.txt", &shift_jis_with_pipes());
 
     let (document, window) = open_local(cx, path);
 
-    assert_eq!(state(&document, window), DocumentState::Error);
-    assert_eq!(toast_count(window), 1);
+    assert_eq!(state(&document, window), DocumentState::Clean);
+    assert_eq!(toast_count(window), 0);
 
-    let failure = window.update(|_, cx| document.read(cx).failure().map(str::to_string));
-    assert!(
-        failure
-            .as_deref()
-            .is_some_and(|failure| failure.contains("Shift_JIS")),
-        "{failure:?}"
+    let (detected, in_effect, overrides) = window.update(|_, cx| {
+        let document = document.read(cx);
+
+        (
+            document.detected_dialect().expect("a loaded document"),
+            document.dialect().expect("a loaded document"),
+            document.dialect_overrides(),
+        )
+    });
+
+    assert_eq!(detected.delimiter, b'|');
+    assert_eq!(detected.encoding.name(), "Shift_JIS");
+    assert_eq!(
+        in_effect,
+        Dialect {
+            delimiter: b',',
+            ..detected
+        }
+    );
+    assert_eq!(
+        overrides,
+        DialectOverrides {
+            delimiter: Some(b','),
+            ..DialectOverrides::default()
+        }
+    );
+    assert!(!window.update(|_, cx| document.read(cx).is_rereading()));
+
+    assert_eq!(
+        warnings(&document, window),
+        [DelimitedWarning::DetectedDelimiterUnreadable]
+    );
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).warning_items().to_vec()),
+        [
+            "The detected delimiter Pipe cannot be read in Shift_JIS text, so the file is read with Comma and its columns are probably wrong. Choose another encoding or delimiter."
+        ]
+    );
+    assert_eq!(status_items(&document, window)[0], "Delimiter: Comma");
+}
+
+/// Reset asks for the detected dialect, which is the refused one: it is
+/// reported like any refused override and the file stays as it is.
+#[gpui::test]
+fn reset_on_a_refused_detected_dialect_reports_the_refusal(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-refused-reset");
+    let (path, _) = directory.file("names.txt", &shift_jis_with_pipes());
+
+    let (document, window) = open_local(cx, path);
+
+    window.update(|_, cx| document.update(cx, |document, cx| document.reset_dialect(cx)));
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(
+        last_toast_title(window).as_deref(),
+        Some("Could not re-read names.txt")
+    );
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).dialect().map(|dialect| dialect.delimiter)),
+        Some(b',')
+    );
+    assert_eq!(
+        warnings(&document, window),
+        [DelimitedWarning::DetectedDelimiterUnreadable]
+    );
+}
+
+/// In another encoding the detected delimiter is readable, so choosing one
+/// puts the pipe back and the warning goes.
+#[gpui::test]
+fn the_unreadable_delimiter_warning_goes_once_the_file_is_read_another_way(
+    cx: &mut TestAppContext,
+) {
+    let directory = TestDirectory::new("document-refused-recovered");
+    let (path, _) = directory.file("names.txt", &shift_jis_with_pipes());
+
+    let (document, window) = open_local(cx, path);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.set_dialect_overrides(
+                DialectOverrides {
+                    encoding: Some(Encoding::for_label(b"windows-1252").expect("a known label")),
+                    ..DialectOverrides::default()
+                },
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 0);
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).dialect().map(|dialect| dialect.delimiter)),
+        Some(b'|')
+    );
+    assert_eq!(column_titles(&document, window).len(), 3);
+    assert!(!warnings(&document, window).contains(&DelimitedWarning::DetectedDelimiterUnreadable));
+}
+
+/// Detection never reports ISO-2022-JP, in which the reader refuses every
+/// delimiter. The dialect is stated here to reach the case with no
+/// delimiter to fall back to, which keeps the refusal.
+#[test]
+fn a_dialect_with_no_readable_delimiter_keeps_its_refusal() {
+    let unreadable = Dialect {
+        delimiter: b',',
+        quote: Some(b'"'),
+        has_header: true,
+        encoding: Encoding::for_label(b"iso-2022-jp").expect("a known encoding label"),
+    };
+
+    assert!(matches!(
+        readable_dialect(unreadable, READER_OPTIONS),
+        Err(ReadError::UnsupportedDialect { .. })
+    ));
+
+    let pipes_in_shift_jis = Dialect {
+        delimiter: b'|',
+        encoding: Encoding::for_label(b"shift_jis").expect("a known encoding label"),
+        ..unreadable
+    };
+
+    assert_eq!(
+        readable_dialect(pipes_in_shift_jis, READER_OPTIONS).ok(),
+        Some(Dialect {
+            delimiter: b',',
+            ..pipes_in_shift_jis
+        })
+    );
+
+    let readable = Dialect {
+        encoding: Encoding::for_label(b"utf-8").expect("a known encoding label"),
+        ..unreadable
+    };
+
+    assert_eq!(
+        readable_dialect(readable, READER_OPTIONS).ok(),
+        Some(readable)
     );
 }
 
@@ -790,10 +951,9 @@ fn the_delimited_document_is_covered(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("document-coverage");
     let (path, _) = directory.file("cities.csv", CITIES);
 
-    let (_document, window) = open_local(cx, path);
+    let (document, window) = open_local(cx, path);
 
-    let capture = FrameCapture::observe(window);
-    let checked = Coverage::new(DELIMITED).assert_covered(&capture.frame(window));
+    let checked = covered_ids(&document, window);
 
     assert!(
         checked.iter().any(|id| id.starts_with("cell-")),
@@ -801,6 +961,33 @@ fn the_delimited_document_is_covered(cx: &mut TestAppContext) {
     );
     assert!(
         checked.iter().any(|id| id.starts_with("header-col-")),
+        "{checked:?}"
+    );
+
+    for control in [
+        "delimited-delimiter.dropdown-trigger",
+        "delimited-quote.dropdown-trigger",
+        "delimited-encoding.dropdown-trigger",
+        "delimited-header",
+    ] {
+        assert!(checked.iter().any(|id| id == control), "{checked:?}");
+    }
+
+    // The reset takes no click until there is an override to drop.
+    assert!(
+        !checked.iter().any(|id| id == "delimited-dialect-reset"),
+        "{checked:?}"
+    );
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| document.override_has_header(false, cx));
+    });
+    window.run_until_parked();
+
+    let checked = covered_ids(&document, window);
+
+    assert!(
+        checked.iter().any(|id| id == "delimited-dialect-reset"),
         "{checked:?}"
     );
 }
@@ -872,7 +1059,7 @@ fn a_file_of_an_exact_number_of_pages_settles_its_total_with_the_last_page(
     );
     assert!(!has_more_records(&document, window));
     assert!(
-        !covered_ids(window)
+        !covered_ids(&document, window)
             .iter()
             .any(|id| id == "delimited-load-more")
     );
@@ -898,7 +1085,7 @@ fn a_file_shorter_than_a_page_offers_no_load_more(cx: &mut TestAppContext) {
 
     assert!(!has_more_records(&document, window));
     assert!(
-        !covered_ids(window)
+        !covered_ids(&document, window)
             .iter()
             .any(|id| id == "delimited-load-more")
     );
@@ -1180,9 +1367,9 @@ fn the_load_more_control_is_covered_while_the_file_has_more(cx: &mut TestAppCont
     let directory = TestDirectory::new("document-load-more-coverage");
     let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
 
-    let (_document, window) = open_local_in_small_pages(cx, path);
+    let (document, window) = open_local_in_small_pages(cx, path);
 
-    let checked = covered_ids(window);
+    let checked = covered_ids(&document, window);
 
     assert!(
         checked.iter().any(|id| id == "delimited-load-more"),
@@ -1266,6 +1453,22 @@ fn the_document_strings_resolve_in_every_locale() {
         "document.delimited.footer.load_more",
         "document.delimited.footer.loading_more",
         "document.delimited.error.load_more_failed",
+        "document.delimited.error.reread_failed",
+        "document.delimited.error.refused.unsupported",
+        "document.delimited.error.refused.line_break",
+        "document.delimited.error.refused.quote_equals_delimiter",
+        "document.delimited.quote.double",
+        "document.delimited.quote.single",
+        "document.delimited.quote.none",
+        "document.delimited.toolbar.delimiter",
+        "document.delimited.toolbar.quote",
+        "document.delimited.toolbar.encoding",
+        "document.delimited.toolbar.header",
+        "document.delimited.toolbar.reset",
+        "document.delimited.toolbar.detected",
+        "document.delimited.warning.malformed_text_chosen",
+        "document.delimited.warning.detected_delimiter_unreadable",
+        "document.delimited.footer.rereading",
     ] {
         let english = dbflux_i18n::t!(key, locale = "en");
 
@@ -1283,4 +1486,1195 @@ fn the_document_strings_resolve_in_every_locale() {
             assert_ne!(translated, english, "{locale} copies English for {key}");
         }
     }
+}
+
+// -- The dialect toolbar ------------------------------------------------------
+
+/// One record of each kind detection needs to settle on windows-1252: the
+/// bytes above 0x7F are not valid UTF-8.
+const WINDOWS_1252_NAMES: &[u8] = b"name;city\nJos\xE9;M\xE1laga\nMar\xEDa;C\xF3rdoba\n";
+
+fn encoding(label: &str) -> &'static Encoding {
+    Encoding::for_label(label.as_bytes()).expect("a known encoding label")
+}
+
+fn set_overrides(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+    overrides: DialectOverrides,
+) {
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.set_dialect_overrides(overrides, cx)
+        });
+    });
+    window.run_until_parked();
+}
+
+fn dialect(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> Dialect {
+    window.update(|_, cx| {
+        document
+            .read(cx)
+            .dialect()
+            .expect("a loaded document has a dialect")
+    })
+}
+
+fn overrides(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> DialectOverrides {
+    window.update(|_, cx| document.read(cx).dialect_overrides())
+}
+
+/// What the delimiter, quote and encoding selects and the header checkbox
+/// show, in that order.
+fn control_labels(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> [String; 4] {
+    window.update(|_, cx| {
+        let document = document.read(cx);
+        let controls = document
+            .dialect_controls()
+            .expect("a loaded document has dialect controls");
+
+        let selected = |dropdown: &Entity<dbflux_components::controls::Dropdown>| {
+            dropdown
+                .read(cx)
+                .selected_label()
+                .map(|label| label.to_string())
+                .unwrap_or_default()
+        };
+
+        [
+            selected(&controls.delimiter),
+            selected(&controls.quote),
+            selected(&controls.encoding),
+            document.header_label(),
+        ]
+    })
+}
+
+fn header_is_checked(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+    window.update(|_, cx| {
+        document
+            .read(cx)
+            .requested_dialect()
+            .expect("a loaded document has a dialect")
+            .has_header
+    })
+}
+
+fn is_rereading(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+    window.update(|_, cx| document.read(cx).is_rereading())
+}
+
+/// Runs the entry `id` of the pane actions menu, as choosing it does.
+fn run_pane_action(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext, id: &str) {
+    let action = window
+        .update(|_, cx| document.read(cx).pane_actions(document))
+        .into_iter()
+        .find(|action| action.id.as_ref() == id)
+        .unwrap_or_else(|| panic!("the pane actions list {id}"));
+
+    assert!(action.enabled, "{id} is enabled");
+
+    let PaneActionRun::Callback(run) = action.run else {
+        panic!("{id} runs a document callback");
+    };
+
+    window.update(|window, cx| run(window, cx));
+    window.run_until_parked();
+}
+
+#[gpui::test]
+fn every_control_shows_the_detected_value_after_opening(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-detected");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(
+        control_labels(&document, window),
+        [
+            "Comma (detected)",
+            "Double quote (detected)",
+            "UTF-8 (detected)",
+            "Header row (detected)"
+        ]
+    );
+    assert!(header_is_checked(&document, window));
+    assert_eq!(overrides(&document, window), DialectOverrides::default());
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).detected_dialect()),
+        Some(dialect(&document, window))
+    );
+}
+
+#[gpui::test]
+fn overriding_the_delimiter_reads_the_file_again_with_other_columns(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-delimiter");
+    let (path, _) = directory.file("cities.csv", b"name,city;zone\nAna,Lima;south\n");
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(column_titles(&document, window), ["name", "city;zone"]);
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            delimiter: Some(b';'),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(column_titles(&document, window), ["name,city", "zone"]);
+    assert_eq!(first_column(&document, window), ["Ana,Lima"]);
+    assert_eq!(dialect(&document, window).delimiter, b';');
+    assert_eq!(status_items(&document, window)[0], "Delimiter: Semicolon");
+    assert_eq!(control_labels(&document, window)[0], "Semicolon");
+    assert!(!is_rereading(&document, window));
+    assert_eq!(toast_count(window), 0);
+
+    let detected = window.update(|_, cx| document.read(cx).detected_dialect());
+    assert_eq!(detected.map(|dialect| dialect.delimiter), Some(b','));
+}
+
+#[gpui::test]
+fn overriding_the_header_moves_the_first_record_out_of_the_names_and_back(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-header-off");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(column_titles(&document, window), ["column_1", "column_2"]);
+    assert_eq!(first_column(&document, window), ["name", "Ana", "Bo"]);
+    assert_eq!(status_items(&document, window)[2], "3 records");
+    assert!(!header_is_checked(&document, window));
+    assert_eq!(control_labels(&document, window)[3], "Header row");
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(true),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(column_titles(&document, window), ["name", "city"]);
+    assert_eq!(first_column(&document, window), ["Ana", "Bo"]);
+    assert_eq!(status_items(&document, window)[2], "2 records");
+    assert_eq!(
+        overrides(&document, window),
+        DialectOverrides::default(),
+        "the detected value is not an override"
+    );
+}
+
+#[gpui::test]
+fn overriding_the_header_moves_the_first_record_into_the_names(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-header-on");
+    let (path, _) = directory.file("cities.csv", b"1,Lima\n2,Quito\n");
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(column_titles(&document, window), ["column_1", "column_2"]);
+    assert_eq!(first_column(&document, window), ["1", "2"]);
+    assert_eq!(
+        control_labels(&document, window)[3],
+        "Header row (detected)"
+    );
+    assert!(!header_is_checked(&document, window));
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(true),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(column_titles(&document, window), ["1", "Lima"]);
+    assert_eq!(first_column(&document, window), ["2"]);
+    assert!(header_is_checked(&document, window));
+}
+
+#[gpui::test]
+fn overriding_the_encoding_decodes_the_text_again(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-encoding");
+    let (path, _) = directory.file("names.csv", WINDOWS_1252_NAMES);
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(
+        dialect(&document, window).encoding,
+        encoding("windows-1252")
+    );
+    assert_eq!(first_column(&document, window), ["José", "María"]);
+    assert!(warnings(&document, window).is_empty());
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            encoding: Some(encoding("utf-8")),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(
+        first_column(&document, window),
+        ["Jos\u{FFFD}", "Mar\u{FFFD}a"]
+    );
+    assert_eq!(
+        warnings(&document, window),
+        [DelimitedWarning::MalformedText]
+    );
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).warning_items().to_vec()),
+        [
+            "Some bytes are not valid UTF-8 text and are shown as \u{FFFD}. The chosen encoding is probably wrong."
+        ]
+    );
+    assert_eq!(status_items(&document, window)[1], "Encoding: UTF-8");
+    assert_eq!(control_labels(&document, window)[2], "UTF-8");
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            encoding: Some(encoding("windows-1252")),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(first_column(&document, window), ["José", "María"]);
+    assert!(warnings(&document, window).is_empty());
+    assert_eq!(
+        control_labels(&document, window)[2],
+        "windows-1252 (detected)"
+    );
+}
+
+#[gpui::test]
+fn without_a_quote_a_quoted_field_shows_its_quote_characters(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-quote");
+    let (path, _) = directory.file("cities.csv", b"name,city\n\"Ana\",Lima\n");
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(first_column(&document, window), ["Ana"]);
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            quote: Some(None),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(first_column(&document, window), ["\"Ana\""]);
+    assert_eq!(dialect(&document, window).quote, None);
+    assert_eq!(control_labels(&document, window)[1], "No quoting");
+}
+
+/// The second override is applied on top of detection together with the
+/// first, and the reset drops both.
+#[gpui::test]
+fn reset_returns_to_the_detected_dialect_after_two_overrides(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-reset");
+    let (path, _) = directory.file("cities.csv", b"name,city;zone\nAna,Lima;south\n");
+
+    let (document, window) = open_local(cx, path);
+    let detected = dialect(&document, window);
+    let detected_labels = control_labels(&document, window);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| document.override_delimiter(b';', cx));
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| document.override_has_header(false, cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        overrides(&document, window),
+        DialectOverrides {
+            delimiter: Some(b';'),
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        }
+    );
+    assert_eq!(column_titles(&document, window), ["column_1", "column_2"]);
+    assert_eq!(first_column(&document, window), ["name,city", "Ana,Lima"]);
+
+    window.update(|_, cx| document.update(cx, |document, cx| document.reset_dialect(cx)));
+    window.run_until_parked();
+
+    assert_eq!(dialect(&document, window), detected);
+    assert_eq!(overrides(&document, window), DialectOverrides::default());
+    assert_eq!(column_titles(&document, window), ["name", "city;zone"]);
+    assert_eq!(first_column(&document, window), ["Ana"]);
+    assert_eq!(control_labels(&document, window), detected_labels);
+}
+
+#[gpui::test]
+fn an_override_after_several_pages_returns_to_the_first_page(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-pages");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    load_more(&document, window);
+    load_more(&document, window);
+
+    assert_eq!(row_count(&document, window), 5);
+    assert!(!has_more_records(&document, window));
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(first_column(&document, window), ["id", "0"]);
+    assert_eq!(
+        status_items(&document, window)[2],
+        "2 records loaded, more in the file"
+    );
+    assert!(matches!(
+        window.update(|_, cx| document.read(cx).record_count()),
+        Some(RecordCount::IndexedSoFar(_))
+    ));
+    assert!(has_more_records(&document, window));
+    assert!(!is_loading_more(&document, window));
+
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["id", "0", "1", "2"]);
+}
+
+/// A pipe byte can be the second byte of a Shift_JIS character, a line
+/// break always ends a record, and a quote equal to the delimiter cannot be
+/// told apart from it.
+#[gpui::test]
+fn each_refused_dialect_reports_one_error_and_changes_nothing(cx: &mut TestAppContext) {
+    let refused = [
+        DialectOverrides {
+            delimiter: Some(b'|'),
+            encoding: Some(encoding("shift_jis")),
+            ..DialectOverrides::default()
+        },
+        DialectOverrides {
+            delimiter: Some(b'\n'),
+            ..DialectOverrides::default()
+        },
+        DialectOverrides {
+            quote: Some(Some(b',')),
+            ..DialectOverrides::default()
+        },
+    ];
+
+    let directory = TestDirectory::new("toolbar-refused");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    let detected = dialect(&document, window);
+    let labels = control_labels(&document, window);
+
+    for (index, overrides_to_refuse) in refused.into_iter().enumerate() {
+        // The refusal is known before anything is read: it is reported and
+        // no reread starts.
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.set_dialect_overrides(overrides_to_refuse, cx);
+                assert!(!document.is_rereading(), "{overrides_to_refuse:?}");
+            });
+        });
+        assert_eq!(toast_count(window), index + 1, "{overrides_to_refuse:?}");
+
+        window.run_until_parked();
+
+        assert_eq!(toast_count(window), index + 1, "{overrides_to_refuse:?}");
+        assert_eq!(
+            last_toast_title(window).as_deref(),
+            Some("Could not re-read cities.csv")
+        );
+        assert_eq!(state(&document, window), DocumentState::Clean);
+        assert_eq!(dialect(&document, window), detected);
+        assert_eq!(overrides(&document, window), DialectOverrides::default());
+        assert_eq!(control_labels(&document, window), labels);
+        assert_eq!(column_titles(&document, window), ["name", "city"]);
+        assert_eq!(first_column(&document, window), ["Ana", "Bo"]);
+        assert!(!is_rereading(&document, window));
+        assert!(!is_loading_more(&document, window));
+    }
+}
+
+#[test]
+fn a_refused_dialect_is_a_user_error_that_says_what_to_change() {
+    let refusal_of = |dialect: Dialect| {
+        let opened = PagedReader::open(
+            dbflux_delimited::MemorySource::new(Vec::new()),
+            dialect,
+            READER_OPTIONS,
+        );
+
+        let Err(refusal) = opened else {
+            panic!("the reader refuses the dialect");
+        };
+
+        refusal
+    };
+
+    let comma = Dialect {
+        delimiter: b',',
+        quote: Some(b'"'),
+        has_header: true,
+        encoding: encoding("utf-8"),
+    };
+
+    let unsupported = refusal_of(Dialect {
+        delimiter: b'|',
+        encoding: encoding("shift_jis"),
+        ..comma
+    });
+    let line_break = refusal_of(Dialect {
+        delimiter: b'\n',
+        ..comma
+    });
+    let same_byte = refusal_of(Dialect {
+        quote: Some(b','),
+        ..comma
+    });
+
+    assert!(matches!(unsupported, ReadError::UnsupportedDialect { .. }));
+    assert!(matches!(line_break, ReadError::LineBreakInDialect { .. }));
+    assert!(matches!(same_byte, ReadError::QuoteEqualsDelimiter { .. }));
+
+    let causes = [
+        (
+            unsupported,
+            "Shift_JIS text cannot be read with Pipe as its delimiter or quote. Choose another delimiter, quote or encoding.",
+        ),
+        (
+            line_break,
+            "A line break cannot be the delimiter or the quote. Choose another character.",
+        ),
+        (
+            same_byte,
+            "The quote and the delimiter are both Comma. Choose a different character for one of them.",
+        ),
+    ];
+
+    for (error, cause) in causes {
+        let reported = refused_dialect_error("cities.csv", &error);
+
+        assert_eq!(reported.kind, ErrorKind::User);
+        assert_eq!(reported.summary, "Could not re-read cities.csv");
+        assert_eq!(reported.cause.as_deref(), Some(cause));
+    }
+}
+
+/// The end state of an override asked for during a page read, whichever of
+/// the two ends first. `a_page_read_before_a_reread_was_applied_is_dropped`
+/// pins the order in which the page comes back last.
+#[gpui::test]
+fn an_override_during_a_page_load_ends_on_the_first_page_of_the_new_reading(
+    cx: &mut TestAppContext,
+) {
+    let directory = TestDirectory::new("toolbar-during-load");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(7));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.load_more(cx);
+            assert!(document.is_loading_more());
+
+            document.override_has_header(false, cx);
+            assert!(document.is_rereading());
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(first_column(&document, window), ["id", "0"]);
+    assert!(!is_loading_more(&document, window));
+    assert!(!is_rereading(&document, window));
+    assert!(has_more_records(&document, window));
+    assert_eq!(toast_count(window), 0);
+
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["id", "0", "1", "2"]);
+}
+
+/// The reread is applied while the page read is still running, so the page
+/// that comes back belongs to the reader the reread replaced.
+#[gpui::test]
+fn a_page_read_before_a_reread_was_applied_is_dropped(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-stale-page");
+    let (path, location) = directory.file("numbers.csv", &numbered_csv(7));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    let headerless = Dialect {
+        has_header: false,
+        ..dialect(&document, window)
+    };
+    let (source, version) = open_source(&location).expect("the test file opens");
+    let Ok(reread) = read_first_page(source, version, headerless, SMALL_PAGES) else {
+        panic!("the file reads without a header");
+    };
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.load_more(cx);
+            assert!(document.is_loading_more());
+
+            let generation = document.reread_generation();
+            document.apply_reread_outcome(generation, Ok(reread), cx);
+            assert!(!document.is_loading_more());
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(first_column(&document, window), ["id", "0"]);
+    assert!(!is_loading_more(&document, window));
+
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["id", "0", "1", "2"]);
+}
+
+/// Two overrides one after the other end with both applied: the second is
+/// asked for on top of the first. `a_stale_reread_does_not_overwrite_a_newer_one`
+/// pins what happens to the result of the first.
+#[gpui::test]
+fn two_overrides_in_a_row_end_with_both_applied(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-latest");
+    let (path, _) = directory.file("cities.csv", b"name,city;zone\nAna,Lima;south\n");
+
+    let (document, window) = open_local(cx, path);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.override_delimiter(b';', cx);
+            document.override_has_header(false, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(column_titles(&document, window), ["column_1", "column_2"]);
+    assert_eq!(first_column(&document, window), ["name,city", "Ana,Lima"]);
+    assert!(!is_rereading(&document, window));
+    assert_eq!(toast_count(window), 0);
+}
+
+/// The result of a reread that a later override replaced arrives and is
+/// ignored: the table keeps what it shows until the later reread arrives.
+#[gpui::test]
+fn a_stale_reread_does_not_overwrite_a_newer_one(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-stale-reread");
+    let (path, location) = directory.file("cities.csv", b"name,city;zone\nAna,Lima;south\n");
+
+    let (document, window) = open_local(cx, path);
+
+    let stale_dialect = Dialect {
+        delimiter: b';',
+        ..dialect(&document, window)
+    };
+    let (source, version) = open_source(&location).expect("the test file opens");
+    let Ok(stale) = read_first_page(source, version, stale_dialect, READER_OPTIONS) else {
+        panic!("the file reads with a semicolon");
+    };
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let stale_generation = document.reread_generation();
+
+            document.override_has_header(false, cx);
+            assert_ne!(document.reread_generation(), stale_generation);
+
+            document.apply_reread_outcome(stale_generation, Ok(stale), cx);
+        });
+    });
+
+    assert_eq!(column_titles(&document, window), ["name", "city;zone"]);
+    assert_eq!(dialect(&document, window).delimiter, b',');
+    assert!(is_rereading(&document, window));
+
+    window.run_until_parked();
+
+    assert_eq!(column_titles(&document, window), ["column_1", "column_2"]);
+    assert_eq!(dialect(&document, window).delimiter, b',');
+    assert!(!dialect(&document, window).has_header);
+}
+
+/// A failure that is not a refusal: the object cannot be read again. The
+/// override is given up and the controls return to the dialect shown.
+#[gpui::test]
+fn a_failed_reread_reports_one_error_and_keeps_the_previous_dialect(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state, profile_id, connection.clone());
+
+    let labels = control_labels(&document, window);
+
+    connection
+        .store
+        .fail_reads_with("SlowDown: reduce the rate");
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(
+        last_toast_title(window).as_deref(),
+        Some("Could not re-read cities.csv")
+    );
+    assert_eq!(column_titles(&document, window), ["name", "city"]);
+    assert_eq!(overrides(&document, window), DialectOverrides::default());
+    assert_eq!(control_labels(&document, window), labels);
+    assert!(!is_rereading(&document, window));
+
+    connection.store.stop_failing_reads();
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(first_column(&document, window), ["name", "Ana"]);
+    assert_eq!(toast_count(window), 1);
+}
+
+/// The connection the document opened with is dead after a reconnect, so
+/// the file is read again through the profile's new one.
+#[gpui::test]
+fn a_reconnected_profile_rereads_through_its_new_connection(cx: &mut TestAppContext) {
+    let first = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, first.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state.clone(), profile_id, first.clone());
+
+    let second = FakeConnection::with_object(CITIES);
+    replace_connection(window, &app_state, profile_id, second.clone());
+    first.store.fail_reads_with("the connection is closed");
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(first_column(&document, window), ["name", "Ana"]);
+    assert_eq!(toast_count(window), 0);
+    assert!(second.store.range_reads() > 0);
+}
+
+#[test]
+fn the_encoding_list_holds_the_common_encodings_and_the_detected_one() {
+    let names = |detected: &'static Encoding| -> Vec<&'static str> {
+        encoding_choices(detected)
+            .into_iter()
+            .map(Encoding::name)
+            .collect()
+    };
+
+    // `encoding_rs` reads the label ISO-8859-1 as windows-1252, so the two
+    // are one entry.
+    let common = ["UTF-8", "UTF-16LE", "UTF-16BE", "windows-1252", "Shift_JIS"];
+
+    assert_eq!(names(encoding("utf-8")), common);
+    assert_eq!(names(encoding("iso-8859-1")), common);
+
+    let with_detected = names(encoding("euc-kr"));
+    assert_eq!(with_detected[..common.len()], common);
+    assert_eq!(with_detected[common.len()..], ["EUC-KR"]);
+}
+
+/// Detection reads this Korean text as EUC-KR, which is not one of the
+/// common encodings, so the select lists it after them and shows it.
+#[gpui::test]
+fn a_detected_encoding_outside_the_common_ones_is_listed_and_selected(cx: &mut TestAppContext) {
+    let text = "이름,도시\n".to_string() + &"김철수는 서울에 삽니다,서울특별시\n".repeat(20);
+    let (bytes, _, unmappable) = encoding("euc-kr").encode(&text);
+    assert!(!unmappable);
+
+    let directory = TestDirectory::new("toolbar-uncommon-encoding");
+    let (path, _) = directory.file("names.csv", &bytes);
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(dialect(&document, window).encoding, encoding("euc-kr"));
+    assert_eq!(control_labels(&document, window)[2], "EUC-KR (detected)");
+}
+
+#[gpui::test]
+fn the_quote_and_encoding_entries_of_the_pane_actions_open_their_selects(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-keyboard-open");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    let open_selects = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let controls = document
+                .read(cx)
+                .dialect_controls()
+                .expect("a loaded document has dialect controls");
+
+            [
+                controls.delimiter.read(cx).is_open(),
+                controls.quote.read(cx).is_open(),
+                controls.encoding.read(cx).is_open(),
+            ]
+        })
+    };
+
+    assert_eq!(open_selects(window), [false, false, false]);
+
+    run_pane_action(&document, window, "delimited-quote");
+    assert_eq!(open_selects(window), [false, true, false]);
+
+    window.simulate_keystrokes("down enter");
+    window.run_until_parked();
+
+    assert_eq!(dialect(&document, window).quote, Some(b'\''));
+
+    run_pane_action(&document, window, "delimited-encoding");
+    assert_eq!(open_selects(window), [false, false, true]);
+}
+
+/// The pane actions menu is the keyboard path of the toolbar. Its delimiter
+/// entry opens the select with the keyboard on it, where the arrow moves and
+/// Enter confirms.
+#[gpui::test]
+fn the_delimiter_select_is_driven_from_the_keyboard(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-keyboard-select");
+    let (path, _) = directory.file("cities.csv", b"name,city;zone\nAna,Lima;south\n");
+
+    let (document, window) = open_local(cx, path);
+
+    run_pane_action(&document, window, "delimited-delimiter");
+
+    let is_open = window.update(|_, cx| {
+        document
+            .read(cx)
+            .dialect_controls()
+            .expect("a loaded document has dialect controls")
+            .delimiter
+            .read(cx)
+            .is_open()
+    });
+    assert!(is_open, "the entry opens the delimiter list");
+
+    window.simulate_keystrokes("down down enter");
+    window.run_until_parked();
+
+    assert_eq!(dialect(&document, window).delimiter, b';');
+    assert_eq!(column_titles(&document, window), ["name,city", "zone"]);
+}
+
+#[gpui::test]
+fn the_header_and_reset_entries_of_the_pane_actions_run_their_controls(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-keyboard-header");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    let reset_is_enabled = |window: &mut VisualTestContext| {
+        window
+            .update(|_, cx| document.read(cx).pane_actions(&document))
+            .into_iter()
+            .find(|action| action.id.as_ref() == "delimited-dialect-reset")
+            .map(|action| action.enabled)
+    };
+
+    assert_eq!(reset_is_enabled(window), Some(false));
+
+    run_pane_action(&document, window, "delimited-header");
+
+    assert_eq!(first_column(&document, window), ["name", "Ana", "Bo"]);
+    assert_eq!(reset_is_enabled(window), Some(true));
+
+    run_pane_action(&document, window, "delimited-dialect-reset");
+
+    assert_eq!(first_column(&document, window), ["Ana", "Bo"]);
+    assert_eq!(overrides(&document, window), DialectOverrides::default());
+}
+
+#[gpui::test]
+fn the_pane_handle_lists_the_dialect_actions(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-pane-handle");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    let ids: Vec<String> = window.update(|_, cx| {
+        DelimitedDocument::into_pane(document.clone(), cx)
+            .pane_actions(cx)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+
+    assert_eq!(
+        ids,
+        [
+            "delimited-delimiter",
+            "delimited-quote",
+            "delimited-header",
+            "delimited-encoding",
+            "delimited-dialect-reset"
+        ]
+    );
+}
+
+/// The select moves to the item that was chosen before the document hears
+/// of it. A choice the reader refuses is put back.
+#[gpui::test]
+fn the_refused_selection_of_a_select_returns_to_the_value_in_effect(cx: &mut TestAppContext) {
+    let text = "名前,都市,備考\n".to_string()
+        + &"太郎さんは東京に住んでいます,東京都,これは日本語のテキストです\n".repeat(20);
+    let (bytes, _, unmappable) = encoding("shift_jis").encode(&text);
+    assert!(!unmappable);
+
+    let directory = TestDirectory::new("toolbar-refused-selection");
+    let (path, _) = directory.file("names.csv", &bytes);
+
+    let (document, window) = open_local(cx, path);
+
+    assert_eq!(dialect(&document, window).encoding, encoding("shift_jis"));
+    assert_eq!(control_labels(&document, window)[0], "Comma (detected)");
+
+    run_pane_action(&document, window, "delimited-delimiter");
+    window.simulate_keystrokes("down down down enter");
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(control_labels(&document, window)[0], "Comma (detected)");
+    assert_eq!(dialect(&document, window).delimiter, b',');
+    assert_eq!(overrides(&document, window), DialectOverrides::default());
+}
+
+#[gpui::test]
+fn an_override_of_a_disconnected_profile_reports_one_error_and_reads_nothing(
+    cx: &mut TestAppContext,
+) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state.clone(), profile_id, connection.clone());
+
+    window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            state.connections_mut().remove(&profile_id);
+        });
+    });
+    let reads_before = connection.store.range_reads();
+    let labels = control_labels(&document, window);
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(
+        last_toast_title(window).as_deref(),
+        Some("Could not re-read cities.csv")
+    );
+    assert_eq!(connection.store.range_reads(), reads_before);
+    assert_eq!(column_titles(&document, window), ["name", "city"]);
+    assert_eq!(control_labels(&document, window), labels);
+    assert!(!is_rereading(&document, window));
+}
+
+// -- A reread in progress ------------------------------------------------------
+
+fn headerless() -> DialectOverrides {
+    DialectOverrides {
+        has_header: Some(false),
+        ..DialectOverrides::default()
+    }
+}
+
+/// While the file is read again the footer says so, and the next page takes
+/// no click and is not read: its records would belong to the reader the
+/// reread replaces.
+#[gpui::test]
+fn load_more_is_off_while_the_file_is_read_again(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(&numbered_csv(7));
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state, profile_id, connection.clone());
+
+    assert!(
+        covered_ids(&document, window)
+            .iter()
+            .any(|id| id == "delimited-load-more")
+    );
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).progress_item()),
+        None
+    );
+
+    let reads_before = connection.store.range_reads();
+
+    assert!(window.update(|_, cx| document.read(cx).can_load_more()));
+
+    window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            document.set_dialect_overrides(headerless(), cx);
+            assert!(document.is_rereading());
+            assert!(!document.can_load_more());
+            assert_eq!(
+                document.progress_item().as_deref(),
+                Some("Reading the file again\u{2026}")
+            );
+
+            document.load_more(cx);
+            assert!(!document.is_loading_more());
+
+            assert!(document.dispatch_command(Command::ResultsNextPage, window, cx));
+            assert!(!document.is_loading_more());
+        });
+    });
+
+    assert_eq!(connection.store.range_reads(), reads_before);
+
+    window.run_until_parked();
+
+    assert_eq!(first_column(&document, window), ["id", "0"]);
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).progress_item()),
+        None
+    );
+    assert!(window.update(|_, cx| document.read(cx).can_load_more()));
+    assert!(
+        covered_ids(&document, window)
+            .iter()
+            .any(|id| id == "delimited-load-more")
+    );
+}
+
+/// Asking for the overrides that are in effect while a different reread is
+/// running gives that reread up: its task is dropped before it reads.
+#[gpui::test]
+fn asking_for_the_dialect_in_effect_cancels_a_running_reread_without_a_read(
+    cx: &mut TestAppContext,
+) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state, profile_id, connection.clone());
+
+    let reads_before = connection.store.range_reads();
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.set_dialect_overrides(headerless(), cx);
+            assert!(document.is_rereading());
+
+            document.reset_dialect(cx);
+            assert!(!document.is_rereading());
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(connection.store.range_reads(), reads_before);
+    assert_eq!(column_titles(&document, window), ["name", "city"]);
+    assert_eq!(overrides(&document, window), DialectOverrides::default());
+    assert_eq!(toast_count(window), 0);
+}
+
+/// A reread a later override replaced is dropped before it reads, so quick
+/// overrides of an object cost one reading and not one each.
+#[gpui::test]
+fn a_replaced_reread_is_cancelled_before_it_reads(cx: &mut TestAppContext) {
+    let one = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, one.clone());
+    let (single, window) = open_object_in_small_pages(cx, app_state, profile_id, one.clone());
+
+    let before = one.store.range_reads();
+    set_overrides(&single, window, headerless());
+    let reads_of_one_reread = one.store.range_reads() - before;
+    assert!(reads_of_one_reread > 0);
+
+    let many = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, many.clone());
+    let (document, window) = open_object_in_small_pages(cx, app_state, profile_id, many.clone());
+
+    let before = many.store.range_reads();
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.override_delimiter(b';', cx);
+            document.override_quote(None, cx);
+            document.override_has_header(false, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(many.store.range_reads() - before, reads_of_one_reread);
+    assert_eq!(dialect(&document, window).delimiter, b';');
+    assert!(!dialect(&document, window).has_header);
+}
+
+#[gpui::test]
+fn a_stale_failed_reread_reports_nothing(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("toolbar-stale-failed-reread");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let stale_generation = document.reread_generation();
+
+            document.override_has_header(false, cx);
+
+            document.apply_reread_outcome(
+                stale_generation,
+                Err(OpenError::Read(ReadError::LineBreakInDialect {
+                    byte: b'\n',
+                })),
+                cx,
+            );
+
+            assert!(
+                document.is_rereading(),
+                "the newer reread is still asked for"
+            );
+        });
+    });
+
+    assert_eq!(toast_count(window), 0);
+
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 0);
+    assert_eq!(first_column(&document, window), ["name", "Ana", "Bo"]);
+}
+
+/// The page read fails after a reread replaced its reader, and nobody is
+/// told: the failure belongs to a reading that is no longer shown.
+#[gpui::test]
+fn a_stale_failed_page_read_reports_nothing(cx: &mut TestAppContext) {
+    let bytes = numbered_csv(7);
+    let connection = FakeConnection::with_object(&bytes);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state, profile_id, connection.clone());
+
+    let directory = TestDirectory::new("toolbar-stale-failed-page");
+    let (_, location) = directory.file("numbers.csv", &bytes);
+
+    let headerless = Dialect {
+        has_header: false,
+        ..dialect(&document, window)
+    };
+    let (source, version) = open_source(&location).expect("the test file opens");
+    let Ok(reread) = read_first_page(source, version, headerless, SMALL_PAGES) else {
+        panic!("the file reads without a header");
+    };
+
+    connection
+        .store
+        .fail_reads_with("SlowDown: reduce the rate");
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.load_more(cx);
+            assert!(document.is_loading_more());
+
+            let generation = document.reread_generation();
+            document.apply_reread_outcome(generation, Ok(reread), cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 0);
+    assert_eq!(first_column(&document, window), ["id", "0"]);
+    assert!(!is_loading_more(&document, window));
+}
+
+/// The override that was in effect is not a detected value, and it is the
+/// one the controls return to.
+#[gpui::test]
+fn a_failed_reread_returns_the_controls_to_the_override_in_effect(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state, profile_id, connection.clone());
+
+    set_overrides(&document, window, headerless());
+
+    let labels = control_labels(&document, window);
+    assert_eq!(labels[3], "Header row");
+    assert!(!header_is_checked(&document, window));
+
+    connection
+        .store
+        .fail_reads_with("SlowDown: reduce the rate");
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| document.override_delimiter(b';', cx));
+    });
+    assert_eq!(control_labels(&document, window)[0], "Semicolon");
+
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(overrides(&document, window), headerless());
+    assert_eq!(control_labels(&document, window), labels);
+    assert!(!header_is_checked(&document, window));
+    assert_eq!(first_column(&document, window), ["name", "Ana"]);
 }

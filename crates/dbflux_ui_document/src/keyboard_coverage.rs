@@ -606,10 +606,11 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
-/// A delimited file tab: the table of the records loaded so far and the
-/// control that loads the next page (`]`). The rows stay in file order, so
-/// the document does not sort and a column header click has no action for a
-/// key to reach.
+/// A delimited file tab: the dialect toolbar, the table of the records
+/// loaded so far and the control that loads the next page (`]`). The pane
+/// actions list the toolbar: each select entry opens its list with the
+/// keyboard on it. The rows stay in file order, so the document does not
+/// sort and a column header click has no action for a key to reach.
 pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     name: "delimited file",
     contexts: &[ContextId::Results, ContextId::DataTable],
@@ -624,6 +625,20 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
         (
             "delimited-load-more",
             KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "delimited-delimiter.*",
+            KeyboardPath::Menu("delimited-delimiter"),
+        ),
+        ("delimited-quote.*", KeyboardPath::Menu("delimited-quote")),
+        (
+            "delimited-encoding.*",
+            KeyboardPath::Menu("delimited-encoding"),
+        ),
+        ("delimited-header", KeyboardPath::Menu("delimited-header")),
+        (
+            "delimited-dialect-reset",
+            KeyboardPath::Menu("delimited-dialect-reset"),
         ),
     ],
 };

@@ -1762,8 +1762,15 @@ document:
     error:
       open_failed: "%{name}을(를) 열 수 없습니다"
       load_more_failed: "%{name}을(를) 더 불러올 수 없습니다"
+      reread_failed: "%{name}을(를) 다시 읽을 수 없습니다"
+      refused:
+        unsupported: "%{encoding} 텍스트는 %{character}을(를) 구분자나 따옴표로 사용해 읽을 수 없습니다. 다른 구분자, 따옴표 또는 인코딩을 선택하세요."
+        line_break: "줄바꿈은 구분자나 따옴표가 될 수 없습니다. 다른 문자를 선택하세요."
+        quote_equals_delimiter: "따옴표와 구분자가 모두 %{character}입니다. 둘 중 하나에 다른 문자를 선택하세요."
     warning:
       malformed_text: "일부 바이트가 올바른 %{encoding} 텍스트가 아니어서 \uFFFD(으)로 표시됩니다. 감지된 인코딩이 잘못되었을 수 있습니다."
+      malformed_text_chosen: "일부 바이트가 올바른 %{encoding} 텍스트가 아니어서 \uFFFD(으)로 표시됩니다. 선택한 인코딩이 잘못되었을 수 있습니다."
+      detected_delimiter_unreadable: "감지된 구분자 %{detected}은(는) %{encoding} 텍스트에서 읽을 수 없어 파일을 %{delimiter}(으)로 읽었으며, 열이 올바르지 않을 수 있습니다. 다른 인코딩이나 구분자를 선택하세요."
       cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
     status:
       delimiter: "구분자: %{delimiter}"
@@ -1779,9 +1786,21 @@ document:
       tab: 탭
       semicolon: 세미콜론
       pipe: 세로 막대
+    quote:
+      double: "큰따옴표"
+      single: "작은따옴표"
+      none: "따옴표 없음"
+    toolbar:
+      delimiter: "구분자"
+      quote: "따옴표"
+      encoding: "인코딩"
+      header: "머리글 행"
+      reset: "감지된 값으로 되돌리기"
+      detected: "%{value} (감지됨)"
     footer:
       load_more: 더 불러오기
       loading_more: "불러오는 중…"
+      rereading: "파일을 다시 읽는 중…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"
