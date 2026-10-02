@@ -1,7 +1,7 @@
 # dbflux_delimited
 
-Dialect model, dialect detection, text decoding and paged record reading for delimited text files
-such as CSV and TSV.
+Dialect model, dialect detection, text decoding, paged record reading and byte-preserving writing
+for delimited text files such as CSV and TSV.
 The crate has no dependency on `dbflux_core` or on any UI crate.
 
 ## Features
@@ -55,10 +55,69 @@ The crate has no dependency on `dbflux_core` or on any UI crate.
   - `invalidate_from_offset` and `invalidate_from_page` discard the index after a byte offset or a
     page start and read the source's length again. Offset zero and page zero also read the
     byte-order mark and the header again.
+- `write_edited` writes a source to a `std::io::Write` sink with an `EditSet` applied. It produces
+  the new bytes only: replacing the file and invalidating a reader's index are the caller's.
+  - An `EditSet` replaces the fields of existing records (the header included, which is how a
+    column is renamed), deletes records, inserts records before an existing record or at the end,
+    and appends columns. Existing records are named by the byte range the reader returned, and
+    the edit set carries the source length those ranges were read against
+    (`PagedReader::source_length`). It has no default value.
+  - Every byte outside a replaced or deleted record is copied as it is. An empty edit set writes
+    the source byte for byte, byte-order mark included. A replaced record keeps its own terminator
+    bytes, and a deleted record removes exactly its range.
+  - The stretches between edited records are copied by range in windows of a caller-chosen size,
+    without being scanned. Appending a column scans every record once, and each record that is
+    not replaced keeps its bytes with the new fields placed before its terminator.
+  - An appended column has a header name, a default value and optional values for single records.
+    Replaced and inserted records are written from their own fields and are not extended, and
+    a value for a replaced or deleted record is ignored. The header name is used only when the
+    dialect has a header.
+  - A rendered field is quoted only when it contains the delimiter, the quote, a carriage return
+    or a line feed, starts or ends with whitespace, starts with U+FEFF, or is the empty only
+    field of its record. A quote inside a quoted field is doubled.
+  - Rendered text is encoded in the dialect's encoding, UTF-16 LE and BE included. A character the
+    encoding cannot represent is an error that names the record and the character.
+  - An inserted record takes the terminator of the record it is placed before, or of the last
+    record when inserted at the end, then the first terminator of the file, then a line feed.
+  - These are refused before the first byte is written and leave the sink untouched: a source
+    whose length is not the one the edit set names, overlapping or duplicate ranges, a range
+    outside the source, a record both replaced and deleted, an unencodable character, an
+    unquotable field, a range that does not start right after a line break or does not hold
+    exactly one record, and a deletion that would leave a copied record starting with U+FEFF at
+    the start of a file without a byte-order mark. Each edited record is read once for the range
+    check.
+  - A UTF-16 source that ends inside a code unit is refused before the first byte is written for
+    any edit set that is not empty, unless the edit set replaces or deletes the final record,
+    which removes the stray byte from the output. An empty edit set writes it byte for byte.
+  - A carriage return is never written directly before a line feed that did not follow it in the
+    source. When deleting records would do that to an empty line, the empty record is written as a
+    pair of quotes before its line feed.
 
 ## Limitations
 
-- The crate does not write files yet.
+- The writer's range checks cannot catch everything. A range that starts right after a line break
+  inside a quoted field passes, and is found only when the edit set appends a column. A range read
+  from an older version of the source passes when the length is unchanged and it lines up with
+  another record. The caller keeps a version of the source with the ranges it read. After a save,
+  every byte range read before it is stale.
+- These errors can arrive after part of the output was written: a source or sink failure, an
+  unclosed quote found while appending a column, a deletion that would merge an empty line into
+  the line break before it in a dialect without a quote character, and a range inside a quoted
+  field found while appending a column. The caller always writes to a temporary destination and
+  discards it on any error.
+- The writer changes a record that was not edited in two cases only: a final record without a
+  terminator is given one when a record is inserted after it, and an empty line that would follow
+  a bare carriage return after a deletion is written as a pair of quotes.
+- Every inserted record is written with a terminator, so a file that ended without one ends with
+  one after a record is inserted at the end.
+- In a dialect without a quote character, a field that contains the delimiter or a line break or
+  starts with U+FEFF, and a record whose only field is empty, cannot be written and are refused.
+- A column cannot be appended to a final record that ends inside a quoted field that is never
+  closed. The record has to be replaced first. A record inserted at the end of such a file is
+  written after the unclosed quote and reads back as part of that field.
+- Appending a column to a source without records writes nothing for it, not even a header.
+- The writer holds the rendered bytes of every edited record in memory, and one whole record at a
+  time while appending a column.
 - The reader refuses a dialect whose delimiter or quote byte can be part of a multi-byte
   character, instead of scanning it wrongly: a non-ASCII byte in UTF-8 or EUC-JP, a byte from 0x30
   to 0x39 or from 0x40 up (which includes the pipe) in Shift_JIS, GBK, gb18030, Big5 and EUC-KR,
