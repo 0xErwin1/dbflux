@@ -251,7 +251,7 @@ DBFlux uses a unified JSON WHERE clause syntax that works across all database dr
 ### Complete Reference
 
 See [WHERE Clause Syntax Guide](./docs/WHERE_CLAUSE_SYNTAX.md) for:
-- All operators (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$like`, `$ilike`, `$regex`, `$contains`, `$overlap`, `$size`, `$all`)
+- All operators (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$like`, `$ilike`, `$regex`, `$contains`, `$overlap`, `$size`, `$all`, `$exists`)
 - Logical composition (`$and`, `$or`, `$not`)
 - Type coercion rules
 - Driver-specific behavior

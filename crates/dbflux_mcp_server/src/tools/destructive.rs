@@ -28,7 +28,7 @@ pub struct DeleteRecordsParams {
     #[schemars(description = "Table or collection name")]
     pub table: String,
 
-    #[schemars(description = "Filter conditions (REQUIRED - cannot be empty)")]
+    #[schemars(description = crate::tools::REQUIRED_WHERE_FILTER_DESCRIPTION)]
     pub r#where: serde_json::Value,
 
     #[schemars(description = "Columns to return from deleted records")]

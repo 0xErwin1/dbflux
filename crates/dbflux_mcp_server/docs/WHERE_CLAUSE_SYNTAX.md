@@ -676,6 +676,7 @@ The WHERE clause syntax is a powerful, driver-agnostic filtering language for DB
 - Use logical operators (`$and`, `$or`, `$not`)
 - Use pattern matching (`$like`, `$ilike`, `$regex`)
 - Use NULL handling (`null`, `$eq: null`, `$ne: null`)
+- Use existence checks (`$exists` with `true` or `false`)
 - Use array operators (`$contains`, `$overlap`, `$size`, `$all`)
 - Always validate column names and types with `describe_object`
 - Handle errors gracefully (syntax, type, column not found)

@@ -44,3 +44,28 @@ pub use scripts::{
     validate_delete_params as validate_delete_script_params,
 };
 pub use write::{InsertRecordParams, UpdateRecordsParams, UpsertRecordParams};
+
+/// Expands to the operator reference shared by every `where` description, as
+/// a literal so `concat!` can prefix it.
+macro_rules! where_filter_reference {
+    () => {
+        "Filter as a JSON object keyed by column; several keys are ANDed. \
+         A bare value means equality and null means IS NULL. \
+         Operators: $eq $ne $gt $gte $lt $lte; $in $nin (array of values); \
+         $like $ilike $regex (patterns); $contains $overlap $all $size (array columns); \
+         $exists (boolean). \
+         Logic: $and and $or take a non-empty array of filters, $not takes a filter. \
+         Example: {\"status\": {\"$in\": [\"active\", \"pending\"]}, \"age\": {\"$gte\": 18}}. \
+         Not every driver supports every operator."
+    };
+}
+
+/// Schema description of the optional `where` parameter.
+///
+/// It lists only what `dbflux_core::parse_semantic_filter_json` accepts, and it
+/// is sent on every tool listing, so it stays compact.
+pub const WHERE_FILTER_DESCRIPTION: &str = where_filter_reference!();
+
+/// Schema description of a `where` parameter that a mutation requires.
+pub const REQUIRED_WHERE_FILTER_DESCRIPTION: &str =
+    concat!("REQUIRED - cannot be empty. ", where_filter_reference!());
