@@ -3144,6 +3144,9 @@ modals:
     compact: 紧凑
     cancel: 取消
     confirm: 导入
+  confirm:
+    cancel: 取消
+    confirm: 确认
   mutation_confirm:
     title: 确认变更
     sample_unavailable: 示例预览不可用
@@ -3368,6 +3371,7 @@ settings:
   discard:
     title: 放弃未保存的更改
     body: "您有未保存的更改。要放弃它们并切换到 %{section} 吗？"
+    confirm: 放弃
   editor_panel:
     title:
       edit: "编辑 %{noun}"

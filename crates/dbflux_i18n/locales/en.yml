@@ -3144,6 +3144,9 @@ modals:
     compact: Compact
     cancel: Cancel
     confirm: Import
+  confirm:
+    cancel: Cancel
+    confirm: Confirm
   mutation_confirm:
     title: Confirm mutation
     sample_unavailable: Sample preview unavailable
@@ -3368,6 +3371,7 @@ settings:
   discard:
     title: Discard Unsaved Changes
     body: "You have unsaved changes. Discard them and switch to %{section}?"
+    confirm: Discard
   editor_panel:
     title:
       edit: "Edit %{noun}"

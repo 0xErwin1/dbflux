@@ -5,7 +5,10 @@ use dbflux_app::updates::{CheckedAgo, UpdateCheckOutcome, UpdateCheckState, Upda
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
 #[cfg(feature = "telemetry")]
-use dbflux_components::modals::{JsonReportPreviewRequest, ModalJsonReportPreview};
+use dbflux_components::modals::{
+    ConfirmOutcome, ConfirmRequest, JsonReportPreviewRequest, ModalConfirm, ModalJsonReportPreview,
+    ModalVariant,
+};
 #[cfg(feature = "telemetry")]
 use dbflux_components::primitives::Chamfer;
 use dbflux_components::primitives::{Icon, Text};
@@ -26,8 +29,6 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-#[cfg(feature = "telemetry")]
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::scroll::ScrollableElement;
 
 /// Width of the label column in a settings row.
@@ -114,9 +115,9 @@ pub(super) struct UpdatesSection {
     /// Staged Basic opt-in, applied only by Save.
     #[cfg(feature = "telemetry")]
     telemetry_basic: bool,
-    /// Staged confirmation state of the install-id reset dialog.
+    /// Confirmation of the install-id reset, opened by `InstallReset`.
     #[cfg(feature = "telemetry")]
-    pending_install_reset: bool,
+    install_reset_confirm: Entity<ModalConfirm>,
     /// Cached newest confirmed report, refreshed outside render.
     #[cfg(feature = "telemetry")]
     report_state: ReportState,
@@ -152,7 +153,7 @@ impl UpdatesSection {
             #[cfg(feature = "telemetry")]
             telemetry_basic: false,
             #[cfg(feature = "telemetry")]
-            pending_install_reset: false,
+            install_reset_confirm: cx.new(|cx| ModalConfirm::new(cx)),
             #[cfg(feature = "telemetry")]
             report_state: ReportState::Loading,
             #[cfg(feature = "telemetry")]
@@ -171,6 +172,15 @@ impl UpdatesSection {
                 .unwrap_or(false);
             section.refresh_last_report(cx);
             section._subscriptions.push(telemetry_subscription);
+
+            let reset_subscription = cx.subscribe(
+                &section.install_reset_confirm,
+                |this, _, outcome: &ConfirmOutcome, cx| match outcome {
+                    ConfirmOutcome::Confirmed => this.confirm_install_reset(cx),
+                    ConfirmOutcome::Cancelled => {}
+                },
+            );
+            section._subscriptions.push(reset_subscription);
         }
 
         section
@@ -335,7 +345,7 @@ impl UpdatesSection {
                 self.telemetry_basic = !self.telemetry_basic;
             }
             #[cfg(feature = "telemetry")]
-            UpdatesRow::InstallReset => self.pending_install_reset = true,
+            UpdatesRow::InstallReset => self.open_install_reset_confirm(cx),
             #[cfg(feature = "telemetry")]
             UpdatesRow::ViewReport => self.open_report_preview(cx),
             #[cfg(feature = "telemetry")]
@@ -1103,7 +1113,7 @@ impl Render for UpdatesSection {
         #[cfg(feature = "telemetry")]
         {
             shell = shell
-                .children(self.render_install_reset_confirm(cx))
+                .child(self.install_reset_confirm.clone())
                 .child(self.report_preview.clone());
         }
 
@@ -1112,40 +1122,22 @@ impl Render for UpdatesSection {
 }
 
 impl UpdatesSection {
-    /// The safe confirmation of the install-id reset, following the section
-    /// dialog convention (proxies delete, hooks delete, ...).
+    /// Opens the safe confirmation of the install-id reset. The reusable
+    /// `ModalConfirm` carries the section's own copy; confirming resolves
+    /// through its `Confirmed` outcome, cancelling through `Cancelled`.
     #[cfg(feature = "telemetry")]
-    fn render_install_reset_confirm(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.pending_install_reset {
-            return None;
-        }
-
-        let entity = cx.entity().clone();
-        let entity_cancel = entity.clone();
-        Some(
-            Dialog::new(cx)
-                .title(dbflux_i18n::t!("updates.settings.reset_install_id_title"))
-                .button_props(DialogButtonProps::default().show_cancel(true))
-                .overlay_closable(false)
-                .close_button(false)
-                .on_ok(move |_, _, cx| {
-                    entity.update(cx, |section, cx| section.confirm_install_reset(cx));
-                    true
-                })
-                .on_cancel(move |_, _, cx| {
-                    entity_cancel.update(cx, |section, cx| {
-                        section.pending_install_reset = false;
-                        cx.notify();
-                    });
-                    true
-                })
-                .child(
-                    div()
-                        .text_sm()
-                        .child(dbflux_i18n::t!("updates.settings.reset_install_id_body")),
-                )
-                .into_any_element(),
-        )
+    fn open_install_reset_confirm(&mut self, cx: &mut Context<Self>) {
+        self.install_reset_confirm.update(cx, |confirm, cx| {
+            confirm.open(
+                ConfirmRequest {
+                    title: dbflux_i18n::t!("updates.settings.reset_install_id_title"),
+                    body: dbflux_i18n::t!("updates.settings.reset_install_id_body"),
+                    variant: ModalVariant::Danger,
+                    confirm_label: dbflux_i18n::t!("updates.settings.reset_install_id"),
+                },
+                cx,
+            );
+        });
     }
 
     /// Rotates the installation identity immediately, in the foreground.
@@ -1153,7 +1145,6 @@ impl UpdatesSection {
     /// app-state change also wakes the retained telemetry worker.
     #[cfg(feature = "telemetry")]
     fn confirm_install_reset(&mut self, cx: &mut Context<Self>) {
-        self.pending_install_reset = false;
         let result = self.app_state.update(cx, |state, cx| {
             let result = state.reset_telemetry_install_id(Utc::now());
             cx.emit(AppStateChanged);
@@ -1475,6 +1466,86 @@ mod telemetry_tests {
 
     fn masked_id(harness: &Harness, window: &mut VisualTestContext) -> Option<String> {
         window.update(|_, cx| harness.app_state.read(cx).telemetry_install_id_masked())
+    }
+
+    /// The install-id reset runs through the reusable confirmation: the row
+    /// opens it with both resolutions available, cancelling leaves the
+    /// install id untouched, and confirming rotates the identity.
+    #[gpui::test]
+    fn the_install_reset_confirmation_cancels_and_confirms(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+        let before = masked_id(&harness, window);
+
+        let confirm_visible = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .install_reset_confirm
+                    .read(cx)
+                    .is_visible()
+            })
+        };
+        let open_confirmation = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                harness.section.update(cx, |section, cx| {
+                    section.activate(UpdatesRow::InstallReset, cx)
+                });
+            });
+            window.run_until_parked();
+        };
+
+        open_confirmation(window);
+        assert!(
+            confirm_visible(window),
+            "the reset row opens the confirmation"
+        );
+        assert!(
+            window.update(|window, cx| harness
+                .section
+                .read(cx)
+                .install_reset_confirm
+                .read(cx)
+                .contains_focus(window, cx)),
+            "opening the confirmation moves focus into it"
+        );
+
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .install_reset_confirm
+                    .update(cx, |confirm, cx| confirm.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            !confirm_visible(window),
+            "cancelling closes the confirmation"
+        );
+        assert_eq!(
+            masked_id(&harness, window),
+            before,
+            "cancelling leaves the install id untouched"
+        );
+
+        open_confirmation(window);
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .install_reset_confirm
+                    .update(cx, |confirm, cx| confirm.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            !confirm_visible(window),
+            "confirming closes the confirmation"
+        );
+        assert_ne!(
+            masked_id(&harness, window),
+            before,
+            "confirming rotates the installation identity"
+        );
     }
 
     #[gpui::test]

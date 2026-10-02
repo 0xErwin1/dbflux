@@ -7,11 +7,11 @@ use crate::labels::{hooks_delete_message, hooks_delete_unreadable_message};
 use dbflux_app::config_loader::EditableGlobalHook;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_core::{HookExecutionMode, ScriptLanguage};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::input::EditorState;
 use std::collections::HashMap;
 
@@ -211,6 +211,17 @@ pub(super) struct HooksSection {
     pub(super) editing_hook_id: Option<String>,
     pub(super) pending_delete_hook_id: Option<String>,
     pub(super) pending_delete_protected_row_id: Option<String>,
+    /// Confirmation of the hook delete, opened by `render` while a delete
+    /// is pending.
+    delete_confirm: Entity<ModalConfirm>,
+    /// Confirmation of the unreadable-row delete, opened by `render` while
+    /// a delete is pending.
+    protected_delete_confirm: Entity<ModalConfirm>,
+    /// Outcomes of the two confirmations, drained in `render` where a
+    /// `Window` is available (the outcome subscriptions recorded them
+    /// without one).
+    pending_delete_confirm_resolution: Option<ConfirmOutcome>,
+    pending_protected_confirm_resolution: Option<ConfirmOutcome>,
     pub(super) input_hook_id: Entity<InputState>,
     pub(super) hook_kind_dropdown: Entity<Dropdown>,
     pub(super) hook_kind_selection: HookKindSelection,
@@ -427,6 +438,21 @@ impl HooksSection {
         let hook_env_denylist_sub = notify_on_input_change(&input_hook_env_denylist, window, cx);
         let hook_timeout_sub = notify_on_input_change(&input_hook_timeout, window, cx);
 
+        let delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let protected_delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let delete_confirm_subscription =
+            cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_delete_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+        let protected_confirm_subscription = cx.subscribe(
+            &protected_delete_confirm,
+            |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_protected_confirm_resolution = Some(*outcome);
+                cx.notify();
+            },
+        );
+
         let mut section = Self {
             app_state,
             hook_definitions,
@@ -434,6 +460,10 @@ impl HooksSection {
             editing_hook_id: None,
             pending_delete_hook_id: None,
             pending_delete_protected_row_id: None,
+            delete_confirm,
+            protected_delete_confirm,
+            pending_delete_confirm_resolution: None,
+            pending_protected_confirm_resolution: None,
             input_hook_id,
             hook_kind_dropdown,
             hook_kind_selection: HookKindSelection::Command,
@@ -469,6 +499,8 @@ impl HooksSection {
             switching_input: false,
             _subscriptions: vec![
                 app_state_subscription,
+                delete_confirm_subscription,
+                protected_confirm_subscription,
                 hook_kind_sub,
                 hook_script_language_sub,
                 hook_execution_mode_sub,
@@ -690,22 +722,73 @@ impl EventEmitter<SectionFocusEvent> for HooksSection {}
 impl EventEmitter<SettingsEvent> for HooksSection {}
 
 impl Render for HooksSection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_hook_delete = self.pending_delete_hook_id.is_some();
-        let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
-        let show_protected_delete = self.pending_delete_protected_row_id.is_some();
-        let protected_delete_label = self
-            .pending_delete_protected_row_id
-            .as_ref()
-            .and_then(|row_id| {
-                self.app_state
-                    .read(cx)
-                    .protected_hook_rows()
-                    .iter()
-                    .find(|row| &row.row_id == row_id)
-                    .map(|row| row.row_name.clone().unwrap_or_else(|| row.row_id.clone()))
-            })
-            .unwrap_or_default();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Confirmations resolved while they were open; run the outcomes here
+        // where a `Window` is available (the outcome subscriptions recorded
+        // them without one).
+        if let Some(outcome) = self.pending_delete_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_hook(window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_hook(cx),
+            }
+        }
+        if let Some(outcome) = self.pending_protected_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_protected_row(cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_protected_row(cx),
+            }
+        }
+
+        // Open the hook-delete confirmation while a delete is pending;
+        // opening only when the request changed keeps later renders from
+        // stealing focus back.
+        if let Some(hook_id) = self.pending_delete_hook_id.clone() {
+            let body = hooks_delete_message(&hook_id);
+            let needs_open = !self.delete_confirm.read(cx).is_visible()
+                || self.delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("hooks.delete.title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("hooks.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
+
+        // Open the unreadable-row confirmation while its delete is pending,
+        // with the same changed-request guard.
+        if let Some(row_id) = self.pending_delete_protected_row_id.clone() {
+            let label = self
+                .app_state
+                .read(cx)
+                .protected_hook_rows()
+                .iter()
+                .find(|row| row.row_id == row_id)
+                .map(|row| row.row_name.clone().unwrap_or_else(|| row.row_id.clone()))
+                .unwrap_or_default();
+            let body = hooks_delete_unreadable_message(&label);
+            let needs_open = !self.protected_delete_confirm.read(cx).is_visible()
+                || self.protected_delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.protected_delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("hooks.delete_unreadable.title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("hooks.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
 
         div()
             .size_full()
@@ -714,64 +797,8 @@ impl Render for HooksSection {
             .flex_col()
             .overflow_hidden()
             .child(self.render_hooks_section(cx))
-            .when(show_hook_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!("hooks.delete.title"))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_hook(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_hook(cx);
-                            });
-                            true
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(hooks_delete_message(&hook_delete_name)),
-                        ),
-                )
-            })
-            .when(show_protected_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!("hooks.delete_unreadable.title"))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, _, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_protected_row(cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_protected_row(cx);
-                            });
-                            true
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(hooks_delete_unreadable_message(&protected_delete_label)),
-                        ),
-                )
-            })
+            .child(self.delete_confirm.clone())
+            .child(self.protected_delete_confirm.clone())
     }
 }
 
@@ -945,5 +972,359 @@ mod tests {
 
         assert_eq!(english, "Script");
         assert_eq!(spanish, "Script");
+    }
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    // Explicit imports: a parent glob would make `#[test]` resolve to
+    // `gpui::test`, whose expansion recurses without bound.
+    use super::HooksSection;
+    use dbflux_app::config_loader::{EditableGlobalHook, HookDefinitionSave};
+    use dbflux_components::modals::confirm::{CONFIRM_CANCEL_ID, CONFIRM_CONFIRM_ID};
+    use dbflux_core::{ConnectionHook, HookExecutionMode, HookFailureMode, HookKind};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Entity, FrameObserver, ParentElement as _,
+        Pixels, TestAppContext, VisualTestContext,
+    };
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+
+    /// Keeps the latest rendered frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    impl FrameCapture {
+        fn bounds_of(&self, id: &str) -> Option<Bounds<Pixels>> {
+            let frame = self.0.lock().expect("frame capture lock").clone()?;
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds())
+        }
+    }
+
+    struct Harness {
+        app_state: Entity<AppStateEntity>,
+        section: Entity<HooksSection>,
+        capture: Arc<FrameCapture>,
+    }
+
+    struct SectionView {
+        section: Entity<HooksSection>,
+    }
+
+    impl gpui::Render for SectionView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div().child(self.section.clone())
+        }
+    }
+
+    fn command_hook(command: &str) -> ConnectionHook {
+        ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: command.to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Disconnect,
+        }
+    }
+
+    fn app_state_with_runtime(
+        cx: &mut gpui::App,
+        runtime: StorageRuntime,
+    ) -> Entity<AppStateEntity> {
+        cx.new(|_| AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup"))
+    }
+
+    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            app_state_with_runtime(cx, StorageRuntime::in_memory().expect("in-memory storage"))
+        });
+
+        let capture = Arc::new(FrameCapture::default());
+        let slot = Rc::new(RefCell::new(None));
+        let capture_for_view = capture.clone();
+        let app_for_view = app_state.clone();
+        let slot_for_view = slot.clone();
+        let (_view, window) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_view);
+            let section = cx.new(|cx| HooksSection::new(app_for_view.clone(), window, cx));
+            slot_for_view.borrow_mut().replace(section.clone());
+            SectionView { section }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("section built");
+        (
+            Harness {
+                app_state,
+                section,
+                capture,
+            },
+            window,
+        )
+    }
+
+    #[gpui::test]
+    fn the_hook_delete_confirmation_cancels_and_confirms(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.hook_definitions.insert(
+                    "notify".to_string(),
+                    EditableGlobalHook {
+                        id: Some("hook-1".to_string()),
+                        hook: command_hook("notify-send"),
+                    },
+                );
+                section.request_delete_hook("notify".to_string(), cx);
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .delete_confirm
+                    .read(cx)
+                    .is_visible()
+            }),
+            "a pending delete opens the confirmation"
+        );
+        let cancel = harness
+            .capture
+            .bounds_of(CONFIRM_CANCEL_ID)
+            .expect("the confirmation renders a cancel control");
+        let confirm = harness
+            .capture
+            .bounds_of(CONFIRM_CONFIRM_ID)
+            .expect("the confirmation renders a confirm control");
+        assert_ne!(cancel, confirm, "the two controls are distinct elements");
+
+        // Cancelling keeps the hook and clears the pending delete.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .delete_confirm
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.delete_confirm.read(cx).is_visible(),
+                "cancelling closes the confirmation"
+            );
+            assert_eq!(
+                section.pending_delete_hook_id, None,
+                "cancelling clears the pending delete"
+            );
+            assert!(
+                section.hook_definitions.contains_key("notify"),
+                "cancelling keeps the hook"
+            );
+        });
+
+        // Re-opening and confirming deletes the hook.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.request_delete_hook("notify".to_string(), cx)
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .delete_confirm
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.delete_confirm.read(cx).is_visible(),
+                "confirming closes the confirmation"
+            );
+            assert!(
+                !section.hook_definitions.contains_key("notify"),
+                "confirming deletes the hook"
+            );
+        });
+    }
+
+    /// A protected (unreadable) hook row, seeded the way the loader finds
+    /// them: a saved canonical row whose payload is corrupted on disk.
+    fn open_with_protected_row<'a>(
+        cx: &'a mut TestAppContext,
+    ) -> (Harness, &'a mut VisualTestContext, String) {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+        let saved = dbflux_app::config_loader::save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "broken".to_string(),
+                hook: command_hook("echo broken"),
+            }],
+            &[],
+        )
+        .expect("save hook");
+        let row_id = saved["broken"].id.clone().expect("generated id");
+
+        let repo = runtime.hook_definitions();
+        let mut dto = repo.get(&row_id).expect("load row").expect("saved row");
+        dto.kind_json = Some("{not valid json".to_string());
+        repo.update(&dto).expect("corrupt canonical payload");
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| app_state_with_runtime(cx, runtime));
+
+        let capture = Arc::new(FrameCapture::default());
+        let slot = Rc::new(RefCell::new(None));
+        let capture_for_view = capture.clone();
+        let app_for_view = app_state.clone();
+        let slot_for_view = slot.clone();
+        let (_view, window) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_view);
+            let section = cx.new(|cx| HooksSection::new(app_for_view.clone(), window, cx));
+            slot_for_view.borrow_mut().replace(section.clone());
+            SectionView { section }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("section built");
+        (
+            Harness {
+                app_state,
+                section,
+                capture,
+            },
+            window,
+            row_id,
+        )
+    }
+
+    #[gpui::test]
+    fn the_protected_row_delete_confirmation_cancels_and_confirms(cx: &mut TestAppContext) {
+        let (harness, window, row_id) = open_with_protected_row(cx);
+
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.request_delete_protected_row(row_id.clone(), cx);
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .protected_delete_confirm
+                    .read(cx)
+                    .is_visible()
+            }),
+            "a pending delete opens the confirmation"
+        );
+        let cancel = harness
+            .capture
+            .bounds_of(CONFIRM_CANCEL_ID)
+            .expect("the confirmation renders a cancel control");
+        let confirm = harness
+            .capture
+            .bounds_of(CONFIRM_CONFIRM_ID)
+            .expect("the confirmation renders a confirm control");
+        assert_ne!(cancel, confirm, "the two controls are distinct elements");
+
+        // Cancelling keeps the unreadable row.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .protected_delete_confirm
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.protected_delete_confirm.read(cx).is_visible(),
+                "cancelling closes the confirmation"
+            );
+            assert_eq!(
+                section.pending_delete_protected_row_id, None,
+                "cancelling clears the pending delete"
+            );
+            assert_eq!(
+                harness.app_state.read(cx).protected_hook_rows().len(),
+                1,
+                "cancelling keeps the unreadable row"
+            );
+        });
+
+        // Re-opening and confirming removes the unreadable row.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.request_delete_protected_row(row_id.clone(), cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .protected_delete_confirm
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.protected_delete_confirm.read(cx).is_visible(),
+                "confirming closes the confirmation"
+            );
+            assert!(
+                harness.app_state.read(cx).protected_hook_rows().is_empty(),
+                "confirming deletes the unreadable row"
+            );
+        });
     }
 }

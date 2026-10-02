@@ -10,13 +10,13 @@ use crate::ssh_shared::SshAuthSelection;
 use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, SegmentedControl, SegmentedItem};
 use dbflux_core::SshTunnelProfile;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -77,6 +77,12 @@ pub(super) struct SshTunnelsSection {
     pub(super) pending_ssh_key_path: Option<String>,
     pub(super) pending_delete_tunnel_id: Option<Uuid>,
     pub(super) pending_sync_from_app_state: bool,
+    /// Confirmation of the tunnel delete, opened by `render` while a delete
+    /// is pending.
+    delete_confirm: Entity<ModalConfirm>,
+    /// Outcome of `delete_confirm`, drained in `render` where a `Window` is
+    /// available (the outcome subscription recorded it without one).
+    pending_delete_confirm_resolution: Option<ConfirmOutcome>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -289,6 +295,13 @@ impl SshTunnelsSection {
         let blur_ssh_key_passphrase = create_blur_subscription(cx, &input_ssh_key_passphrase);
         let blur_ssh_password = create_blur_subscription(cx, &input_ssh_password);
 
+        let delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let delete_confirm_subscription =
+            cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_delete_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+
         Self {
             app_state,
             editing_tunnel_id: None,
@@ -314,8 +327,11 @@ impl SshTunnelsSection {
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
             pending_sync_from_app_state: false,
+            delete_confirm,
+            pending_delete_confirm_resolution: None,
             _subscriptions: vec![
                 subscription,
+                delete_confirm_subscription,
                 blur_tunnel_name,
                 blur_ssh_host,
                 blur_ssh_port,
@@ -934,19 +950,46 @@ impl Render for SshTunnelsSection {
         };
 
         let editing_id = self.editing_tunnel_id;
-        let show_delete_confirm = self.pending_delete_tunnel_id.is_some();
 
-        let tunnel_delete_name = self
-            .pending_delete_tunnel_id
-            .and_then(|tunnel_id| {
-                self.app_state
-                    .read(cx)
-                    .ssh_tunnels()
-                    .iter()
-                    .find(|tunnel| tunnel.id == tunnel_id)
-                    .map(|tunnel| tunnel.name.clone())
-            })
-            .unwrap_or_default();
+        // A confirmation resolved while it was open; run the outcome here
+        // where a `Window` is available (the outcome subscription recorded it
+        // without one).
+        if let Some(outcome) = self.pending_delete_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_tunnel(cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_tunnel(cx),
+            }
+        }
+
+        // Open the delete confirmation while a delete is pending; opening
+        // only when the request changed keeps later renders from stealing
+        // focus back.
+        if let Some(tunnel_id) = self.pending_delete_tunnel_id {
+            let name = self
+                .app_state
+                .read(cx)
+                .ssh_tunnels()
+                .iter()
+                .find(|tunnel| tunnel.id == tunnel_id)
+                .map(|tunnel| tunnel.name.clone())
+                .unwrap_or_default();
+            let body = ssh_tunnels_delete_body(&name);
+            let needs_open = !self.delete_confirm.read(cx).is_visible()
+                || self.delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("settings.ssh_tunnels.delete_dialog_title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("settings.ssh_tunnels.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
 
         layout::split_section_shell(
             cx.theme().border,
@@ -958,35 +1001,7 @@ impl Render for SshTunnelsSection {
             self.render_ssh_list(&tunnels, editing_id, cx),
             self.render_ssh_form(keyring_available, cx),
         )
-        .when(show_delete_confirm, |element| {
-            let entity = cx.entity().clone();
-            let entity_cancel = entity.clone();
-
-            element.child(
-                Dialog::new(cx)
-                    .title(dbflux_i18n::t!("settings.ssh_tunnels.delete_dialog_title"))
-                    .button_props(DialogButtonProps::default().show_cancel(true))
-                    .overlay_closable(false)
-                    .close_button(false)
-                    .on_ok(move |_, _, cx| {
-                        entity.update(cx, |section, cx| {
-                            section.confirm_delete_tunnel(cx);
-                        });
-                        true
-                    })
-                    .on_cancel(move |_, _, cx| {
-                        entity_cancel.update(cx, |section, cx| {
-                            section.cancel_delete_tunnel(cx);
-                        });
-                        true
-                    })
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(ssh_tunnels_delete_body(&tunnel_delete_name)),
-                    ),
-            )
-        })
+        .child(self.delete_confirm.clone())
     }
 }
 
@@ -1081,5 +1096,203 @@ mod tests {
         assert_eq!(english, "No saved SSH tunnels");
         assert_eq!(spanish, "No hay túneles SSH guardados");
         assert_ne!(english, spanish);
+    }
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    // Explicit imports: a parent glob would make `#[test]` resolve to
+    // `gpui::test`, whose expansion recurses without bound.
+    use super::SshTunnelsSection;
+    use dbflux_components::modals::confirm::{CONFIRM_CANCEL_ID, CONFIRM_CONFIRM_ID};
+    use dbflux_core::{SshTunnelConfig, SshTunnelProfile};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Entity, FrameObserver, ParentElement as _,
+        Pixels, TestAppContext, VisualTestContext,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+
+    /// Keeps the latest rendered frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    impl FrameCapture {
+        fn bounds_of(&self, id: &str) -> Option<Bounds<Pixels>> {
+            let frame = self.0.lock().expect("frame capture lock").clone()?;
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds())
+        }
+    }
+
+    struct Harness {
+        app_state: Entity<AppStateEntity>,
+        section: Entity<SshTunnelsSection>,
+        capture: Arc<FrameCapture>,
+    }
+
+    struct SectionView {
+        section: Entity<SshTunnelsSection>,
+    }
+
+    impl gpui::Render for SectionView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div().child(self.section.clone())
+        }
+    }
+
+    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let capture = Arc::new(FrameCapture::default());
+        let slot = Rc::new(RefCell::new(None));
+        let capture_for_view = capture.clone();
+        let app_for_view = app_state.clone();
+        let slot_for_view = slot.clone();
+        let (_view, window) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_view);
+            let section = cx.new(|cx| SshTunnelsSection::new(app_for_view.clone(), window, cx));
+            slot_for_view.borrow_mut().replace(section.clone());
+            SectionView { section }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("section built");
+        (
+            Harness {
+                app_state,
+                section,
+                capture,
+            },
+            window,
+        )
+    }
+
+    #[gpui::test]
+    fn the_ssh_tunnel_delete_confirmation_cancels_and_confirms(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+
+        let tunnel = SshTunnelProfile::new(
+            "bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "iperez".to_string(),
+                auth_method: Default::default(),
+            },
+        );
+        window.update(|_, cx| {
+            harness
+                .app_state
+                .update(cx, |state, _| state.add_ssh_tunnel(tunnel.clone()));
+        });
+
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.request_delete_tunnel(tunnel.id, cx);
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .delete_confirm
+                    .read(cx)
+                    .is_visible()
+            }),
+            "a pending delete opens the confirmation"
+        );
+        let cancel = harness
+            .capture
+            .bounds_of(CONFIRM_CANCEL_ID)
+            .expect("the confirmation renders a cancel control");
+        let confirm = harness
+            .capture
+            .bounds_of(CONFIRM_CONFIRM_ID)
+            .expect("the confirmation renders a confirm control");
+        assert_ne!(cancel, confirm, "the two controls are distinct elements");
+
+        // Cancelling keeps the tunnel and clears the pending delete.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .delete_confirm
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.delete_confirm.read(cx).is_visible(),
+                "cancelling closes the confirmation"
+            );
+            assert_eq!(
+                section.pending_delete_tunnel_id, None,
+                "cancelling clears the pending delete"
+            );
+            assert_eq!(
+                harness.app_state.read(cx).ssh_tunnels().len(),
+                1,
+                "cancelling keeps the tunnel"
+            );
+        });
+
+        // Re-opening and confirming deletes the tunnel.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.request_delete_tunnel(tunnel.id, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .delete_confirm
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.delete_confirm.read(cx).is_visible(),
+                "confirming closes the confirmation"
+            );
+            assert!(
+                harness.app_state.read(cx).ssh_tunnels().is_empty(),
+                "confirming deletes the tunnel"
+            );
+        });
     }
 }

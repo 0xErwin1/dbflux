@@ -1,5 +1,6 @@
 pub mod active_query;
 pub mod cell_editor;
+pub mod confirm;
 pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
@@ -16,6 +17,7 @@ pub use active_query::{
     ActiveQueryOutcome, ActiveQueryRequest, ActiveQueryTrigger, ModalActiveQuery,
 };
 pub use cell_editor::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
+pub use confirm::{ConfirmOutcome, ConfirmRequest, ModalConfirm};
 pub use delete_connection::{
     DeleteConnectionOutcome, DeleteConnectionRequest, ModalDeleteConnection,
 };

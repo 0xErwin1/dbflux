@@ -11,6 +11,7 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Text};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
@@ -24,7 +25,6 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -54,6 +54,12 @@ pub(super) struct AuthProfilesSection {
     profile_enabled: bool,
     pending_delete_profile_id: Option<Uuid>,
     pending_sync_from_app_state: bool,
+    /// Confirmation of the profile delete, opened by `render` while a delete
+    /// is pending.
+    delete_confirm: Entity<ModalConfirm>,
+    /// Outcome of `delete_confirm`, drained in `render` where a `Window` is
+    /// available (the outcome subscription recorded it without one).
+    pending_delete_confirm_resolution: Option<ConfirmOutcome>,
 
     /// Whether the currently-displayed profile is read-only (i.e. it is a
     /// dangling reflected profile with no on-disk section to target). When
@@ -405,6 +411,13 @@ impl AuthProfilesSection {
                 cx.notify();
             });
 
+        let delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let delete_confirm_subscription =
+            cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_delete_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+
         let provider_dropdown_subscription = cx.subscribe_in(
             &provider_dropdown,
             window,
@@ -436,6 +449,8 @@ impl AuthProfilesSection {
             profile_enabled: true,
             pending_delete_profile_id: None,
             pending_sync_from_app_state: false,
+            delete_confirm,
+            pending_delete_confirm_resolution: None,
             profile_is_read_only: false,
             profile_dangling_origin: None,
             edit_snapshot: None,
@@ -462,7 +477,7 @@ impl AuthProfilesSection {
             pending_profile_scroll_idx: None,
             switching_input: false,
 
-            _subscriptions: vec![app_state_subscription],
+            _subscriptions: vec![app_state_subscription, delete_confirm_subscription],
             _blur_subscriptions: Vec::new(),
             _dropdown_subscriptions: Vec::new(),
             _provider_dropdown_subscription: Some(provider_dropdown_subscription),
@@ -3019,22 +3034,48 @@ impl Render for AuthProfilesSection {
         }
 
         let profiles = self.app_state.read(cx).list_auth_profiles();
-        let show_delete_dialog = self.pending_delete_profile_id.is_some();
 
-        let (delete_name, affected_connections) = self
-            .pending_delete_profile_id
-            .and_then(|profile_id| {
-                profiles
-                    .iter()
-                    .find(|profile| profile.id == profile_id)
-                    .map(|profile| {
-                        (
-                            profile.name.clone(),
-                            self.profiles_using_auth(profile_id, cx),
-                        )
-                    })
-            })
-            .unwrap_or_else(|| (String::new(), 0));
+        // A confirmation resolved while it was open; run the outcome here
+        // where a `Window` is available (the outcome subscription recorded it
+        // without one).
+        if let Some(outcome) = self.pending_delete_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_profile(window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_profile(cx),
+            }
+        }
+
+        // Open the delete confirmation while a delete is pending; opening
+        // only when the request changed keeps later renders from stealing
+        // focus back.
+        if let Some(profile_id) = self.pending_delete_profile_id {
+            let (name, affected_connections) = profiles
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .map(|profile| {
+                    (
+                        profile.name.clone(),
+                        self.profiles_using_auth(profile_id, cx),
+                    )
+                })
+                .unwrap_or_else(|| (String::new(), 0));
+            let body = crate::labels::auth_profiles_delete_body(&name, affected_connections);
+            let needs_open = !self.delete_confirm.read(cx).is_visible()
+                || self.delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("settings.auth_profiles.delete_dialog_title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("settings.auth_profiles.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
 
         layout::section_container(
             layout::split_section_shell(
@@ -3047,36 +3088,7 @@ impl Render for AuthProfilesSection {
                 self.render_profile_list(&profiles, cx),
                 self.render_editor_panel(window, cx),
             )
-            .when(show_delete_dialog, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                let body =
-                    crate::labels::auth_profiles_delete_body(&delete_name, affected_connections);
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!(
-                            "settings.auth_profiles.delete_dialog_title"
-                        ))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_profile(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_profile(cx);
-                            });
-                            true
-                        })
-                        .child(Text::body(body)),
-                )
-            }),
+            .child(self.delete_confirm.clone()),
         )
     }
 }
@@ -4178,5 +4190,210 @@ mod tests {
         let hint = crate::labels::auth_profiles_inherited_hint("proxy_id", Some("corporate-proxy"));
 
         assert_eq!(hint, "Inherited from proxy_id 'corporate-proxy'.");
+    }
+}
+
+#[cfg(test)]
+mod delete_confirm_tests {
+    // Explicit imports: a parent glob would collide with the sibling tests
+    // module and make `#[test]` resolve to `gpui::test`, whose expansion
+    // recurses without bound.
+    use super::AuthProfilesSection;
+    use dbflux_components::modals::confirm::{CONFIRM_CANCEL_ID, CONFIRM_CONFIRM_ID};
+    use dbflux_core::AuthProfile;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Entity, FrameObserver, ParentElement as _,
+        Pixels, TestAppContext, VisualTestContext,
+    };
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+
+    /// Keeps the latest rendered frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    impl FrameCapture {
+        fn bounds_of(&self, id: &str) -> Option<Bounds<Pixels>> {
+            let frame = self.0.lock().expect("frame capture lock").clone()?;
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds())
+        }
+    }
+
+    struct Harness {
+        app_state: Entity<AppStateEntity>,
+        section: Entity<AuthProfilesSection>,
+        capture: Arc<FrameCapture>,
+    }
+
+    struct SectionView {
+        section: Entity<AuthProfilesSection>,
+    }
+
+    impl gpui::Render for SectionView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div().child(self.section.clone())
+        }
+    }
+
+    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let capture = Arc::new(FrameCapture::default());
+        let slot = Rc::new(RefCell::new(None));
+        let capture_for_view = capture.clone();
+        let app_for_view = app_state.clone();
+        let slot_for_view = slot.clone();
+        let (_view, window) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_view);
+            let section = cx.new(|cx| AuthProfilesSection::new(app_for_view.clone(), window, cx));
+            slot_for_view.borrow_mut().replace(section.clone());
+            SectionView { section }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("section built");
+        (
+            Harness {
+                app_state,
+                section,
+                capture,
+            },
+            window,
+        )
+    }
+
+    #[gpui::test]
+    fn the_auth_profile_delete_confirmation_cancels_and_confirms(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+
+        let profile = AuthProfile::new("aws-main", "aws", HashMap::new());
+        window.update(|_, cx| {
+            harness
+                .app_state
+                .update(cx, |state, _| state.add_auth_profile(profile.clone()));
+        });
+
+        // Stage the delete the Delete row does: edit the profile, then
+        // request deletion of the profile being edited.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.editing_profile_id = Some(profile.id);
+                section.request_delete_selected_profile(cx);
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| {
+                harness
+                    .section
+                    .read(cx)
+                    .delete_confirm
+                    .read(cx)
+                    .is_visible()
+            }),
+            "a pending delete opens the confirmation"
+        );
+        let cancel = harness
+            .capture
+            .bounds_of(CONFIRM_CANCEL_ID)
+            .expect("the confirmation renders a cancel control");
+        let confirm = harness
+            .capture
+            .bounds_of(CONFIRM_CONFIRM_ID)
+            .expect("the confirmation renders a confirm control");
+        assert_ne!(cancel, confirm, "the two controls are distinct elements");
+
+        // Cancelling keeps the profile and the editing session.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .delete_confirm
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.delete_confirm.read(cx).is_visible(),
+                "cancelling closes the confirmation"
+            );
+            assert_eq!(
+                section.pending_delete_profile_id, None,
+                "cancelling clears the pending delete"
+            );
+            assert_eq!(
+                harness.app_state.read(cx).list_auth_profiles().len(),
+                1,
+                "cancelling keeps the profile"
+            );
+            assert_eq!(
+                section.editing_profile_id,
+                Some(profile.id),
+                "cancelling keeps the editing session"
+            );
+        });
+
+        // Re-opening and confirming deletes the profile.
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section.editing_profile_id = Some(profile.id);
+                section.request_delete_selected_profile(cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .delete_confirm
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            assert!(
+                !section.delete_confirm.read(cx).is_visible(),
+                "confirming closes the confirmation"
+            );
+            assert!(
+                harness.app_state.read(cx).list_auth_profiles().is_empty(),
+                "confirming deletes the profile"
+            );
+            assert_eq!(
+                section.editing_profile_id, None,
+                "confirming ends the editing session"
+            );
+        });
     }
 }

@@ -3144,6 +3144,9 @@ modals:
     compact: 압축
     cancel: 취소
     confirm: 가져오기
+  confirm:
+    cancel: 취소
+    confirm: 확인
   mutation_confirm:
     title: 변경 확인
     sample_unavailable: 샘플 미리보기를 사용할 수 없습니다
@@ -3368,6 +3371,7 @@ settings:
   discard:
     title: 저장되지 않은 변경 사항 버리기
     body: "저장되지 않은 변경 사항이 있습니다. 버리고 %{section}(으)로 전환하시겠습니까?"
+    confirm: 버리기
   editor_panel:
     title:
       edit: "%{noun} 편집"

@@ -3144,6 +3144,9 @@ modals:
     compact: Compactar
     cancel: Cancelar
     confirm: Importar
+  confirm:
+    cancel: Cancelar
+    confirm: Confirmar
   mutation_confirm:
     title: Confirmar mutación
     sample_unavailable: Vista previa de muestra no disponible
@@ -3368,6 +3371,7 @@ settings:
   discard:
     title: Descartar cambios sin guardar
     body: "Tienes cambios sin guardar. ¿Descartarlos y cambiar a %{section}?"
+    confirm: Descartar
   editor_panel:
     title:
       edit: "Editar %{noun}"
