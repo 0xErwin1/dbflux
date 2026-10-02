@@ -93,7 +93,7 @@ Microsoft SQL Server 关系型数据库。
 
 - `[方括号]` 形式的标识符引用，`]` 需要转义。
 - `N'…'` 形式的 Unicode 字符串字面量；`0x…`（大写）形式的二进制字面量；布尔（`BIT`）值用 `1`/`0` 表示。
-- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 形式的分页（并回退为 `ORDER BY 1`，使不带 ORDER BY 的 OFFSET 查询不会报错）。
+- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 形式的分页（并回退为 `ORDER BY (SELECT NULL)`，使不带 ORDER BY 的 OFFSET 查询不会报错，且不按任何列排序）。
 - 不使用 `SELECT TOP N`；OFFSET/FETCH 是规范的分页写法。
 - 有意不生成 `UPSERT`；SQL Server 的 `MERGE` 存在已知缺陷，应当手写。
 

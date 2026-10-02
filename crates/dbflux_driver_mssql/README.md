@@ -189,7 +189,8 @@ Requires the `VIEW SERVER STATE` permission.
 - `N'…'` Unicode string literals; `0x…` (uppercase) binary literals;
   `1`/`0` for boolean (`BIT`) values.
 - `OFFSET … ROWS FETCH NEXT … ROWS ONLY` pagination (with a fallback
-  `ORDER BY 1` so OFFSET-without-ORDER-BY queries do not error out).
+  `ORDER BY (SELECT NULL)` so OFFSET-without-ORDER-BY queries do not error
+  out and no column is sorted).
 - `SELECT TOP N` is not used; OFFSET/FETCH is the canonical pagination form.
 - `UPSERT` is intentionally not generated; SQL Server's `MERGE` has known
   bugs and should be written by hand.

@@ -8,9 +8,10 @@
 
 use dbflux_core::{
     CollectionRef, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DescribeRequest,
-    ExecutionContext, ExecutionSourceContext, ExplainRequest, OrderByColumn, Pagination,
-    QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy,
-    TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote, Value,
+    ExecutionContext, ExecutionSourceContext, ExplainRequest, GroupByEntry, OrderByColumn,
+    Pagination, Projection, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
+    SchemaLoadingStrategy, SortEntry, SourceTable, TableBrowseRequest, TableCountRequest, TableRef,
+    TransactionStateNote, Value, VisualQuerySpec, VisualSortDirection,
 };
 use dbflux_driver_mssql::MssqlDriver;
 use dbflux_test_support::containers;
@@ -128,6 +129,8 @@ fn cleanup_test_tables(conn: &dyn Connection) {
         "users",
         "crud_test",
         "browse_test",
+        "limit_test",
+        "limit_xml_test",
         "explain_test",
         "describe_test",
         "codegen_test",
@@ -393,6 +396,194 @@ fn mssql_browse_and_count() -> Result<(), DbError> {
                 }),
         )?;
         assert_eq!(filtered.rows.len(), 1);
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Row limiting without an explicit sort
+// ---------------------------------------------------------------------------
+
+fn limit_spec(table: &str, limit: Option<u64>, offset: u64) -> VisualQuerySpec {
+    VisualQuerySpec {
+        source: SourceTable {
+            schema: Some("dbo".to_string()),
+            table: table.to_string(),
+            alias: table.to_string(),
+        },
+        projection: Projection::All,
+        joins: vec![],
+        filter: None,
+        group_by: vec![],
+        aggregates: vec![],
+        having: None,
+        sort: vec![],
+        limit,
+        offset,
+    }
+}
+
+fn run_builder_select(
+    connection: &dyn Connection,
+    spec: &VisualQuerySpec,
+) -> Result<Vec<Vec<Value>>, DbError> {
+    let select = connection
+        .query_generator()
+        .expect("mssql connection must expose a query generator")
+        .generate_select(spec)
+        .expect("spec must be valid")
+        .expect("mssql generator must render a SELECT");
+
+    assert!(
+        select.params.is_empty(),
+        "spec without filter has no params"
+    );
+
+    Ok(connection.execute(&QueryRequest::new(select.sql))?.rows)
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_builder_select_limits_run_with_and_without_sort() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE limit_test (
+                id INT NOT NULL PRIMARY KEY,
+                bucket INT NOT NULL
+            )",
+        ))?;
+
+        for id in 1..=10 {
+            connection.execute(&QueryRequest::new(format!(
+                "INSERT INTO limit_test (id, bucket) VALUES ({}, {})",
+                id,
+                id % 2
+            )))?;
+        }
+
+        let unsorted = |limit, offset| limit_spec("limit_test", limit, offset);
+
+        assert_eq!(
+            run_builder_select(&*connection, &unsorted(None, 0))?.len(),
+            10
+        );
+        assert_eq!(
+            run_builder_select(&*connection, &unsorted(Some(3), 0))?.len(),
+            3
+        );
+        assert_eq!(
+            run_builder_select(&*connection, &unsorted(Some(3), 2))?.len(),
+            3
+        );
+        assert_eq!(
+            run_builder_select(&*connection, &unsorted(None, 4))?.len(),
+            6
+        );
+
+        let sorted = |limit, offset| {
+            let mut spec = limit_spec("limit_test", limit, offset);
+
+            spec.sort = vec![SortEntry {
+                source_alias: "limit_test".to_string(),
+                column: "id".to_string(),
+                direction: VisualSortDirection::Desc,
+            }];
+
+            spec
+        };
+
+        let ids = |rows: Vec<Vec<Value>>| -> Vec<Value> {
+            rows.into_iter().map(|row| row[0].clone()).collect()
+        };
+
+        assert_eq!(
+            ids(run_builder_select(&*connection, &sorted(Some(3), 0))?),
+            vec![Value::Int(10), Value::Int(9), Value::Int(8)]
+        );
+        assert_eq!(
+            ids(run_builder_select(&*connection, &sorted(Some(3), 2))?),
+            vec![Value::Int(8), Value::Int(7), Value::Int(6)]
+        );
+        assert_eq!(
+            ids(run_builder_select(&*connection, &sorted(None, 8))?),
+            vec![Value::Int(2), Value::Int(1)]
+        );
+
+        let mut grouped = limit_spec("limit_test", Some(1), 0);
+        grouped.group_by = vec![GroupByEntry {
+            source_alias: "limit_test".to_string(),
+            column: "bucket".to_string(),
+        }];
+
+        assert_eq!(run_builder_select(&*connection, &grouped)?.len(), 1);
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+/// A table whose first column cannot be sorted: a positional `ORDER BY 1`
+/// fails on it, so every unsorted limited read must avoid sorting by a column.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_unsorted_limits_run_when_first_column_is_not_sortable() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE limit_xml_test (
+                payload XML NULL,
+                id INT NOT NULL
+            )",
+        ))?;
+
+        for id in 1..=5 {
+            connection.execute(&QueryRequest::new(format!(
+                "INSERT INTO limit_xml_test (payload, id) VALUES (N'<row id=\"{id}\"/>', {id})"
+            )))?;
+        }
+
+        let positional = connection.execute(&QueryRequest::new(
+            "SELECT * FROM dbo.limit_xml_test ORDER BY 1 OFFSET 0 ROWS FETCH NEXT 2 ROWS ONLY",
+        ));
+        assert!(
+            positional.is_err(),
+            "ORDER BY 1 on an xml first column is expected to be rejected"
+        );
+
+        let limited = run_builder_select(&*connection, &limit_spec("limit_xml_test", Some(2), 0))?;
+        assert_eq!(limited.len(), 2);
+
+        let paged = run_builder_select(&*connection, &limit_spec("limit_xml_test", Some(2), 2))?;
+        assert_eq!(paged.len(), 2);
+
+        let table_ref = TableRef::with_schema("dbo", "limit_xml_test");
+
+        let browsed = connection.browse_table(
+            &TableBrowseRequest::new(table_ref.clone()).with_pagination(Pagination::Offset {
+                limit: 2,
+                offset: 2,
+            }),
+        )?;
+        assert_eq!(browsed.rows.len(), 2);
+
+        let select_sql = connection.build_select_sql("limit_xml_test", &[], None, &[], 2, 2);
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(select_sql))?
+                .rows
+                .len(),
+            2
+        );
+
+        let plan = connection.explain(&ExplainRequest::new(table_ref))?;
+        assert!(!plan.rows.is_empty());
 
         cleanup_test_tables(&*connection);
         Ok(())
