@@ -1,9 +1,11 @@
-//! Dialect model, dialect detection and text decoding for delimited text files
-//! such as CSV and TSV.
+//! Dialect model, dialect detection, text decoding and paged record reading
+//! for delimited text files such as CSV and TSV.
 //!
 //! The crate resolves how a file is laid out (delimiter, quote character, header
 //! row, text encoding) from a leading byte sample, lets a caller override any
 //! part of that result, and decodes bytes to text under the resolved encoding.
+//! [`PagedReader`] then reads the records of a [`ByteSource`] one page at a
+//! time, each with its exact byte range in the source.
 //!
 //! ```
 //! use dbflux_delimited::{DialectOverrides, SampleCoverage, decode, detect_dialect};
@@ -33,6 +35,16 @@ use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 pub use encoding_rs::Encoding;
 use encoding_rs::UTF_8;
 
+mod reader;
+mod source;
+
+pub use reader::{Page, PagedReader, ReadError, ReaderOptions, Record, RecordCount};
+#[cfg(any(unix, windows))]
+pub use source::FileSource;
+pub use source::{ByteSource, MemorySource, SourceError};
+
+#[cfg(test)]
+mod reader_tests;
 #[cfg(test)]
 mod tests;
 
