@@ -459,6 +459,8 @@ The tracing event shape:
 | `kind` | `ErrorKind` as string (`storage`, `network`, `auth`, `hook`, `driver`, `user`, `config`) |
 | `correlation_id` | UUID v7 linking the toast to the audit record |
 | `message` | The human-readable summary shown in the toast |
+| `cause` | The underlying error text shown in the toast's code block. Omitted when the error has no cause; stored in `details_json` |
+| `suggested_action` | The follow-up hint shown in the toast body. Omitted when unset; stored in `details_json` |
 
 The `correlation_id` field is extracted by `AuditFieldVisitor` into `EventRecord.correlation_id`. Note that the visitor routes both `record_str` (Display sigil `%val`) and `record_debug` (Debug sigil `?val`) through the same `record_string_by_name` dispatcher, so new typed slots added in the future are picked up regardless of which sigil the caller uses.
 

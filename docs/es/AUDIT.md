@@ -542,6 +542,8 @@ La forma del evento de tracing:
 | `kind`           | `ErrorKind` como string (`storage`, `network`, `auth`, `hook`, `driver`, `user`, `config`) |
 | `correlation_id` | UUID v7 que vincula el toast con el audit record                                           |
 | `message`        | El resumen legible por humanos mostrado en el toast                                        |
+| `cause`          | El texto del error subyacente mostrado en el bloque de código del toast. Se omite cuando el error no tiene causa. Se guarda en `details_json` |
+| `suggested_action` | La sugerencia mostrada en el cuerpo del toast. Se omite cuando no está definida. Se guarda en `details_json` |
 
 El campo `correlation_id` lo extrae `AuditFieldVisitor` hacia
 `EventRecord.correlation_id`. Nótese que el visitor enruta tanto `record_str`
