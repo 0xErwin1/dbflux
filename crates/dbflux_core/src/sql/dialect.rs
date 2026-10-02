@@ -120,6 +120,30 @@ pub trait SqlDialect: Send + Sync {
         format!("LIMIT {} OFFSET {}", n, offset)
     }
 
+    /// Returns the row-limiting tail of a SELECT rendered from a
+    /// `VisualQuerySpec`, or `None` when the statement needs none.
+    ///
+    /// The result is placed after the statement's `ORDER BY`, as its own
+    /// line. `limit` is `None` when the query is unbounded, and
+    /// `has_order_by` tells whether the statement already carries an
+    /// `ORDER BY`, for dialects whose limiting syntax depends on one.
+    ///
+    /// Most dialects use `LIMIT n` and `OFFSET m`. SQL Server (T-SQL)
+    /// overrides this with `OFFSET m ROWS FETCH NEXT n ROWS ONLY`.
+    fn select_limit_offset_clause(
+        &self,
+        limit: Option<u64>,
+        offset: u64,
+        _has_order_by: bool,
+    ) -> Option<String> {
+        match (limit, offset) {
+            (None, 0) => None,
+            (Some(n), 0) => Some(format!("LIMIT {}", n)),
+            (None, o) => Some(format!("OFFSET {}", o)),
+            (Some(n), o) => Some(format!("LIMIT {}\nOFFSET {}", n, o)),
+        }
+    }
+
     /// Whether this dialect requires HAVING clauses to repeat the full aggregate
     /// expression rather than referencing the column alias.
     ///
