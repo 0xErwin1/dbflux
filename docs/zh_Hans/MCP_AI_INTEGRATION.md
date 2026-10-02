@@ -96,7 +96,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | Schema | `list_tables` | metadata | 列出 Schema 内的表与视图。传入 `names_only: true` 时，以字符串形式返回名称，而不是每项一个对象 |
 | Schema | `list_collections` | metadata | 列出 MongoDB 的集合。与 `list_tables` 一样接受 `names_only` |
 | Schema | `describe_object` | metadata | 获取某个表的列/字段定义与索引 |
-| 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。与其他表的 `joins` 在声明支持 join 的驱动程序上执行；文档型、键值型以及其他未声明支持的驱动程序会返回明确的错误。`on` 条件只接受用 `AND` 连接的列比较 |
+| 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。与其他表的 `joins` 在声明支持 join 的驱动程序上执行；文档型、键值型以及其他未声明支持的驱动程序会返回明确的错误。`on` 条件只接受用 `AND` 连接的列比较。使用 join 时，在会从生成的查询中去掉 schema 的连接（SQLite、Turso）上使用带 schema 限定的表、在未声明支持 `$ilike` 的驱动上使用 `$ilike`，以及 `order_by` 方向不是 `asc` 或 `desc`，都会被拒绝。SQL Server 上的 join 需要共享的 SELECT 构建器生成 `OFFSET … FETCH`，该修复在另一个变更中发布 |
 | 读取 | `count_records` | read | 返回目标的行数/文档数 |
 | 读取 | `aggregate_data` | read | 运行只读的聚合管道 |
 | 读取 | `explain_query` | read | 显示查询执行计划，而不执行目标变更 |
@@ -128,7 +128,9 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 审计 | `get_audit_entry` | read | 按 ID 获取单条审计日志 |
 | 审计 | `export_audit_logs` | read | 以 CSV 或 JSON 下载审计日志条目 |
 
-当驱动使 `select_data`、`count_records`、`aggregate_data` 或 `describe_object` 调用失败，且所查询的数据库或 schema 的元数据中没有列出该表或集合时，错误信息会说明在哪里查找了这个名称，并列出最接近的已列出名称。错误信息的措辞是 "is not listed"（未列出），因为该表可能不存在，也可能是该连接无权访问它。如果调用没有传入 `database`，而服务器列出了多个数据库，错误信息还会提示该表可能位于另一个数据库中。对于表（不包括集合），三个读取工具对 `where` 或 `order_by` 中引用的列做同样的处理，`select_data` 对 `columns` 中引用的列也是如此。提示只包含客户端有权列出的名称：表名需要 `list_tables`，列名需要 `describe_object`，数据库信息需要 `list_databases`。驱动自身的错误文本保留在末尾。只有在驱动使调用失败之后才会执行这项查找，不提供这些元数据的驱动会返回原始错误。
+当驱动使 `select_data`、`count_records`、`aggregate_data` 或 `describe_object` 调用失败，且所查询的数据库或 schema 的元数据中没有列出该表或集合时，错误信息会说明在哪里查找了这个名称，并列出最接近的已列出名称。错误信息的措辞是 "is not listed"（未列出），因为该表可能不存在，也可能是该连接无权访问它。如果调用没有传入 `database`，而服务器列出了多个数据库，错误信息还会提示该表可能位于另一个数据库中。对于表（不包括集合），`count_records` 和 `aggregate_data` 对 `where` 或 `order_by` 中引用的列做同样的处理。提示只包含客户端有权列出的名称：表名需要 `list_tables`，列名需要 `describe_object`，数据库信息需要 `list_databases`。驱动自身的错误文本保留在末尾。只有在驱动使调用失败之后才会执行这项查找，不提供这些元数据的驱动会返回原始错误。
+
+`select_data` 则在执行之前检查列。对于关系型表，以及所有带 `joins` 的调用，`columns`、`where` 或 `order_by` 中引用的每一列都会与其所属表的列元数据进行比较（不区分大小写）。未列出的列会被拒绝，错误信息包含同样的提示，并附上 "The query was not run."，查询不会执行。之所以需要这项检查，是因为有些引擎遇到未知列时不会报错：SQLite 会把它当作字符串，返回零行。没有 `describe_object` 权限时，拒绝信息不会列出任何其他列名。当驱动没有该表的列元数据，或者引用是嵌套路径或表达式时，会跳过检查，调用照常执行。调用中每个被引用了列的表需要一次列元数据查询。
 
 暂缓提供的工具（在 v1 中会在请求时明确拒绝）：
 

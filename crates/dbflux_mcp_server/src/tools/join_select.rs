@@ -10,18 +10,19 @@
 use std::sync::Arc;
 
 use dbflux_core::{
-    ColumnRef, Connection, ExecutionClassification, FilterNode, JoinComparison, JoinKind, JoinStep,
-    ProjectedColumn, Projection, QueryRequest, QueryResult, SemanticFilter, SortEntry, SourceTable,
-    SqlDialect, TableRef, VisualQuerySpec, VisualSortDirection, classify_query_for_governance,
-    is_plain_sql_identifier, join_on_conditions, parse_join_condition,
-    semantic_filter_to_filter_node,
+    ColumnMeta, ColumnRef, Comparator, Connection, ExecutionClassification, FilterNode,
+    JoinComparison, JoinKind, JoinStep, ProjectedColumn, Projection, QueryRequest, QueryResult,
+    SemanticFilter, SortEntry, SourceTable, SqlDialect, TableRef, VisualQuerySpec,
+    VisualSortDirection, WhereOperator, classify_query_for_governance, is_plain_sql_identifier,
+    join_on_conditions, parse_join_condition, semantic_filter_to_filter_node,
 };
 
 use crate::{
     helper::value_to_json,
     server::DbFluxServer,
+    state::ServerState,
     tools::{
-        not_found::CallFailure,
+        not_found::{self, CallFailure, ColumnCheck, ColumnReference},
         read::{JoinSpec, OrderByItem},
     },
 };
@@ -133,12 +134,52 @@ fn require_plain_identifier(kind: &str, value: &str) -> Result<(), String> {
     ))
 }
 
-fn require_plain_table(table: &TableRef) -> Result<(), String> {
+fn require_plain_table(table: &TableRef, dialect: &dyn SqlDialect) -> Result<(), String> {
     if let Some(schema) = &table.schema {
         require_plain_identifier("schema", schema)?;
+        require_schema_kept(schema, &table.name, dialect)?;
     }
 
     require_plain_identifier("table", &table.name)
+}
+
+/// Refuses a schema-qualified table on a dialect that renders the table name
+/// without its schema, because the query would read another table.
+fn require_schema_kept(schema: &str, table: &str, dialect: &dyn SqlDialect) -> Result<(), String> {
+    if dialect.qualified_table(Some(schema), table) != dialect.qualified_table(None, table) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Table '{schema}.{table}': this connection does not qualify table names with a schema \
+         in generated queries, so the join would read '{table}' instead. Use '{table}' without \
+         a qualifier when that is the table you mean"
+    ))
+}
+
+/// Characters that can end a quoted database name or a statement in the
+/// driver code that switches databases.
+const DATABASE_NAME_FORBIDDEN: [char; 7] = ['`', '"', '\'', '[', ']', '\\', ';'];
+
+/// Checks the `database` argument of a call with joins before it reaches the
+/// driver. Database names are not held to the plain-identifier rule, because
+/// engines accept names with hyphens, dots and spaces. Only characters that
+/// can break quoting are refused: quotes of every dialect, brackets,
+/// backslash, semicolon and control characters.
+pub(super) fn require_safe_database_name(database: &str) -> Result<(), String> {
+    if database.is_empty() {
+        return Err("database must not be empty when joins are used".to_string());
+    }
+
+    match database
+        .chars()
+        .find(|character| character.is_control() || DATABASE_NAME_FORBIDDEN.contains(character))
+    {
+        Some(character) => Err(format!(
+            "database name contains {character:?}, which is not accepted when joins are used"
+        )),
+        None => Ok(()),
+    }
 }
 
 fn join_kind(join_type: &str) -> Result<JoinKind, String> {
@@ -162,7 +203,7 @@ fn join_step(
     dialect: &dyn SqlDialect,
 ) -> Result<JoinStep, String> {
     let kind = join_kind(&join.r#type)?;
-    require_plain_table(target)?;
+    require_plain_table(target, dialect)?;
 
     let alias = match &join.alias {
         Some(alias) => {
@@ -272,12 +313,7 @@ fn sort_entries(
         .map(|item| {
             let (source_alias, column) = scope.resolve_text(&item.column)?;
 
-            let direction = match item.direction.as_deref() {
-                Some(direction) if direction.eq_ignore_ascii_case("desc") => {
-                    VisualSortDirection::Desc
-                }
-                _ => VisualSortDirection::Asc,
-            };
+            let direction = sort_direction(item.direction.as_deref())?;
 
             Ok(SortEntry {
                 source_alias,
@@ -286,6 +322,19 @@ fn sort_entries(
             })
         })
         .collect()
+}
+
+/// Reads an `order_by` direction. Anything but `asc` or `desc`, in any case,
+/// is refused instead of falling back to ascending.
+fn sort_direction(direction: Option<&str>) -> Result<VisualSortDirection, String> {
+    match direction.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("asc") => Ok(VisualSortDirection::Asc),
+        Some("desc") => Ok(VisualSortDirection::Desc),
+        Some(_) => Err(format!(
+            "Unsupported order_by direction '{}'. Use 'asc' or 'desc'",
+            direction.unwrap_or_default()
+        )),
+    }
 }
 
 fn filter_node(
@@ -312,7 +361,7 @@ fn build_spec(
     join_tables: &[TableRef],
     dialect: &dyn SqlDialect,
 ) -> Result<VisualQuerySpec, String> {
-    require_plain_table(source)?;
+    require_plain_table(source, dialect)?;
 
     if request.limit == 0 {
         return Err("limit must be at least 1 when joins are used".to_string());
@@ -350,23 +399,95 @@ fn build_spec(
     })
 }
 
-/// Serializes the result with unique column names, so a name two tables share
-/// is not lost when a row becomes a JSON object. A repeated name gets a
-/// numeric suffix: `id`, `id_2`.
-fn serialize_joined_result(result: &QueryResult) -> serde_json::Value {
-    let mut names: Vec<String> = Vec::with_capacity(result.columns.len());
-
-    for column in &result.columns {
-        let mut name = column.name.clone();
-        let mut occurrence = 2;
-
-        while names.contains(&name) {
-            name = format!("{}_{occurrence}", column.name);
-            occurrence += 1;
-        }
-
-        names.push(name);
+fn uses_comparator(node: &FilterNode, comparator: Comparator) -> bool {
+    match node {
+        FilterNode::Predicate(predicate) => predicate.comparator == comparator,
+        FilterNode::Group { children, .. } => children
+            .iter()
+            .any(|child| uses_comparator(child, comparator)),
     }
+}
+
+/// The columns the spec names in its projection, filter and sort, each with
+/// the table its alias stands for.
+fn spec_column_references(spec: &VisualQuerySpec) -> Vec<ColumnReference> {
+    let source = std::iter::once((
+        spec.source.alias.as_str(),
+        spec.source.schema.as_deref(),
+        spec.source.table.as_str(),
+    ));
+    let joined = spec.joins.iter().map(|join| {
+        (
+            join.to_alias.as_str(),
+            join.to_schema.as_deref(),
+            join.to_table.as_str(),
+        )
+    });
+
+    let tables: Vec<(&str, TableRef)> = source
+        .chain(joined)
+        .map(|(alias, schema, table)| {
+            let table = match schema {
+                Some(schema) => TableRef::with_schema(schema, table),
+                None => TableRef::new(table),
+            };
+
+            (alias, table)
+        })
+        .collect();
+
+    let mut named: Vec<(&str, &str)> = Vec::new();
+
+    if let Projection::Explicit(columns) = &spec.projection {
+        named.extend(
+            columns
+                .iter()
+                .map(|column| (column.source_alias.as_str(), column.column.as_str())),
+        );
+    }
+
+    if let Some(filter) = &spec.filter {
+        filter_columns(filter, &mut named);
+    }
+
+    named.extend(
+        spec.sort
+            .iter()
+            .map(|entry| (entry.source_alias.as_str(), entry.column.as_str())),
+    );
+
+    named
+        .into_iter()
+        .filter_map(|(alias, column)| {
+            let (_, table) = tables.iter().find(|(known, _)| *known == alias)?;
+
+            Some(ColumnReference {
+                table: table.clone(),
+                column: column.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn filter_columns<'a>(node: &'a FilterNode, named: &mut Vec<(&'a str, &'a str)>) {
+    match node {
+        FilterNode::Predicate(predicate) => {
+            named.push((predicate.source_alias.as_str(), predicate.column.as_str()));
+        }
+        FilterNode::Group { children, .. } => {
+            for child in children {
+                filter_columns(child, named);
+            }
+        }
+    }
+}
+
+/// Serializes the result with unique column names, so a name two tables share
+/// is not lost when a row becomes a JSON object. A repeated name gets the
+/// first numeric suffix that neither an earlier name nor any column of the
+/// result uses: `id`, `id_2`, or `id_3` when the result has an `id_2` column.
+fn serialize_joined_result(result: &QueryResult) -> serde_json::Value {
+    let names = unique_column_names(&result.columns);
 
     let rows: Vec<serde_json::Value> = result
         .rows
@@ -389,15 +510,50 @@ fn serialize_joined_result(result: &QueryResult) -> serde_json::Value {
     })
 }
 
+fn unique_column_names(columns: &[ColumnMeta]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::with_capacity(columns.len());
+
+    for column in columns {
+        let mut name = column.name.clone();
+        let mut occurrence = 2;
+
+        while names.contains(&name) {
+            name = format!("{}_{occurrence}", column.name);
+            occurrence += 1;
+
+            // A suffixed name never takes the name of another column.
+            if columns.iter().any(|other| other.name == name) {
+                name = column.name.clone();
+            }
+        }
+
+        names.push(name);
+    }
+
+    names
+}
+
 impl DbFluxServer {
     /// Runs a `select_data` call that has joins and returns the result with
-    /// the SQL that produced it.
+    /// the SQL that produced it. The columns the call names are checked
+    /// against each table's metadata before the query runs.
     pub(super) async fn select_data_joined(
+        state: &ServerState,
+        connection_id: &str,
         connection: &Arc<dyn Connection>,
         request: JoinedSelect<'_>,
     ) -> Result<(serde_json::Value, String), CallFailure> {
-        let query_request = Self::plan_joined_select(connection, &request)?;
+        let (query_request, references) = Self::plan_joined_select(connection, &request)?;
         let sql = query_request.sql.clone();
+
+        not_found::check_columns(ColumnCheck {
+            state,
+            connection_id,
+            connection,
+            database: request.database,
+            references,
+        })
+        .await?;
 
         let conn = connection.clone();
         #[allow(clippy::result_large_err)]
@@ -410,11 +566,12 @@ impl DbFluxServer {
     }
 
     /// Checks that the driver supports joins, generates the query and checks
-    /// that it is a read.
+    /// that it is a read. Also returns the columns the query names, each with
+    /// its table.
     fn plan_joined_select(
         connection: &Arc<dyn Connection>,
         request: &JoinedSelect<'_>,
-    ) -> Result<QueryRequest, String> {
+    ) -> Result<(QueryRequest, Vec<ColumnReference>), String> {
         let metadata = connection.metadata();
 
         let declares_joins = metadata
@@ -435,6 +592,24 @@ impl DbFluxServer {
             .collect();
 
         let spec = build_spec(request, &source, &join_tables, connection.dialect())?;
+
+        let declares_ilike = metadata
+            .query
+            .as_ref()
+            .is_some_and(|query| query.where_operators.contains(&WhereOperator::ILike));
+
+        if !declares_ilike
+            && spec
+                .filter
+                .as_ref()
+                .is_some_and(|filter| uses_comparator(filter, Comparator::ILike))
+        {
+            return Err(
+                "$ilike is not supported with joins on this connection, because its driver does \
+                 not declare case-insensitive matching. Use $like instead"
+                    .to_string(),
+            );
+        }
 
         let select = generator
             .generate_select(&spec)
@@ -461,9 +636,11 @@ impl DbFluxServer {
             );
         }
 
-        Ok(query_request
+        let query_request = query_request
             .with_database(request.database.map(str::to_string))
-            .with_confirmed_ceiling(ExecutionClassification::Read))
+            .with_confirmed_ceiling(ExecutionClassification::Read);
+
+        Ok((query_request, spec_column_references(&spec)))
     }
 }
 
@@ -471,7 +648,11 @@ impl DbFluxServer {
 mod tests {
     use super::*;
 
-    use dbflux_core::{DefaultSqlDialect, QueryGenerator, parse_semantic_filter_json};
+    use dbflux_core::{
+        DbDriver, DbError, DbKind, DefaultSqlDialect, DriverMetadata, GeneratedQuery,
+        MutationCategory, MutationRequest, QueryCapabilities, QueryGenError, QueryGenerator,
+        QueryHandle, SchemaLoadingStrategy, SchemaSnapshot, parse_semantic_filter_json,
+    };
 
     fn join(join_type: &str, table: &str, alias: Option<&str>, on: &str) -> JoinSpec {
         JoinSpec {
@@ -671,5 +852,232 @@ mod tests {
         duplicated.columns = Some(&columns);
         let error = sql_for(&duplicated).expect_err("the column is listed twice");
         assert!(error.contains("listed more than once"), "{error}");
+    }
+
+    #[test]
+    fn an_unknown_sort_direction_is_rejected() {
+        let joins = [join("inner", "orders", None, "users.id = orders.user_id")];
+
+        for direction in ["DESC", "Asc"] {
+            let order_by = [OrderByItem {
+                column: "orders.total".to_string(),
+                direction: Some(direction.to_string()),
+            }];
+            let mut sorted = request(&joins);
+            sorted.order_by = Some(&order_by);
+
+            assert!(sql_for(&sorted).is_ok(), "{direction} is a direction");
+        }
+
+        let order_by = [OrderByItem {
+            column: "orders.total".to_string(),
+            direction: Some("descending".to_string()),
+        }];
+        let mut sorted = request(&joins);
+        sorted.order_by = Some(&order_by);
+
+        let error = sql_for(&sorted).expect_err("'descending' is not a direction");
+        assert!(
+            error.contains("Unsupported order_by direction 'descending'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_suffix_never_takes_the_name_of_another_column() {
+        let columns = |names: &[&str]| -> Vec<ColumnMeta> {
+            names
+                .iter()
+                .map(|name| ColumnMeta {
+                    name: name.to_string(),
+                    type_name: "text".to_string(),
+                    kind: dbflux_core::ColumnKind::Text,
+                    nullable: true,
+                    is_primary_key: false,
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            unique_column_names(&columns(&["id", "id_2", "id"])),
+            ["id", "id_2", "id_3"]
+        );
+        assert_eq!(
+            unique_column_names(&columns(&["id", "id", "id_2", "id_2"])),
+            ["id", "id_3", "id_2", "id_2_2"]
+        );
+        assert_eq!(
+            unique_column_names(&columns(&["id", "name", "id"])),
+            ["id", "name", "id_2"]
+        );
+    }
+
+    #[test]
+    fn database_names_that_can_break_quoting_are_rejected() {
+        for accepted in ["analytics", "my-db", "sales.2024", "Sales Q1"] {
+            assert!(
+                require_safe_database_name(accepted).is_ok(),
+                "{accepted} is a database name"
+            );
+        }
+
+        for rejected in [
+            "", "a`b", "a\"b", "a'b", "a[b", "a]b", "a\\b", "a;b", "a\nb", "a\0b",
+        ] {
+            assert!(
+                require_safe_database_name(rejected).is_err(),
+                "{rejected:?} must be rejected"
+            );
+        }
+    }
+
+    /// A connection that declares join support and whose generator returns
+    /// `select_sql` for every SELECT spec, or nothing.
+    struct GeneratorConnection {
+        metadata: DriverMetadata,
+        generator: FixedSelectGenerator,
+    }
+
+    struct FixedSelectGenerator {
+        select_sql: Option<&'static str>,
+    }
+
+    impl QueryGenerator for FixedSelectGenerator {
+        fn supported_categories(&self) -> &'static [MutationCategory] {
+            &[]
+        }
+
+        fn generate_mutation(&self, _mutation: &MutationRequest) -> Option<GeneratedQuery> {
+            None
+        }
+
+        fn generate_select(
+            &self,
+            _spec: &VisualQuerySpec,
+        ) -> Result<Option<dbflux_core::SelectQuery>, QueryGenError> {
+            Ok(self.select_sql.map(|sql| dbflux_core::SelectQuery {
+                sql: sql.to_string(),
+                params: Vec::new(),
+            }))
+        }
+    }
+
+    impl Connection for GeneratorConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _request: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::query_failed("planning never executes"))
+        }
+
+        fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::ConnectionPerDatabase
+        }
+
+        fn dialect(&self) -> &dyn SqlDialect {
+            &DefaultSqlDialect
+        }
+
+        fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+            Some(&self.generator)
+        }
+    }
+
+    fn generator_connection(
+        select_sql: Option<&'static str>,
+        where_operators: Vec<WhereOperator>,
+    ) -> Arc<dyn Connection> {
+        let mut metadata =
+            DbDriver::metadata(&dbflux_test_support::FakeDriver::new(DbKind::Postgres)).clone();
+        metadata.query = Some(QueryCapabilities {
+            supports_joins: true,
+            where_operators,
+            ..QueryCapabilities::default()
+        });
+
+        Arc::new(GeneratorConnection {
+            metadata,
+            generator: FixedSelectGenerator { select_sql },
+        })
+    }
+
+    fn plan(
+        connection: &Arc<dyn Connection>,
+        filter: Option<serde_json::Value>,
+    ) -> Result<String, String> {
+        let joins = [join("inner", "orders", None, "users.id = orders.user_id")];
+        let filter = filter
+            .and_then(|filter| parse_semantic_filter_json(&filter).expect("the filter parses"));
+
+        let mut joined = request(&joins);
+        joined.filter = filter.as_ref();
+
+        DbFluxServer::plan_joined_select(connection, &joined)
+            .map(|(query_request, _)| query_request.sql)
+    }
+
+    #[test]
+    fn a_generated_query_that_is_not_a_read_is_refused() {
+        let connection = generator_connection(
+            Some("DELETE FROM \"users\""),
+            QueryCapabilities::default().where_operators,
+        );
+
+        let error = plan(&connection, None).expect_err("a DELETE is not a read");
+        assert!(error.contains("not a read-only query"), "{error}");
+
+        let reading = generator_connection(
+            Some("SELECT 1"),
+            QueryCapabilities::default().where_operators,
+        );
+        assert_eq!(plan(&reading, None).as_deref(), Ok("SELECT 1"));
+    }
+
+    #[test]
+    fn a_generator_without_select_support_gets_the_unsupported_error() {
+        let connection = generator_connection(None, QueryCapabilities::default().where_operators);
+
+        assert_eq!(plan(&connection, None), Err(JOINS_UNSUPPORTED.to_string()));
+    }
+
+    #[test]
+    fn ilike_needs_the_driver_to_declare_it() {
+        let filter = serde_json::json!({ "orders.status": { "$ilike": "open%" } });
+
+        let without = generator_connection(
+            Some("SELECT 1"),
+            QueryCapabilities::default().where_operators,
+        );
+        let error = plan(&without, Some(filter.clone())).expect_err("$ilike is not declared");
+        assert!(
+            error.contains("$ilike is not supported with joins"),
+            "{error}"
+        );
+
+        let mut operators = QueryCapabilities::default().where_operators;
+        operators.push(WhereOperator::ILike);
+        let with = generator_connection(Some("SELECT 1"), operators);
+        assert!(plan(&with, Some(filter)).is_ok());
     }
 }

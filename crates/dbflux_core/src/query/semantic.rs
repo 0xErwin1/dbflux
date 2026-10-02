@@ -500,7 +500,9 @@ pub type ColumnResolver<'a> = dyn Fn(&ColumnRef) -> Result<(String, String), Str
 /// `resolve_column` maps each column reference to the `(table alias, column)`
 /// pair the generator quotes. The conversion is exact: an operator, field
 /// shape or value the filter tree cannot express is an error that names it,
-/// never an approximation.
+/// never an approximation. That includes a number at or beyond 2^63 in
+/// magnitude, which JSON parsing has already turned into a possibly rounded
+/// float.
 pub fn semantic_filter_to_filter_node(
     filter: &SemanticFilter,
     resolve_column: &ColumnResolver<'_>,
@@ -619,11 +621,21 @@ fn literal_list(predicate: &SemanticPredicate) -> Result<PredicateValue, String>
         .map(PredicateValue::List)
 }
 
+/// Magnitude from which a JSON number has no exact `i64` and was parsed as a
+/// float, possibly rounded: 2^63.
+const OUT_OF_INTEGER_RANGE: f64 = 9_223_372_036_854_775_808.0;
+
 fn literal_from_value(value: &Value) -> Result<LiteralValue, String> {
     match value {
         Value::Null => Ok(LiteralValue::Null),
         Value::Bool(value) => Ok(LiteralValue::Bool(*value)),
         Value::Int(value) => Ok(LiteralValue::Integer(*value)),
+        Value::Float(value) if *value >= OUT_OF_INTEGER_RANGE || *value < -OUT_OF_INTEGER_RANGE => {
+            Err(format!(
+                "the number {value} is outside the 64-bit integer range and cannot be compared \
+                 exactly here"
+            ))
+        }
         Value::Float(value) => Ok(LiteralValue::Float(*value)),
         Value::Text(value) => Ok(LiteralValue::Text(value.clone())),
         Value::Array(_) => Err("an array value is not supported here".to_string()),
@@ -1064,6 +1076,41 @@ mod tests {
             value,
             node_id: 0,
         })
+    }
+
+    #[test]
+    fn filter_node_conversion_rejects_integers_beyond_the_64_bit_range() {
+        for json in [
+            serde_json::json!({ "id": 9_223_372_036_854_775_808_u64 }),
+            serde_json::json!({ "id": { "$in": [1, 18_446_744_073_709_551_615_u64] } }),
+            serde_json::json!({ "id": { "$gt": -1.0e19 } }),
+        ] {
+            let error = to_filter_node(json.clone()).expect_err("the value is approximated");
+
+            assert!(error.contains("64-bit integer range"), "{json}: {error}");
+        }
+
+        for (json, expected) in [
+            (
+                serde_json::json!({ "id": i64::MAX }),
+                LiteralValue::Integer(i64::MAX),
+            ),
+            (
+                serde_json::json!({ "id": i64::MIN }),
+                LiteralValue::Integer(i64::MIN),
+            ),
+            (serde_json::json!({ "id": 1.5 }), LiteralValue::Float(1.5)),
+        ] {
+            assert_eq!(
+                to_filter_node(json).expect("the value is exact"),
+                predicate(
+                    "users",
+                    "id",
+                    Comparator::Eq,
+                    PredicateValue::Single(expected)
+                )
+            );
+        }
     }
 
     #[test]

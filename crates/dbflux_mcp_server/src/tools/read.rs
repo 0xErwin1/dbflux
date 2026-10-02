@@ -24,8 +24,8 @@ use crate::{
     server::DbFluxServer,
     state::ServerState,
     tools::{
-        join_select::JoinedSelect,
-        not_found::{self, CallFailure, FailedCall},
+        join_select::{self, JoinedSelect},
+        not_found::{self, CallFailure, ColumnCheck, ColumnReference, FailedCall},
     },
 };
 
@@ -45,7 +45,9 @@ pub struct JoinSpec {
     )]
     pub r#type: String,
 
-    #[schemars(description = "Table to join: a plain name, optionally schema.table")]
+    #[schemars(
+        description = "Table to join: a plain name, or schema.table on connections that qualify table names with a schema"
+    )]
     pub table: String,
 
     #[schemars(
@@ -105,8 +107,9 @@ pub struct SelectDataParams {
                        With joins, write a column of a joined table as qualifier.column in columns, where and order_by; \
                        a bare name is a column of the main table. Table, alias and column names must be plain identifiers. \
                        Result columns are named as written in columns. Without columns every column of every table is \
-                       returned and a repeated name gets a suffix (id, id_2). \
-                       where accepts $eq $ne $gt $gte $lt $lte $in $like $ilike $exists, null, $and and $or"
+                       returned and a repeated name gets a numeric suffix no other result column uses (id, id_2). \
+                       where accepts $eq $ne $gt $gte $lt $lte $in $like $exists, null, $and and $or, and $ilike on \
+                       drivers that declare it. order_by direction must be asc or desc"
     )]
     pub joins: Option<Vec<JoinSpec>>,
 
@@ -334,6 +337,14 @@ impl DbFluxServer {
             .transpose()?
             .flatten();
 
+        let joins = joins.filter(|joins| !joins.is_empty());
+
+        if joins.is_some()
+            && let Some(database) = database
+        {
+            join_select::require_safe_database_name(database)?;
+        }
+
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
@@ -346,8 +357,17 @@ impl DbFluxServer {
             Self::get_or_connect(state.clone(), connection_id).await?
         };
 
-        let outcome = match joins.filter(|joins| !joins.is_empty()) {
+        let target = Self::hint_target(&connection, table);
+
+        // The column check covers every column the post-failure hint would
+        // look up, so a checked call does not read the columns a second time.
+        let columns_checked = joins.is_some()
+            || matches!(connection.metadata().category, DatabaseCategory::Relational);
+
+        let outcome = match joins {
             Some(joins) => Self::select_data_joined(
+                &state,
+                connection_id,
                 &connection,
                 JoinedSelect {
                     table,
@@ -362,19 +382,32 @@ impl DbFluxServer {
             )
             .await
             .map(|(value, sql)| (value, Some(sql))),
-            None => Self::select_data_single_source(
-                &connection,
-                table,
-                columns,
-                filter,
-                semantic_filter.as_ref(),
-                order_by,
-                limit,
-                offset,
-                database,
-            )
-            .await
-            .map(|value| (value, None)),
+            None => {
+                let check = ColumnCheck {
+                    state: &state,
+                    connection_id,
+                    connection: &connection,
+                    database,
+                    references: if columns_checked {
+                        Self::checked_columns(semantic_filter.as_ref(), order_by, columns, &target)
+                    } else {
+                        Vec::new()
+                    },
+                };
+
+                Self::select_data_single_source(
+                    check,
+                    table,
+                    columns,
+                    filter,
+                    semantic_filter.as_ref(),
+                    order_by,
+                    limit,
+                    offset,
+                )
+                .await
+                .map(|value| (value, None))
+            }
         };
 
         let failure = match outcome {
@@ -382,8 +415,11 @@ impl DbFluxServer {
             Err(failure) => failure,
         };
 
-        let target = Self::hint_target(&connection, table);
-        let referenced = Self::referenced_columns(semantic_filter.as_ref(), order_by, &target, &[]);
+        let referenced = if columns_checked {
+            Vec::new()
+        } else {
+            Self::referenced_columns(semantic_filter.as_ref(), order_by, &target, &[])
+        };
 
         Err(not_found::explain(
             FailedCall {
@@ -399,10 +435,11 @@ impl DbFluxServer {
         .await)
     }
 
-    /// Handles select_data without joins through the driver's browse path.
+    /// Handles select_data without joins through the driver's browse path,
+    /// after the column check of `check` passes.
     #[allow(clippy::too_many_arguments)]
     async fn select_data_single_source(
-        connection: &Arc<dyn Connection>,
+        check: ColumnCheck<'_>,
         table: &str,
         columns: Option<&[String]>,
         filter: Option<&serde_json::Value>,
@@ -410,8 +447,12 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-        database: Option<&str>,
     ) -> Result<serde_json::Value, CallFailure> {
+        let connection = check.connection;
+        let database = check.database;
+
+        not_found::check_columns(check).await?;
+
         match connection.metadata().category {
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 Self::select_data_document(
@@ -479,6 +520,34 @@ impl DbFluxServer {
             .into_iter()
             .chain(sorted)
             .filter(|column| !excluded.contains(column))
+            .collect()
+    }
+
+    /// Columns of `target` a call without joins names in `where`, `order_by`
+    /// and `columns`, for the column check. Nested paths, expressions and
+    /// names qualified with another table are left out.
+    fn checked_columns(
+        semantic_filter: Option<&SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        columns: Option<&[String]>,
+        target: &TableRef,
+    ) -> Vec<ColumnReference> {
+        let projected = columns
+            .unwrap_or_default()
+            .iter()
+            .filter(|column| not_found::is_plain_identifier(column))
+            .filter_map(|column| {
+                not_found::column_of_table(&ColumnRef::from_qualified(column), target)
+            });
+
+        Self::referenced_columns(semantic_filter, order_by, target, &[])
+            .into_iter()
+            .chain(projected)
+            .filter(|column| not_found::is_checkable_column(column))
+            .map(|column| ColumnReference {
+                table: target.clone(),
+                column,
+            })
             .collect()
     }
 
