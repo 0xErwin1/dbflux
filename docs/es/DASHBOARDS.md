@@ -223,6 +223,17 @@ Inspectors**.
   operaciones actuales de MongoDB, la client list de Redis), refrescados en el
   intervalo compartido.
 
+Los charts de instancias en vivo solo acumulan lo que observan durante la
+sesión actual del chart: un buffer en memoria acotado con las últimas 120
+muestras, que nunca se persiste ni se rellena hacia atrás. El rango temporal
+seleccionado gobierna el eje temporal mostrado y filtra las muestras que
+existen — los rangos relativos avanzan en cada refresh, mientras que un rango
+personalizado aplicado permanece fijo. Un tramo vacío en la parte temprana de
+los siete días significa que aún no se recolectaron muestras, no que existan
+datos históricos, y **Refresh** trae la muestra actual en lugar de reconstruir
+el pasado; al guardar un overview editable se guardan el layout y la
+configuración de los charts, no el historial de métricas recolectado.
+
 ### Abrir el Instance Overview
 
 La sidebar muestra una única hoja **Instance Overview** bajo un perfil conectado
