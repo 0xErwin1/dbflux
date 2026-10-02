@@ -153,6 +153,8 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Auditoría       | `get_audit_entry`         | read                                   | Obtiene una entrada específica del audit log por ID                                                                  |
 | Auditoría       | `export_audit_logs`       | read                                   | Descarga entradas del audit log como CSV o JSON                                                                      |
 
+Cuando el driver hace fallar una llamada a `select_data`, `count_records`, `aggregate_data` o `describe_object` y la tabla o colección no figura en los metadatos de esquema de la base de datos o del esquema consultado, el error indica dónde se buscó el nombre y lista los nombres listados más parecidos. Dice "is not listed" (no figura), porque la tabla puede no existir o la conexión puede no tener acceso a ella. Si la llamada no pasó `database` y el servidor lista más de una base de datos, el error agrega que la tabla puede estar en otra. Para tablas, no para colecciones, las tres tools de lectura hacen lo mismo con una columna nombrada en `where` u `order_by`, y `select_data` con una columna nombrada en `columns`. Una sugerencia solo incluye los nombres que el cliente tiene permitido listar: los nombres de tablas requieren `list_tables`, los de columnas requieren `describe_object` y los datos de bases de datos requieren `list_databases`. El texto de error del driver se conserva al final. La búsqueda solo se ejecuta después de que el driver hace fallar la llamada, y los drivers que no exponen estos metadatos devuelven el error original.
+
 Tools diferidas (rechazadas explícitamente en tiempo de solicitud en v1):
 
 - `estimate_query_cost`

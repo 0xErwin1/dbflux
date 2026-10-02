@@ -42,6 +42,10 @@ const READ_ONLY_ROLE: &str = "builtin/read-only";
 /// A custom role whose policy allows every class without approval: the
 /// explicit opt-in a user makes with "Allow all without approval".
 const ALLOW_ALL_ROLE: &str = "e2e/allow-all";
+/// Custom roles that allow `select_data` and `count_records` and, for the
+/// second one, `list_tables` as well.
+const READ_TOOLS_ONLY_ROLE: &str = "e2e/read-tools-only";
+const READ_AND_LIST_TABLES_ROLE: &str = "e2e/read-and-list-tables";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -301,6 +305,30 @@ fn build_runtime(connection_id: Option<&str>, role: &str) -> McpRuntime {
             policy_ids: vec![ALLOW_ALL_ROLE.to_string()],
         })
         .expect("register the allow-all role");
+
+    let narrow_roles = [
+        (READ_TOOLS_ONLY_ROLE, vec!["select_data", "count_records"]),
+        (
+            READ_AND_LIST_TABLES_ROLE,
+            vec!["select_data", "count_records", "list_tables"],
+        ),
+    ];
+    for (narrow_role, tools) in narrow_roles {
+        runtime
+            .upsert_policy_mut(ToolPolicyDto {
+                id: narrow_role.to_string(),
+                allowed_tools: tools.into_iter().map(str::to_string).collect(),
+                allowed_classes: vec!["metadata".to_string(), "read".to_string()],
+                approval_classes: Vec::new(),
+            })
+            .expect("register a narrow policy");
+        runtime
+            .upsert_role_mut(PolicyRoleDto {
+                id: narrow_role.to_string(),
+                policy_ids: vec![narrow_role.to_string()],
+            })
+            .expect("register a narrow role");
+    }
 
     runtime
         .upsert_trusted_client_mut(TrustedClientDto {
@@ -827,4 +855,560 @@ async fn agent_requests_approval_and_cannot_approve_it_itself() {
         )
         .await;
     assert_eq!(counted["count"], json!(1));
+}
+
+// ---------------------------------------------------------------------------
+// Not-found hints
+// ---------------------------------------------------------------------------
+
+const NOT_LISTED_REASON: &str = "It may not exist, or this connection may not have access to it.";
+
+/// Returns the message of a call that must fail as a tool error.
+async fn tool_error(agent: &Agent, tool: &str, arguments: Value) -> String {
+    let error = agent
+        .try_call(tool, arguments)
+        .await
+        .expect_err("the call should fail");
+
+    let rmcp::ServiceError::McpError(error) = error else {
+        panic!("expected an MCP error from '{tool}', got {error}");
+    };
+
+    error.message.to_string()
+}
+
+/// A relational driver for the hint tests. Queries and `describe_table` fail
+/// with a generic query error, `count_table` with a permission error. The
+/// schema lists `public.users` and `public.orders`; `users` has the columns
+/// `id` and `email`, and `orders` reports an empty column list.
+struct HintDriver {
+    inner: dbflux_test_support::FakeDriver,
+}
+
+struct HintConnection {
+    inner: Box<dyn dbflux_core::Connection>,
+}
+
+impl HintDriver {
+    fn with_databases(databases: &[&str]) -> Arc<dyn DbDriver> {
+        use dbflux_core::{DatabaseInfo, DbKind, DbSchemaInfo, RelationalSchema, SchemaSnapshot};
+
+        let tables = ["users", "orders"]
+            .into_iter()
+            .map(|name| hint_table(name, None))
+            .collect();
+
+        let schema = SchemaSnapshot::relational(RelationalSchema {
+            databases: databases
+                .iter()
+                .map(|name| DatabaseInfo {
+                    name: (*name).to_string(),
+                    is_current: *name == "postgres",
+                })
+                .collect(),
+            current_database: Some("postgres".to_string()),
+            schemas: vec![DbSchemaInfo {
+                name: "public".to_string(),
+                tables,
+                views: Vec::new(),
+                custom_types: None,
+            }],
+            tables: Vec::new(),
+            views: Vec::new(),
+        });
+
+        let inner = dbflux_test_support::FakeDriver::new(DbKind::Postgres)
+            .with_schema(schema)
+            .with_default_error("engine says no");
+
+        Arc::new(Self { inner })
+    }
+}
+
+fn hint_table(name: &str, columns: Option<&[&str]>) -> dbflux_core::TableInfo {
+    let columns = columns.map(|names| {
+        names
+            .iter()
+            .map(|column| {
+                json!({
+                    "name": column,
+                    "type_name": "text",
+                    "nullable": true,
+                    "is_primary_key": false,
+                    "default_value": null
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+
+    serde_json::from_value(json!({
+        "name": name,
+        "schema": "public",
+        "columns": columns,
+        "indexes": null
+    }))
+    .expect("build the table metadata")
+}
+
+impl DbDriver for HintDriver {
+    fn kind(&self) -> dbflux_core::DbKind {
+        self.inner.kind()
+    }
+
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        self.inner.metadata()
+    }
+
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        self.inner.driver_key()
+    }
+
+    fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+        self.inner.form_definition()
+    }
+
+    fn build_config(
+        &self,
+        values: &dbflux_core::FormValues,
+    ) -> Result<DbConfig, dbflux_core::DbError> {
+        self.inner.build_config(values)
+    }
+
+    fn extract_values(&self, config: &DbConfig) -> dbflux_core::FormValues {
+        self.inner.extract_values(config)
+    }
+
+    fn connect_with_secrets(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&dbflux_core::secrecy::SecretString>,
+        ssh_secret: Option<&dbflux_core::secrecy::SecretString>,
+    ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+        let inner = self
+            .inner
+            .connect_with_secrets(profile, password, ssh_secret)?;
+
+        Ok(Box::new(HintConnection { inner }))
+    }
+
+    fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), dbflux_core::DbError> {
+        self.inner.test_connection(profile)
+    }
+}
+
+impl dbflux_core::Connection for HintConnection {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        self.inner.metadata()
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        self.inner.ping()
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        self.inner.close()
+    }
+
+    fn execute(
+        &self,
+        request: &dbflux_core::QueryRequest,
+    ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+        self.inner.execute(request)
+    }
+
+    fn cancel(&self, handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        self.inner.cancel(handle)
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        self.inner.schema()
+    }
+
+    fn list_databases(&self) -> Result<Vec<dbflux_core::DatabaseInfo>, dbflux_core::DbError> {
+        self.inner.list_databases()
+    }
+
+    fn active_database(&self) -> Option<String> {
+        Some("postgres".to_string())
+    }
+
+    fn kind(&self) -> dbflux_core::DbKind {
+        self.inner.kind()
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        self.inner.schema_loading_strategy()
+    }
+
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        self.inner.dialect()
+    }
+
+    fn count_table(
+        &self,
+        _request: &dbflux_core::TableCountRequest,
+    ) -> Result<u64, dbflux_core::DbError> {
+        Err(dbflux_core::DbError::permission_denied("no access"))
+    }
+
+    fn describe_table(
+        &self,
+        _request: &dbflux_core::DescribeRequest,
+    ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+        Err(dbflux_core::DbError::query_failed("engine says no"))
+    }
+
+    fn table_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<dbflux_core::TableInfo, dbflux_core::DbError> {
+        match table {
+            "users" => Ok(hint_table(table, Some(&["id", "email"]))),
+            "orders" => Ok(hint_table(table, Some(&[]))),
+            _ => Err(dbflux_core::DbError::object_not_found(table)),
+        }
+    }
+}
+
+/// Starts an agent with `role` on the hint driver and returns it with the
+/// connection id.
+async fn start_hint_agent(role: &str, databases: &[&str]) -> (Agent, String) {
+    let profile = ConnectionProfile::new("agent-fake", DbConfig::default_postgres());
+    let connection_id = profile.id.to_string();
+    let driver = HintDriver::with_databases(databases);
+    let agent = start_agent(role, Some((driver, profile))).await;
+
+    (agent, connection_id)
+}
+
+#[tokio::test]
+async fn unlisted_table_gets_a_suggestion_from_every_read_tool() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, false).await;
+
+    let calls = [
+        (
+            "select_data",
+            json!({ "connection_id": connection_id, "table": "itms" }),
+        ),
+        (
+            "count_records",
+            json!({ "connection_id": connection_id, "table": "itms" }),
+        ),
+        (
+            "aggregate_data",
+            json!({
+                "connection_id": connection_id,
+                "table": "itms",
+                "group_by": [],
+                "aggregations": [{ "function": "count", "column": "*", "alias": "total" }]
+            }),
+        ),
+    ];
+
+    for (tool, arguments) in calls {
+        let message = tool_error(&agent, tool, arguments).await;
+
+        assert!(
+            message.starts_with(&format!(
+                "Table 'itms' is not listed in database 'main'. {NOT_LISTED_REASON}\n\
+                 Did you mean: items?\n\nOriginal error: "
+            )),
+            "{tool} should say where the table was looked up, got: {message}"
+        );
+        assert!(
+            message.contains("no such table"),
+            "{tool} should keep the driver error, got: {message}"
+        );
+        assert!(
+            !message.contains("another database"),
+            "SQLite lists no other database, got: {message}"
+        );
+    }
+
+    let qualified = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "other.itms" }),
+    )
+    .await;
+    assert!(
+        qualified.starts_with("Select error: "),
+        "a qualifier that is not a known database keeps the driver error, got: {qualified}"
+    );
+}
+
+#[tokio::test]
+async fn misspelled_column_gets_a_suggestion() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, false).await;
+
+    let correct = agent
+        .call_json(
+            "select_data",
+            json!({ "connection_id": connection_id, "table": "items", "columns": ["label"] }),
+        )
+        .await;
+    assert_eq!(correct["columns"], json!(["label"]));
+    assert_eq!(correct["row_count"], json!(2));
+
+    let projected = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "items", "columns": ["id", "labl"] }),
+    )
+    .await;
+    assert_eq!(
+        projected,
+        "Select error: column 'labl' not found in result set. Did you mean: label? \
+         Available columns: id, label"
+    );
+
+    // SQLite reads an unknown double-quoted identifier as a string literal, so
+    // a misspelled column alone does not fail. `$regex` renders an operator
+    // SQLite rejects, so the call fails, which is when the hint is added.
+    let expected = "Column 'labl' is not listed among the columns of table 'items'.\n\
+                    Did you mean: label?\n\
+                    Available columns: id, label\n\nOriginal error: ";
+
+    let filtered = tool_error(
+        &agent,
+        "select_data",
+        json!({
+            "connection_id": connection_id,
+            "table": "items",
+            "where": { "labl": { "$regex": "^a" } }
+        }),
+    )
+    .await;
+    assert!(filtered.starts_with(expected), "got: {filtered}");
+
+    let sorted = tool_error(
+        &agent,
+        "select_data",
+        json!({
+            "connection_id": connection_id,
+            "table": "items",
+            "where": { "label": { "$regex": "^a" } },
+            "order_by": [{ "column": "labl", "direction": "desc" }]
+        }),
+    )
+    .await;
+    assert!(sorted.starts_with(expected), "got: {sorted}");
+
+    let counted = tool_error(
+        &agent,
+        "count_records",
+        json!({
+            "connection_id": connection_id,
+            "table": "items",
+            "where": { "labl": { "$regex": "^a" } }
+        }),
+    )
+    .await;
+    assert!(counted.starts_with(expected), "got: {counted}");
+}
+
+#[tokio::test]
+async fn failure_on_an_existing_table_with_valid_columns_keeps_the_original_error() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, false).await;
+
+    let message = tool_error(
+        &agent,
+        "select_data",
+        json!({
+            "connection_id": connection_id,
+            "table": "items",
+            "where": { "label": { "$regex": "^a" } }
+        }),
+    )
+    .await;
+
+    assert!(message.starts_with("Select error: "), "got: {message}");
+    assert!(!message.contains("not listed"), "got: {message}");
+    assert!(!message.contains("Did you mean"), "got: {message}");
+}
+
+#[tokio::test]
+async fn another_database_note_needs_several_databases_and_no_database_argument() {
+    let (agent, connection_id) = start_hint_agent(ALLOW_ALL_ROLE, &["postgres", "analytics"]).await;
+
+    let without_database = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "usres" }),
+    )
+    .await;
+    assert_eq!(
+        without_database,
+        format!(
+            "Table 'usres' is not listed in schema 'public' of database 'postgres'. \
+             {NOT_LISTED_REASON}\n\
+             Did you mean: users?\n\
+             This call did not pass `database`, so the table may be in another database. \
+             Pass `database` to select one (`list_databases` lists them).\n\n\
+             Original error: Select error: engine says no"
+        )
+    );
+
+    let with_database = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "usres", "database": "postgres" }),
+    )
+    .await;
+    assert!(
+        with_database.contains("Did you mean: users?"),
+        "got: {with_database}"
+    );
+    assert!(
+        !with_database.contains("another database"),
+        "the call chose its database, got: {with_database}"
+    );
+
+    let described = tool_error(
+        &agent,
+        "describe_object",
+        json!({ "connection_id": connection_id, "name": "ordrs" }),
+    )
+    .await;
+    assert!(
+        described.starts_with(&format!(
+            "Table 'ordrs' is not listed in schema 'public' of database 'postgres'. \
+             {NOT_LISTED_REASON}\nDid you mean: orders?\n"
+        )),
+        "describe_object looks in the default schema only, got: {described}"
+    );
+}
+
+#[tokio::test]
+async fn another_database_note_is_absent_with_a_single_database() {
+    let (agent, connection_id) = start_hint_agent(ALLOW_ALL_ROLE, &["postgres"]).await;
+
+    let message = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "usres" }),
+    )
+    .await;
+
+    assert!(message.contains("Did you mean: users?"), "got: {message}");
+    assert!(!message.contains("another database"), "got: {message}");
+}
+
+#[tokio::test]
+async fn hint_is_skipped_when_the_metadata_cannot_settle_the_failure() {
+    let (agent, connection_id) = start_hint_agent(ALLOW_ALL_ROLE, &["postgres", "analytics"]).await;
+    let original = "Select error: engine says no";
+
+    let cases = [
+        ("an existing table", json!({ "table": "users" })),
+        (
+            "a qualifier that is not a schema of the database",
+            json!({ "table": "nope.usres" }),
+        ),
+        (
+            "an order_by expression",
+            json!({ "table": "users", "order_by": [{ "column": "lower(emial)" }] }),
+        ),
+        (
+            "a table with an empty column list",
+            json!({ "table": "orders", "where": { "totl": 1 } }),
+        ),
+    ];
+
+    for (case, mut arguments) in cases {
+        arguments["connection_id"] = json!(connection_id);
+
+        let message = tool_error(&agent, "select_data", arguments).await;
+
+        assert_eq!(message, original, "{case} keeps the driver error");
+    }
+
+    let denied = tool_error(
+        &agent,
+        "count_records",
+        json!({ "connection_id": connection_id, "table": "usres" }),
+    )
+    .await;
+    assert_eq!(
+        denied, "Count error: Permission denied: no access",
+        "a permission error is never turned into a not-listed hint"
+    );
+
+    let column = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "users", "where": { "emial": "a" } }),
+    )
+    .await;
+    assert_eq!(
+        column,
+        format!(
+            "Column 'emial' is not listed among the columns of table 'users'.\n\
+             Did you mean: email?\n\
+             Available columns: id, email\n\n\
+             Original error: {original}"
+        )
+    );
+}
+
+#[tokio::test]
+async fn hint_only_includes_what_the_client_may_list() {
+    let original = "Select error: engine says no";
+    let unlisted_table = json!({ "table": "usres" });
+    let misspelled_column = json!({ "table": "users", "where": { "emial": "a" } });
+
+    let (read_only, connection_id) =
+        start_hint_agent(READ_TOOLS_ONLY_ROLE, &["postgres", "analytics"]).await;
+
+    for mut arguments in [unlisted_table.clone(), misspelled_column.clone()] {
+        arguments["connection_id"] = json!(connection_id);
+
+        let message = tool_error(&read_only, "select_data", arguments).await;
+
+        assert_eq!(
+            message, original,
+            "a client that may not list tables or describe objects gets no names"
+        );
+    }
+
+    let (with_tables, connection_id) =
+        start_hint_agent(READ_AND_LIST_TABLES_ROLE, &["postgres", "analytics"]).await;
+
+    let mut arguments = unlisted_table;
+    arguments["connection_id"] = json!(connection_id);
+    let message = tool_error(&with_tables, "select_data", arguments).await;
+    assert_eq!(
+        message,
+        format!(
+            "Table 'usres' is not listed in schema 'public'. {NOT_LISTED_REASON}\n\
+             Did you mean: users?\n\n\
+             Original error: {original}"
+        ),
+        "list_tables allows the table names, and nothing about databases"
+    );
+
+    let mut arguments = misspelled_column;
+    arguments["connection_id"] = json!(connection_id);
+    let message = tool_error(&with_tables, "select_data", arguments).await;
+    assert_eq!(
+        message, original,
+        "column names need describe_object, which this client may not call"
+    );
 }

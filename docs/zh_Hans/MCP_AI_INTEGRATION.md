@@ -128,6 +128,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 审计 | `get_audit_entry` | read | 按 ID 获取单条审计日志 |
 | 审计 | `export_audit_logs` | read | 以 CSV 或 JSON 下载审计日志条目 |
 
+当驱动使 `select_data`、`count_records`、`aggregate_data` 或 `describe_object` 调用失败，且所查询的数据库或 schema 的元数据中没有列出该表或集合时，错误信息会说明在哪里查找了这个名称，并列出最接近的已列出名称。错误信息的措辞是 "is not listed"（未列出），因为该表可能不存在，也可能是该连接无权访问它。如果调用没有传入 `database`，而服务器列出了多个数据库，错误信息还会提示该表可能位于另一个数据库中。对于表（不包括集合），三个读取工具对 `where` 或 `order_by` 中引用的列做同样的处理，`select_data` 对 `columns` 中引用的列也是如此。提示只包含客户端有权列出的名称：表名需要 `list_tables`，列名需要 `describe_object`，数据库信息需要 `list_databases`。驱动自身的错误文本保留在末尾。只有在驱动使调用失败之后才会执行这项查找，不提供这些元数据的驱动会返回原始错误。
+
 暂缓提供的工具（在 v1 中会在请求时明确拒绝）：
 
 - `estimate_query_cost`

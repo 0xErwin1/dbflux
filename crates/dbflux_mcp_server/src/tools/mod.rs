@@ -14,6 +14,7 @@ pub mod audit;
 pub mod connection;
 pub mod ddl;
 pub mod destructive;
+pub(crate) mod not_found;
 pub mod query;
 pub mod read;
 pub mod schema;

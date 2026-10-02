@@ -10,8 +10,8 @@ use std::sync::Arc;
 use dbflux_core::{
     AggregateFunction, AggregateRequest, AggregateSpec as CoreAggregateSpec,
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, Connection,
-    DatabaseCategory, OrderByColumn, Pagination, QueryResult, SemanticRequest, SortDirection,
-    TableBrowseRequest, TableCountRequest, TableRef, parse_semantic_filter_json,
+    DatabaseCategory, OrderByColumn, Pagination, QueryResult, SemanticFilter, SemanticRequest,
+    SortDirection, TableBrowseRequest, TableCountRequest, TableRef, parse_semantic_filter_json,
 };
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
@@ -23,6 +23,7 @@ use crate::{
     helper::{IntoErrorData, serialize_query_result, to_json_content},
     server::DbFluxServer,
     state::ServerState,
+    tools::not_found::{self, CallFailure, FailedCall},
 };
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -322,15 +323,15 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
-        match connection.metadata().category {
+        let outcome = match connection.metadata().category {
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 Self::select_data_document(
                     &connection,
@@ -364,7 +365,61 @@ impl DbFluxServer {
                 )
                 .await
             }
+        };
+
+        let failure = match outcome {
+            Ok(value) => return Ok(value),
+            Err(failure) => failure,
+        };
+
+        let target = Self::hint_target(&connection, table);
+        let referenced = Self::referenced_columns(semantic_filter.as_ref(), order_by, &target, &[]);
+
+        Err(not_found::explain(
+            FailedCall {
+                state: &state,
+                connection_id,
+                connection: &connection,
+                target: &target,
+                database,
+                columns: referenced,
+            },
+            failure,
+        )
+        .await)
+    }
+
+    /// The table or collection a failed call targeted, as the not-found hint
+    /// looks it up. Collection names are taken whole, because they may
+    /// contain dots.
+    fn hint_target(connection: &Arc<dyn Connection>, table: &str) -> TableRef {
+        match connection.metadata().category {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => TableRef::new(table),
+            _ => Self::table_ref_for_connection(connection, table),
         }
+    }
+
+    /// Column names of `target` that a call referenced in its filter and sort,
+    /// leaving out the names in `excluded` (aggregate aliases).
+    fn referenced_columns(
+        semantic_filter: Option<&SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        target: &TableRef,
+        excluded: &[String],
+    ) -> Vec<String> {
+        let sorted = order_by
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| not_found::is_plain_identifier(&item.column))
+            .filter_map(|item| {
+                not_found::column_of_table(&ColumnRef::from_qualified(&item.column), target)
+            });
+
+        not_found::filter_columns(semantic_filter, target)
+            .into_iter()
+            .chain(sorted)
+            .filter(|column| !excluded.contains(column))
+            .collect()
     }
 
     /// Handle select_data for document databases (MongoDB, DynamoDB)
@@ -376,7 +431,7 @@ impl DbFluxServer {
         semantic_filter: Option<&dbflux_core::SemanticFilter>,
         limit: u32,
         offset: u32,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, CallFailure> {
         // For document databases, database parameter is required
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let db_name = database.ok_or_else(|| {
@@ -405,7 +460,7 @@ impl DbFluxServer {
         let query_result = tokio::task::spawn_blocking(move || conn.browse_collection(&request))
             .await
             .map_err(|e| format!("Blocking task failed: {}", e))?
-            .map_err(|e| format!("Select error: {}", e))?;
+            .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
 
         Ok(serialize_query_result(&query_result))
     }
@@ -420,7 +475,7 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, CallFailure> {
         let pagination = Pagination::Offset {
             limit,
             offset: offset as u64,
@@ -441,7 +496,7 @@ impl DbFluxServer {
         let query_result = tokio::task::spawn_blocking(move || conn.browse_table(&request))
             .await
             .map_err(|e| format!("Blocking task failed: {}", e))?
-            .map_err(|e| format!("Select error: {}", e))?;
+            .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
 
         log::debug!(
             "select_data_table: query completed, serializing {} rows",
@@ -468,15 +523,15 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
-        match connection.metadata().category {
+        let outcome: Result<u64, CallFailure> = match connection.metadata().category {
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 #[allow(clippy::unnecessary_lazy_evaluations)]
                 let db_name = database.ok_or_else(|| {
@@ -496,7 +551,7 @@ impl DbFluxServer {
                 let conn = connection.clone();
                 tokio::task::spawn_blocking(move || {
                     conn.count_collection(&request)
-                        .map_err(|e| format!("Count error: {}", e))
+                        .map_err(|e| CallFailure::from_driver(format!("Count error: {}", e), &e))
                 })
                 .await
                 .map_err(|e| format!("Blocking task failed: {}", e))?
@@ -520,12 +575,33 @@ impl DbFluxServer {
                 let conn = connection.clone();
                 tokio::task::spawn_blocking(move || {
                     conn.count_table(&request)
-                        .map_err(|e| format!("Count error: {}", e))
+                        .map_err(|e| CallFailure::from_driver(format!("Count error: {}", e), &e))
                 })
                 .await
                 .map_err(|e| format!("Blocking task failed: {}", e))?
             }
-        }
+        };
+
+        let failure = match outcome {
+            Ok(count) => return Ok(count),
+            Err(failure) => failure,
+        };
+
+        let target = Self::hint_target(&connection, table);
+        let referenced = Self::referenced_columns(semantic_filter.as_ref(), None, &target, &[]);
+
+        Err(not_found::explain(
+            FailedCall {
+                state: &state,
+                connection_id,
+                connection: &connection,
+                target: &target,
+                database,
+                columns: referenced,
+            },
+            failure,
+        )
+        .await)
     }
 
     fn table_ref_for_connection(connection: &Arc<dyn Connection>, table: &str) -> TableRef {
@@ -580,7 +656,17 @@ impl DbFluxServer {
                 .iter()
                 .position(|meta| meta.name == *column)
                 .ok_or_else(|| {
-                    format!("Select error: column '{}' not found in result set", column)
+                    let available: Vec<&str> = result
+                        .columns
+                        .iter()
+                        .map(|meta| meta.name.as_str())
+                        .collect();
+
+                    not_found::with_column_hints(
+                        format!("Select error: column '{}' not found in result set", column),
+                        column,
+                        &available,
+                    )
                 })?;
             indices.push(index);
         }
@@ -632,12 +718,12 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
         let mut request = AggregateRequest::new(Self::table_ref_for_connection(&connection, table))
@@ -652,6 +738,8 @@ impl DbFluxServer {
             .with_limit(limit)
             .with_target_database(database.map(str::to_string));
 
+        let semantic_filter_for_hint = semantic_filter.clone();
+
         if let Some(filter) = semantic_filter {
             request = request.with_filter(filter);
         }
@@ -661,22 +749,50 @@ impl DbFluxServer {
         }
 
         let semantic_request = SemanticRequest::Aggregate(request);
-        let (result, sql_text) = Self::execute_aggregate_semantic_request(
+        let outcome = Self::execute_aggregate_semantic_request(
             connection.clone(),
             semantic_request,
             database.map(str::to_string),
         )
-        .await?;
+        .await;
 
-        Ok((serialize_query_result(&result), sql_text))
+        match outcome {
+            Ok((result, sql_text)) => Ok((serialize_query_result(&result), sql_text)),
+            Err(failure) => {
+                let target = Self::hint_target(&connection, table);
+                let aliases: Vec<String> = aggregations
+                    .iter()
+                    .map(|aggregation| aggregation.alias.clone())
+                    .collect();
+                let referenced = Self::referenced_columns(
+                    semantic_filter_for_hint.as_ref(),
+                    order_by,
+                    &target,
+                    &aliases,
+                );
+
+                Err(not_found::explain(
+                    FailedCall {
+                        state: &state,
+                        connection_id,
+                        connection: &connection,
+                        target: &target,
+                        database,
+                        columns: referenced,
+                    },
+                    failure,
+                )
+                .await)
+            }
+        }
     }
 
     async fn execute_aggregate_semantic_request(
         connection: Arc<dyn Connection>,
         semantic_request: SemanticRequest,
         target_database: Option<String>,
-    ) -> Result<(QueryResult, Option<String>), String> {
-        tokio::task::spawn_blocking(move || -> Result<_, String> {
+    ) -> Result<(QueryResult, Option<String>), CallFailure> {
+        tokio::task::spawn_blocking(move || -> Result<_, CallFailure> {
             let plan = connection
                 .plan_semantic_request(&semantic_request)
                 .map_err(|e| format!("Aggregate planning error: {}", e))?;
@@ -693,12 +809,12 @@ impl DbFluxServer {
             #[allow(clippy::large_enum_variant)]
             let result = connection
                 .execute(&request)
-                .map_err(|e| format!("Aggregate error: {}", e))?;
+                .map_err(|e| CallFailure::from_driver(format!("Aggregate error: {}", e), &e))?;
 
             Ok((result, sql_text))
         })
         .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?
+        .map_err(|e| CallFailure::from(format!("Blocking task failed: {}", e)))?
     }
 
     fn aggregate_specs(aggregations: &[AggregationSpec]) -> Result<Vec<CoreAggregateSpec>, String> {
@@ -904,7 +1020,8 @@ mod tests {
             None,
         )
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .message;
 
         assert!(error.contains("Aggregate planning error"));
         assert!(error.contains("aggregate semantics are not supported by this driver"));

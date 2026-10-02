@@ -14,6 +14,7 @@ use crate::{
     helper::{IntoErrorData, *},
     server::DbFluxServer,
     state::ServerState,
+    tools::not_found::{self, CallFailure, FailedCall},
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -492,12 +493,12 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
         let table_ref = TableRef {
@@ -505,28 +506,44 @@ impl DbFluxServer {
             name: name.to_string(),
         };
 
-        let request = DescribeRequest::new(table_ref);
+        let request = DescribeRequest::new(table_ref.clone());
         let conn = connection.clone();
-        let connection_id = connection_id.to_string();
-        let database = database.map(str::to_string);
-        let schema = schema.map(str::to_string);
-        let name = name.to_string();
+        let error_connection_id = connection_id.to_string();
+        let error_database = database.map(str::to_string);
+        let error_schema = schema.map(str::to_string);
+        let error_name = name.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             conn.describe_table(&request).map_err(|e| {
-                error_messages::schema_operation_error(
+                let message = error_messages::schema_operation_error(
                     "describe object",
-                    &connection_id,
-                    database.as_deref(),
-                    schema.as_deref(),
-                    Some(&name),
-                    e,
-                )
+                    &error_connection_id,
+                    error_database.as_deref(),
+                    error_schema.as_deref(),
+                    Some(&error_name),
+                    &e,
+                );
+
+                CallFailure::from_driver(message, &e)
             })
         })
         .await
-        .map_err(|e| format!("Blocking task failed: {}", e))??;
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
 
-        Ok(serialize_query_result(&result))
+        match outcome {
+            Ok(result) => Ok(serialize_query_result(&result)),
+            Err(failure) => Err(not_found::explain(
+                FailedCall {
+                    state: &state,
+                    connection_id,
+                    connection: &connection,
+                    target: &table_ref,
+                    database,
+                    columns: Vec::new(),
+                },
+                failure,
+            )
+            .await),
+        }
     }
 }

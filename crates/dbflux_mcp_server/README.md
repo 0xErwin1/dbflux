@@ -625,6 +625,35 @@ See `crates/dbflux_core/src/query/column_ref.rs` for implementation.
 }
 ```
 
+### Not-Found Hints
+
+When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call, the server may add a hint in front of the error. The error stays a plain message, and the driver's own text is kept at the end.
+
+| Case | Added to the error | Needs permission for |
+|------|--------------------|----------------------|
+| Table or collection is not listed in the queried database or schema | Where the name was looked up and up to three close names | `list_tables` |
+| Same, the call did not pass `database`, and the server lists several databases | The database name, and a note that the table may be in another database | `list_databases` |
+| Column in `where` or `order_by` is not a listed column of the table (tables only, not collections) | Up to three close column names, and every column when the table has 20 or fewer | `describe_object` |
+| Column in `columns` is not in the result (`select_data` on tables) | The same column hints, taken from the result the call already read | none |
+
+```text
+Table 'usres' is not listed in schema 'public' of database 'postgres'. It may not exist, or this connection may not have access to it.
+Did you mean: users?
+This call did not pass `database`, so the table may be in another database. Pass `database` to select one (`list_databases` lists them).
+
+Original error: Select error: ...
+```
+
+Rules:
+
+- **Not listed is not the same as missing.** The hint is built from the schema metadata the driver exposes. A table the connection cannot see, or one the metadata does not cover, is also not listed, so the message never says the table does not exist.
+- **A hint only includes names the client may list.** A part is left out when the policy denies its tool to the client on that connection, or sends it to approval. With no part allowed, the original error is returned.
+- **Only some failures are looked up.** The lookup runs for a generic query failure or an explicit object-not-found error from the driver. Connection, authentication, permission, syntax, timeout, cancellation and not-supported errors are returned as they are, and so are errors raised before the driver call, such as an invalid `where`.
+- **One scope.** An unqualified name is looked up in the driver's default schema, and a qualified name in its own schema. If the qualifier is not a schema (or database) the metadata knows, the original error is returned.
+- **No guess without metadata.** The original error is returned when the name is listed (also when it differs only in case), when the scope lists nothing, when the driver exposes no listing or no column metadata, and when an `order_by` entry is an expression.
+
+Names match without regard to case or separators, so `userId` suggests `user_id`.
+
 ## Best Practices for AI Agents
 
 ### Before Querying

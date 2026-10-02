@@ -128,6 +128,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 감사 | `get_audit_entry` | read | ID로 단일 감사 로그 항목을 가져옵니다 |
 | 감사 | `export_audit_logs` | read | 감사 로그 항목을 CSV 또는 JSON으로 내려받습니다 |
 
+드라이버가 `select_data`, `count_records`, `aggregate_data` 또는 `describe_object` 호출을 실패시켰고 조회한 데이터베이스나 스키마의 메타데이터에 해당 테이블이나 컬렉션이 나열되어 있지 않으면, 오류는 이름을 어디에서 찾았는지 알려 주고 나열된 이름 중 가장 비슷한 것을 보여 줍니다. 테이블이 존재하지 않을 수도 있고 연결에 접근 권한이 없을 수도 있으므로, 오류 문구는 "is not listed"(나열되지 않음)입니다. 호출에 `database`를 전달하지 않았고 서버가 둘 이상의 데이터베이스를 나열하면, 오류는 테이블이 다른 데이터베이스에 있을 수 있다는 내용을 덧붙입니다. 컬렉션이 아닌 테이블의 경우, 세 가지 읽기 도구는 `where`나 `order_by`에 지정된 열에 대해서도 같은 방식으로 동작하며, `select_data`는 `columns`에 지정된 열에 대해서도 그렇게 합니다. 힌트에는 클라이언트가 나열할 수 있는 이름만 포함됩니다. 테이블 이름에는 `list_tables`, 열 이름에는 `describe_object`, 데이터베이스 정보에는 `list_databases` 권한이 필요합니다. 드라이버의 원래 오류 텍스트는 끝에 그대로 유지됩니다. 이 조회는 드라이버가 호출을 실패시킨 뒤에만 실행되며, 이 메타데이터를 제공하지 않는 드라이버는 원래 오류를 반환합니다.
+
 보류된 도구 (v1에서는 요청 시점에 명시적으로 거부됨):
 
 - `estimate_query_cost`

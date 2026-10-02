@@ -191,6 +191,7 @@ pub use query::{
     DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
     UnrepresentableClause,
 };
+pub use query::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 
 pub use query::relational_filter::{

@@ -103,6 +103,18 @@ impl SemanticFilter {
     pub fn negate(filter: SemanticFilter) -> Self {
         Self::Not(Box::new(filter))
     }
+
+    /// Returns every field the filter tests, in tree order. A field tested
+    /// more than once appears once per predicate.
+    pub fn field_refs(&self) -> Vec<&SemanticFieldRef> {
+        match self {
+            Self::Predicate(predicate) => vec![&predicate.field],
+            Self::And(filters) | Self::Or(filters) => {
+                filters.iter().flat_map(Self::field_refs).collect()
+            }
+            Self::Not(filter) => filter.field_refs(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -829,6 +841,26 @@ mod tests {
         ]);
 
         assert!(matches!(filter, SemanticFilter::And(children) if children.len() == 2));
+    }
+
+    #[test]
+    fn field_refs_lists_every_tested_field_in_tree_order() {
+        let filter = SemanticFilter::and(vec![
+            SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            SemanticFilter::or(vec![
+                SemanticFilter::null("deleted_at"),
+                SemanticFilter::negate(SemanticFilter::null("email")),
+            ]),
+        ]);
+
+        assert_eq!(
+            filter.field_refs(),
+            [
+                &SemanticFieldRef::named("status"),
+                &SemanticFieldRef::named("deleted_at"),
+                &SemanticFieldRef::named("email"),
+            ]
+        );
     }
 
     #[test]

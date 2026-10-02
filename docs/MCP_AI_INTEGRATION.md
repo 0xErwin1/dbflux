@@ -128,6 +128,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID |
 | Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON |
 
+When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call and the table or collection is not listed in the schema metadata of the database or schema that was queried, the error says where the name was looked up and lists the closest listed names. It reads "is not listed", because the table may not exist or the connection may not have access to it. If the call did not pass `database` and the server lists more than one database, the error adds that the table may be in another one. For tables, not collections, the three read tools do the same for a column named in `where` or `order_by`, and `select_data` for a column named in `columns`. A hint only includes names the client is allowed to list: table names need `list_tables`, column names need `describe_object`, and the database details need `list_databases`. The driver's own error text is kept at the end. The lookup runs only after the driver has failed the call, and drivers that do not expose this metadata return the original error.
+
 Deferred tools (explicitly rejected at request time in v1):
 
 - `estimate_query_cost`
