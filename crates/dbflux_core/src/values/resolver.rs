@@ -54,6 +54,17 @@ impl CompositeValueResolver {
         &self.cache
     }
 
+    /// Synchronously reads the environment variable behind a
+    /// [`ValueRef::Env`] ref.
+    ///
+    /// Shared with the synchronous switch-database path so both consumers use
+    /// the same lookup and the same "Environment variable ... not set" error.
+    pub(crate) fn resolve_env_ref(key: &str) -> Result<String, DbError> {
+        std::env::var(key).map_err(|_| {
+            DbError::value_resolution_failed(format!("Environment variable '{}' not set", key))
+        })
+    }
+
     /// Resolve a single `ValueRef` to a concrete value.
     pub async fn resolve(
         &self,
@@ -66,12 +77,7 @@ impl CompositeValueResolver {
             }
 
             ValueRef::Env { key } => {
-                let value = std::env::var(key).map_err(|_| {
-                    DbError::value_resolution_failed(format!(
-                        "Environment variable '{}' not set",
-                        key
-                    ))
-                })?;
+                let value = Self::resolve_env_ref(key)?;
 
                 Ok(ResolvedValue::new(
                     value,
