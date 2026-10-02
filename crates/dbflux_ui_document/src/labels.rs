@@ -2801,6 +2801,15 @@ pub(crate) fn delimited_open_failed_message(file_name: &str) -> String {
     dbflux_i18n::t!("document.delimited.error.open_failed", name = file_name)
 }
 
+/// Summary of the error reported when a further page of a delimited file
+/// cannot be loaded.
+pub(crate) fn delimited_load_more_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.load_more_failed",
+        name = file_name
+    )
+}
+
 /// Warning shown when decoding a delimited file replaced malformed byte
 /// sequences, with the encoding the file was read in.
 pub(crate) fn delimited_malformed_text_warning(encoding: &str) -> String {

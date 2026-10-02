@@ -234,6 +234,15 @@ impl FakeObjectStore {
         *self.read_failure.lock().expect("the read failure") = Some(message.to_string());
     }
 
+    pub(super) fn stop_failing_reads(&self) {
+        *self.read_failure.lock().expect("the read failure") = None;
+    }
+
+    /// How many range reads the store answered.
+    pub(super) fn range_reads(&self) -> usize {
+        self.range_reads.load(Ordering::SeqCst)
+    }
+
     fn fail_uploads_with(&self, message: &str) {
         *self.upload_failure.lock().expect("the upload failure") = Some(message.to_string());
     }

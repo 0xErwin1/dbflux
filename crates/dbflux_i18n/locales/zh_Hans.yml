@@ -1761,6 +1761,7 @@ document:
     loading: "正在加载 %{name}…"
     error:
       open_failed: "无法打开 %{name}"
+      load_more_failed: "无法加载 %{name} 的更多内容"
     warning:
       malformed_text: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。检测到的编码可能不正确。"
       cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
@@ -1778,6 +1779,9 @@ document:
       tab: 制表符
       semicolon: 分号
       pipe: 竖线
+    footer:
+      load_more: 加载更多
+      loading_more: "正在加载…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"

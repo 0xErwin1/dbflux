@@ -1,22 +1,30 @@
 //! The delimited file tab: a CSV or TSV file, local or in object storage,
-//! shown as a read-only table of its first page.
+//! shown as a read-only table of the pages loaded so far.
 //!
 //! Opening reads the file on the background executor and never on the
 //! foreground: the source is opened, a leading sample decides the dialect, and
 //! the reader returns the first page. The document shows a loading notice
 //! until that arrives and the error when it fails.
+//!
+//! A further page is read on request, also on the background executor. The
+//! reader blocks and needs exclusive access, so it moves into the read and
+//! comes back with the result. While it is away no other page can be asked
+//! for.
 
 use std::fmt;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use dbflux_components::components::data_table::{DataTable, DataTableEvent, DataTableState};
+use dbflux_components::components::data_table::{
+    DataTable, DataTableEvent, DataTableState, ModelSwap,
+};
 use dbflux_core::{Connection, DbError};
 use dbflux_delimited::{
-    ByteSource, Dialect, PagedReader, ReadError, ReaderOptions, RecordCount, SampleCoverage,
+    ByteSource, Dialect, Page, PagedReader, ReadError, ReaderOptions, RecordCount, SampleCoverage,
     SourceError, detect_dialect,
 };
+use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
@@ -42,6 +50,12 @@ pub(super) const PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 /// offset zero.
 const FETCH_WINDOW_BYTES: NonZeroU64 = NonZeroU64::new(1024 * 1024).unwrap();
 
+/// How the document pages and fetches a file.
+pub(super) const READER_OPTIONS: ReaderOptions = ReaderOptions {
+    page_size: PAGE_SIZE,
+    window_size: FETCH_WINDOW_BYTES,
+};
+
 /// A condition of an opened file that the user has to know about and that
 /// does not stop the file from being shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +70,8 @@ pub enum DelimitedWarning {
     CannotSaveInPlace,
 }
 
-/// Why a delimited file could not be opened.
+/// Why a delimited file could not be opened, or a further page of it could
+/// not be read.
 #[derive(Debug)]
 pub(super) enum OpenError {
     /// The file or object could not be reached or read.
@@ -70,7 +85,7 @@ pub(super) enum OpenError {
     /// dialect.
     Read(ReadError),
 
-    /// The first page did not fit the page model.
+    /// The page did not fit the page model.
     PageModel(PageModelError),
 }
 
@@ -126,6 +141,15 @@ pub(super) struct OpenedFile {
     page_model: PageModel,
 }
 
+/// What a background page read hands to the foreground.
+pub(super) struct ReadPage {
+    page: Page,
+
+    /// The reader's count after the read, as [`settled_record_count`] left
+    /// it.
+    record_count: RecordCount,
+}
+
 /// A file whose first page is loaded.
 struct LoadedFile {
     /// The dialect detection resolved when the file was opened.
@@ -135,12 +159,9 @@ struct LoadedFile {
     version: SourceVersion,
 
     /// The reader the first page came from, kept open over the same source
-    /// for the pages that follow it.
-    #[expect(
-        dead_code,
-        reason = "only the first page is read, and nothing asks for a second one"
-    )]
-    reader: PagedReader<DelimitedSource>,
+    /// for the pages that follow it. `None` while a page is being read: the
+    /// background read has it and hands it back with the page.
+    reader: Option<PagedReader<DelimitedSource>>,
 
     page_model: PageModel,
     warnings: Vec<DelimitedWarning>,
@@ -153,6 +174,35 @@ struct LoadedFile {
 
     /// The status line, formatted when the page model changes.
     status_items: Vec<SharedString>,
+}
+
+impl LoadedFile {
+    /// Shows the page model as it is after a page was appended: the table
+    /// gets the rows, and the status line and the warnings are formatted
+    /// again.
+    ///
+    /// The table keeps its column widths, its scroll position, the keyboard
+    /// and the selected cell, because the rows already shown keep their
+    /// indices. It drops pending edits, of which a read-only table has none.
+    fn show_page_model(&mut self, cx: &mut App) {
+        let model = Arc::new(self.page_model.table_model());
+
+        self.table_state.update(cx, |state, cx| {
+            state.set_model(model, ModelSwap::KeepCursor, cx);
+        });
+
+        self.status_items = status_items(&self.dialect, &self.page_model);
+
+        if self.page_model.had_replacements()
+            && !self.warnings.contains(&DelimitedWarning::MalformedText)
+        {
+            let warning = DelimitedWarning::MalformedText;
+
+            self.warnings.insert(0, warning);
+            self.warning_items
+                .insert(0, warning_text(warning, &self.dialect).into());
+        }
+    }
 }
 
 enum DelimitedPhase {
@@ -168,6 +218,15 @@ pub struct DelimitedDocument {
     is_active_tab: bool,
     file: DelimitedFileKey,
     location: DelimitedLocation,
+
+    /// The application state the live connection of an object's profile is
+    /// resolved from for every page. `None` for a local file, which has no
+    /// connection.
+    app_state: Option<Entity<AppStateEntity>>,
+
+    /// The page and window sizes every reader of this file is opened with.
+    reader_options: ReaderOptions,
+
     phase: DelimitedPhase,
 
     /// Set when the first page arrives, so the next render hands the keyboard
@@ -182,19 +241,54 @@ impl EventEmitter<DocumentEvent> for DelimitedDocument {}
 impl DelimitedDocument {
     /// Opens the local file at `path`.
     pub fn open_local(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        Self::open_local_with(path, READER_OPTIONS, cx)
+    }
+
+    /// [`Self::open_local`] with the page and window sizes of
+    /// `reader_options`, which tests make small.
+    pub(super) fn open_local_with(
+        path: PathBuf,
+        reader_options: ReaderOptions,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let file = DelimitedFileKey::Local { path: path.clone() };
         let location = DelimitedLocation::Local { path };
 
-        Self::open(file, location, cx)
+        Self::open(file, location, None, reader_options, cx)
     }
 
     /// Opens the object `key` of `bucket` through `connection`, the live
-    /// connection of the profile `profile_id`.
+    /// connection of the profile `profile_id` in `app_state`. Further pages
+    /// are read through the connection the profile has in `app_state` when
+    /// they are asked for.
     pub fn open_object(
+        app_state: Entity<AppStateEntity>,
         profile_id: uuid::Uuid,
         connection: Arc<dyn Connection>,
         bucket: String,
         key: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::open_object_with(
+            app_state,
+            profile_id,
+            connection,
+            bucket,
+            key,
+            READER_OPTIONS,
+            cx,
+        )
+    }
+
+    /// [`Self::open_object`] with the page and window sizes of
+    /// `reader_options`, which tests make small.
+    pub(super) fn open_object_with(
+        app_state: Entity<AppStateEntity>,
+        profile_id: uuid::Uuid,
+        connection: Arc<dyn Connection>,
+        bucket: String,
+        key: String,
+        reader_options: ReaderOptions,
         cx: &mut Context<Self>,
     ) -> Self {
         let file = DelimitedFileKey::Object {
@@ -208,16 +302,24 @@ impl DelimitedDocument {
             key,
         };
 
-        Self::open(file, location, cx)
+        Self::open(file, location, Some(app_state), reader_options, cx)
     }
 
-    fn open(file: DelimitedFileKey, location: DelimitedLocation, cx: &mut Context<Self>) -> Self {
+    fn open(
+        file: DelimitedFileKey,
+        location: DelimitedLocation,
+        app_state: Option<Entity<AppStateEntity>>,
+        reader_options: ReaderOptions,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut document = Self {
             id: DocumentId::new(),
             focus_handle: cx.focus_handle(),
             is_active_tab: true,
             file,
             location,
+            app_state,
+            reader_options,
             phase: DelimitedPhase::Loading,
             pending_table_focus: false,
             _subscriptions: Vec::new(),
@@ -298,14 +400,22 @@ impl DelimitedDocument {
     }
 
     /// Table navigation runs inside the embedded `DataTable` through its own
-    /// key context, and the document has no command of its own.
+    /// key context. The one command of the document is the next page, which
+    /// a loaded file answers by loading one.
     pub fn dispatch_command(
         &mut self,
-        _command: dbflux_app::keymap::Command,
+        command: dbflux_app::keymap::Command,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        match command {
+            dbflux_app::keymap::Command::ResultsNextPage if self.loaded().is_some() => {
+                self.load_more(cx);
+                true
+            }
+
+            _ => false,
+        }
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -363,6 +473,18 @@ impl DelimitedDocument {
             .map_or(&[], |loaded| loaded.warning_items.as_slice())
     }
 
+    /// Whether the file has records that are not loaded, as far as the reader
+    /// knows. False until the file is loaded.
+    pub fn has_more_records(&self) -> bool {
+        self.loaded()
+            .is_some_and(|loaded| !loaded.page_model.is_fully_loaded())
+    }
+
+    /// Whether a further page is being read.
+    pub fn is_loading_more(&self) -> bool {
+        self.loaded().is_some_and(|loaded| loaded.reader.is_none())
+    }
+
     /// The status line: the delimiter, the encoding, and the loaded records
     /// against the total. Empty until the file is loaded.
     pub fn status_items(&self) -> &[SharedString] {
@@ -417,10 +539,11 @@ impl DelimitedDocument {
 
         let location = self.location.clone();
         let extension = self.extension();
+        let reader_options = self.reader_options;
 
         let task = cx
             .background_executor()
-            .spawn(async move { open_first_page(&location, extension.as_deref()) });
+            .spawn(async move { open_first_page(&location, extension.as_deref(), reader_options) });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -509,7 +632,7 @@ impl DelimitedDocument {
         LoadedFile {
             dialect,
             version,
-            reader,
+            reader: Some(reader),
             page_model,
             warnings,
             warning_items,
@@ -517,6 +640,141 @@ impl DelimitedDocument {
             table,
             status_items,
         }
+    }
+
+    // -- Further pages -------------------------------------------------------
+
+    /// Reads the next page on the background executor and appends it to the
+    /// table. Does nothing while a page is being read, and once every record
+    /// is loaded.
+    ///
+    /// An object is read through the live connection of its profile, resolved
+    /// here for every page: the one the file was opened with is dead after a
+    /// disconnect or a reconnect. A profile that is not connected is reported
+    /// and nothing is read.
+    pub fn load_more(&mut self, cx: &mut Context<Self>) {
+        if !self.has_more_records() || self.is_loading_more() {
+            return;
+        }
+
+        let connection = match &self.file {
+            DelimitedFileKey::Local { .. } => None,
+
+            DelimitedFileKey::Object { profile_id, .. } => {
+                let Some(connection) = self.live_connection(*profile_id, cx) else {
+                    let summary = crate::labels::delimited_load_more_failed_message(&self.title());
+                    let cause =
+                        dbflux_i18n::t!("document.object_browser.error.connection_unavailable");
+
+                    report_error(
+                        UserFacingError::new(ErrorKind::User, summary).with_cause(cause),
+                        cx,
+                    );
+                    return;
+                };
+
+                Some(connection)
+            }
+        };
+
+        let page_size = self.reader_options.page_size;
+
+        let DelimitedPhase::Loaded(loaded) = &mut self.phase else {
+            return;
+        };
+        let Some(mut reader) = loaded.reader.take() else {
+            return;
+        };
+        let page_index = loaded.page_model.next_page();
+
+        if let Some(connection) = connection {
+            reader.source_mut().use_connection(connection.clone());
+
+            if let DelimitedLocation::Object {
+                connection: opened_with,
+                ..
+            } = &mut self.location
+            {
+                *opened_with = connection;
+            }
+        }
+
+        let task = cx.background_executor().spawn(async move {
+            let result = read_page(&mut reader, page_index, page_size);
+
+            (reader, result)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let (reader, result) = task.await;
+
+            cx.update(|cx| {
+                this.update(cx, |document, cx| {
+                    document.apply_page_outcome(reader, result, cx);
+                })
+                .ok();
+            });
+        })
+        .detach();
+
+        cx.notify();
+    }
+
+    /// The live connection of the profile `profile_id`, resolved from the
+    /// application state the way the object editor resolves it for each
+    /// operation. `None` when the profile is not connected.
+    fn live_connection(
+        &self,
+        profile_id: uuid::Uuid,
+        cx: &Context<Self>,
+    ) -> Option<Arc<dyn Connection>> {
+        self.app_state
+            .as_ref()?
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.connection.clone())
+    }
+
+    /// Takes the reader back and stores the outcome of the background page
+    /// read. This is the first place a failure of the read is caught, so it
+    /// is reported here and only here. A document that was closed meanwhile
+    /// never gets here, and its failure is dropped.
+    ///
+    /// A failed read leaves the loaded pages as they are, and the page can be
+    /// asked for again.
+    fn apply_page_outcome(
+        &mut self,
+        reader: PagedReader<DelimitedSource>,
+        result: Result<ReadPage, OpenError>,
+        cx: &mut Context<Self>,
+    ) {
+        let title = self.title();
+
+        let DelimitedPhase::Loaded(loaded) = &mut self.phase else {
+            return;
+        };
+
+        loaded.reader = Some(reader);
+
+        let appended = result.and_then(|read| {
+            loaded
+                .page_model
+                .append_page(read.page, read.record_count)
+                .map_err(OpenError::from)
+        });
+
+        match appended {
+            Ok(_) => loaded.show_page_model(cx),
+
+            Err(error) => {
+                let summary = crate::labels::delimited_load_more_failed_message(&title);
+
+                report_error(open_error_to_user_facing(&error, summary), cx);
+            }
+        }
+
+        cx.notify();
     }
 }
 
@@ -573,6 +831,7 @@ fn status_items(dialect: &Dialect, page_model: &PageModel) -> Vec<SharedString> 
 pub(super) fn open_first_page(
     location: &DelimitedLocation,
     extension: Option<&str>,
+    reader_options: ReaderOptions,
 ) -> Result<OpenedFile, OpenError> {
     let (source, version) = open_source(location)?;
 
@@ -581,7 +840,7 @@ pub(super) fn open_first_page(
 
     let dialect = detect_dialect(&sample, sample_coverage(sample.len(), length), extension);
 
-    read_first_page(source, version, dialect)
+    read_first_page(source, version, dialect, reader_options)
 }
 
 /// Opens a reader over `source` with `dialect` and reads the first page.
@@ -590,17 +849,14 @@ pub(super) fn read_first_page(
     source: DelimitedSource,
     version: SourceVersion,
     dialect: Dialect,
+    reader_options: ReaderOptions,
 ) -> Result<OpenedFile, OpenError> {
-    let options = ReaderOptions {
-        page_size: PAGE_SIZE,
-        window_size: FETCH_WINDOW_BYTES,
-    };
-    let mut reader = PagedReader::open(source, dialect, options)?;
+    let mut reader = PagedReader::open(source, dialect, reader_options)?;
 
-    let page = reader.read_page(0)?;
+    let first = read_page(&mut reader, 0, reader_options.page_size)?;
 
     let mut page_model = PageModel::new(reader.header().cloned());
-    page_model.append_page(page, reader.record_count())?;
+    page_model.append_page(first.page, first.record_count)?;
 
     Ok(OpenedFile {
         dialect,
@@ -610,8 +866,44 @@ pub(super) fn read_first_page(
     })
 }
 
-/// The user-facing error of a failed open. `summary` names the file, and the
-/// cause is the driver's, the storage layer's or the reader's own message.
+/// Reads page `page_index` through `reader`, whose pages hold `page_size`
+/// records. Blocks on file or network I/O.
+pub(super) fn read_page(
+    reader: &mut PagedReader<DelimitedSource>,
+    page_index: usize,
+    page_size: NonZeroUsize,
+) -> Result<ReadPage, OpenError> {
+    let page = reader.read_page(page_index)?;
+    let record_count = settled_record_count(&page, reader.record_count(), page_size);
+
+    Ok(ReadPage { page, record_count })
+}
+
+/// The record count to keep with `page`, after whose read the reader
+/// reported `reported`.
+///
+/// A page with fewer records than `page_size` is the last one: the reader
+/// found no record after it. The reader reports a total only when its scan
+/// stopped at the last byte of the source, so a short or empty page it left
+/// open is settled here. The file then counts as fully loaded with the read
+/// that found its end, and no further, empty, page is ever asked for.
+pub(super) fn settled_record_count(
+    page: &Page,
+    reported: RecordCount,
+    page_size: NonZeroUsize,
+) -> RecordCount {
+    match reported {
+        RecordCount::IndexedSoFar(_) if page.records.len() < page_size.get() => {
+            RecordCount::Total(page.first_record.saturating_add(page.records.len() as u64))
+        }
+
+        reported => reported,
+    }
+}
+
+/// The user-facing error of a failed open or page read. `summary` names the
+/// file, and the cause is the driver's, the storage layer's or the reader's
+/// own message.
 ///
 /// A refusal by the object store, at `head_object` or at a range read, keeps
 /// the driver's formatted error. A dialect the reader refuses is the user's

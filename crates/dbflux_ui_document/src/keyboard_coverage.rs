@@ -606,9 +606,10 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
-/// A delimited file tab: the table of the records loaded so far. The rows
-/// stay in file order, so the document does not sort and a column header
-/// click has no action for a key to reach.
+/// A delimited file tab: the table of the records loaded so far and the
+/// control that loads the next page (`]`). The rows stay in file order, so
+/// the document does not sort and a column header click has no action for a
+/// key to reach.
 pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     name: "delimited file",
     contexts: &[ContextId::Results, ContextId::DataTable],
@@ -619,6 +620,10 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::MouseOnly(
                 "a header click has no action in this document: rows stay in file order",
             ),
+        ),
+        (
+            "delimited-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
         ),
     ],
 };
