@@ -624,7 +624,7 @@ DBFlux MCP uses a unified JSON WHERE clause syntax that works across all databas
 - `ColumnRef::Nested(vec!["metadata", "profile", "age"])` — Nested document field (MongoDB, JSONB)
 - `ColumnRef::JsonPath { column: "config", path: "$.notifications.email" }` — JSON path syntax
 
-**Operators**: Standard comparison (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`), pattern matching (`$like`, `$ilike`, `$regex`), NULL handling (`null`, `$eq: null`), array operations (`$contains`, `$overlap`, `$size`, `$all`), and logical composition (`$and`, `$or`, `$not`).
+**Operators**: Standard comparison (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`), pattern matching (`$like`, `$ilike`, `$regex`), NULL handling (`null`, `$eq: null`), existence (`$exists`), array operations (`$contains`, `$overlap`, `$size`, `$all`), and logical composition (`$and`, `$or`, `$not`).
 
 **Type Coercion**: Automatic type conversion (string ↔ number ↔ boolean) with validation.
 

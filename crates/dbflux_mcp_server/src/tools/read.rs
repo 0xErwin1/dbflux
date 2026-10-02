@@ -75,7 +75,7 @@ pub struct SelectDataParams {
     #[schemars(description = "Columns to select (default: all columns)")]
     pub columns: Option<Vec<String>>,
 
-    #[schemars(description = "Filter conditions as JSON object")]
+    #[schemars(description = crate::tools::WHERE_FILTER_DESCRIPTION)]
     pub r#where: Option<serde_json::Value>,
 
     #[schemars(description = "Sort order")]
@@ -119,7 +119,7 @@ pub struct CountRecordsParams {
     #[schemars(description = "Table or collection name")]
     pub table: String,
 
-    #[schemars(description = "Filter conditions as JSON object")]
+    #[schemars(description = crate::tools::WHERE_FILTER_DESCRIPTION)]
     pub r#where: Option<serde_json::Value>,
 
     #[schemars(description = "Optional database/schema name")]
@@ -134,7 +134,7 @@ pub struct AggregateDataParams {
     #[schemars(description = "Table or collection name")]
     pub table: String,
 
-    #[schemars(description = "Filter conditions as JSON object")]
+    #[schemars(description = crate::tools::WHERE_FILTER_DESCRIPTION)]
     pub r#where: Option<serde_json::Value>,
 
     #[schemars(description = "Columns to group by")]
