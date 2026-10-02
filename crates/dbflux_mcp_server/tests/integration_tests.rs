@@ -11,7 +11,11 @@ use dbflux_mcp_server::{
     connection_cache::ConnectionCache,
     governance::GovernanceMiddleware,
     state::ServerState,
-    tools::{SelectDataParams, query::PreviewMutationParams},
+    tools::{
+        AggregateDataParams, CountRecordsParams, DeleteRecordsParams,
+        REQUIRED_WHERE_FILTER_DESCRIPTION, SelectDataParams, UpdateRecordsParams,
+        WHERE_FILTER_DESCRIPTION, query::PreviewMutationParams,
+    },
 };
 use dbflux_policy::{ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope};
 use rmcp::{model::CallToolResult, schemars::schema_for};
@@ -477,10 +481,14 @@ fn select_data_schema_keeps_shared_filter_and_pagination_contract() {
     let schema =
         serde_json::to_value(schema_for!(SelectDataParams)).expect("schema should serialize");
 
-    assert_eq!(
-        property_schema(&schema, "where")["description"],
-        "Filter conditions as JSON object"
-    );
+    let where_description = property_schema(&schema, "where")["description"]
+        .as_str()
+        .expect("where should carry a description");
+
+    assert_eq!(where_description, WHERE_FILTER_DESCRIPTION);
+    assert!(where_description.contains("JSON object"));
+    assert!(where_description.contains("$in"));
+
     assert_eq!(
         property_schema(&schema, "limit")["description"],
         "Maximum rows to return (default: 100, max: 10000)"
@@ -500,6 +508,104 @@ fn select_data_schema_keeps_shared_filter_and_pagination_contract() {
     assert!(required.contains(&Value::String("connection_id".to_string())));
     assert!(required.contains(&Value::String("table".to_string())));
     assert!(!required.contains(&Value::String("where".to_string())));
+}
+
+/// Operators the `where` description must name, one per family the parser
+/// accepts, so the schema cannot fall back to an operator-free sentence.
+const WHERE_OPERATORS: [&str; 19] = [
+    "$eq",
+    "$ne",
+    "$gt",
+    "$gte",
+    "$lt",
+    "$lte",
+    "$in",
+    "$nin",
+    "$like",
+    "$ilike",
+    "$regex",
+    "$contains",
+    "$overlap",
+    "$all",
+    "$size",
+    "$exists",
+    "$and",
+    "$or",
+    "$not",
+];
+
+#[test]
+fn every_filter_tool_schema_names_the_where_operators() {
+    let schemas = [
+        (
+            "select_data",
+            serde_json::to_value(schema_for!(SelectDataParams)),
+        ),
+        (
+            "count_records",
+            serde_json::to_value(schema_for!(CountRecordsParams)),
+        ),
+        (
+            "aggregate_data",
+            serde_json::to_value(schema_for!(AggregateDataParams)),
+        ),
+        (
+            "update_records",
+            serde_json::to_value(schema_for!(UpdateRecordsParams)),
+        ),
+        (
+            "delete_records",
+            serde_json::to_value(schema_for!(DeleteRecordsParams)),
+        ),
+    ];
+
+    for (tool, schema) in schemas {
+        let schema = schema.expect("schema should serialize");
+
+        let description = property_schema(&schema, "where")["description"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{tool} should describe its where parameter"));
+
+        for operator in WHERE_OPERATORS {
+            assert!(
+                description.contains(operator),
+                "{tool} where description should name {operator}: {description}"
+            );
+        }
+
+        assert!(
+            !description.contains("$cast"),
+            "{tool} where description names an operator the parser rejects"
+        );
+    }
+}
+
+#[test]
+fn mutating_filter_tools_state_that_where_is_required() {
+    let schemas = [
+        (
+            "update_records",
+            serde_json::to_value(schema_for!(UpdateRecordsParams)),
+        ),
+        (
+            "delete_records",
+            serde_json::to_value(schema_for!(DeleteRecordsParams)),
+        ),
+    ];
+
+    for (tool, schema) in schemas {
+        let schema = schema.expect("schema should serialize");
+
+        let description = property_schema(&schema, "where")["description"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{tool} should describe its where parameter"));
+
+        assert_eq!(description, REQUIRED_WHERE_FILTER_DESCRIPTION);
+        assert!(
+            description.contains("REQUIRED") && description.contains("cannot be empty"),
+            "{tool} where description should state the filter is required: {description}"
+        );
+    }
 }
 
 #[test]
