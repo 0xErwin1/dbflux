@@ -1034,6 +1034,7 @@ document:
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
     breadcrumb: "Buckets"
   chart:
+    session_samples_only: "Samples collected in this chart session"
     pane_actions:
       refresh: "Refresh"
       auto_refresh: "Auto-refresh interval…"

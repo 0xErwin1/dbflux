@@ -209,6 +209,16 @@ sidebar, above the **Instance Metrics** and **Instance Inspectors** folders.
   Postgres `pg_stat_activity`, MySQL process list, MongoDB current operations,
   Redis client list), refreshed on the shared interval.
 
+Live instance charts accumulate only what they observe during the current chart
+session: a bounded in-memory buffer of the latest 120 samples, which is never
+persisted or backfilled. The selected time window governs the displayed time
+axis and filters the samples that exist — relative ranges roll forward on each
+refresh, while a custom applied range stays fixed. An empty stretch in the
+earlier part of the seven-day window means no sample was collected yet, not
+that historical data exists, and **Refresh** fetches the current sample rather
+than reconstructing the past; saving an editable overview saves the layout and
+chart configuration, not the collected metric history.
+
 ### Opening the Instance Overview
 
 The sidebar shows a single **Instance Overview** leaf under a connected profile

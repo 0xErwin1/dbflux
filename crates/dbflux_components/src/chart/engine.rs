@@ -124,6 +124,9 @@ pub(crate) struct RenderModel {
 pub struct ChartView {
     spec: ChartSpec,
     render_model: RenderModel,
+    /// Data-derived X bounds captured at build time. `set_x_time_domain`
+    /// restores these when the runtime domain override is cleared.
+    data_x_bounds: (f64, f64),
     /// Window-space X coordinate of the current crosshair, captured from the
     /// last `MouseMoveEvent`. `None` when the cursor has not yet entered the
     /// chart or after a rebuild.
@@ -401,6 +404,7 @@ impl ChartView {
         };
 
         Ok(ChartView {
+            data_x_bounds: (x_min, x_max),
             spec,
             render_model,
             hover_x_screen: None,
@@ -472,6 +476,34 @@ impl ChartView {
     /// Whether the X axis is a time axis.
     pub fn x_is_time(&self) -> bool {
         self.spec.x_axis.kind == AxisKind::Time
+    }
+
+    /// Apply a runtime X time-domain override in epoch milliseconds.
+    ///
+    /// Hosts set this for accumulating sources so sparse session samples are
+    /// projected against the full requested window: the axis, its ticks, and
+    /// the hover mapping cover `[start_ms, end_ms]` while the data points keep
+    /// their true positions inside it. No boundary samples, padding points, or
+    /// history are invented — the series simply occupies its real span within
+    /// the wider domain.
+    ///
+    /// A no-op on non-time X axes. `None` (or a degenerate `end <= start`)
+    /// restores the data-derived bounds. Single-point series are handled
+    /// naturally: the point stays at its timestamp inside the spread domain.
+    pub fn set_x_time_domain(&mut self, domain_ms: Option<(i64, i64)>, cx: &mut Context<Self>) {
+        if self.spec.x_axis.kind != AxisKind::Time {
+            return;
+        }
+
+        let bounds = match domain_ms {
+            Some((start_ms, end_ms)) if end_ms > start_ms => (start_ms as f64, end_ms as f64),
+            _ => self.data_x_bounds,
+        };
+
+        self.render_model.x_min = bounds.0;
+        self.render_model.x_max = bounds.1;
+        self.render_model.x_ticks = ticks_time(bounds.0, bounds.1, 6);
+        cx.notify();
     }
 
     /// Resolved palette colour for the series at `idx`, derived from the active theme.
@@ -2814,6 +2846,18 @@ fn paint_dashed_vline(
 }
 
 /// Extract an f64 value from a `Value`, treating timestamps as ms-since-epoch.
+/// Epoch-milliseconds for a value placed on a time axis, using exactly the
+/// same acceptance semantics as `extract_f64(.., is_time = true)`.
+///
+/// Shared with the chart document's session-sample window filter so the
+/// window filter and the chart's own X extraction accept exactly the same
+/// timestamp representations (Int/Float epoch-ms, Decimal strings, Bool,
+/// RFC 3339 text, DateTime, Date).
+pub fn time_axis_epoch_ms(value: &Value) -> Option<i64> {
+    let x = extract_f64(value, true)?;
+    x.is_finite().then_some(x as i64)
+}
+
 fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
     match value {
         Value::Int(i) => Some(*i as f64),
