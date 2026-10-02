@@ -52,6 +52,10 @@ semver.workspace = true
 
 [features]
 telemetry = ["dep:dbflux_telemetry", "dbflux_storage/telemetry", "dbflux_core/telemetry", "dbflux_mcp_server?/telemetry"]
+# Test-only composition harness seam: admits an explicit BuildIdentity through
+# `initialize_telemetry_with_identity`. Never in `default`; production and
+# telemetry-off builds do not contain the gated method.
+test-support = []
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "mssql"]
 # Per-driver features enable the driver crate (for registration here) and, when
 # the MCP server is compiled in, forward the matching driver feature to it. This

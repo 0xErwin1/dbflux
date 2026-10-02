@@ -136,11 +136,36 @@ impl AppState {
         config: crate::telemetry::TelemetryConfig,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.initialize_telemetry_inner(config, crate::telemetry::BuildIdentity::compiled(), now)
+    }
+
+    /// Test-only seam: the same initialization with a caller-supplied identity,
+    /// so a composition test can drive a scheduler that admits a fixture RC
+    /// build (`BuildIdentity::compiled()` rejects dev versions, which would
+    /// leave every delivery permanently `Skipped(UnsupportedBuild)`). Production
+    /// and telemetry-off builds do not contain this method.
+    #[cfg(all(feature = "telemetry", any(test, feature = "test-support")))]
+    pub fn initialize_telemetry_with_identity(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        identity: Result<crate::telemetry::BuildIdentity, crate::telemetry::TelemetryError>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.initialize_telemetry_inner(config, identity, now)
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn initialize_telemetry_inner(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        identity: Result<crate::telemetry::BuildIdentity, crate::telemetry::TelemetryError>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
         if self.telemetry.is_none() {
             self.telemetry = Some(crate::telemetry::TelemetryScheduler::new(
                 self.storage_runtime.telemetry(),
                 config,
-                crate::telemetry::BuildIdentity::compiled(),
+                identity,
                 Arc::new(self.audit_service.clone()),
                 {
                     let audit = self.audit_service.clone();

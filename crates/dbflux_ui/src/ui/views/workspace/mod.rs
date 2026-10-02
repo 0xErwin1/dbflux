@@ -8,6 +8,10 @@ mod pane_actions;
 pub mod pipeline;
 mod render;
 mod shell;
+// Test-only composition harness for the telemetry usage counters; declared
+// here so it sits beside the other workspace test module.
+#[cfg(all(test, feature = "telemetry"))]
+mod telemetry_composition_tests;
 use actions::TabPlacement;
 
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
