@@ -123,6 +123,23 @@ pub struct ChartDocument {
     pending_time_window: Option<(i64, i64)>,
     pending_chart_reexecute: bool,
 
+    /// Applied display window for accumulating sources (`is_accumulating()`).
+    ///
+    /// Instance-metric backends return only the current sample, so the visible
+    /// series is whatever this chart session collected. The applied window
+    /// filters that session-only sample set for display:
+    /// - `Relative` — a preset selection; anchored at the current time on
+    ///   every reprojection so the displayed window advances on refresh.
+    /// - `Absolute` — an applied custom range; fixed bounds applied literally.
+    ///
+    /// `None` (before the first panel is created) shows the full session.
+    applied_display_window: Option<MetricDisplayWindow>,
+
+    /// `true` when `pending_time_window` was staged externally (a dashboard
+    /// sharing its own range panel). The child's own first-render preset seed
+    /// must not overwrite externally staged absolute bounds.
+    external_window_staged: bool,
+
     // Pending data source swap from MetricPickerApplied event.
     // Consumed by the render loop so the swap happens on the UI thread.
     pending_data_source: Option<Box<dyn ChartDataSource>>,
@@ -286,6 +303,8 @@ impl ChartDocument {
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,
+            applied_display_window: None,
+            external_window_staged: false,
             pending_data_source: None,
             initial_metric_identity: None,
             initial_instance_metric_id: None,
@@ -511,6 +530,8 @@ impl ChartDocument {
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,
+            applied_display_window: None,
+            external_window_staged: false,
             pending_data_source: None,
             initial_metric_identity,
             initial_instance_metric_id: None,
@@ -636,6 +657,14 @@ impl ChartDocument {
     /// Returns the initial `TimeRangePanel` preset index set for this document.
     pub fn initial_time_range_index(&self) -> usize {
         self.initial_time_range_index
+    }
+
+    /// Whether the active source accumulates session samples (instance
+    /// metrics). Hosts surface the session-only data notice for such charts:
+    /// the visible series is limited to what this chart session collected,
+    /// regardless of the selected time range.
+    pub fn source_is_accumulating(&self) -> bool {
+        self.data_source.is_accumulating()
     }
 
     /// Returns `true` when this document was opened for the given
@@ -1108,20 +1137,32 @@ impl ChartDocument {
                 self.state = DocumentState::Clean;
 
                 let was_chart_mode = self.last_result.is_some();
+                let now_ms = current_epoch_ms();
 
                 let display_result = if self.data_source.is_accumulating() {
                     let buffer = self.instance_metric_buffer.get_or_insert_with(|| {
                         InstantSeriesBuffer::new(result.columns.clone(), 120)
                     });
                     buffer.push_result(&result);
-                    Arc::new(buffer.to_query_result())
+
+                    // Session-only honesty: show the collected samples that
+                    // fall inside the applied window, anchored at the current
+                    // time so relative windows roll forward with each fetch.
+                    // The buffer keeps every sample, so widening the range
+                    // later restores rows.
+                    Arc::new(match self.applied_display_window {
+                        Some(window) => buffer.display_snapshot(window, now_ms),
+                        None => buffer.to_query_result(),
+                    })
                 } else {
                     Arc::new(result)
                 };
 
                 let display_clone = display_result.clone();
+                let x_time_domain = self.accumulating_x_time_domain(now_ms);
                 self.chart_shell.update(cx, |shell, cx| {
                     shell.set_result(&display_clone, was_chart_mode, cx);
+                    shell.set_x_time_domain(x_time_domain, cx);
                     shell.ensure_chart_view(&display_clone, cx);
                 });
 
@@ -1143,10 +1184,16 @@ impl ChartDocument {
 
     /// Handle a `TimeRangeChanged` event from the owned `TimeRangePanel`.
     ///
-    /// Stashes the resolved window and schedules a re-execution on the next
-    /// render cycle, mirroring how `CodeDocument` reacts to range changes.
-    /// Also mirrors `selected_time_range` from the panel so the render path
-    /// knows whether to keep the custom picker row visible after Apply.
+    /// Stashes the resolved window, immediately reprojects any retained
+    /// session samples into the new window (so the user never sees stale data
+    /// outside it while the refetch runs), and schedules a re-execution on the
+    /// next render cycle. Also mirrors `selected_time_range` from the panel so
+    /// the render path knows whether to keep the custom picker row visible
+    /// after Apply.
+    ///
+    /// When a dashboard staged an external window, this document's own panel
+    /// events (including the first-render `emit_initial`) are ignored: the
+    /// staged window stays authoritative until the dashboard re-stages.
     pub fn on_time_range_changed(
         &mut self,
         start_ms: Option<i64>,
@@ -1160,10 +1207,66 @@ impl ChartDocument {
         }
 
         if let (Some(start), Some(end)) = (start_ms, end_ms) {
+            if self.external_window_staged {
+                return;
+            }
+
             self.pending_time_window = Some((start, end));
+            self.applied_display_window = Some(classify_applied_window(
+                self.selected_time_range,
+                start,
+                end,
+            ));
             self.pending_chart_reexecute = true;
+            self.reproject_accumulated_display(cx);
             cx.notify();
         }
+    }
+
+    /// Immediately rebuild the display result from the retained session
+    /// samples under the current applied window and refresh the chart shell.
+    ///
+    /// Called on range changes so retained samples are reprojected without
+    /// waiting for the next successful fetch. A window with no samples yields
+    /// an empty result, which the shell renders as the no-data state rather
+    /// than a stale chart. Non-accumulating sources are untouched.
+    fn reproject_accumulated_display(&mut self, cx: &mut Context<Self>) {
+        if !self.data_source.is_accumulating() {
+            return;
+        }
+        let Some(buffer) = self.instance_metric_buffer.as_ref() else {
+            return;
+        };
+
+        let now_ms = current_epoch_ms();
+        let display_result = Arc::new(match self.applied_display_window {
+            Some(window) => buffer.display_snapshot(window, now_ms),
+            None => buffer.to_query_result(),
+        });
+
+        let was_chart_mode = self.last_result.is_some();
+        let display_clone = display_result.clone();
+        let x_time_domain = self.accumulating_x_time_domain(now_ms);
+        self.chart_shell.update(cx, |shell, cx| {
+            shell.set_result(&display_clone, was_chart_mode, cx);
+            shell.set_x_time_domain(x_time_domain, cx);
+            shell.ensure_chart_view(&display_clone, cx);
+        });
+        self.last_result = Some(display_result);
+    }
+
+    /// X time-domain override for the chart view: the concrete bounds of the
+    /// applied window when the source accumulates and the result has a
+    /// Timestamp column (time X axis). `None` keeps the data-derived bounds —
+    /// numeric-X or historical charts are never reprojected.
+    fn accumulating_x_time_domain(&self, now_ms: i64) -> Option<(i64, i64)> {
+        if !self.data_source.is_accumulating() {
+            return None;
+        }
+        let buffer = self.instance_metric_buffer.as_ref()?;
+        buffer.timestamp_column()?;
+        let window = self.applied_display_window?;
+        Some(resolve_display_window(window, now_ms))
     }
 
     /// Update the pending time window WITHOUT scheduling a re-execution.
@@ -1172,9 +1275,32 @@ impl ChartDocument {
     /// are queued behind the semaphore. The window is stashed so that when the
     /// semaphore releases and `mark_pending_reexecute` is called, the correct
     /// window is used.
-    pub fn stage_time_window(&mut self, start_ms: i64, end_ms: i64) {
+    ///
+    /// `display_window` carries the shared panel's provenance: relative
+    /// presets stage a sliding `Relative` window (so each applied result
+    /// re-anchors at the current time and rolling refreshes keep collecting
+    /// visible samples), while a Custom selection stages fixed `Absolute`
+    /// bounds. Staged windows are flagged external so the child's own
+    /// first-render preset seed and its `emit_initial` event cannot overwrite
+    /// them.
+    ///
+    /// Staging also immediately reprojects any retained session samples and
+    /// the chart domain into the new window: a queued, failing, or offline
+    /// refetch must never leave stale rows or a stale axis beneath the newly
+    /// selected range label. Re-execution itself stays with the caller (the
+    /// dashboard's semaphore flow drives it via `mark_pending_reexecute`).
+    pub(crate) fn stage_time_window(
+        &mut self,
+        start_ms: i64,
+        end_ms: i64,
+        display_window: MetricDisplayWindow,
+        cx: &mut Context<Self>,
+    ) {
         self.pending_time_window = Some((start_ms, end_ms));
-        // Intentionally does NOT set pending_chart_reexecute or call cx.notify().
+        self.applied_display_window = Some(display_window);
+        self.external_window_staged = true;
+        self.reproject_accumulated_display(cx);
+        cx.notify();
     }
 
     /// Set `pending_chart_reexecute = true` and schedule a render notification.
@@ -1207,8 +1333,15 @@ impl ChartDocument {
                 // mutate state. The subscription still fires (and mirrors
                 // selected_time_range), but the chart re-run is no longer gated
                 // on its delivery timing.
+                //
+                // Custom Apply is always an absolute window, regardless of the
+                // document's mirrored preset selection — the panel had already
+                // switched to `Custom` when the picker validated.
                 self.pending_time_window = Some((start_ms, end_ms));
+                self.applied_display_window =
+                    Some(MetricDisplayWindow::Absolute { start_ms, end_ms });
                 self.pending_chart_reexecute = true;
+                self.reproject_accumulated_display(cx);
                 cx.notify();
             }
             Err(error) => {
@@ -1629,6 +1762,90 @@ impl ChartHost for ChartDocument {
 // InstantSeriesBuffer
 // ---------------------------------------------------------------------------
 
+/// The applied display window for accumulating instance-metric sources.
+///
+/// Session-only by design: instance-metric backends return the current sample,
+/// and DBFlux keeps a bounded in-memory collection of those samples. The
+/// window filters what is DISPLAYED — it never claims or fabricates history
+/// the session does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetricDisplayWindow {
+    /// A relative preset (Last 15 min, Last 7 days, …). Resolved live at
+    /// every applied result and reprojection by anchoring `span_ms` at the
+    /// CURRENT time — `[now - span_ms, now]` inclusive — so freshly fetched
+    /// samples stay visible and the window rolls forward with each refresh.
+    Relative { span_ms: i64 },
+
+    /// Fixed bounds from a custom-range Apply. Applied literally: samples
+    /// outside `[start_ms, end_ms]` are hidden.
+    Absolute { start_ms: i64, end_ms: i64 },
+}
+
+/// Current wall-clock epoch milliseconds. Centralized so call sites read as
+/// "anchored at now" and tests can substitute fixed times at the seam.
+fn current_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Resolve a display window to concrete inclusive `[start_ms, end_ms]` bounds
+/// at the supplied current time. Relative windows slide with `now_ms`;
+/// absolute windows pass through untouched.
+fn resolve_display_window(window: MetricDisplayWindow, now_ms: i64) -> (i64, i64) {
+    match window {
+        MetricDisplayWindow::Relative { span_ms } => (now_ms.saturating_sub(span_ms), now_ms),
+        MetricDisplayWindow::Absolute { start_ms, end_ms } => (start_ms, end_ms),
+    }
+}
+
+/// Classify an applied `TimeRangeChanged` window by its provenance.
+///
+/// Preset selections arrive as absolute `(start, end)` bounds resolved at
+/// click time, but they semantically slide — classify them as `Relative` so
+/// display filtering re-anchors at the newest sample. Custom-range applies
+/// (and any unknown provenance) are fixed `Absolute` bounds. `Custom` is
+/// selected before Apply, so `None` provenance must never widen a Custom
+/// window into a sliding span.
+fn classify_applied_window(
+    selected: Option<TimeRange>,
+    start_ms: i64,
+    end_ms: i64,
+) -> MetricDisplayWindow {
+    match selected {
+        Some(TimeRange::Custom) | None => MetricDisplayWindow::Absolute { start_ms, end_ms },
+        Some(_) => MetricDisplayWindow::Relative {
+            span_ms: (end_ms - start_ms).max(0),
+        },
+    }
+}
+
+/// Resolve the first-render `pending_time_window` seed and its display
+/// window.
+///
+/// A dashboard may stage a window on the child chart BEFORE the child's
+/// first render; the staged bounds — and their provenance — win over the
+/// child's own default preset, so the child's seed never overwrites
+/// externally staged windows. Without staging the preset lookback produces a
+/// sliding `Relative` span.
+fn seed_initial_window(
+    staged: Option<(i64, i64, MetricDisplayWindow)>,
+    preset_lookback_ms: i64,
+    now_ms: i64,
+) -> (i64, i64, MetricDisplayWindow) {
+    match staged {
+        Some((start_ms, end_ms, display_window)) => (start_ms, end_ms, display_window),
+        None => (
+            now_ms - preset_lookback_ms,
+            now_ms,
+            MetricDisplayWindow::Relative {
+                span_ms: preset_lookback_ms,
+            },
+        ),
+    }
+}
+
 /// In-memory accumulator for instance-metric single-sample poll results.
 ///
 /// Each `fetch_metric_series` call returns exactly one row (the current gauge
@@ -1717,6 +1934,77 @@ impl InstantSeriesBuffer {
             additional_results: Vec::new(),
         }
     }
+
+    /// Index of the first `Timestamp`-kind column, if any.
+    fn timestamp_column(&self) -> Option<usize> {
+        self.columns
+            .iter()
+            .position(|column| column.kind == dbflux_core::ColumnKind::Timestamp)
+    }
+
+    /// Epoch-milliseconds for a row's timestamp cell, using the chart
+    /// engine's shared time-axis extraction (`time_axis_epoch_ms`) so the
+    /// window filter and the chart's own X extraction accept exactly the same
+    /// timestamp representations. Returns `None` when the cell cannot be
+    /// placed on a time axis.
+    fn row_timestamp_ms(&self, row: &dbflux_core::Row, timestamp_col: usize) -> Option<i64> {
+        let value = row.get(timestamp_col)?;
+        dbflux_components::chart::engine::time_axis_epoch_ms(value)
+    }
+
+    /// Build the DISPLAY snapshot for `window`, anchored at `now_ms`.
+    ///
+    /// This is a filter over the collected session samples, never a prune: the
+    /// buffer itself is untouched, so narrowing and then widening the range
+    /// restores previously collected rows.
+    ///
+    /// - `Relative` resolves to `[now_ms - span, now_ms]` inclusive at the
+    ///   supplied current time, so it rolls forward on every refresh and
+    ///   freshly fetched samples are never frozen out by bounds resolved at
+    ///   preset-click time.
+    /// - `Absolute` applies the literal bounds.
+    /// - Rows without a parseable timestamp, and buffers without a Timestamp
+    ///   column, pass through unfiltered — the window is a time-axis concept
+    ///   only and must not disturb numeric-X or historical sources.
+    ///
+    /// The snapshot's `resolved_window` carries the concrete bounds actually
+    /// displayed, so the toolbar window label reflects the filtered reality.
+    pub(super) fn display_snapshot(
+        &self,
+        window: MetricDisplayWindow,
+        now_ms: i64,
+    ) -> dbflux_core::QueryResult {
+        let snapshot = self.to_query_result();
+        let Some(timestamp_col) = self.timestamp_column() else {
+            return snapshot;
+        };
+
+        let (start_ms, end_ms) = resolve_display_window(window, now_ms);
+
+        let rows = snapshot
+            .rows
+            .iter()
+            .filter(|row| match self.row_timestamp_ms(row, timestamp_col) {
+                // Unplaceable rows pass through rather than being silently
+                // dropped by a filter that cannot classify them.
+                None => true,
+                Some(ts) => ts >= start_ms && ts <= end_ms,
+            })
+            .cloned()
+            .collect();
+
+        dbflux_core::QueryResult {
+            rows,
+            // Display-only context: the window was resolved by the UI, not by
+            // a driver; the label render reads only the bounds.
+            resolved_window: Some(dbflux_core::ResolvedWindow {
+                start_ms,
+                end_ms,
+                language: dbflux_core::QueryLanguage::Sql,
+            }),
+            ..snapshot
+        }
+    }
 }
 
 /// Returns `true` when `ChartDocument` should render the Stats rail.
@@ -1771,6 +2059,7 @@ fn toggle_stats_rail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::Value as TestValue;
 
     /// Constructor with empty query must NOT set `pending_run_on_first_render`.
     #[test]
@@ -2685,6 +2974,656 @@ mod tests {
             !src.is_accumulating(),
             "QuerySource must report is_accumulating() == false"
         );
+    }
+
+    // ---- Metric range honesty: session-only display windows ----
+
+    /// Harness that can defer rendering the chart document, so tests can stage
+    /// external state (a dashboard-staged window) BEFORE the document's first
+    /// render.
+    struct DeferredChartHarness {
+        doc: Option<Entity<ChartDocument>>,
+        show: bool,
+    }
+
+    impl Render for DeferredChartHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let mut el = gpui::div();
+            if self.show {
+                if let Some(doc) = &self.doc {
+                    el = el.child(doc.clone());
+                }
+            }
+            el
+        }
+    }
+
+    /// A dashboard-staged window must survive the child chart's first render:
+    /// the child's own preset seed must not overwrite it, and neither may the
+    /// child panel's `emit_initial` event delivered through the subscription.
+    #[gpui::test]
+    fn staged_dashboard_window_survives_first_render_and_initial_emission(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let harness_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DeferredChartHarness>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        let doc_holder_for_view = doc_holder.clone();
+        let harness_holder_for_view = harness_holder.clone();
+        let (_, visual) = cx.add_window_view(move |window, cx| {
+            let source = dbflux_components::chart::InstanceMetricSource {
+                metric_id: "pg.tps".to_string(),
+            };
+            let doc = cx.new(|cx| {
+                ChartDocument::new_with_source(
+                    None,
+                    "pg.tps".to_string(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            doc_holder_for_view.replace(Some(doc.clone()));
+            let harness = cx.new(|_cx| DeferredChartHarness {
+                doc: Some(doc),
+                show: false,
+            });
+            harness_holder_for_view.replace(Some(harness.clone()));
+            gpui_component::Root::new(harness, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc entity");
+        let harness = harness_holder.borrow().clone().expect("harness entity");
+
+        // Stage a 7-day absolute window BEFORE the child's first render, the
+        // way DashboardDocument stages bounds on queued panels.
+        let staged_start: i64 = 1_000_000;
+        let staged_end: i64 = staged_start + 7 * 24 * 60 * 60_000;
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, doc_cx| {
+                doc.stage_time_window(
+                    staged_start,
+                    staged_end,
+                    MetricDisplayWindow::Absolute {
+                        start_ms: staged_start,
+                        end_ms: staged_end,
+                    },
+                    doc_cx,
+                );
+            });
+        });
+
+        // First child render: seeds its own preset and fires emit_initial.
+        visual.update(|_, cx| {
+            harness.update(cx, |h, cx| {
+                h.show = true;
+                cx.notify();
+            });
+        });
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let doc_state = doc.read(cx);
+            assert_eq!(
+                doc_state.pending_time_window,
+                Some((staged_start, staged_end)),
+                "staged bounds must survive the child's first render"
+            );
+            assert_eq!(
+                doc_state.applied_display_window,
+                Some(MetricDisplayWindow::Absolute {
+                    start_ms: staged_start,
+                    end_ms: staged_end,
+                }),
+                "staged absolute display window must survive first render and emit_initial"
+            );
+        });
+    }
+
+    /// Changing the range must reproject the retained session samples
+    /// immediately — not wait for the next successful fetch — so the user
+    /// never sees stale data outside the newly selected window.
+    #[gpui::test]
+    fn range_change_reprojects_retained_samples_before_next_fetch(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        let doc_holder_for_view = doc_holder.clone();
+        let harness_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DeferredChartHarness>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let harness_holder_for_view = harness_holder.clone();
+        let (_, visual) = cx.add_window_view(move |window, cx| {
+            let source = dbflux_components::chart::InstanceMetricSource {
+                metric_id: "pg.tps".to_string(),
+            };
+            let doc = cx.new(|cx| {
+                ChartDocument::new_with_source(
+                    None,
+                    "pg.tps".to_string(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            doc_holder_for_view.replace(Some(doc.clone()));
+            let harness = cx.new(|_cx| DeferredChartHarness {
+                doc: Some(doc),
+                show: false,
+            });
+            harness_holder_for_view.replace(Some(harness.clone()));
+            gpui_component::Root::new(harness, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc entity");
+        // The document is NOT rendered (deferred harness), so its
+        // TimeRangePanel never exists and the range-change event carries no
+        // preset provenance: the bounds apply literally as absolute.
+        visual.run_until_parked();
+
+        // Seed the accumulation state directly: three samples over two
+        // minutes, currently displayed in full.
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, _cx| {
+                let first = make_single_point_result(0, 1.0);
+                let mut buffer = InstantSeriesBuffer::new(first.columns.clone(), 120);
+                buffer.push_result(&first);
+                buffer.push_result(&make_single_point_result(60_000, 2.0));
+                buffer.push_result(&make_single_point_result(120_000, 3.0));
+                doc.last_result = Some(Arc::new(buffer.to_query_result()));
+                doc.instance_metric_buffer = Some(buffer);
+            });
+        });
+
+        // Narrow to [0, 60_000] via the range-change event. No panel exists in
+        // this scenario, so no provenance mirror applies: literal bounds.
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.on_time_range_changed(Some(0), Some(60_000), cx);
+            });
+        });
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let doc_state = doc.read(cx);
+            let row_count = doc_state
+                .last_result
+                .as_ref()
+                .map(|result| result.row_count())
+                .unwrap_or(0);
+            assert_eq!(
+                row_count, 2,
+                "range change must reproject retained samples immediately, \
+                 not keep rows outside the new window until the next fetch"
+            );
+        });
+    }
+
+    /// The user bug: a 7-day selection on an accumulating instance metric
+    /// must project the chart axis across the FULL requested window — sparse
+    /// session samples keep their true positions inside it — instead of
+    /// zooming the axis to the sampled span, which implied history the
+    /// session does not have. No boundary samples or invented points: the
+    /// row set stays exactly the collected session samples.
+    #[gpui::test]
+    fn seven_day_window_projects_full_domain_over_sparse_samples(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let harness_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DeferredChartHarness>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        let doc_holder_for_view = doc_holder.clone();
+        let harness_holder_for_view = harness_holder.clone();
+        let (_, visual) = cx.add_window_view(move |window, cx| {
+            let source = dbflux_components::chart::InstanceMetricSource {
+                metric_id: "pg.tps".to_string(),
+            };
+            let doc = cx.new(|cx| {
+                ChartDocument::new_with_source(
+                    None,
+                    "pg.tps".to_string(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            doc_holder_for_view.replace(Some(doc.clone()));
+            let harness = cx.new(|_cx| DeferredChartHarness {
+                doc: Some(doc),
+                show: false,
+            });
+            harness_holder_for_view.replace(Some(harness.clone()));
+            gpui_component::Root::new(harness, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc entity");
+        visual.run_until_parked();
+
+        // Two minutes of session samples collected so far.
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, _cx| {
+                let first = make_single_point_result(0, 1.0);
+                let mut buffer = InstantSeriesBuffer::new(first.columns.clone(), 120);
+                buffer.push_result(&first);
+                buffer.push_result(&make_single_point_result(60_000, 2.0));
+                buffer.push_result(&make_single_point_result(120_000, 3.0));
+                doc.last_result = Some(Arc::new(buffer.to_query_result()));
+                doc.instance_metric_buffer = Some(buffer);
+            });
+        });
+
+        // Select the full 7-day window; no panel exists, so bounds apply
+        // literally as absolute.
+        let seven_days_ms: i64 = 7 * 24 * 60 * 60_000;
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.on_time_range_changed(Some(0), Some(seven_days_ms), cx);
+            });
+        });
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let doc_state = doc.read(cx);
+            let row_count = doc_state
+                .last_result
+                .as_ref()
+                .map(|result| result.row_count())
+                .unwrap_or(0);
+            assert_eq!(
+                row_count, 3,
+                "7-day window must show exactly the collected session samples \
+                 — no invented boundary points or history"
+            );
+
+            let view = doc_state
+                .chart_shell
+                .read(cx)
+                .chart_view()
+                .cloned()
+                .expect("chart view must be built");
+            let (x_min, x_max) = view.read(cx).data_x_bounds();
+            assert_eq!(
+                (x_min, x_max),
+                (0.0, seven_days_ms as f64),
+                "the X axis must span the full requested 7-day window, not the \
+                 sampled 2-minute span"
+            );
+        });
+    }
+
+    /// Staging a new shared dashboard window must reproject the retained
+    /// session samples and the chart domain IMMEDIATELY, at staging time —
+    /// so a queued, failing, or offline refetch never leaves stale rows or a
+    /// stale axis beneath the newly selected range label.
+    #[gpui::test]
+    fn staged_window_reprojects_before_any_refetch(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let harness_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DeferredChartHarness>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        let doc_holder_for_view = doc_holder.clone();
+        let harness_holder_for_view = harness_holder.clone();
+        let (_, visual) = cx.add_window_view(move |window, cx| {
+            let source = dbflux_components::chart::InstanceMetricSource {
+                metric_id: "pg.tps".to_string(),
+            };
+            let doc = cx.new(|cx| {
+                ChartDocument::new_with_source(
+                    None,
+                    "pg.tps".to_string(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            doc_holder_for_view.replace(Some(doc.clone()));
+            let harness = cx.new(|_cx| DeferredChartHarness {
+                doc: Some(doc),
+                show: false,
+            });
+            harness_holder_for_view.replace(Some(harness.clone()));
+            gpui_component::Root::new(harness, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc entity");
+        let _harness = harness_holder.borrow().clone().expect("harness entity");
+        let seven_days_ms: i64 = 7 * 24 * 60 * 60_000;
+
+        // Setup: stage a wide absolute window before first render (dashboard
+        // pattern), collect two minutes of samples, and build the chart view
+        // against that wide window. No fetch ever succeeds in this scenario.
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.stage_time_window(
+                    0,
+                    seven_days_ms,
+                    MetricDisplayWindow::Absolute {
+                        start_ms: 0,
+                        end_ms: seven_days_ms,
+                    },
+                    cx,
+                );
+
+                let first = make_single_point_result(0, 1.0);
+                let mut buffer = InstantSeriesBuffer::new(first.columns.clone(), 120);
+                buffer.push_result(&first);
+                buffer.push_result(&make_single_point_result(60_000, 2.0));
+                buffer.push_result(&make_single_point_result(120_000, 3.0));
+                let snapshot = Arc::new(buffer.to_query_result());
+                doc.instance_metric_buffer = Some(buffer);
+                doc.last_result = Some(snapshot.clone());
+                doc.chart_shell.update(cx, |shell, cx| {
+                    shell.set_result(&snapshot, false, cx);
+                    shell.set_x_time_domain(Some((0, seven_days_ms)), cx);
+                    shell.ensure_chart_view(&snapshot, cx);
+                });
+            });
+        });
+        visual.run_until_parked();
+
+        // Behavior under test: stage a NARROWER shared window. The refetch is
+        // never admitted (no mark_pending_reexecute), yet the display must
+        // already reflect the new window.
+        visual.update(|_, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.stage_time_window(
+                    0,
+                    60_000,
+                    MetricDisplayWindow::Absolute {
+                        start_ms: 0,
+                        end_ms: 60_000,
+                    },
+                    cx,
+                );
+            });
+        });
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let doc_state = doc.read(cx);
+            let row_count = doc_state
+                .last_result
+                .as_ref()
+                .map(|result| result.row_count())
+                .unwrap_or(0);
+            assert_eq!(
+                row_count, 2,
+                "staging a new shared window must reproject retained samples \
+                 immediately, not wait for a successful fetch"
+            );
+
+            let view = doc_state
+                .chart_shell
+                .read(cx)
+                .chart_view()
+                .cloned()
+                .expect("chart view must be built");
+            let (x_min, x_max) = view.read(cx).data_x_bounds();
+            assert_eq!(
+                (x_min, x_max),
+                (0.0, 60_000.0),
+                "staging must update the chart domain before any refetch"
+            );
+        });
+    }
+
+    fn accumulating_buffer_with_samples(timestamps_ms: &[i64]) -> InstantSeriesBuffer {
+        let first = make_single_point_result(timestamps_ms[0], 1.0);
+        let mut buffer = InstantSeriesBuffer::new(first.columns.clone(), 120);
+        for (i, &ts) in timestamps_ms.iter().enumerate() {
+            buffer.push_result(&make_single_point_result(ts, i as f64));
+        }
+        buffer
+    }
+
+    fn snapshot_timestamps(result: &QueryResult) -> Vec<i64> {
+        result
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                TestValue::Int(v) => *v,
+                other => panic!("expected Int timestamp, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A relative window must resolve against the supplied current time to
+    /// the inclusive bounds `[now - span, now]`, so it rolls forward on every
+    /// refresh and freshly fetched samples are never frozen out by bounds
+    /// resolved at preset-click time.
+    #[test]
+    fn relative_display_window_anchors_at_now_with_inclusive_upper_bound() {
+        let buffer = accumulating_buffer_with_samples(&[0, 60_000, 120_000]);
+
+        // 30 s span anchored at now = 120_000: window [90_000, 120_000].
+        let snapshot =
+            buffer.display_snapshot(MetricDisplayWindow::Relative { span_ms: 30_000 }, 120_000);
+        assert_eq!(
+            snapshot_timestamps(&snapshot),
+            vec![120_000],
+            "relative window must anchor at now and drop samples older than the span"
+        );
+        assert_eq!(
+            buffer.sample_count(),
+            3,
+            "display filtering must never prune the accumulation buffer"
+        );
+
+        // Rolling forward: anchoring at a later now keeps newly fetched
+        // samples visible while old ones age out of the span.
+        let rolled =
+            buffer.display_snapshot(MetricDisplayWindow::Relative { span_ms: 30_000 }, 150_000);
+        assert_eq!(
+            snapshot_timestamps(&rolled),
+            vec![120_000],
+            "samples within [now - span, now] must stay visible as now advances"
+        );
+    }
+
+    /// The resolved bounds are inclusive on both ends, and the snapshot
+    /// carries them in `resolved_window` so the window label reflects the
+    /// displayed reality.
+    #[test]
+    fn display_snapshot_bounds_are_inclusive_and_stamped() {
+        let buffer = accumulating_buffer_with_samples(&[60_000, 120_000, 180_000]);
+
+        let snapshot = buffer.display_snapshot(
+            MetricDisplayWindow::Absolute {
+                start_ms: 60_000,
+                end_ms: 180_000,
+            },
+            999_999,
+        );
+        assert_eq!(
+            snapshot_timestamps(&snapshot),
+            vec![60_000, 120_000, 180_000],
+            "boundary samples must be included in the window"
+        );
+        let resolved = snapshot.resolved_window.expect("resolved window stamped");
+        assert_eq!(resolved.start_ms, 60_000);
+        assert_eq!(resolved.end_ms, 180_000);
+    }
+
+    /// The display snapshot is a filter, not a FIFO prune: narrowing the range
+    /// and then widening it must restore previously collected rows.
+    #[test]
+    fn display_snapshot_does_not_prune_buffer_narrow_then_wide() {
+        let buffer = accumulating_buffer_with_samples(&[0, 60_000, 120_000]);
+
+        let narrow =
+            buffer.display_snapshot(MetricDisplayWindow::Relative { span_ms: 30_000 }, 120_000);
+        assert_eq!(snapshot_timestamps(&narrow), vec![120_000]);
+
+        let wide =
+            buffer.display_snapshot(MetricDisplayWindow::Relative { span_ms: 600_000 }, 120_000);
+        assert_eq!(
+            snapshot_timestamps(&wide),
+            vec![0, 60_000, 120_000],
+            "widening the window must restore rows the narrow window hid"
+        );
+        assert_eq!(buffer.sample_count(), 3);
+    }
+
+    /// Absolute windows (custom range Apply, dashboard staging) filter to
+    /// exactly [start_ms, end_ms].
+    #[test]
+    fn absolute_display_window_filters_both_bounds() {
+        let buffer = accumulating_buffer_with_samples(&[0, 60_000, 120_000, 180_000]);
+
+        let snapshot = buffer.display_snapshot(
+            MetricDisplayWindow::Absolute {
+                start_ms: 60_000,
+                end_ms: 120_000,
+            },
+            999_999,
+        );
+        assert_eq!(snapshot_timestamps(&snapshot), vec![60_000, 120_000]);
+    }
+
+    /// A window with no samples must show an empty chart, not stale data
+    /// from outside the requested range.
+    #[test]
+    fn display_snapshot_empty_window_yields_empty_rows_not_stale_data() {
+        let buffer = accumulating_buffer_with_samples(&[1_000_000, 1_060_000]);
+
+        let snapshot = buffer.display_snapshot(
+            MetricDisplayWindow::Absolute {
+                start_ms: 0,
+                end_ms: 500_000,
+            },
+            999_999,
+        );
+        assert!(
+            snapshot.rows.is_empty(),
+            "window with no collected samples must render empty, not stale rows"
+        );
+    }
+
+    /// Buffers whose columns carry no Timestamp kind (numeric-X or otherwise
+    /// non-time-series data) must pass through unfiltered — the display window
+    /// is a time-axis concept only.
+    #[test]
+    fn display_snapshot_without_timestamp_column_is_unfiltered() {
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape};
+
+        let result = QueryResult {
+            shape: QueryResultShape::Table,
+            columns: vec![
+                ColumnMeta {
+                    name: "x".to_string(),
+                    type_name: "int8".to_string(),
+                    kind: ColumnKind::Integer,
+                    nullable: false,
+                    is_primary_key: false,
+                },
+                ColumnMeta {
+                    name: "y".to_string(),
+                    type_name: "float8".to_string(),
+                    kind: ColumnKind::Float,
+                    nullable: false,
+                    is_primary_key: false,
+                },
+            ],
+            rows: vec![vec![TestValue::Int(42), TestValue::Float(7.0)]],
+            affected_rows: None,
+            execution_time: std::time::Duration::ZERO,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
+            additional_results: Vec::new(),
+        };
+        let mut buffer = InstantSeriesBuffer::new(result.columns.clone(), 120);
+        buffer.push_result(&result);
+
+        let snapshot = buffer.display_snapshot(
+            MetricDisplayWindow::Absolute {
+                start_ms: 0,
+                end_ms: 1,
+            },
+            999_999,
+        );
+        assert_eq!(
+            snapshot.rows.len(),
+            1,
+            "buffer without a Timestamp column must pass through unfiltered"
+        );
+    }
+
+    /// Window provenance: relative presets produce a sliding span anchored at
+    /// display time; a Custom selection (and any unknown provenance) produces
+    /// fixed absolute bounds.
+    #[test]
+    fn classify_applied_window_uses_preset_provenance() {
+        let relative = classify_applied_window(
+            Some(TimeRange::Last15min),
+            1_000_000,
+            1_000_000 + 15 * 60_000,
+        );
+        assert_eq!(
+            relative,
+            MetricDisplayWindow::Relative {
+                span_ms: 15 * 60_000
+            },
+            "preset selections must resolve as sliding relative spans"
+        );
+
+        let absolute = classify_applied_window(Some(TimeRange::Custom), 100, 200);
+        assert_eq!(
+            absolute,
+            MetricDisplayWindow::Absolute {
+                start_ms: 100,
+                end_ms: 200
+            },
+            "custom Apply bounds must resolve as fixed absolute bounds"
+        );
+
+        let fallback = classify_applied_window(None, 100, 200);
+        assert_eq!(
+            fallback,
+            MetricDisplayWindow::Absolute {
+                start_ms: 100,
+                end_ms: 200
+            },
+            "unknown provenance must fall back to the literal bounds"
+        );
+    }
+
+    /// The child chart's own default preset seed must not overwrite a window
+    /// a dashboard staged externally — including its provenance — before the
+    /// child's first render.
+    #[test]
+    fn seed_initial_window_prefers_staged_bounds() {
+        let staged_window = MetricDisplayWindow::Relative {
+            span_ms: 7 * 24 * 60 * 60_000,
+        };
+        let (start, end, window) =
+            seed_initial_window(Some((1_000, 2_000, staged_window)), 900_000, 5_000_000);
+        assert_eq!((start, end), (1_000, 2_000));
+        assert_eq!(window, staged_window, "staged provenance must be preserved");
+
+        let (start, end, window) = seed_initial_window(None, 900_000, 5_000_000);
+        assert_eq!((start, end), (5_000_000 - 900_000, 5_000_000));
+        assert_eq!(window, MetricDisplayWindow::Relative { span_ms: 900_000 });
     }
 
     // ---- BF6: InstanceMetric default time range and refresh policy ----

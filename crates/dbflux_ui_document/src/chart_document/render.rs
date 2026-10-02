@@ -17,7 +17,9 @@
 //! The chart content area is rendered by `render_chart_content`, called from
 //! the `ViewHandle::render` closure built by `into_view_handle`.
 
-use super::{ChartDocument, ExecState, should_render_stats_rail, toggle_stats_rail};
+use super::{
+    ChartDocument, ExecState, seed_initial_window, should_render_stats_rail, toggle_stats_rail,
+};
 use crate::chart::ChartRailTab;
 use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::chart_window_label;
@@ -104,7 +106,23 @@ impl Render for ChartDocument {
                 .unwrap_or(0);
             let lookback_ms =
                 TimeRangePanel::lookback_ms_for_index(preset_index).unwrap_or(24 * 60 * 60_000);
-            self.pending_time_window = Some((now_ms - lookback_ms, now_ms));
+
+            // A dashboard may have staged a window before this first render;
+            // the staged bounds and their provenance win over the child's own
+            // default preset so the seed cannot overwrite the externally
+            // applied window.
+            let staged = self
+                .external_window_staged
+                .then(|| {
+                    let (start_ms, end_ms) = self.pending_time_window?;
+                    let display_window = self.applied_display_window?;
+                    Some((start_ms, end_ms, display_window))
+                })
+                .flatten();
+            let (seed_start, seed_end, display_window) =
+                seed_initial_window(staged, lookback_ms, now_ms);
+            self.pending_time_window = Some((seed_start, seed_end));
+            self.applied_display_window = Some(display_window);
             // Seed selected_time_range to match the initial panel preset.
             self.selected_time_range = panel.read(cx).selected_time_range;
 
@@ -474,6 +492,19 @@ impl ChartDocument {
             chart_window_label(&self.chart_shell, resolved_window, row_count, cx)
         };
 
+        // Session-only notice for accumulating sources: the visible series is
+        // limited to samples collected while this chart is open, whatever the
+        // selected time range claims. Without it a "Last 7 days" preset would
+        // imply history the session does not have.
+        let session_note = self.source_is_accumulating().then(|| {
+            div()
+                .flex_shrink_0()
+                .font_family(AppFonts::MONO)
+                .text_size(DocumentMetrics::TABLE_META_FONT)
+                .text_color(theme.muted_foreground)
+                .child(dbflux_i18n::t!("document.chart.session_samples_only"))
+        });
+
         let axis_row = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx)
             .child(axis_bar)
             .child(div().flex_1())
@@ -484,7 +515,8 @@ impl ChartDocument {
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(theme.muted_foreground)
                     .child(window_label),
-            );
+            )
+            .children(session_note);
 
         // -- Custom date/time picker row --
         // Rendered below the chart toolbar when the user has selected "Custom…"

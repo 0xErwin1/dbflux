@@ -1034,6 +1034,7 @@ document:
         created_with_limitations: "Bucket \"%{name}\" criado com limitações"
     breadcrumb: "Buckets"
   chart:
+    session_samples_only: "Amostras coletadas nesta sessão do gráfico"
     pane_actions:
       refresh: "Atualizar"
       auto_refresh: "Intervalo de atualização automática…"
