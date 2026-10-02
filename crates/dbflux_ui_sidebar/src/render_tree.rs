@@ -8,6 +8,20 @@ use dbflux_components::typography::AppFonts;
 use gpui::FontWeight;
 use std::time::Duration;
 
+/// Whether `item_id` is an error placeholder row, whose label is the full
+/// failure message and is usually wider than the sidebar.
+fn is_error_retry_row(item_id: &str) -> bool {
+    item_id.starts_with("object-retry|") || item_id.starts_with("metrics-retry|")
+}
+
+/// Whether a row draws its chevron pointing down.
+///
+/// A profile keeps its expanded flag across a disconnect so it reopens on
+/// reconnect, but while it has no children there is nothing open under it.
+fn reads_expanded(node_kind: SchemaNodeKind, is_expanded: bool, has_children: bool) -> bool {
+    is_expanded && (has_children || node_kind != SchemaNodeKind::Profile)
+}
+
 fn sidebar_tree_label(
     label: SharedString,
     node_kind: SchemaNodeKind,
@@ -185,7 +199,7 @@ pub(super) fn render_tree_item(
     let theme = cx.theme();
     let indent_per_level = f32::from(TreeMetrics::INDENT);
     let is_folder = entry.is_folder();
-    let is_expanded = entry.is_expanded();
+    let is_expanded = reads_expanded(node_kind, entry.is_expanded(), is_folder);
 
     let needs_chevron = matches!(
         node_kind,
@@ -536,12 +550,22 @@ pub(super) fn render_tree_item(
                     )
                 })
                 .when(!is_being_renamed, |el| {
+                    let error_tooltip =
+                        is_error_retry_row(item_id.as_ref()).then(|| label_text.clone());
+
                     el.child(
                         div()
+                            .id(SharedString::from(format!("row-label-{item_id}")))
                             .flex_1()
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
+                            .when_some(error_tooltip, |el, tooltip| {
+                                el.tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(tooltip.clone())
+                                        .build(window, cx)
+                                })
+                            })
                             .child(sidebar_tree_label(
                                 label_text.clone(),
                                 node_kind,
@@ -1567,7 +1591,10 @@ fn resolve_collection_field_type_icon(label: &str) -> AppIcon {
 
 #[cfg(test)]
 mod tests {
-    use super::{icon_for_node_kind, sidebar_tree_label, split_folder_count};
+    use super::{
+        icon_for_node_kind, is_error_retry_row, reads_expanded, sidebar_tree_label,
+        split_folder_count,
+    };
     use dbflux_components::typography::AppFonts;
     use dbflux_core::SchemaNodeKind;
     use gpui::FontWeight;
@@ -1585,6 +1612,21 @@ mod tests {
             !render_code.contains('\u{2022}'),
             "a leaf row must not draw a bullet where the chevron goes (P1Sidebar)"
         );
+    }
+
+    #[test]
+    fn a_profile_without_children_reads_collapsed() {
+        assert!(!reads_expanded(SchemaNodeKind::Profile, true, false));
+        assert!(reads_expanded(SchemaNodeKind::Profile, true, true));
+        assert!(!reads_expanded(SchemaNodeKind::Profile, false, true));
+        assert!(reads_expanded(SchemaNodeKind::Database, true, false));
+    }
+
+    #[test]
+    fn error_placeholder_rows_are_recognised_by_their_retry_prefix() {
+        assert!(is_error_retry_row("object-retry|profile|db"));
+        assert!(is_error_retry_row("metrics-retry|profile|db"));
+        assert!(!is_error_retry_row("connect-failure|profile|0"));
     }
 
     #[test]

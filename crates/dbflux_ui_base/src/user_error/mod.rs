@@ -124,27 +124,9 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
     use crate::toast::{Toast, ToastAction, copy_action, now_hms};
 
     let id_str = err.correlation_id.to_string();
-    let kind_str = err.kind.as_str();
     let summary = &err.summary;
 
-    match err.severity {
-        EventSeverity::Warn => tracing::warn!(
-            target: "dbflux_ui::user_error",
-            correlation_id = %id_str,
-            kind            = %kind_str,
-            outcome         = "failure",
-            action          = "user_error",
-            "{summary}",
-        ),
-        _ => tracing::error!(
-            target: "dbflux_ui::user_error",
-            correlation_id = %id_str,
-            kind            = %kind_str,
-            outcome         = "failure",
-            action          = "user_error",
-            "{summary}",
-        ),
-    }
+    trace_user_error(&err);
 
     let mut toast = match err.severity {
         EventSeverity::Warn => Toast::warning(err.summary.clone()),
@@ -193,6 +175,41 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
                 ));
             s.note_user_error(err.correlation_id, err.severity, cx);
         });
+    }
+}
+
+/// Emits the tracing event the audit bridge turns into the audit row.
+///
+/// `cause` and `suggested_action` are not typed audit fields, so the bridge
+/// stores them in `details_json` next to `kind`. Both are skipped when unset.
+fn trace_user_error(err: &UserFacingError) {
+    let id_str = err.correlation_id.to_string();
+    let kind_str = err.kind.as_str();
+    let summary = &err.summary;
+    let cause = err.cause.as_deref();
+    let suggested_action = err.suggested_action.as_deref();
+
+    match err.severity {
+        EventSeverity::Warn => tracing::warn!(
+            target: "dbflux_ui::user_error",
+            correlation_id = %id_str,
+            kind            = %kind_str,
+            outcome         = "failure",
+            action          = "user_error",
+            cause,
+            suggested_action,
+            "{summary}",
+        ),
+        _ => tracing::error!(
+            target: "dbflux_ui::user_error",
+            correlation_id = %id_str,
+            kind            = %kind_str,
+            outcome         = "failure",
+            action          = "user_error",
+            cause,
+            suggested_action,
+            "{summary}",
+        ),
     }
 }
 
@@ -262,6 +279,91 @@ mod tests {
             err.cause.is_none(),
             "cause must be None when no detail/hint/code"
         );
+    }
+
+    /// Collects the string fields of every event emitted while it is the
+    /// default subscriber.
+    #[derive(Default)]
+    struct FieldCapture {
+        fields: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+    }
+
+    impl tracing::field::Visit for &FieldCapture {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if let Ok(mut fields) = self.fields.lock() {
+                fields.insert(field.name().to_owned(), value.to_owned());
+            }
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if let Ok(mut fields) = self.fields.lock() {
+                fields.insert(field.name().to_owned(), format!("{value:?}"));
+            }
+        }
+    }
+
+    impl tracing::Subscriber for FieldCapture {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut visitor = self;
+            event.record(&mut visitor);
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn traced_fields(err: &UserFacingError) -> std::collections::BTreeMap<String, String> {
+        let capture = std::sync::Arc::new(FieldCapture::default());
+
+        tracing::subscriber::with_default(capture.clone(), || trace_user_error(err));
+
+        capture
+            .fields
+            .lock()
+            .map(|fields| fields.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn traced_event_carries_the_cause_and_suggested_action() {
+        let err = UserFacingError::new(ErrorKind::Network, "Failed to load the database list")
+            .with_cause("Connection failed: error sending request")
+            .with_suggested_action("Check that the server is reachable");
+
+        let fields = traced_fields(&err);
+
+        assert_eq!(
+            fields.get("cause").map(String::as_str),
+            Some("Connection failed: error sending request")
+        );
+        assert_eq!(
+            fields.get("suggested_action").map(String::as_str),
+            Some("Check that the server is reachable")
+        );
+        assert_eq!(fields.get("kind").map(String::as_str), Some("network"));
+    }
+
+    #[test]
+    fn traced_event_omits_an_unset_cause() {
+        let err = UserFacingError::new(ErrorKind::Storage, "Export failed");
+
+        let fields = traced_fields(&err);
+
+        assert!(!fields.contains_key("cause"));
+        assert!(!fields.contains_key("suggested_action"));
     }
 
     #[test]
