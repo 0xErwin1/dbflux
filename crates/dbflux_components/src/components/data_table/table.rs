@@ -693,7 +693,17 @@ impl gpui::Render for DataTable {
                             .bottom_0()
                             .w(SCROLLBAR_WIDTH)
                             .when(row_count > 0, |this| {
-                                this.child(Scrollbar::vertical(&vertical_scroll_handle))
+                                // The overlay strip below the header is the
+                                // visible viewport. The handle's own bounds are
+                                // the uniform_list element, which extends past
+                                // the visible area when the grid overflows
+                                // horizontally — deriving the hitbox from them
+                                // makes right-edge track clicks miss. Same
+                                // binding the horizontal bar above uses.
+                                this.child(
+                                    Scrollbar::vertical(&vertical_scroll_handle)
+                                        .viewport_from_layout(),
+                                )
                             }),
                     )
                     // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
@@ -1521,4 +1531,154 @@ fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{AppContext as _, Render, TestAppContext, VisualTestContext, div};
+    use gpui_base::ScrollbarHandle as _;
+
+    struct ScrollHarness {
+        table: Entity<DataTable>,
+    }
+
+    impl Render for ScrollHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(600.0))
+                .h(px(300.0))
+                .debug_selector(|| "scroll-harness".to_string())
+                .child(self.table.clone())
+        }
+    }
+
+    fn overflow_model() -> Arc<TableModel> {
+        use super::super::model::{CellValue, ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        let columns = vec![
+            ColumnSpec {
+                id: "id".into(),
+                title: "id".into(),
+                kind: ColumnKind::Integer,
+                align: TextAlign::Left,
+                type_name: "int8".into(),
+            },
+            ColumnSpec {
+                id: "name".into(),
+                title: "name".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            },
+        ];
+        let rows = (0..100)
+            .map(|i| RowData {
+                cells: vec![CellValue::int(i as i64), CellValue::text("row")],
+            })
+            .collect();
+        Arc::new(TableModel::new(columns, rows))
+    }
+
+    fn offsets(
+        visual: &mut VisualTestContext,
+        state: &Entity<DataTableState>,
+    ) -> (gpui::Pixels, gpui::Pixels) {
+        visual.update(|_, cx| {
+            let vertical = state.read(cx).vertical_scroll_handle().offset().y;
+            let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
+            (vertical, horizontal)
+        })
+    }
+
+    /// Clicking the vertical scrollbar track must scroll the body vertically
+    /// and leave the horizontal axis untouched, even when the grid overflows
+    /// horizontally (columns wider than the viewport).
+    ///
+    /// The vertical `Scrollbar` overlays a positioned strip below the header.
+    /// Without `.viewport_from_layout()` the bar derives its hitbox from the
+    /// uniform_list handle's bounds, which extend past the visible viewport
+    /// when the list is wider than the table — the right-edge track click
+    /// misses and the grid never scrolls. The binding takes the overlay strip
+    /// itself as the visible viewport, matching the horizontal bar.
+    #[gpui::test]
+    fn vertical_scrollbar_track_click_scrolls_vertically_only(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        cx.update(|cx| {
+            gpui_component::Theme::set_scrollbar_mode(
+                gpui_component::scroll::ScrollbarMode::Always,
+                cx,
+            );
+        });
+
+        let state_holder: std::rc::Rc<
+            std::cell::RefCell<Option<(Entity<DataTableState>, Entity<DataTable>)>>,
+        > = std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("scroll-test-table", state.clone(), cx));
+            holder_for_view.replace(Some((state.clone(), table.clone())));
+            ScrollHarness { table }
+        });
+
+        let (state, _table) = state_holder
+            .borrow()
+            .clone()
+            .expect("state and table entities must be created");
+
+        // Force horizontal overflow: column 0 wider than the window.
+        visual.update(|_, cx| {
+            state.update(cx, |s, cx| s.set_column_width(0, 1000.0, cx));
+        });
+        visual.run_until_parked();
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+
+        // Precondition: the grid must actually overflow horizontally, and the
+        // horizontal axis must start unscrolled — otherwise this test exercises
+        // nothing.
+        let total_width = visual.update(|_, cx| state.read(cx).total_content_width());
+        assert!(
+            harness.size.width < px(total_width),
+            "fixture must overflow horizontally: viewport {:?} vs content {total_width}",
+            harness.size.width
+        );
+
+        // Track point: rightmost strip, below the header, above the
+        // horizontal scrollbar strip.
+        let track_x =
+            harness.origin.x + harness.size.width - super::super::theme::SCROLLBAR_WIDTH / 2.0;
+        let track_y = harness.origin.y
+            + super::super::theme::HEADER_HEIGHT
+            + (harness.size.height
+                - super::super::theme::HEADER_HEIGHT
+                - super::super::theme::SCROLLBAR_WIDTH)
+                / 2.0;
+
+        let (y_before, x_before) = offsets(visual, &state);
+        assert_eq!(x_before, gpui::px(0.0), "horizontal must start unscrolled");
+
+        visual.simulate_click(gpui::point(track_x, track_y), gpui::Modifiers::default());
+        visual.run_until_parked();
+
+        let (y_after, x_after) = offsets(visual, &state);
+        assert!(
+            y_after < y_before,
+            "clicking the vertical track must scroll the body vertically \
+             (before {y_before:?}, after {y_after:?})"
+        );
+        assert!(
+            y_after <= gpui::px(0.0),
+            "vertical offset must move into scrolled range (after {y_after:?})"
+        );
+        assert_eq!(
+            x_after, x_before,
+            "vertical track click must not scroll horizontally"
+        );
+    }
 }

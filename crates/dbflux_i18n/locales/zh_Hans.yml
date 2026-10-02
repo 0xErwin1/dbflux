@@ -1034,6 +1034,7 @@ document:
         created_with_limitations: "已创建存储桶 %{name}（有限制）"
     breadcrumb: "存储桶"
   chart:
+    session_samples_only: "本次图表会话中采集的样本"
     pane_actions:
       refresh: "刷新"
       auto_refresh: "自动刷新间隔…"

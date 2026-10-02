@@ -1034,6 +1034,7 @@ document:
         created_with_limitations: "\"%{name}\" 버킷 생성됨 (제한 있음)"
     breadcrumb: "버킷"
   chart:
+    session_samples_only: "이 차트 세션에서 수집된 샘플"
     pane_actions:
       refresh: "새로 고침"
       auto_refresh: "자동 새로 고침 간격…"

@@ -21,6 +21,7 @@ use super::instance_inspector::InspectorPanel;
 use super::types::{DocumentId, DocumentState};
 use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::{
     ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged, InputState,
@@ -405,12 +406,30 @@ impl DashboardDocument {
                     return;
                 };
 
-                // First pass: stage the new time window on all panels without
-                // triggering their render loop (stage_time_window does not notify).
+                // Preserve the shared panel's provenance: relative presets
+                // stage a sliding window so rolling refreshes keep collecting
+                // visible samples; a Custom selection stages fixed bounds.
+                let display_window = match this.shared_time_range.read(cx).selected_time_range {
+                    Some(TimeRange::Custom) | None => {
+                        crate::chart_document::MetricDisplayWindow::Absolute {
+                            start_ms: start,
+                            end_ms: end,
+                        }
+                    }
+                    Some(_) => crate::chart_document::MetricDisplayWindow::Relative {
+                        span_ms: (end - start).max(0),
+                    },
+                };
+
+                // First pass: stage the new time window on all panels. Staging
+                // reprojects retained samples into the new window immediately,
+                // so a queued, failing, or offline refetch never leaves stale
+                // rows or a stale axis beneath the newly selected label.
+                // Re-execution is still gated by the semaphore below.
                 for slot in &this.panel_slots {
                     if let DashboardPanelSlot::Loaded { panel, .. } = slot {
-                        panel.update(cx, |doc, _cx| {
-                            doc.stage_time_window(start, end);
+                        panel.update(cx, |doc, cx| {
+                            doc.stage_time_window(start, end, display_window, cx);
                         });
                     }
                 }
