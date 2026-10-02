@@ -1,3 +1,4 @@
+use crate::values::{CompositeValueResolver, ValueRef};
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DataStructure, DatabaseInfo,
@@ -2738,6 +2739,10 @@ pub struct ConnectProfileResult {
     pub probe: WritePrivilege,
 }
 
+/// The value-ref field name carrying the connection password, matching the
+/// pipeline's field convention in `pipeline::resolve`.
+const PASSWORD_VALUE_REF: &str = "password";
+
 pub struct SwitchDatabaseParams {
     pub profile_id: Uuid,
     pub database: String,
@@ -2751,7 +2756,7 @@ impl SwitchDatabaseParams {
     pub fn execute(self) -> Result<SwitchDatabaseResult, String> {
         info!("Switching to database: {}", self.database);
 
-        let password = self.get_password();
+        let password = self.resolve_password()?;
 
         let connection = self
             .driver
@@ -2780,6 +2785,34 @@ impl SwitchDatabaseParams {
             connection: connection.into(),
             schema,
         })
+    }
+
+    /// Resolves the password for the switched connection.
+    ///
+    /// The connect pipeline resolves a `password` value ref (literal or env)
+    /// before the driver sees the profile, so a profile connected that way may
+    /// have no stored keyring password. Resolve those refs again here instead
+    /// of silently connecting without a password. Refs that need a provider or
+    /// auth context cannot be resolved on this path and fail explicitly rather
+    /// than falling back to the stored password.
+    fn resolve_password(&self) -> Result<Option<SecretString>, String> {
+        match self.original_profile.value_refs.get(PASSWORD_VALUE_REF) {
+            None => Ok(self.get_password()),
+            Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
+            Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
+                .map(|value| Some(SecretString::from(value)))
+                .map_err(|error| {
+                    format!(
+                        "Failed to resolve password for database '{}': {}",
+                        self.database, error
+                    )
+                }),
+            Some(_) => Err(format!(
+                "Password for profile '{}' comes from a provider or auth reference, which \
+                 cannot be resolved while switching to database '{}'.",
+                self.original_profile.name, self.database
+            )),
+        }
     }
 
     fn get_password(&self) -> Option<SecretString> {
@@ -3427,11 +3460,13 @@ mod tests {
     }
 
     use super::*;
+    use crate::values::ValueRef;
     use crate::{
         DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, NoopSecretStore,
         QueryLanguage, RelationKind, TableStorageHint,
     };
     use secrecy::ExposeSecret;
+    use std::sync::Mutex;
 
     struct TestConnection {
         kind: DbKind,
@@ -5985,6 +6020,10 @@ mod tests {
     struct PerDatabaseSwitchDriver {
         metadata: DriverMetadata,
         form: &'static DriverFormDef,
+        /// `(bound database, password)` pairs received by
+        /// `connect_with_secrets`, so switch-path regressions can assert what
+        /// the driver actually received.
+        passwords: RecordedConnects,
     }
 
     impl PerDatabaseSwitchDriver {
@@ -5992,7 +6031,20 @@ mod tests {
             Arc::new(Self {
                 metadata: postgres_metadata("test-pg-switch"),
                 form: &TEST_FORM,
+                passwords: Arc::new(Mutex::new(Vec::new())),
             })
+        }
+
+        fn recording() -> (Arc<Self>, RecordedConnects) {
+            let passwords = Arc::new(Mutex::new(Vec::new()));
+            (
+                Arc::new(Self {
+                    metadata: postgres_metadata("test-pg-switch"),
+                    form: &TEST_FORM,
+                    passwords: passwords.clone(),
+                }),
+                passwords,
+            )
         }
     }
 
@@ -6024,13 +6076,20 @@ mod tests {
         fn connect_with_secrets(
             &self,
             profile: &ConnectionProfile,
-            _password: Option<&SecretString>,
+            password: Option<&SecretString>,
             _ssh_secret: Option<&SecretString>,
         ) -> Result<Box<dyn Connection>, DbError> {
             let bound = match &profile.config {
                 DbConfig::Postgres { database, .. } => database.clone(),
                 _ => "unknown".to_string(),
             };
+            self.passwords
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((
+                    bound.clone(),
+                    password.map(|secret| secret.expose_secret().to_string()),
+                ));
             Ok(TableDetailsBoundConnection::boxed(
                 SchemaLoadingStrategy::ConnectionPerDatabase,
                 &bound,
@@ -6094,6 +6153,278 @@ mod tests {
 
     fn noop_secret_store() -> Arc<RwLock<Box<dyn SecretStore>>> {
         Arc::new(RwLock::new(Box::new(NoopSecretStore)))
+    }
+
+    // --- Password resolution when switching databases (#832) ---
+
+    const SWITCH_ENV_PASSWORD_VAR: &str = "DBFLUX_TEST_832_ENV_PASSWORD";
+    const SWITCH_ENV_SUBPROCESS_FLAG: &str = "DBFLUX_TEST_832_SUBPROCESS";
+    const SWITCH_ENV_PASSWORD_VALUE: &str = "env-resolved-password";
+    const KEYRING_PASSWORD_VALUE: &str = "keyring-stored-password";
+
+    /// `(bound database, password)` pair the recording driver received.
+    type ConnectCall = (String, Option<String>);
+    type RecordedConnects = Arc<Mutex<Vec<ConnectCall>>>;
+
+    struct FixedSecretStore(&'static str);
+
+    impl SecretStore for FixedSecretStore {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn get(&self, _secret_ref: &str) -> Result<Option<SecretString>, DbError> {
+            Ok(Some(SecretString::from(self.0.to_string())))
+        }
+
+        fn set(&self, _secret_ref: &str, _value: &SecretString) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn delete(&self, _secret_ref: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    fn fixed_secret_store() -> Arc<RwLock<Box<dyn SecretStore>>> {
+        Arc::new(RwLock::new(Box::new(FixedSecretStore(
+            KEYRING_PASSWORD_VALUE,
+        ))))
+    }
+
+    /// Connects a profile (with an optional `password` value ref) against the
+    /// recording per-database driver and returns the connection record.
+    fn switch_manager_with(
+        password_ref: Option<ValueRef>,
+        save_password: bool,
+    ) -> (ConnectionManager, ConnectionProfile, RecordedConnects) {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = save_password;
+        if let Some(value_ref) = password_ref {
+            profile.value_refs.insert("password".to_string(), value_ref);
+        }
+
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.drivers.insert("postgres".to_string(), driver);
+
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::ConnectionPerDatabase, "app");
+        connect_profile_with_schema(
+            &mut manager,
+            &profile,
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        (manager, profile, recorded)
+    }
+
+    fn switch_manager_with_password_ref(
+        password_ref: Option<ValueRef>,
+    ) -> (ConnectionManager, ConnectionProfile, RecordedConnects) {
+        switch_manager_with(password_ref, true)
+    }
+
+    fn recorded_connect_calls(recorded: &RecordedConnects) -> Vec<ConnectCall> {
+        recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Runs `test_name` in a fresh test-binary subprocess so per-test
+    /// environment changes never touch this process (no unsafe set_var).
+    fn run_isolated_switch_test(
+        test_name: &str,
+        configure: &dyn Fn(&mut std::process::Command),
+    ) -> std::process::Output {
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("current test binary path"));
+        command
+            .args([test_name, "--exact", "--nocapture"])
+            .env(SWITCH_ENV_SUBPROCESS_FLAG, "1");
+        configure(&mut command);
+
+        command.output().expect("spawn subprocess test binary")
+    }
+
+    /// Requires evidence that exactly one child test ran and passed: libtest
+    /// exits 0 when `--exact` matches no test, so exit status alone would let
+    /// a renamed test pass silently.
+    fn assert_isolated_switch_test_passes(
+        test_name: &str,
+        configure: &dyn Fn(&mut std::process::Command),
+    ) {
+        let output = run_isolated_switch_test(test_name, configure);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed; 0 failed"),
+            "expected exactly one child test to run and passed:\n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn switch_database_literal_password_overrides_stored_keyring() {
+        let (manager, profile, recorded) =
+            switch_manager_with_password_ref(Some(ValueRef::literal("literal-password")));
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+        assert_eq!(params.database, "analytics");
+
+        params
+            .execute()
+            .expect("execute should use the literal password ref over the keyring");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some("literal-password".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn isolated_switch_helper_rejects_exact_name_drift() {
+        let outcome = std::panic::catch_unwind(|| {
+            assert_isolated_switch_test_passes(
+                "connection::manager::tests::no_such_exact_test_name",
+                &|_| {},
+            );
+        });
+
+        assert!(
+            outcome.is_err(),
+            "helper must fail when the exact name matches zero child tests"
+        );
+    }
+
+    #[test]
+    fn switch_database_env_password_uses_environment_value() {
+        if std::env::var(SWITCH_ENV_SUBPROCESS_FLAG).is_ok() {
+            assert_env_password_switch_resolves_from_environment();
+            return;
+        }
+
+        assert_isolated_switch_test_passes(
+            "connection::manager::tests::switch_database_env_password_uses_environment_value",
+            &|command| {
+                command.env(SWITCH_ENV_PASSWORD_VAR, SWITCH_ENV_PASSWORD_VALUE);
+            },
+        );
+    }
+
+    /// Exercises the shared per-database path (`prepare_database_connection`)
+    /// with no stored password at all, so only the environment can supply it.
+    fn assert_env_password_switch_resolves_from_environment() {
+        let (manager, profile, recorded) =
+            switch_manager_with(Some(ValueRef::env(SWITCH_ENV_PASSWORD_VAR)), false);
+
+        let params = manager
+            .prepare_database_connection(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare database connection should succeed");
+
+        params
+            .execute()
+            .expect("switch should resolve the password from the environment");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some(SWITCH_ENV_PASSWORD_VALUE.to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn switch_database_missing_env_password_fails_without_keyring_fallback() {
+        if std::env::var(SWITCH_ENV_SUBPROCESS_FLAG).is_ok() {
+            assert_missing_env_password_switch_fails();
+            return;
+        }
+
+        assert_isolated_switch_test_passes(
+            "connection::manager::tests::switch_database_missing_env_password_fails_without_keyring_fallback",
+            &|command| {
+                command.env_remove(SWITCH_ENV_PASSWORD_VAR);
+            },
+        );
+    }
+
+    fn assert_missing_env_password_switch_fails() {
+        let (manager, profile, recorded) =
+            switch_manager_with_password_ref(Some(ValueRef::env(SWITCH_ENV_PASSWORD_VAR)));
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!(
+                "missing env password must fail instead of falling back to the stored keyring password"
+            );
+        };
+
+        assert!(
+            error.contains(SWITCH_ENV_PASSWORD_VAR),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("not set"), "unexpected error: {error}");
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "driver must not be called when the password cannot be resolved"
+        );
+    }
+
+    #[test]
+    fn switch_database_provider_password_ref_fails_without_keyring_fallback() {
+        let (manager, profile, recorded) =
+            switch_manager_with_password_ref(Some(ValueRef::secret("stub", "db-pass", None)));
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!(
+                "provider-backed password ref must fail instead of falling back to the stored keyring password"
+            );
+        };
+
+        assert!(
+            error.contains("provider") && error.contains("analytics"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "driver must not be called when the password cannot be resolved"
+        );
+    }
+
+    #[test]
+    fn switch_database_without_password_ref_uses_stored_keyring_password() {
+        let (manager, profile, recorded) = switch_manager_with_password_ref(None);
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        params
+            .execute()
+            .expect("execute should use the stored keyring password");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some(KEYRING_PASSWORD_VALUE.to_string())
+            )]
+        );
     }
 
     #[test]
