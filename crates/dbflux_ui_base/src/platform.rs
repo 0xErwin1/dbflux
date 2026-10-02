@@ -411,6 +411,19 @@ pub fn fitted_window_bounds(width: f32, height: f32, cx: &App) -> gpui::Bounds<g
     }
 }
 
+/// Applies DBFlux window options to the main window: `WindowKind::Normal`, min
+/// size so X11 window managers emit `WM_NORMAL_HINTS`, and platform-appropriate
+/// decorations.
+///
+/// `Normal` is what makes the window the operating system's and every
+/// accessibility-based window manager's to manage. `WindowKind::Floating`
+/// opens an `NSPanel` above the other windows on macOS (see [`apply_window_options`]),
+/// which takes the window out of AeroSpace, Spaces and Stage Manager.
+pub fn apply_main_window_options(options: &mut WindowOptions, min_width: f32, min_height: f32) {
+    apply_window_size_and_decorations(options, min_width, min_height);
+    options.kind = WindowKind::Normal;
+}
+
 /// Applies standard DBFlux window options for secondary windows (Settings, Connection
 /// Manager, SSO Wizard, etc.): floating kind, min size so X11 window
 /// managers emit `WM_NORMAL_HINTS`, and platform-appropriate decorations.
@@ -418,8 +431,11 @@ pub fn fitted_window_bounds(width: f32, height: f32, cx: &App) -> gpui::Bounds<g
 /// On Linux, requests CSD so secondary windows match the main window behavior and
 /// render their own title bars. On other platforms, requests server-side decorations.
 pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_height: f32) {
+    apply_window_size_and_decorations(options, min_width, min_height);
     options.kind = floating_window_kind();
+}
 
+fn apply_window_size_and_decorations(options: &mut WindowOptions, min_width: f32, min_height: f32) {
     // A minimum larger than the window it applies to would force the window
     // past the display, so it never exceeds the fitted initial size. A window
     // opened maximized or fullscreen still carries the size it was placed with.
@@ -440,8 +456,11 @@ pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_hei
 
 #[cfg(test)]
 mod window_size_tests {
-    use super::{WINDOW_SCREEN_MARGIN, fit_window_size, inset_by_screen_margin};
-    use gpui::{Bounds, point, px, size};
+    use super::{
+        WINDOW_SCREEN_MARGIN, apply_main_window_options, apply_window_options, fit_window_size,
+        inset_by_screen_margin,
+    };
+    use gpui::{Bounds, WindowKind, WindowOptions, point, px, size};
 
     #[test]
     fn the_screen_margin_is_inset_on_every_side() {
@@ -489,5 +508,73 @@ mod window_size_tests {
         let fitted = fit_window_size(size(px(1180.0), px(1000.0)), size(px(1920.0), px(1000.0)));
 
         assert_eq!(fitted, size(px(1180.0), px(952.0)));
+    }
+
+    #[test]
+    fn the_main_window_is_a_normal_window() {
+        let mut options = WindowOptions::default();
+
+        apply_main_window_options(&mut options, 800.0, 600.0);
+
+        assert_eq!(options.kind, WindowKind::Normal);
+    }
+
+    #[test]
+    fn a_secondary_window_floats() {
+        let mut options = WindowOptions::default();
+
+        apply_window_options(&mut options, 800.0, 600.0);
+
+        assert_eq!(options.kind, WindowKind::Floating);
+    }
+
+    #[test]
+    fn both_window_kinds_carry_the_min_size_and_the_decorations() {
+        for (name, apply) in [
+            (
+                "main",
+                apply_main_window_options as fn(&mut WindowOptions, f32, f32),
+            ),
+            ("secondary", apply_window_options),
+        ] {
+            let mut options = WindowOptions::default();
+
+            apply(&mut options, 800.0, 600.0);
+
+            assert_eq!(
+                options.window_min_size,
+                Some(size(px(800.0), px(600.0))),
+                "{name} window"
+            );
+            assert!(options.window_decorations.is_some(), "{name} window");
+        }
+    }
+
+    /// The min size never exceeds the window it applies to, whichever kind of
+    /// window asks for it: a window placed maximized on a small display keeps
+    /// the size it was placed with.
+    #[test]
+    fn a_min_size_larger_than_the_placed_window_shrinks_to_it() {
+        let placed = size(px(600.0), px(400.0));
+
+        for (name, apply) in [
+            (
+                "main",
+                apply_main_window_options as fn(&mut WindowOptions, f32, f32),
+            ),
+            ("secondary", apply_window_options),
+        ] {
+            let mut options = WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    placed,
+                ))),
+                ..WindowOptions::default()
+            };
+
+            apply(&mut options, 800.0, 600.0);
+
+            assert_eq!(options.window_min_size, Some(placed), "{name} window");
+        }
     }
 }

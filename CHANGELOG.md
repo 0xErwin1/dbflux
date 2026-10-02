@@ -22,6 +22,8 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Window size and position survive a restart** — The main window reopens at the size and position it had when DBFlux closed, maximized again if it was maximized. A window saved on a display that is no longer connected comes back on one that is attached, and the window is fitted to the screen's usable area, so its title bar and its bottom edge stay visible. Before, each launch gave the window a default size taken from the full display instead of the work area: on a screen whose work area is shorter, the window opened as tall as the screen, with its header above the top edge and its bottom under the taskbar. The first launch of a fresh installation now fits the window to the screen the same way. On Wayland the compositor owns window placement and does not report where a window ended up, so there the position is a request rather than a restored value.
 
+* **The main window is an ordinary window again** — DBFlux created its main window as a floating window, which on macOS opened it as a panel above every other window and outside the reach of AeroSpace, Mission Control, Spaces and Stage Manager, so it could not be tiled, moved between spaces or brought forward with the window manager's own keys. The main window is now an ordinary window, managed like any other application's, and switching between windows follows the layout. Linux and Windows were not affected.
+
 ## [0.8.5] - 2026-09-30
 
 ### Added

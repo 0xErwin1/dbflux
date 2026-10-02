@@ -453,7 +453,10 @@ fn run_gui() {
             display_id: placement.display_id,
             ..Default::default()
         };
-        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+        // The main window stays a normal window: a floating one is an
+        // `NSPanel` above everything else on macOS, which takes it out of
+        // AeroSpace, Spaces and Stage Manager.
+        platform::apply_main_window_options(&mut main_window_options, 800.0, 600.0);
 
         let window_handle = cx
             .open_window(main_window_options, |window, cx| {
