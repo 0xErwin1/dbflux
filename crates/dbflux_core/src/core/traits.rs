@@ -959,6 +959,36 @@ pub trait ObjectStoreConnection: Send + Sync {
     /// this trait does not enforce a size limit itself.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError>;
 
+    /// Fetch the bytes of an object that fall inside `range`, a half-open
+    /// byte range (`start` inclusive, `end` exclusive).
+    ///
+    /// The range is clamped to the object's length: a range that runs past
+    /// the end returns the available tail, and a range that starts at or past
+    /// the end returns an empty vector. An empty range (`start >= end`)
+    /// returns an empty vector without fetching anything.
+    ///
+    /// The default implementation downloads the whole object through
+    /// `get_object` and slices it, so every call costs a full download.
+    /// Drivers whose backend supports ranged reads should override it.
+    fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: std::ops::Range<u64>,
+    ) -> Result<Vec<u8>, DbError> {
+        if range.start >= range.end {
+            return Ok(Vec::new());
+        }
+
+        let body = self.get_object(bucket, key)?;
+        let length = body.len();
+
+        let start = usize::try_from(range.start).map_or(length, |start| start.min(length));
+        let end = usize::try_from(range.end).map_or(length, |end| end.min(length));
+
+        Ok(body.get(start..end).map(<[u8]>::to_vec).unwrap_or_default())
+    }
+
     /// Stream an object's body straight to `dest` on disk, never buffering
     /// the whole object in memory. Used for Download and Open-externally —
     /// the only two transfers that move an object's bytes off the network,
@@ -2627,7 +2657,27 @@ mod tests {
 
     /// Minimal `ObjectStoreConnection` stub exercising object-safety (usable
     /// as `&dyn ObjectStoreConnection`) rather than any real S3 behavior.
-    struct StubObjectStore;
+    /// `get_object` serves `body` for every key and counts its calls, so
+    /// tests can tell a default method that fetched from one that did not.
+    #[derive(Default)]
+    struct StubObjectStore {
+        body: Vec<u8>,
+        get_object_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl StubObjectStore {
+        fn with_body(body: &[u8]) -> Self {
+            Self {
+                body: body.to_vec(),
+                ..Self::default()
+            }
+        }
+
+        fn get_object_calls(&self) -> usize {
+            self.get_object_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
 
     impl ObjectStoreConnection for StubObjectStore {
         fn list_buckets(&self) -> Result<Vec<BucketInfo>, DbError> {
@@ -2660,7 +2710,10 @@ mod tests {
         }
 
         fn get_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, DbError> {
-            Ok(Vec::new())
+            self.get_object_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            Ok(self.body.clone())
         }
 
         fn download_object(
@@ -2770,10 +2823,71 @@ mod tests {
 
     #[test]
     fn object_store_connection_is_object_safe_and_callable() {
-        let store: &dyn ObjectStoreConnection = &StubObjectStore;
+        let stub = StubObjectStore::default();
+        let store: &dyn ObjectStoreConnection = &stub;
         let buckets = store.list_buckets().expect("list_buckets");
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].name, "my-bucket");
+    }
+
+    #[test]
+    fn get_object_range_default_returns_the_same_bytes_as_a_slice_of_the_full_read() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let full = store.get_object("bucket", "key").expect("get_object");
+        let window = store
+            .get_object_range("bucket", "key", 3..7)
+            .expect("get_object_range");
+
+        assert_eq!(window, full[3..7]);
+        assert_eq!(window, b"3456");
+    }
+
+    #[test]
+    fn get_object_range_default_clamps_a_range_running_past_the_end_to_the_tail() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let tail = store
+            .get_object_range("bucket", "key", 7..1_000)
+            .expect("get_object_range");
+
+        assert_eq!(tail, b"789");
+    }
+
+    #[test]
+    fn get_object_range_default_returns_empty_when_the_range_starts_at_or_past_the_end() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let at_end = store
+            .get_object_range("bucket", "key", 10..20)
+            .expect("get_object_range at end");
+        let past_end = store
+            .get_object_range("bucket", "key", 50..u64::MAX)
+            .expect("get_object_range past end");
+
+        assert!(at_end.is_empty());
+        assert!(past_end.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn get_object_range_default_returns_empty_for_an_empty_range_without_fetching() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let empty = store
+            .get_object_range("bucket", "key", 4..4)
+            .expect("get_object_range empty");
+        let inverted = store
+            .get_object_range("bucket", "key", 6..2)
+            .expect("get_object_range inverted");
+
+        assert!(empty.is_empty());
+        assert!(inverted.is_empty());
+        assert_eq!(stub.get_object_calls(), 0);
     }
 
     /// Connection stub whose `ConnectionExt` impl relies entirely on defaults,
