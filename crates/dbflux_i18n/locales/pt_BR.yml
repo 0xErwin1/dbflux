@@ -39,6 +39,13 @@ access:
   ssh_failed: Falha na conexão SSH
   save_as_tunnel: Salvar como túnel
   ssh_disabled_hint: Habilite o túnel SSH para configurar a conexão por meio de um host bastion
+app_menu:
+  about: Sobre o %{app}
+  services: Serviços
+  hide: Ocultar %{app}
+  hide_others: Ocultar Outros
+  show_all: Mostrar Tudo
+  quit: Sair do %{app}
 audit:
   toast:
     mcp_governance_persisted: Estado de governança do MCP salvo
@@ -3565,6 +3572,7 @@ settings:
       open_tab_menu: Abrir menu da aba
       move_tab_left: Mover aba para a esquerda
       move_tab_right: Mover aba para a direita
+      quit: Sair do DBFlux
       focus_sidebar: Focar na barra lateral
       focus_editor: Focar no editor
       focus_results: Focar nos resultados
