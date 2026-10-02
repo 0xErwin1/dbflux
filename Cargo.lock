@@ -3475,6 +3475,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_components",
  "dbflux_core",
+ "dbflux_delimited",
  "dbflux_driver_mongodb",
  "dbflux_driver_mssql",
  "dbflux_export",
