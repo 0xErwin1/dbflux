@@ -1,4 +1,110 @@
-rust_i18n::i18n!("locales", fallback = "en");
+include!(concat!(env!("OUT_DIR"), "/locales.rs"));
+
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
+
+static CURRENT_LOCALE: RwLock<String> = RwLock::new(String::new());
+
+/// Returns the flattened translation table for every shipped locale, parsing
+/// each catalog YAML at most once per process.
+fn translation_tables() -> &'static HashMap<&'static str, HashMap<String, String>> {
+    static TABLES: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();
+
+    TABLES.get_or_init(|| {
+        LOCALE_SOURCES
+            .iter()
+            .map(|(locale, source)| (*locale, parse_catalog(source)))
+            .collect()
+    })
+}
+
+/// Parses one catalog YAML source into a flat dotted-key table.
+fn parse_catalog(source: &str) -> HashMap<String, String> {
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(source).expect("shipped catalog must be valid YAML");
+    let mut table = HashMap::new();
+    flatten_value(&value, String::new(), &mut table);
+    table
+}
+
+/// Flattens nested YAML into dotted keys: a string leaf becomes its own
+/// value, `null` becomes the empty string, bools and numbers are stringified,
+/// arrays become the empty string, and mappings recurse with `parent.child`.
+fn flatten_value(value: &serde_yaml::Value, prefix: String, table: &mut HashMap<String, String>) {
+    match value {
+        serde_yaml::Value::Mapping(mapping) => {
+            for (key, nested) in mapping {
+                let Some(key) = key.as_str() else { continue };
+                let path = if prefix.is_empty() {
+                    key.to_string()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten_value(nested, path, table);
+            }
+        }
+        serde_yaml::Value::String(text) => {
+            table.insert(prefix, text.clone());
+        }
+        serde_yaml::Value::Null | serde_yaml::Value::Sequence(_) => {
+            table.insert(prefix, String::new());
+        }
+        serde_yaml::Value::Bool(value) => {
+            table.insert(prefix, value.to_string());
+        }
+        serde_yaml::Value::Number(value) => {
+            table.insert(prefix, value.to_string());
+        }
+        serde_yaml::Value::Tagged(tagged) => {
+            flatten_value(&tagged.value, prefix, table);
+        }
+    }
+}
+
+/// Resolves `key` for `locale` following rust-i18n's precedence: the
+/// locale's own table first, then the sub-locale chain (everything after the
+/// last `-` is dropped, trimming a trailing `-x`), then the English fallback.
+fn lookup_translation(locale: &str, key: &str) -> Option<String> {
+    let tables = translation_tables();
+
+    if let Some(value) = tables.get(locale).and_then(|table| table.get(key)) {
+        return Some(value.clone());
+    }
+
+    let mut current = locale;
+    while let Some(separator) = current.rfind('-') {
+        let fallback = current[..separator].trim_end_matches("-x");
+        if let Some(value) = tables.get(fallback).and_then(|table| table.get(key)) {
+            return Some(value.clone());
+        }
+        current = fallback;
+    }
+
+    tables.get("en").and_then(|table| table.get(key)).cloned()
+}
+
+/// Translates `key` for an explicit `locale`, falling back to the sub-locale
+/// chain and the English fallback, then to `format!("{locale}.{key}")` (or
+/// the bare key when the locale is empty) when nothing matches.
+fn translate_raw(locale: &str, key: &str) -> String {
+    if let Some(value) = lookup_translation(locale, key) {
+        return value;
+    }
+
+    if locale.is_empty() {
+        return key.to_string();
+    }
+
+    format!("{locale}.{key}")
+}
+
+/// Returns the process-wide active locale used by [`translate`] and [`t!`].
+fn current_locale() -> String {
+    CURRENT_LOCALE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
 
 /// A language DBFlux ships a translation catalog for.
 ///
@@ -20,7 +126,8 @@ impl Language {
         static AVAILABLE: std::sync::OnceLock<Vec<Language>> = std::sync::OnceLock::new();
 
         AVAILABLE.get_or_init(|| {
-            let mut codes = rust_i18n::available_locales!();
+            let mut codes: Vec<&'static str> =
+                LOCALE_SOURCES.iter().map(|(locale, _)| *locale).collect();
             codes.sort_by(|a, b| match (*a, *b) {
                 ("en", "en") => std::cmp::Ordering::Equal,
                 ("en", _) => std::cmp::Ordering::Less,
@@ -49,7 +156,7 @@ impl Language {
             .find(|language| language.0 == value)
     }
 
-    /// The `rust-i18n` locale code, currently identical to the storage string.
+    /// The catalog locale code, currently identical to the storage string.
     pub fn locale_code(self) -> &'static str {
         self.0
     }
@@ -192,11 +299,13 @@ pub fn detect_system_locale() -> Option<String> {
 
 /// Sets the process-wide active locale used by [`translate`] and [`t!`].
 ///
-/// `rust-i18n` stores the active locale in a process-global, so this is
-/// intended to run once at startup after resolving the effective
-/// [`Language`], not on every translation lookup.
+/// The active locale is stored in a process-global, so this is intended to
+/// run once at startup after resolving the effective [`Language`], not on
+/// every translation lookup.
 pub fn set_locale(language: Language) {
-    rust_i18n::set_locale(language.locale_code());
+    *CURRENT_LOCALE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = language.locale_code().to_string();
 }
 
 /// Translates `key` using the process-wide active locale set by [`set_locale`].
@@ -204,23 +313,20 @@ pub fn set_locale(language: Language) {
 /// Falls back to the configured fallback locale, then to the key itself,
 /// when no translation is found.
 pub fn translate(key: &str) -> String {
-    use std::ops::Deref;
-
-    crate::_rust_i18n_translate(rust_i18n::locale().deref(), key).into_owned()
+    translate_in(&current_locale(), key)
 }
 
 /// Translates `key` for an explicit `locale`, ignoring the process-wide
 /// active locale.
 pub fn translate_in(locale: &str, key: &str) -> String {
-    crate::_rust_i18n_translate(locale, key).into_owned()
+    translate_raw(locale, key)
 }
 
 /// Translates a catalog key, optionally against an explicit locale or with
 /// `%{name}` placeholder interpolation.
 ///
-/// `rust-i18n`'s own `t!` expands to a crate-local `_rust_i18n_t!` alias that
-/// cannot be re-exported from this crate, so `dbflux_i18n` defines its own
-/// macro on top of [`translate`] / [`translate_in`].
+/// `dbflux_i18n` owns the loader, so the macro is a thin wrapper over
+/// [`translate`] / [`translate_in`].
 #[macro_export]
 macro_rules! t {
     ($key:expr) => {
@@ -401,23 +507,6 @@ mod tests {
         assert_eq!(spanish().native_name(), "Español");
     }
 
-    fn flatten_catalog_keys(value: &serde_yaml::Value, prefix: String, out: &mut Vec<String>) {
-        match value {
-            serde_yaml::Value::Mapping(mapping) => {
-                for (key, nested) in mapping {
-                    let key = key.as_str().expect("catalog keys must be strings");
-                    let path = if prefix.is_empty() {
-                        key.to_string()
-                    } else {
-                        format!("{prefix}.{key}")
-                    };
-                    flatten_catalog_keys(nested, path, out);
-                }
-            }
-            _ => out.push(prefix),
-        }
-    }
-
     fn flatten_catalog_values(
         value: &serde_yaml::Value,
         out: &mut Vec<(String, serde_yaml::Value)>,
@@ -475,9 +564,10 @@ mod tests {
     #[test]
     fn partial_catalogs_may_omit_fallback_keys_but_must_not_add_unknown_keys() {
         let en = catalog("en");
-        let mut en_keys = Vec::new();
-        flatten_catalog_keys(&en, String::new(), &mut en_keys);
-        let en_set: std::collections::BTreeSet<_> = en_keys.into_iter().collect();
+        let mut en_values = Vec::new();
+        flatten_catalog_values(&en, &mut en_values);
+        let en_set: std::collections::BTreeSet<_> =
+            en_values.into_iter().map(|(key, _)| key).collect();
 
         for language in Language::available()
             .iter()
@@ -485,16 +575,76 @@ mod tests {
         {
             let locale = language.locale_code();
             let translated = catalog(locale);
-            let mut translated_keys = Vec::new();
-            flatten_catalog_keys(&translated, String::new(), &mut translated_keys);
+            let mut translated_values = Vec::new();
+            flatten_catalog_values(&translated, &mut translated_values);
             let translated_set: std::collections::BTreeSet<_> =
-                translated_keys.into_iter().collect();
+                translated_values.into_iter().map(|(key, _)| key).collect();
             let unknown: Vec<_> = translated_set.difference(&en_set).cloned().collect();
 
             assert!(
                 unknown.is_empty(),
                 "catalog {locale} contains keys unknown to the English fallback: {unknown:?}"
             );
+        }
+    }
+
+    #[test]
+    fn loaded_tables_match_the_flattened_yaml_on_disk() {
+        for &(locale, source) in LOCALE_SOURCES {
+            let parsed: serde_yaml::Value =
+                serde_yaml::from_str(source).expect("shipped catalog must be valid YAML");
+            let mut expected_entries = Vec::new();
+            flatten_catalog_values(&parsed, &mut expected_entries);
+            let expected: std::collections::BTreeSet<_> =
+                expected_entries.into_iter().map(|(key, _)| key).collect();
+
+            let table = translation_tables()
+                .get(locale)
+                .expect("every locale source is loaded into a table");
+
+            assert_eq!(
+                table
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected,
+                "loaded table for {locale} must match its YAML file exactly"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_key_falls_back_to_english_then_to_locale_key_sentinel() {
+        // A locale with no shipped catalog resolves through the English fallback.
+        assert_eq!(translate_in("xx", "settings.general.save.button"), "Save");
+
+        // A key missing everywhere resolves to the `{locale}.{key}` sentinel,
+        // or to the bare key when the locale is empty.
+        assert_eq!(
+            translate_in("es", "dbflux_i18n.test.missing_key"),
+            "es.dbflux_i18n.test.missing_key"
+        );
+        assert_eq!(
+            translate_in("", "dbflux_i18n.test.missing_key"),
+            "dbflux_i18n.test.missing_key"
+        );
+
+        // A partial catalog resolves its untranslated keys through the
+        // English fallback when one exists.
+        let tables = translation_tables();
+        let english = tables.get("en").expect("en catalog is loaded");
+        if let Some((locale, key)) = tables
+            .iter()
+            .filter(|(locale, _)| **locale != "en")
+            .find_map(|(locale, table)| {
+                english
+                    .keys()
+                    .find(|key| !table.contains_key(*key))
+                    .map(|key| (*locale, key.clone()))
+            })
+        {
+            let expected = english.get(&key).expect("key came from the English table");
+            assert_eq!(translate_in(locale, &key), *expected);
         }
     }
 
