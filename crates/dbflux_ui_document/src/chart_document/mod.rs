@@ -128,11 +128,10 @@ pub struct ChartDocument {
     /// Instance-metric backends return only the current sample, so the visible
     /// series is whatever this chart session collected. The applied window
     /// filters that session-only sample set for display:
-    /// - `Relative` — a preset selection; anchored at the newest collected
-    ///   sample on every applied result so freshly fetched samples stay
-    ///   visible instead of being frozen out by bounds resolved at click time.
-    /// - `Absolute` — a custom-range Apply or a dashboard-staged window; fixed
-    ///   bounds applied literally.
+    /// - `Relative` — a preset selection; anchored at the current time on
+    ///   every reprojection so the displayed window advances on refresh.
+    /// - `Absolute` — an applied custom range; fixed bounds applied literally.
+    ///
     /// `None` (before the first panel is created) shows the full session.
     applied_display_window: Option<MetricDisplayWindow>,
 
