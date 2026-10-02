@@ -4794,6 +4794,7 @@ updates:
     collected_build: "构建：版本、渠道、操作系统、架构"
     collected_language: "系统语言和国家，每周"
     collected_counts: "功能使用计数（查询、仪表板、脚本等）"
+    collected_header: 采集内容
     collected_minimal: 最小通知
     collected_basic: 基本
     collected_yes: "✓"
@@ -4814,6 +4815,7 @@ updates:
     level_basic_display: 基本
     view_report: 查看最近报告
     open_in_audit: 在审计中打开
+    reports_audit_note: "每份报告都会记录在审计日志中：发送时间、级别和完整内容。"
     telemetry_save_failed: 无法保存遥测设置。
     telemetry_reset_failed: 无法重置安装 ID。
   ago:

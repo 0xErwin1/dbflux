@@ -4795,6 +4795,7 @@ updates:
     collected_build: "빌드: 버전, 채널, OS, 아키텍처"
     collected_language: "시스템 언어와 국가, 주간"
     collected_counts: "기능 사용 횟수 (쿼리, 대시보드, 스크립트, …)"
+    collected_header: 수집 항목
     collected_minimal: 최소 핑
     collected_basic: 기본
     collected_yes: "✓"
@@ -4815,6 +4816,7 @@ updates:
     level_basic_display: 기본
     view_report: 마지막 보고서 보기
     open_in_audit: 감사에서 열기
+    reports_audit_note: "모든 보고서는 감사 로그에 기록됩니다: 전송 시각, 수준, 전체 내용."
     telemetry_save_failed: 원격 측정 설정을 저장하지 못했습니다.
     telemetry_reset_failed: 설치 ID를 재설정하지 못했습니다.
   ago:

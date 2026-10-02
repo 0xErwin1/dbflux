@@ -4796,6 +4796,7 @@ updates:
     collected_build: "Build: version, channel, OS, architecture"
     collected_language: "System language and country, weekly"
     collected_counts: "Feature counts (queries, dashboards, scripts, …)"
+    collected_header: Collected
     collected_minimal: Minimal ping
     collected_basic: Basic
     collected_yes: "✓"
@@ -4816,6 +4817,7 @@ updates:
     level_basic_display: basic
     view_report: View last report
     open_in_audit: Open in Audit
+    reports_audit_note: "Every report is logged in Audit: when it was sent, the level and the full payload."
     telemetry_save_failed: Could not save the telemetry settings.
     telemetry_reset_failed: Could not reset the installation id.
   ago:

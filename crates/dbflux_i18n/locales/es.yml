@@ -4796,6 +4796,7 @@ updates:
     collected_build: "Compilación: versión, canal, sistema operativo, arquitectura"
     collected_language: "Idioma del sistema y país, semanal"
     collected_counts: "Recuentos de funciones (consultas, paneles, scripts, …)"
+    collected_header: Recopilado
     collected_minimal: Aviso mínimo
     collected_basic: Básico
     collected_yes: "✓"
@@ -4816,6 +4817,7 @@ updates:
     level_basic_display: básico
     view_report: Ver el último informe
     open_in_audit: Abrir en auditoría
+    reports_audit_note: "Cada informe queda registrado en Auditoría: cuándo se envió, el nivel y el contenido completo."
     telemetry_save_failed: No se pudo guardar la configuración de telemetría.
     telemetry_reset_failed: No se pudo reiniciar el id de instalación.
   ago:

@@ -6,9 +6,13 @@ use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
 #[cfg(feature = "telemetry")]
 use dbflux_components::modals::{JsonReportPreviewRequest, ModalJsonReportPreview};
+#[cfg(feature = "telemetry")]
+use dbflux_components::primitives::Chamfer;
 use dbflux_components::primitives::{Icon, Text};
 #[cfg(feature = "telemetry")]
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
+#[cfg(feature = "telemetry")]
+use dbflux_components::tokens::{ChamferCut, Fields, Heights};
 use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
 use dbflux_core::ReleaseChannel;
 use dbflux_core::chrono::Utc;
@@ -31,6 +35,10 @@ const ROW_LABEL_WIDTH: Pixels = px(200.0);
 
 /// Vertical padding of a settings row.
 const ROW_PADDING_Y: Pixels = px(7.0);
+
+/// Width of one telemetry-level column in the "what is sent" table.
+#[cfg(feature = "telemetry")]
+const USAGE_COLUMN_WIDTH: Pixels = px(72.0);
 
 /// Keyboard-navigable controls of the section, in visual order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -577,8 +585,10 @@ impl UpdatesSection {
 
         let level = SegmentedControl::new(
             vec![
-                SegmentedItem::new("off", dbflux_i18n::t!("updates.settings.level_off")),
-                SegmentedItem::new("basic", dbflux_i18n::t!("updates.settings.level_basic")),
+                SegmentedItem::new("off", dbflux_i18n::t!("updates.settings.level_off"))
+                    .icon(AppIcon::EyeOff),
+                SegmentedItem::new("basic", dbflux_i18n::t!("updates.settings.level_basic"))
+                    .icon(AppIcon::Columns),
             ],
             if self.telemetry_basic { "basic" } else { "off" },
             {
@@ -594,45 +604,78 @@ impl UpdatesSection {
         .group("telemetry-level")
         .focused(self.content_focused && self.is_at(UpdatesRow::TelemetryLevel));
 
-        let level_row = self.focus_frame(UpdatesRow::TelemetryLevel, cx, div().child(level));
+        // A flex row keeps the segmented track hugging its segments; a plain
+        // child of the column would stretch it across the whole row.
+        let level_row = self.focus_frame(UpdatesRow::TelemetryLevel, cx, div().flex().child(level));
 
         let what_is_sent = div()
             .flex()
             .flex_col()
-            .gap(Spacing::XXS)
+            .gap(Spacing::SM)
             .child(
                 Text::caption(dbflux_i18n::t!("updates.settings.counts_not_instrumented"))
                     .text_color(muted),
             )
-            .child(self.collected_row(
-                dbflux_i18n::t!("updates.settings.collected_build"),
-                true,
-                true,
-            ))
-            .child(self.collected_row(
-                dbflux_i18n::t!("updates.settings.collected_language"),
-                false,
-                true,
-            ))
-            .child(self.collected_row(
-                dbflux_i18n::t!("updates.settings.collected_counts"),
-                false,
-                true,
-            ));
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        Chamfer::new(ChamferCut::CONTROL)
+                            .fill(theme.background)
+                            .border(theme.border),
+                    )
+                    .child(self.usage_table_header(cx))
+                    .child(self.collected_row(
+                        dbflux_i18n::t!("updates.settings.collected_build"),
+                        true,
+                        true,
+                        true,
+                        cx,
+                    ))
+                    .child(self.collected_row(
+                        dbflux_i18n::t!("updates.settings.collected_language"),
+                        false,
+                        true,
+                        true,
+                        cx,
+                    ))
+                    .child(self.collected_row(
+                        dbflux_i18n::t!("updates.settings.collected_counts"),
+                        false,
+                        true,
+                        false,
+                        cx,
+                    )),
+            );
 
         let install_id = div()
             .flex()
             .items_center()
             .gap(Spacing::SM)
             .child(
-                Text::code(
-                    self.app_state
-                        .read(cx)
-                        .telemetry_install_id_masked()
-                        .unwrap_or_else(|| "—".to_owned()),
-                )
-                .font_size(FontSizes::SM)
-                .text_color(ChromeColors::strong(theme)),
+                div()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .h(Fields::HEIGHT)
+                    .px(Fields::PADDING_X)
+                    .child(
+                        Chamfer::new(ChamferCut::CONTROL)
+                            .fill(theme.background)
+                            .border(theme.border),
+                    )
+                    .child(
+                        Text::code(
+                            self.app_state
+                                .read(cx)
+                                .telemetry_install_id_masked()
+                                .unwrap_or_else(|| "—".to_owned()),
+                        )
+                        .font_size(FontSizes::SM)
+                        .text_color(ChromeColors::strong(theme)),
+                    ),
             )
             .child(self.render_button(
                 "updates-install-reset",
@@ -694,22 +737,82 @@ impl UpdatesSection {
             .into_any_element()
     }
 
-    /// One honest row of the "what is sent" summary: the collected item and
-    /// whether the minimal ping / Basic level includes it.
+    /// Header of the "what is sent" table: the collected item column and one
+    /// column per telemetry level, aligned with the marks of every row.
     #[cfg(feature = "telemetry")]
-    fn collected_row(&self, label: String, in_minimal: bool, in_basic: bool) -> Div {
-        let mark = |included: bool| {
-            Text::caption(if included {
-                dbflux_i18n::t!("updates.settings.collected_yes")
-            } else {
-                dbflux_i18n::t!("updates.settings.collected_no")
-            })
+    fn usage_table_header(&self, cx: &App) -> Div {
+        let theme = cx.theme();
+        let head = |label: String| {
+            div()
+                .w(USAGE_COLUMN_WIDTH)
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .child(
+                    Text::label(label)
+                        .font_size(FontSizes::XS)
+                        .text_color(theme.muted_foreground),
+                )
         };
 
         div()
             .flex()
             .items_center()
             .gap(Spacing::LG)
+            .px(Spacing::MD)
+            .py(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Text::label(dbflux_i18n::t!("updates.settings.collected_header"))
+                    .font_size(FontSizes::XS)
+                    .text_color(theme.muted_foreground),
+            )
+            .child(div().flex_1())
+            .child(head(dbflux_i18n::t!("updates.settings.collected_minimal")))
+            .child(head(dbflux_i18n::t!("updates.settings.collected_basic")))
+    }
+
+    /// One honest row of the "what is sent" table: the collected item and
+    /// whether the minimal ping / Basic level includes it.
+    #[cfg(feature = "telemetry")]
+    fn collected_row(
+        &self,
+        label: String,
+        in_minimal: bool,
+        in_basic: bool,
+        separator: bool,
+        cx: &App,
+    ) -> Div {
+        let theme = cx.theme();
+        let mark = |included: bool| {
+            let color = if included {
+                theme.success
+            } else {
+                theme.muted_foreground
+            };
+            div()
+                .w(USAGE_COLUMN_WIDTH)
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .child(
+                    Text::caption(if included {
+                        dbflux_i18n::t!("updates.settings.collected_yes")
+                    } else {
+                        dbflux_i18n::t!("updates.settings.collected_no")
+                    })
+                    .text_color(color),
+                )
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap(Spacing::LG)
+            .px(Spacing::MD)
+            .py(Spacing::SM)
+            .when(separator, |row| row.border_b_1().border_color(theme.border))
             .child(Text::caption(label))
             .child(div().flex_1())
             .child(mark(in_minimal))
@@ -757,8 +860,25 @@ impl UpdatesSection {
             .flex()
             .flex_col()
             .gap(Spacing::XXS)
-            .child(meta)
-            .child(div().flex().gap(Spacing::SM).child(view).child(open))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .child(
+                        Icon::new(AppIcon::Activity)
+                            .size(Heights::ICON_SM)
+                            .color(muted),
+                    )
+                    .child(meta)
+                    .child(div().flex_1())
+                    .child(view)
+                    .child(open),
+            )
+            .child(
+                Text::caption(dbflux_i18n::t!("updates.settings.reports_audit_note"))
+                    .text_color(muted),
+            )
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -1211,6 +1331,7 @@ mod tests {
             "updates.settings.collected_build",
             "updates.settings.collected_language",
             "updates.settings.collected_counts",
+            "updates.settings.collected_header",
             "updates.settings.collected_minimal",
             "updates.settings.collected_basic",
             "updates.settings.counts_not_instrumented",
@@ -1227,6 +1348,7 @@ mod tests {
             "updates.settings.last_sent",
             "updates.settings.view_report",
             "updates.settings.open_in_audit",
+            "updates.settings.reports_audit_note",
             "updates.settings.telemetry_save_failed",
             "updates.settings.telemetry_reset_failed",
             "updates.ago.just_now",
