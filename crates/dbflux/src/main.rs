@@ -25,6 +25,7 @@ use dbflux_ui::ui::views::workspace::{
     DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_ui_base::window_state::{self, WindowGeometry};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
@@ -52,6 +53,17 @@ static BRIDGE_HANDLE: Mutex<Option<BridgeHandle>> = Mutex::new(None);
 /// the shutdown sequence can flush pending document edits. Weak so shutdown can
 /// never keep the view alive.
 static WORKSPACE_FOR_SHUTDOWN: Mutex<Option<WeakEntity<Workspace>>> = Mutex::new(None);
+
+/// Handle to the main window, captured where it is created so the shutdown
+/// sequence can save its geometry.
+static MAIN_WINDOW_FOR_SHUTDOWN: Mutex<Option<WindowHandle<Root>>> = Mutex::new(None);
+
+/// Geometry the main window last reported, recorded from a window callback.
+///
+/// A window callback runs with the window taken out of `App`, so its handle
+/// cannot be used to read the bounds again from inside one. Recording them
+/// where the window is in hand is what lets the shutdown write them later.
+static MAIN_WINDOW_GEOMETRY: Mutex<Option<WindowGeometry>> = Mutex::new(None);
 
 /// Previous panic hook, chained after our hook.
 #[allow(clippy::type_complexity)]
@@ -420,6 +432,14 @@ fn run_gui() {
         dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
 
         let channel = dbflux_core::ReleaseChannel::current();
+
+        // Open the window where the user left it, pushed back inside the work
+        // area of the displays attached now. With nothing saved this is the
+        // first-run size, fitted the same way; leaving the placement to gpui
+        // instead is what opened the window flush against the screen edges.
+        let window_geometry = window_state::load(app_state.read(cx).storage_runtime());
+        let placement = window_state::resolve_main_window_placement(window_geometry, cx);
+
         let mut main_window_options = WindowOptions {
             app_id: Some(channel.app_id().into()),
             titlebar: Some(TitlebarOptions {
@@ -429,6 +449,8 @@ fn run_gui() {
             // Request client-side decorations on Linux to enable native Wayland support.
             // On other platforms this returns Server explicitly.
             window_decorations: platform::main_window_decoration_request(),
+            window_bounds: placement.bounds,
+            display_id: placement.display_id,
             ..Default::default()
         };
         platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
@@ -493,10 +515,19 @@ fn run_gui() {
             })
             .expect("Failed to open main window");
 
+        *MAIN_WINDOW_FOR_SHUTDOWN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(window_handle);
+
         let app_state_for_close = app_state.clone();
         window_handle
             .update(cx, |_root, window, cx| {
                 window.on_window_should_close(cx, move |window, cx| {
+                    // The window is in hand here and out of `App` until this
+                    // callback returns, so this is the one place the geometry
+                    // can be read on the way out.
+                    record_main_window_geometry(window);
+
                     let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
                     if already_shutting_down {
                         let phase = app_state_for_close.read(cx).shutdown_phase();
@@ -556,6 +587,55 @@ fn run_gui() {
     });
 }
 
+/// Records the geometry of the main window, to be written when it shuts down.
+fn record_main_window_geometry(window: &Window) {
+    *MAIN_WINDOW_GEOMETRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        Some(WindowGeometry::from_window(window));
+}
+
+/// Saves the main window geometry for the next launch.
+///
+/// The geometry comes from the last window callback that could read it, which
+/// is the close the user asked for. The handle is only read when no callback
+/// ran, as on the SIGINT/SIGTERM path, and that read is only possible outside
+/// a window update: while one is running the window is not in `App`.
+fn save_main_window_geometry(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    let recorded = MAIN_WINDOW_GEOMETRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+
+    let geometry = recorded.or_else(|| read_main_window_geometry(cx));
+
+    let Some(geometry) = geometry else {
+        return;
+    };
+
+    window_state::save(app_state.read(cx).storage_runtime(), geometry);
+}
+
+/// Reads the main window geometry from its handle, for the shutdown paths that
+/// no window callback ran on.
+fn read_main_window_geometry(cx: &mut App) -> Option<WindowGeometry> {
+    let main_window = MAIN_WINDOW_FOR_SHUTDOWN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .copied()?;
+
+    let geometry = main_window.update(cx, |_root, window, _cx| WindowGeometry::from_window(window));
+
+    match geometry {
+        Ok(geometry) => Some(geometry),
+        Err(error) => {
+            log::warn!("Could not read the main window geometry to record it: {error}");
+            None
+        }
+    }
+}
+
 /// Single entry point for graceful shutdown, reached from both window close
 /// and OS signals (SIGINT/SIGTERM). Marks shutdown as begun, records the
 /// audit event, and spawns the async shutdown sequence.
@@ -564,6 +644,8 @@ fn initiate_graceful_shutdown(app_state: &Entity<AppStateEntity>, cx: &mut App) 
     let initiated_shutdown = app_state.update(cx, |state, _| state.begin_shutdown());
 
     if initiated_shutdown {
+        save_main_window_geometry(app_state, cx);
+
         let audit_service = app_state.read(cx).audit_service().clone();
         emit_system_shutdown(&audit_service);
 

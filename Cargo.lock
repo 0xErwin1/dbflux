@@ -3438,6 +3438,7 @@ dependencies = [
  "gpui-pre",
  "log",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",

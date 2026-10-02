@@ -29,6 +29,7 @@ pub mod toast;
 pub mod ui_automation;
 pub mod updates;
 pub mod user_error;
+pub mod window_state;
 
 mod style_guardrails;
 
