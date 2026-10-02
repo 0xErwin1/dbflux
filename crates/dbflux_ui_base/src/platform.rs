@@ -359,7 +359,7 @@ pub fn floating_window_kind() -> WindowKind {
 
 /// Space kept free between a secondary window and each edge of the display's
 /// visible area when the requested size does not fit. (24 px)
-const WINDOW_SCREEN_MARGIN: f32 = 24.0;
+pub(crate) const WINDOW_SCREEN_MARGIN: f32 = 24.0;
 
 /// Shrinks `requested` so it fits inside `available` minus the screen margin
 /// on every side. A dimension that already fits is kept.
@@ -375,6 +375,23 @@ pub fn fit_window_size(
         width: requested.width.min(max_width),
         height: requested.height.min(max_height),
     }
+}
+
+/// Shrinks `area` by [`WINDOW_SCREEN_MARGIN`] on every side: the region a
+/// window should stay inside for its frame to remain on screen. A dimension
+/// smaller than twice the margin collapses to zero rather than inverting.
+pub fn inset_by_screen_margin(area: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
+    let margin = px(WINDOW_SCREEN_MARGIN * 2.0);
+    let width = (area.size.width - margin).max(px(0.0));
+    let height = (area.size.height - margin).max(px(0.0));
+
+    gpui::Bounds::new(
+        gpui::point(
+            area.origin.x + px(WINDOW_SCREEN_MARGIN),
+            area.origin.y + px(WINDOW_SCREEN_MARGIN),
+        ),
+        gpui::size(width, height),
+    )
 }
 
 /// Bounds for a new secondary window of `width` by `height`, shrunk to fit
@@ -404,10 +421,13 @@ pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_hei
     options.kind = floating_window_kind();
 
     // A minimum larger than the window it applies to would force the window
-    // past the display, so it never exceeds the fitted initial size.
+    // past the display, so it never exceeds the fitted initial size. A window
+    // opened maximized or fullscreen still carries the size it was placed with.
     let initial_size = match options.window_bounds {
-        Some(gpui::WindowBounds::Windowed(bounds)) => Some(bounds.size),
-        _ => None,
+        Some(gpui::WindowBounds::Windowed(bounds))
+        | Some(gpui::WindowBounds::Maximized(bounds))
+        | Some(gpui::WindowBounds::Fullscreen(bounds)) => Some(bounds.size),
+        None => None,
     };
 
     options.window_min_size = Some(gpui::Size {
@@ -420,8 +440,35 @@ pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_hei
 
 #[cfg(test)]
 mod window_size_tests {
-    use super::fit_window_size;
-    use gpui::{px, size};
+    use super::{WINDOW_SCREEN_MARGIN, fit_window_size, inset_by_screen_margin};
+    use gpui::{Bounds, point, px, size};
+
+    #[test]
+    fn the_screen_margin_is_inset_on_every_side() {
+        let area = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let margin = px(WINDOW_SCREEN_MARGIN);
+
+        let inset = inset_by_screen_margin(area);
+
+        assert_eq!(inset.left(), margin);
+        assert_eq!(inset.top(), margin);
+        assert_eq!(inset.right(), area.right() - margin);
+        assert_eq!(inset.bottom(), area.bottom() - margin);
+    }
+
+    #[test]
+    fn a_work_area_narrower_than_the_margins_collapses_to_nothing() {
+        let area = Bounds::new(point(px(100.0), px(100.0)), size(px(10.0), px(30.0)));
+        let margin = px(WINDOW_SCREEN_MARGIN);
+
+        let inset = inset_by_screen_margin(area);
+
+        assert_eq!(inset.size, size(px(0.0), px(0.0)));
+        assert_eq!(
+            inset.origin,
+            point(area.origin.x + margin, area.origin.y + margin)
+        );
+    }
 
     #[test]
     fn a_size_that_fits_the_display_is_kept() {
