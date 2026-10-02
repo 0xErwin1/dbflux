@@ -468,6 +468,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
+    pub(super) line_breaks: bool,
     pub(super) show_whitespaces: bool,
     /// This flag tells the renderer to prefer the end of the current visual line.
     pub(crate) cursor_line_end_affinity: bool,
@@ -797,6 +798,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             masked: false,
             clean_on_escape: false,
             submit_on_enter: false,
+            line_breaks: true,
             show_whitespaces: false,
             loading: false,
             pattern: None,
@@ -1300,6 +1302,17 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn set_submit_on_enter(&mut self, submit: bool, cx: &mut Context<Self>) {
         self.submit_on_enter = submit;
         cx.notify();
+    }
+
+    /// Set false to keep a multi-line mode on one line: no key inserts a line
+    /// break, and line breaks in typed, pasted or programmatically set text are
+    /// dropped, as a single-line input already does.
+    ///
+    /// For a field that needs a multi-line mode's features, such as the code
+    /// editor's completion, while showing a single row. Default is `true`.
+    pub fn line_breaks(mut self, allow: bool) -> Self {
+        self.line_breaks = allow;
+        self
     }
 
     /// Set whether to show whitespace characters.
@@ -2093,8 +2106,10 @@ impl<M: InputModeKind> InputBaseState<M> {
         // In multi-line mode with `submit_on_enter` enabled, a plain `Enter`
         // (without Shift) is treated as submit: propagate the action and emit
         // PressEnter without inserting a newline. `Shift+Enter` still inserts
-        // a newline.
-        let insert_newline = self.is_multi_line() && (!self.submit_on_enter || action.shift);
+        // a newline. With line breaks off no key inserts one.
+        let insert_newline = self.is_multi_line()
+            && self.line_breaks
+            && (!self.submit_on_enter || action.shift);
 
         if insert_newline {
             if !self.selections.is_single() {
@@ -3614,7 +3629,8 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// For number inputs (with [`MaskPattern::Number`]), this converts
     /// full-width number characters into their ASCII equivalents,
-    /// e.g. `12。5` -> `12.5`.
+    /// e.g. `12。5` -> `12.5`. Line breaks are dropped for single-line inputs
+    /// and for multi-line modes with [`Self::line_breaks`] off.
     fn normalize_input<'a>(&self, new_text: &'a str) -> Cow<'a, str> {
         let normalized = if matches!(self.mask_pattern, MaskPattern::Number { .. }) {
             normalize_number_input(new_text)
@@ -3622,7 +3638,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             Cow::Borrowed(new_text)
         };
 
-        if self.is_single_line() && normalized.contains(['\n', '\r']) {
+        if (self.is_single_line() || !self.line_breaks) && normalized.contains(['\n', '\r']) {
             Cow::Owned(normalized.replace(['\n', '\r'], ""))
         } else {
             normalized
@@ -5939,6 +5955,98 @@ mod tests {
                 assert_eq!(state.value(), "before submit");
                 state.undo(&Undo, window, cx);
                 assert_eq!(state.value(), "");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_shift_enter_inserts_no_line_break_when_line_breaks_are_off(cx: &mut TestAppContext) {
+        let input_view =
+            InputView::build_editor(cx, |state| state.submit_on_enter(true).line_breaks(false));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "status = 1", window, cx);
+
+                for shift in [false, true] {
+                    state.enter(
+                        &Enter {
+                            secondary: false,
+                            shift,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+
+                assert_eq!(state.value(), "status = 1");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_enter_inserts_no_line_break_without_submit_when_line_breaks_are_off(
+        cx: &mut TestAppContext,
+    ) {
+        let input_view = InputView::build_editor(cx, |state| state.line_breaks(false));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "status = 1", window, cx);
+                state.enter(
+                    &Enter {
+                        secondary: false,
+                        shift: false,
+                    },
+                    window,
+                    cx,
+                );
+
+                assert_eq!(state.value(), "status = 1");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_inserted_line_breaks_are_dropped_when_line_breaks_are_off(cx: &mut TestAppContext) {
+        let input_view = InputView::build_editor(cx, |state| state.line_breaks(false));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "status = 1\r\nAND total > 5\n", window, cx);
+                assert_eq!(state.value(), "status = 1AND total > 5");
+
+                state.set_value("id = 1\nOR id = 2", window, cx);
+                assert_eq!(state.value(), "id = 1OR id = 2");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_shift_enter_still_inserts_a_line_break_by_default(cx: &mut TestAppContext) {
+        let input_view = InputView::build_editor(cx, |state| state.submit_on_enter(true));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "select 1", window, cx);
+                state.enter(
+                    &Enter {
+                        secondary: false,
+                        shift: true,
+                    },
+                    window,
+                    cx,
+                );
+
+                assert_eq!(state.value(), "select 1\n");
             });
         });
     }
