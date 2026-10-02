@@ -424,6 +424,8 @@ UPDATE cfg_audit_settings SET log_capture_min_level = 'warn';
 | `kind` | `ErrorKind` 的字符串形式（`storage`、`network`、`auth`、`hook`、`driver`、`user`、`config`） |
 | `correlation_id` | UUID v7，用于将 Toast 提示与审计记录关联起来 |
 | `message` | Toast 提示中显示的可读摘要 |
+| `cause` | Toast 提示代码块中显示的底层错误文本。错误没有原因时省略；存储在 `details_json` 中 |
+| `suggested_action` | Toast 提示正文中显示的后续建议。未设置时省略；存储在 `details_json` 中 |
 
 `correlation_id` 字段由 `AuditFieldVisitor` 提取到 `EventRecord.correlation_id` 中。注意：该访问器把 `record_str`（Display 标记符 `%val`）与 `record_debug`（Debug 标记符 `?val`）都交由同一个 `record_string_by_name` 分发器处理，因此将来新增的类型化槽位无论调用方使用哪种标记符都能被识别。
 
