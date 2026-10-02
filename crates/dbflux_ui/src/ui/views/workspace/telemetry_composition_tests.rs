@@ -146,6 +146,9 @@ struct QueryStubConnection {
     /// When set, `browse_table` fails — used to prove the builder run goes
     /// through the structured SELECT path, not a table browse.
     fail_browses: std::sync::atomic::AtomicBool,
+    /// When set, `execute` fails — the negative control proving that a failed
+    /// run never credits `query_run`.
+    fail_executes: std::sync::atomic::AtomicBool,
 }
 
 impl QueryStubConnection {
@@ -157,6 +160,7 @@ impl QueryStubConnection {
         Self {
             executes,
             fail_browses: std::sync::atomic::AtomicBool::new(false),
+            fail_executes: std::sync::atomic::AtomicBool::new(false),
             metadata: DriverMetadata {
                 id: "stub-telemetry-query".to_string(),
                 display_name: "Stub".to_string(),
@@ -226,6 +230,11 @@ impl dbflux_core::Connection for QueryStubConnection {
     fn execute(&self, _: &QueryRequest) -> Result<QueryResult, DbError> {
         self.executes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_executes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(DbError::NotSupported(
+                "fixture: a failed run must not credit query_run".to_string(),
+            ));
+        }
         Ok(three_row_result())
     }
 
@@ -592,7 +601,8 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
     }
 
     // -- producer 1: query_run (user SQL run through the code document) ------
-    let query_profile = harness.register_connection(Arc::new(QueryStubConnection::new()));
+    let query_stub = Arc::new(QueryStubConnection::new());
+    let query_profile = harness.register_connection(query_stub.clone());
     let (sql_document, sql_document_id, pane) = {
         let app_state = harness.app_state.clone();
         let profile_id = query_profile;
@@ -616,6 +626,19 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
     harness.window.update(|window, cx| {
         sql_document.update(cx, |doc, cx| {
             doc.set_content("SELECT id, name, email FROM users", window, cx);
+            doc.run_query(window, cx);
+        });
+    });
+    harness.window.run_until_parked();
+    harness.window.run_until_parked();
+    // Negative control: a failed run must not credit, so `query_run` is pinned
+    // at exactly 1 by the final payload assertion.
+    query_stub
+        .fail_executes
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    harness.window.update(|window, cx| {
+        sql_document.update(cx, |doc, cx| {
+            doc.set_content("SELECT broken FROM users", window, cx);
             doc.run_query(window, cx);
         });
     });
@@ -707,6 +730,22 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
 
     // -- producer 4: schema_inspect (explicit schema-viz open) ----------------
     let schema_profile = harness.register_connection(Arc::new(SchemaStubConnection::new()));
+    // Negative control: a table the loaded metadata does not contain must not
+    // credit, so `schema_inspect` is pinned at exactly 1 by the final payload
+    // assertion.
+    harness.window.update(|window, cx| {
+        harness.workspace.update(cx, |workspace, cx| {
+            workspace.open_schema_viz_document(
+                schema_profile,
+                Some("app".to_string()),
+                None,
+                "not_in_schema".to_string(),
+                window,
+                cx,
+            );
+        });
+    });
+    harness.window.run_until_parked();
     harness.window.update(|window, cx| {
         harness.workspace.update(cx, |workspace, cx| {
             workspace.open_schema_viz_document(
@@ -833,6 +872,8 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
         .as_object()
         .expect("features object")
         .clone();
+    // Each producer ran exactly once and every negative control must have
+    // credited nothing, so the counts are pinned exactly, not as floors.
     let expected = [
         ("query_run", 1),
         ("visual_query_builder", 1),
@@ -845,13 +886,16 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
         expected.len(),
         "exactly the five driven counters, got {features:?}"
     );
-    for (feature, minimum) in expected {
+    for (feature, expected_count) in expected {
         let count = features
             .get(feature)
             .unwrap_or_else(|| panic!("missing counter {feature} in {features:?}"))
             .as_u64()
             .expect("numeric counter");
-        assert!(count >= minimum, "{feature} = {count} below {minimum}");
+        assert_eq!(
+            count, expected_count,
+            "{feature} credited {count}, expected exactly {expected_count}: {features:?}"
+        );
     }
     assert!(
         !features.contains_key("mcp_tool"),
@@ -932,6 +976,12 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
             basic_attempted = true;
             break;
         }
+    }
+    if collector_configured {
+        assert!(
+            basic_attempted,
+            "with a collector the Basic snapshot must be the delivery that was attempted"
+        );
     }
     let correlation = if basic_attempted {
         last_correlation.expect("the Basic attempt recorded its correlation")
