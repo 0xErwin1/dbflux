@@ -130,9 +130,38 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 
 | Tool | Description | Classification |
 |------|-------------|----------------|
-| `select_data` | Query data with WHERE clause | Read |
+| `select_data` | Query data with WHERE clause, optionally across joined tables | Read |
 | `count_records` | Count records matching filter | Read |
 | `aggregate_data` | Aggregate data (COUNT, SUM, AVG, MIN, MAX) | Read |
+
+#### Joins in `select_data`
+
+`select_data` reads across tables when the call passes `joins`. It runs on drivers that declare join support and can render a structured SELECT; document, key-value and other drivers that do not declare it return an explicit error.
+
+```json
+{
+  "connection_id": "…",
+  "table": "users",
+  "columns": ["name", "o.total"],
+  "joins": [{ "type": "left", "table": "orders", "alias": "o", "on": "users.id = o.user_id" }],
+  "where": { "o.total": { "$gte": 10 } },
+  "order_by": [{ "column": "o.total", "direction": "desc" }],
+  "limit": 50
+}
+```
+
+| Part | Rule |
+|------|------|
+| `type` | `inner`, `left`, `right` or `full`. The engine rejects a type it does not have |
+| `on` | Column comparisons joined by `AND`, with `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`. Each side is `qualifier.column`. Literals, functions, `OR`, parentheses and anything else are rejected |
+| Qualifier | The name or alias of the main table, of this join or of an earlier join. A table joined twice needs aliases |
+| Names | Table, schema, alias and column names must be plain identifiers: letters, digits and underscores, not starting with a digit |
+| `columns` | `qualifier.column` for any table, or a bare name for the main table. The result names each column as it was written. A join's own `columns` are returned as `alias.column` and need the top-level `columns` |
+| No `columns` | Every column of every table, in table order. A repeated name gets a suffix: `id`, `id_2` |
+| `where`, `order_by` | Same column naming. `where` accepts `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$like`, `$ilike`, `$exists`, `null`, `$and` and `$or`; other operators are rejected |
+| `limit` | At least 1, default 100, capped at 10000 |
+
+The call stays a `Read`: the server builds the query from quoted identifiers and literals, runs it only if it classifies as a read, and records it in the audit log. A call without `joins` is unchanged.
 
 ### Data Mutations
 
@@ -756,7 +785,7 @@ RUST_LOG=dbflux_mcp=trace ./target/debug/dbflux mcp --client-id test
 ### General
 
 - **No subqueries:** WHERE clauses do not support subqueries
-- **No joins in WHERE:** Use `select_data` with `joins` parameter
+- **No joins in WHERE:** Use `select_data` with the `joins` parameter, on drivers that declare join support (see [Joins in `select_data`](#joins-in-select_data))
 - **No computed columns:** Cannot reference virtual/computed columns
 - **No database functions:** Limited function support in WHERE clauses
 

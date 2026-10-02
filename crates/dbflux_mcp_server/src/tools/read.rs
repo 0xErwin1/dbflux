@@ -23,7 +23,10 @@ use crate::{
     helper::{IntoErrorData, serialize_query_result, to_json_content},
     server::DbFluxServer,
     state::ServerState,
-    tools::not_found::{self, CallFailure, FailedCall},
+    tools::{
+        join_select::JoinedSelect,
+        not_found::{self, CallFailure, FailedCall},
+    },
 };
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -37,19 +40,28 @@ pub struct OrderByItem {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct JoinSpec {
-    #[schemars(description = "Join type: 'inner', 'left', or 'right'")]
+    #[schemars(
+        description = "Join type: 'inner', 'left', 'right' or 'full'. Not every engine has 'right' and 'full'"
+    )]
     pub r#type: String,
 
-    #[schemars(description = "Table to join")]
+    #[schemars(description = "Table to join: a plain name, optionally schema.table")]
     pub table: String,
 
-    #[schemars(description = "Join condition (e.g., 'users.id = orders.user_id')")]
+    #[schemars(
+        description = "Join condition: column comparisons joined by AND, e.g. 'users.id = o.user_id AND users.org = o.org'. \
+                       Operators: = != < <= > >=. Each side is qualifier.column, where the qualifier is the name or alias \
+                       of the main table, of this join or of an earlier join. Nothing else is accepted: no literals, \
+                       functions, OR or parentheses"
+    )]
     pub on: String,
 
-    #[schemars(description = "Optional alias for the joined table")]
+    #[schemars(description = "Alias for the joined table. Needed to join the same table twice")]
     pub alias: Option<String>,
 
-    #[schemars(description = "Columns to select from the joined table")]
+    #[schemars(
+        description = "Columns of this table to return, named alias.column in the result. Needs the top-level columns"
+    )]
     pub columns: Option<Vec<String>>,
 }
 
@@ -89,7 +101,12 @@ pub struct SelectDataParams {
     pub offset: Option<u32>,
 
     #[schemars(
-        description = "Join operations (currently rejected until select_data join support is implemented)"
+        description = "Joins to other tables. Runs only on drivers that declare join support; the others return an error. \
+                       With joins, write a column of a joined table as qualifier.column in columns, where and order_by; \
+                       a bare name is a column of the main table. Table, alias and column names must be plain identifiers. \
+                       Result columns are named as written in columns. Without columns every column of every table is \
+                       returned and a repeated name gets a suffix (id, id_2). \
+                       where accepts $eq $ne $gt $gte $lt $lte $in $like $ilike $exists, null, $and and $or"
     )]
     pub joins: Option<Vec<JoinSpec>>,
 
@@ -164,6 +181,7 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<SelectDataParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        use crate::governance::AuditDetails;
         use dbflux_policy::ExecutionClassification;
 
         let state = self.state.clone();
@@ -178,12 +196,12 @@ impl DbFluxServer {
         let database = params.database.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "select_data",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
-                    let result = Self::select_data_impl(
+                    let (result, sql_text) = Self::select_data_impl(
                         state,
                         &connection_id,
                         &table,
@@ -198,7 +216,10 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
+                    Ok((
+                        CallToolResult::success(vec![to_json_content(&result)?]),
+                        AuditDetails { query: sql_text },
+                    ))
                 },
             )
             .await
@@ -292,6 +313,9 @@ impl DbFluxServer {
             .await
     }
 
+    /// Returns the result and, for a call with joins, the SQL that produced
+    /// it. A call without joins goes through the driver's browse path and
+    /// has no query text to record.
     #[allow(clippy::too_many_arguments)]
     async fn select_data_impl(
         state: ServerState,
@@ -302,22 +326,13 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-        _joins: Option<&[JoinSpec]>,
+        joins: Option<&[JoinSpec]>,
         database: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Option<String>), String> {
         let semantic_filter = filter
             .map(parse_semantic_filter_json)
             .transpose()?
             .flatten();
-
-        if let Some(joins) = _joins
-            && !joins.is_empty()
-        {
-            return Err(
-                "select_data join operations are not implemented yet; the MCP server now rejects them explicitly instead of ignoring them"
-                    .to_string(),
-            );
-        }
 
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
@@ -331,44 +346,39 @@ impl DbFluxServer {
             Self::get_or_connect(state.clone(), connection_id).await?
         };
 
-        let outcome = match connection.metadata().category {
-            DatabaseCategory::Document | DatabaseCategory::LogStream => {
-                Self::select_data_document(
-                    &connection,
-                    table,
-                    database,
-                    filter,
-                    semantic_filter.as_ref(),
-                    limit,
-                    offset,
-                )
-                .await
-            }
-            // ObjectStorage has no `select_data` support yet (bucket/object
-            // listing goes through `ObjectStoreConnection`, not `select_data`).
-            // It falls into the table-shaped path rather than a separate MCP
-            // error case so a future object-storage MCP tool can extend it.
-            DatabaseCategory::Relational
-            | DatabaseCategory::KeyValue
-            | DatabaseCategory::Graph
-            | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn
-            | DatabaseCategory::ObjectStorage => {
-                Self::select_data_table(
-                    &connection,
+        let outcome = match joins.filter(|joins| !joins.is_empty()) {
+            Some(joins) => Self::select_data_joined(
+                &connection,
+                JoinedSelect {
                     table,
                     columns,
-                    semantic_filter.as_ref(),
+                    filter: semantic_filter.as_ref(),
                     order_by,
                     limit,
                     offset,
-                )
-                .await
-            }
+                    joins,
+                    database,
+                },
+            )
+            .await
+            .map(|(value, sql)| (value, Some(sql))),
+            None => Self::select_data_single_source(
+                &connection,
+                table,
+                columns,
+                filter,
+                semantic_filter.as_ref(),
+                order_by,
+                limit,
+                offset,
+                database,
+            )
+            .await
+            .map(|value| (value, None)),
         };
 
         let failure = match outcome {
-            Ok(value) => return Ok(value),
+            Ok(selected) => return Ok(selected),
             Err(failure) => failure,
         };
 
@@ -387,6 +397,56 @@ impl DbFluxServer {
             failure,
         )
         .await)
+    }
+
+    /// Handles select_data without joins through the driver's browse path.
+    #[allow(clippy::too_many_arguments)]
+    async fn select_data_single_source(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+        columns: Option<&[String]>,
+        filter: Option<&serde_json::Value>,
+        semantic_filter: Option<&SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        limit: u32,
+        offset: u32,
+        database: Option<&str>,
+    ) -> Result<serde_json::Value, CallFailure> {
+        match connection.metadata().category {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => {
+                Self::select_data_document(
+                    connection,
+                    table,
+                    database,
+                    filter,
+                    semantic_filter,
+                    limit,
+                    offset,
+                )
+                .await
+            }
+            // ObjectStorage has no `select_data` support yet (bucket/object
+            // listing goes through `ObjectStoreConnection`, not `select_data`).
+            // It falls into the table-shaped path rather than a separate MCP
+            // error case so a future object-storage MCP tool can extend it.
+            DatabaseCategory::Relational
+            | DatabaseCategory::KeyValue
+            | DatabaseCategory::Graph
+            | DatabaseCategory::TimeSeries
+            | DatabaseCategory::WideColumn
+            | DatabaseCategory::ObjectStorage => {
+                Self::select_data_table(
+                    connection,
+                    table,
+                    columns,
+                    semantic_filter,
+                    order_by,
+                    limit,
+                    offset,
+                )
+                .await
+            }
+        }
     }
 
     /// The table or collection a failed call targeted, as the not-found hint
@@ -604,7 +664,10 @@ impl DbFluxServer {
         .await)
     }
 
-    fn table_ref_for_connection(connection: &Arc<dyn Connection>, table: &str) -> TableRef {
+    pub(super) fn table_ref_for_connection(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+    ) -> TableRef {
         let default_schema = connection
             .metadata()
             .syntax
@@ -1162,5 +1225,89 @@ mod tests {
             "audit SQL must contain SELECT keyword; got: {}",
             sql
         );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn select_data_impl_with_joins_returns_the_generated_sql() {
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            use rusqlite::Connection as RusqliteConnection;
+            let conn = RusqliteConnection::open(&db_path).expect("open sqlite");
+            conn.execute_batch(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+                 CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, total INTEGER);
+                 INSERT INTO users (id, name) VALUES (1, 'Ada'), (2, 'Bo');
+                 INSERT INTO orders (id, user_id, total) VALUES (10, 1, 30), (11, 2, 5);",
+            )
+            .expect("seed tables");
+        }
+
+        let state = build_sqlite_state_read(&connection_id, &db_path);
+
+        let joins = vec![JoinSpec {
+            r#type: "left".to_string(),
+            table: "orders".to_string(),
+            on: "users.id = o.user_id".to_string(),
+            alias: Some("o".to_string()),
+            columns: None,
+        }];
+        let columns = vec!["name".to_string(), "o.total".to_string()];
+        let filter = serde_json::json!({ "o.total": { "$gte": 10 } });
+        let order_by = vec![OrderByItem {
+            column: "o.total".to_string(),
+            direction: Some("desc".to_string()),
+        }];
+
+        let (result, sql_text) = DbFluxServer::select_data_impl(
+            state.clone(),
+            &connection_id,
+            "users",
+            Some(&columns),
+            Some(&filter),
+            Some(&order_by),
+            50,
+            0,
+            Some(&joins),
+            None,
+        )
+        .await
+        .expect("the join runs against SQLite");
+
+        assert_eq!(
+            sql_text.as_deref(),
+            Some(
+                "SELECT \"users\".\"name\", \"o\".\"total\" AS \"o.total\"\n\
+                 FROM \"users\"\n\
+                 LEFT JOIN \"orders\" AS \"o\" ON \"users\".\"id\" = \"o\".\"user_id\"\n\
+                 WHERE \"o\".\"total\" >= 10\n\
+                 ORDER BY \"o\".\"total\" DESC\n\
+                 LIMIT 50"
+            )
+        );
+        assert_eq!(
+            result["rows"],
+            serde_json::json!([{ "name": "Ada", "o.total": 30 }])
+        );
+
+        let (_, plain_sql) = DbFluxServer::select_data_impl(
+            state,
+            &connection_id,
+            "users",
+            None,
+            None,
+            None,
+            50,
+            0,
+            None,
+            None,
+        )
+        .await
+        .expect("the plain select runs against SQLite");
+
+        assert_eq!(plain_sql, None, "a call without joins records no query");
     }
 }

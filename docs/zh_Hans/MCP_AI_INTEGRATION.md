@@ -96,7 +96,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | Schema | `list_tables` | metadata | 列出 Schema 内的表与视图。传入 `names_only: true` 时，以字符串形式返回名称，而不是每项一个对象 |
 | Schema | `list_collections` | metadata | 列出 MongoDB 的集合。与 `list_tables` 一样接受 `names_only` |
 | Schema | `describe_object` | metadata | 获取某个表的列/字段定义与索引 |
-| 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。不支持的 `joins` 会被明确拒绝 |
+| 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。与其他表的 `joins` 在声明支持 join 的驱动程序上执行；文档型、键值型以及其他未声明支持的驱动程序会返回明确的错误。`on` 条件只接受用 `AND` 连接的列比较 |
 | 读取 | `count_records` | read | 返回目标的行数/文档数 |
 | 读取 | `aggregate_data` | read | 运行只读的聚合管道 |
 | 读取 | `explain_query` | read | 显示查询执行计划，而不执行目标变更 |

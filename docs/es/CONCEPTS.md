@@ -114,8 +114,13 @@ Las propiedades de seguridad son parte del límite:
   ejecuta la mutación. La implementación rechaza cualquier query de preview
   generada por el driver que no esté clasificada como metadata/read ([query
   tool](../crates/dbflux_mcp_server/src/tools/query.rs)).
-- `select_data` actualmente rechaza los joins solicitados en lugar de ignorarlos
-  en silencio ([read tool](../crates/dbflux_mcp_server/src/tools/read.rs)).
+- `select_data` ejecuta los joins solicitados solo en drivers que declaran
+  soporte de joins, y en los demás (documentales, clave-valor y cualquier driver
+  que no lo declare) devuelve un error explícito en lugar de ignorarlos en
+  silencio. La condición del join se parsea a comparaciones entre columnas y los
+  nombres deben ser identificadores simples, de modo que ningún texto del cliente
+  llega a la base de datos como SQL, y la query generada solo se ejecuta si se
+  clasifica como lectura ([traducción de joins](../crates/dbflux_mcp_server/src/tools/join_select.rs)).
 - El preview de mutation no es un surface de DDL preview. Las operaciones DDL
   son herramientas gobernadas separadas; no se expone ninguna herramienta de DDL
   preview en el [tool catalog](../crates/dbflux_mcp/src/tool_catalog.rs) actual.

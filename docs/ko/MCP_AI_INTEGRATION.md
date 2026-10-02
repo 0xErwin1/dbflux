@@ -96,7 +96,7 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 스키마 | `list_tables` | metadata | 스키마 내의 테이블과 뷰를 나열합니다. `names_only: true`를 전달하면 항목마다 객체 하나 대신 이름을 문자열로 반환합니다 |
 | 스키마 | `list_collections` | metadata | MongoDB 컬렉션을 나열합니다. `list_tables`와 마찬가지로 `names_only`를 받습니다 |
 | 스키마 | `describe_object` | metadata | 테이블의 열/필드 정의와 인덱스를 가져옵니다 |
-| 읽기 | `select_data` | read | 테이블이나 컬렉션에 대해 구조화된 `SELECT`를 실행합니다. 지원되지 않는 `joins`는 명시적으로 거부됩니다 |
+| 읽기 | `select_data` | read | 테이블이나 컬렉션에 대해 구조화된 `SELECT`를 실행합니다. 다른 테이블과의 `joins`는 조인 지원을 선언한 드라이버에서 실행되며, 문서형, 키-값형 및 지원을 선언하지 않은 그 밖의 드라이버는 명시적인 오류를 반환합니다. `on` 조건은 `AND`로 연결된 컬럼 비교만 허용합니다 |
 | 읽기 | `count_records` | read | 대상의 행/문서 개수를 반환합니다 |
 | 읽기 | `aggregate_data` | read | 읽기 전용 집계 파이프라인을 실행합니다 |
 | 읽기 | `explain_query` | read | 대상 변경을 실행하지 않고 쿼리 실행 계획을 보여줍니다 |

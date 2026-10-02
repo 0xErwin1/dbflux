@@ -1,6 +1,7 @@
 pub(crate) mod column_kind;
 pub(crate) mod document_query;
 pub(crate) mod generator;
+pub(crate) mod join_condition;
 pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub(crate) mod name_suggestion;
@@ -32,6 +33,10 @@ pub use generator::{
     QueryGenerator, ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
     inline_params, render_filter_node_sql,
 };
+pub use join_condition::{
+    JOIN_CONDITION_FORM, JoinColumnRef, JoinComparison, JoinConditionError,
+    is_plain_sql_identifier, join_on_conditions, parse_join_condition,
+};
 pub use keyset::lower_keyset_predicate;
 pub use language_service::{
     ClassifiedMutation, CodeAction, CodeActionEdit, DangerousQueryKind, Diagnostic,
@@ -52,6 +57,7 @@ pub use semantic::{
     AggregateFunction, AggregateRequest, AggregateSpec, PlannedQuery, SemanticFieldRef,
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
+    semantic_filter_to_filter_node,
 };
 pub use sql_context::{
     ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,

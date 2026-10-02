@@ -96,7 +96,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | Schema | `list_tables` | metadata | List tables and views within a schema. Pass `names_only: true` to get the names as strings instead of one object per entry |
 | Schema | `list_collections` | metadata | List MongoDB collections. Accepts `names_only` like `list_tables` |
 | Schema | `describe_object` | metadata | Get column/field definitions and indexes for a table |
-| Read | `select_data` | read | Execute a structured SELECT against a table or collection. Unsupported `joins` are rejected explicitly |
+| Read | `select_data` | read | Execute a structured SELECT against a table or collection. `joins` to other tables run on drivers that declare join support; document, key-value and other drivers that do not declare it return an explicit error. The `on` condition accepts only column comparisons joined by `AND` |
 | Read | `count_records` | read | Return a row/document count for a target |
 | Read | `aggregate_data` | read | Run a read-only aggregation pipeline |
 | Read | `explain_query` | read | Show the query execution plan without executing the target mutation |
