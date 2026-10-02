@@ -17,6 +17,8 @@ pub enum Command {
     MoveTabLeft,
     /// Moves the active document tab one place to the right.
     MoveTabRight,
+    /// Quits the application, asking first when a query is still running.
+    Quit,
 
     // === Focus Navigation ===
     FocusSidebar,
@@ -318,6 +320,7 @@ impl Command {
             "import_dashboard" => Some(Command::ImportDashboard),
             "new_dashboard" => Some(Command::NewDashboard),
             "open_pane_actions" => Some(Command::OpenPaneActions),
+            "quit" => Some(Command::Quit),
             _ => None,
         }
     }
@@ -335,6 +338,7 @@ impl Command {
             Command::OpenTabMenu => "Open tab menu",
             Command::MoveTabLeft => "Move tab left",
             Command::MoveTabRight => "Move tab right",
+            Command::Quit => "Quit DBFlux",
 
             Command::FocusSidebar => "Focus sidebar",
             Command::FocusEditor => "Focus editor",
@@ -531,6 +535,7 @@ impl Command {
             Command::OpenTabMenu => "open_tab_menu",
             Command::MoveTabLeft => "move_tab_left",
             Command::MoveTabRight => "move_tab_right",
+            Command::Quit => "quit",
 
             Command::FocusSidebar => "focus_sidebar",
             Command::FocusEditor => "focus_editor",
@@ -751,6 +756,7 @@ impl Command {
             Command::OpenTabMenu,
             Command::MoveTabLeft,
             Command::MoveTabRight,
+            Command::Quit,
             Command::FocusSidebar,
             Command::FocusEditor,
             Command::FocusResults,
@@ -934,6 +940,7 @@ impl Command {
             | Command::SwitchToTab(_)
             | Command::MoveTabLeft
             | Command::MoveTabRight
+            | Command::Quit
             | Command::OpenTabMenu => "Global",
 
             Command::FocusSidebar
@@ -1128,6 +1135,7 @@ impl Command {
                 | Command::PrevTab
                 | Command::MoveTabLeft
                 | Command::MoveTabRight
+                | Command::Quit
                 | Command::SwitchToTab(_)
                 | Command::RunQuery
                 | Command::Cancel

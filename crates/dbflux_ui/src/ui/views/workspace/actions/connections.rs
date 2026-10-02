@@ -992,6 +992,57 @@ mod active_query_prompt_tests {
         assert!(harness.is_connected(second_profile));
     }
 
+    /// The quit command is what the keymap binds and what the application
+    /// menu runs, so it takes the same path as the window's close button.
+    #[gpui::test]
+    fn the_quit_command_confirms_the_quit_without_a_running_query(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        harness.connect("prod");
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.dispatch(Command::Quit);
+
+        assert!(!harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    #[gpui::test]
+    fn the_quit_command_opens_the_prompt_with_a_running_query(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.dispatch(Command::Quit);
+
+        assert!(harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 0);
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Running));
+
+        harness.force();
+
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    /// A second quit command while the prompt is up leaves the question to
+    /// the prompt: it reopens nothing and quits nothing.
+    #[gpui::test]
+    fn the_quit_command_leaves_the_open_prompt_alone(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.dispatch(Command::Quit);
+        assert!(harness.prompt_visible());
+
+        harness.dispatch(Command::Quit);
+
+        assert!(harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 0);
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Running));
+    }
+
     #[gpui::test]
     fn title_bar_close_with_a_running_query_opens_the_prompt(cx: &mut TestAppContext) {
         let mut harness = new_harness(cx);

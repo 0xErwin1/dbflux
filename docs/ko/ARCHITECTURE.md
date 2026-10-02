@@ -308,6 +308,7 @@ crates/
     src/                    # 이동된 하위 시스템을 이전 모듈 경로의 shim을 통해 재노출
       lib.rs                # 크레이트 루트; shim 모듈을 통한 재노출
       app.rs                # GPUI 앱 부트스트랩
+      app_menu.rs           # macOS 응용 프로그램 메뉴 막대(정보, 서비스, 가리기, 종료)
       ipc_server.rs         # 앱 제어 IPC 서버 (Focus, OpenScript)
       assets.rs             # 임베디드 SVG 아이콘을 위한 GPUI AssetSource 구현
       platform.rs           # Shim: pub use dbflux_ui_base::platform::*
@@ -869,7 +870,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - 내보내기: `crates/dbflux_export/`는 셰이프 기반 내보내기(CSV, JSON pretty/compact, Text, Binary/Hex/Base64)를 제공합니다. 형식 가용성은 드라이버가 아니라 `QueryResultShape`에 의해 결정됩니다. 각 형식은 자체 모듈(`binary.rs`, `csv.rs`, `json.rs`, `text.rs`)을 갖습니다. 파일 대화 상자 가용성은 `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()`를 통해 런타임에 탐지됩니다(Linux에서는 `PATH`에서 `xdg-desktop-portal`, `zenity`, `kdialog`를 확인); 사용 가능한 백엔드가 없으면 내보내기는 `unique_path_in()` 충돌 방지와 함께 `fallback_export_dir()`(`~/.local/share/dbflux/exports/`)로 폴백합니다. 클립보드 내보내기 경로도 대체 대상으로 사용할 수 있습니다.
 - 테스트 지원: `crates/dbflux_test_support/`는 모든 드라이버에 걸친 라이브 통합 테스트를 위한 Docker 컨테이너 관리와 픽스처를 제공합니다. DynamoDB Local은 통합 테스트와 로컬 검증에만 사용됩니다; 프로덕션 사용은 원격 AWS DynamoDB 엔드포인트를 대상으로 합니다.
 - 아이콘 시스템: `crates/dbflux_components/src/icons/mod.rs`에 정의된 `AppIcon` 열거형; 내장 SVG 바이트와 `ALL_ICONS` 목록은 `crates/dbflux_ui/src/ui/icons/mod.rs`에 그대로 있으며(리소스는 `crates/dbflux_ui/resources/` 아래), `assets.rs`를 통해 로드됩니다.
-- 플랫폼 감지: `crates/dbflux_ui_base/src/platform.rs`는 X11/Wayland 차이를 처리하며, 적절한 창 최소 크기 힌트를 위해 `is_x11()`, `floating_window_kind()`, `apply_window_options()`를 제공합니다. (`crates/dbflux_ui/src/platform.rs`에 심(shim)이 있습니다.)
+- 플랫폼 감지: `crates/dbflux_ui_base/src/platform.rs`는 X11/Wayland 차이를 처리하며, 적절한 창 최소 크기 힌트를 위해 `is_x11()`, 메인 창을 위한 `apply_main_window_options()`, 보조 창을 위한 `floating_window_kind()`와 `apply_window_options()`를 제공합니다. (`crates/dbflux_ui/src/platform.rs`에 심(shim)이 있습니다.)
 
 ### MCP 거버넌스 시스템
 

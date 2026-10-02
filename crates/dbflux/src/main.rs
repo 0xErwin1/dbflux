@@ -20,10 +20,12 @@ use dbflux_ipc::{
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
+use dbflux_ui::keymap::Command;
 use dbflux_ui::platform;
 use dbflux_ui::ui::views::workspace::{
     DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
 };
+use dbflux_ui_base::keymap::RunCommand;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use dbflux_ui_base::window_state::{self, WindowGeometry};
 use gpui::*;
@@ -453,7 +455,10 @@ fn run_gui() {
             display_id: placement.display_id,
             ..Default::default()
         };
-        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+        // The main window stays a normal window: a floating one is an
+        // `NSPanel` above everything else on macOS, which takes it out of
+        // AeroSpace, Spaces and Stage Manager.
+        platform::apply_main_window_options(&mut main_window_options, 800.0, 600.0);
 
         let window_handle = cx
             .open_window(main_window_options, |window, cx| {
@@ -474,6 +479,48 @@ fn run_gui() {
                     initiate_graceful_shutdown(&app_state_for_quit, cx);
                 })
                 .detach();
+
+                // The application menu bar. macOS draws it, and the menu it
+                // shows for the application name is empty until one is
+                // installed.
+                dbflux_ui::app_menu::install(cx, app_state.clone());
+
+                // The focused window is not always the workspace: the Settings
+                // window is a window of its own and propagates the commands it
+                // does not own. The application therefore answers the quit
+                // command, whichever window asked, by asking the workspace —
+                // and its running-query prompt — in the window that shows it.
+                let main_window = window.window_handle();
+                cx.on_action(move |action: &RunCommand, cx| {
+                    if action.command.as_ref() != Command::Quit.action_id().as_ref() {
+                        cx.propagate();
+                        return;
+                    }
+
+                    let Some(workspace) = WORKSPACE_FOR_SHUTDOWN
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone()
+                        .and_then(|workspace| workspace.upgrade())
+                    else {
+                        return;
+                    };
+
+                    let outcome = main_window.update(cx, |_root, window, cx| {
+                        // The question belongs to the window that shows it, so
+                        // bring that one to the front of whoever asked.
+                        window.activate_window();
+                        workspace.update(cx, |workspace, cx| {
+                            if workspace.request_quit(window, cx) {
+                                cx.emit(QuitConfirmed);
+                            }
+                        });
+                    });
+
+                    if let Err(error) = outcome {
+                        log::warn!("The quit request did not reach the main window: {error}");
+                    }
+                });
 
                 IpcServer::start_with_listener(
                     listener,

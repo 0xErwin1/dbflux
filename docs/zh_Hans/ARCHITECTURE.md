@@ -308,6 +308,7 @@ crates/
     src/                    # 通过旧模块路径上的 pub use 垫片重新导出已迁移的子系统
       lib.rs                # crate 根；通过垫片模块重新导出
       app.rs                # GPUI 应用引导
+      app_menu.rs           # macOS 应用程序菜单栏（关于、服务、隐藏、退出）
       ipc_server.rs         # 应用控制 IPC 服务器（Focus、OpenScript）
       assets.rs             # 用于内嵌 SVG 图标的 GPUI AssetSource 实现
       platform.rs           # 垫片：pub use dbflux_ui_base::platform::*
@@ -872,7 +873,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 导出：`crates/dbflux_export/` 提供基于形状的导出（CSV、JSON 美化/紧凑、文本、二进制/Hex/Base64）。可用格式由 `QueryResultShape` 决定，而不是由驱动程序决定。每种格式各有自己的模块（`binary.rs`、`csv.rs`、`json.rs`、`text.rs`）。文件对话框的可用性在运行时通过 `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` 探测（在 Linux 上：检查 `PATH` 中是否有 `xdg-desktop-portal`、`zenity`、`kdialog`）；若没有可用的后端，导出会回退到 `fallback_export_dir()`（`~/.local/share/dbflux/exports/`），并用 `unique_path_in()` 去重。此外还有一条剪贴板导出路径可作为替代目标。
 - 测试支撑：`crates/dbflux_test_support/` 提供 Docker 容器管理与固件（Fixture），用于跨所有驱动程序的真实集成测试。DynamoDB Local 仅用于集成测试与本地验证；生产环境使用的是远端 AWS DynamoDB 端点。
 - 图标系统：`AppIcon` 枚举定义在 `crates/dbflux_components/src/icons/mod.rs`；内嵌的 SVG 字节与 `ALL_ICONS` 列表仍位于 `crates/dbflux_ui/src/ui/icons/mod.rs`（资源文件在 `crates/dbflux_ui/resources/` 下），通过 `assets.rs` 加载。
-- 平台检测：`crates/dbflux_ui_base/src/platform.rs` 用 `is_x11()`、`floating_window_kind()` 与 `apply_window_options()` 处理 X11/Wayland 差异，以正确设置窗口最小尺寸提示。（`crates/dbflux_ui/src/platform.rs` 处留有垫片。）
+- 平台检测：`crates/dbflux_ui_base/src/platform.rs` 用 `is_x11()`、主窗口的 `apply_main_window_options()`，以及次要窗口的 `floating_window_kind()` 与 `apply_window_options()` 处理 X11/Wayland 差异，以正确设置窗口最小尺寸提示。（`crates/dbflux_ui/src/platform.rs` 处留有垫片。）
 
 ### MCP 治理系统
 

@@ -456,6 +456,23 @@ fn refresh_derived_keybindings(cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// The action a binding of `command` in `context` dispatches, taken from the
+/// keymap in force, or `None` when nothing binds it there.
+///
+/// A native menu item carries this rather than a freshly built
+/// [`RunCommand`], so the chord it shows is the effective one, a binding the
+/// user changed included. Only the contexts whose bindings dispatch
+/// [`RunCommand`] answer; an element context binds its own actions and
+/// answers `None`.
+pub fn run_command_for(context: ContextId, command: Command) -> Option<RunCommand> {
+    keymap_overrides()
+        .effective_bindings(default_keymap())
+        .into_iter()
+        .find(|binding| binding.slot.context == context && binding.slot.command == command)
+        .map(|binding| binding_action(&binding.slot, binding.is_user))
+        .and_then(|action| action.as_any().downcast_ref::<RunCommand>().cloned())
+}
+
 /// Every binding of the effective keymap as a native GPUI binding, in the
 /// registration order [`KeymapOverrides::effective_bindings`] defines.
 ///

@@ -39,6 +39,13 @@ access:
   ssh_failed: SSH 连接失败
   save_as_tunnel: 保存为隧道
   ssh_disabled_hint: 启用 SSH 隧道以配置经由堡垒机的连接
+app_menu:
+  about: 关于 %{app}
+  services: 服务
+  hide: 隐藏 %{app}
+  hide_others: 隐藏其他
+  show_all: 全部显示
+  quit: 退出 %{app}
 audit:
   toast:
     mcp_governance_persisted: MCP 治理状态已持久化
@@ -3555,6 +3562,7 @@ settings:
       open_tab_menu: 打开标签页菜单
       move_tab_left: 向左移动标签页
       move_tab_right: 向右移动标签页
+      quit: 退出 DBFlux
       focus_sidebar: 聚焦侧边栏
       focus_editor: 聚焦编辑器
       focus_results: 聚焦结果

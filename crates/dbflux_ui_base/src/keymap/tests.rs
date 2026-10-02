@@ -46,6 +46,54 @@ fn primary_shift_n_is_not_bound_to_any_other_command() {
 }
 
 #[test]
+fn primary_q_quits_from_the_global_context() {
+    let keymap = default_keymap();
+    let chord = KeyChord::new("q", Modifiers::primary());
+
+    assert_eq!(
+        keymap.resolve(ContextId::Global, &chord),
+        Some(Command::Quit)
+    );
+}
+
+/// The quit chord belongs to the application wherever the global layer
+/// applies: no panel takes it away, and the macOS application menu labels its
+/// Quit item from this single binding. The Settings window is a window of its
+/// own with its own layer, which keeps the literal Ctrl+Q that closed it
+/// before this chord existed.
+#[test]
+fn primary_q_runs_quit_wherever_the_global_layer_applies() {
+    let keymap = default_keymap();
+    let chord = KeyChord::new("q", Modifiers::primary());
+
+    for context in [
+        ContextId::Global,
+        ContextId::Sidebar,
+        ContextId::Editor,
+        ContextId::Results,
+        ContextId::BackgroundTasks,
+        ContextId::TextInput,
+        ContextId::ContextBar,
+    ] {
+        assert_eq!(
+            keymap.resolve(context, &chord),
+            Some(Command::Quit),
+            "primary+q must quit in {context:?}"
+        );
+    }
+
+    for context in ContextId::all_variants() {
+        let resolved = keymap.resolve(*context, &chord);
+        assert!(
+            resolved.is_none()
+                || resolved == Some(Command::Quit)
+                || (*context == ContextId::Settings && resolved == Some(Command::CloseWindow)),
+            "primary+q resolves to {resolved:?} in {context:?}"
+        );
+    }
+}
+
+#[test]
 fn chord_display_parts_follow_the_platform_modifier() {
     let chord = KeyChord::new("n", Modifiers::primary_shift());
 
@@ -2556,4 +2604,45 @@ fn changing_the_leader_moves_default_and_user_leader_bindings(cx: &mut gpui::Tes
         set_vim_leader(default_vim_leader(), cx);
         apply_keymap_overrides(KeymapOverrides::new(), cx);
     });
+}
+
+/// The action a menu item carries is the one the keymap binds, so the chord
+/// the menu shows is the effective one, user overrides included.
+#[gpui::test]
+fn run_command_for_returns_the_bound_action(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
+
+    let bound = run_command_for(ContextId::Global, Command::Quit).expect("quit is bound");
+    assert!(runs_command(&bound, Command::Quit));
+    assert!(
+        !bound.from_user_binding,
+        "the default binding is not a user one"
+    );
+
+    assert!(
+        run_command_for(ContextId::Sidebar, Command::Quit).is_none(),
+        "the sidebar binds no quit"
+    );
+
+    let slot = BindingSlot::new(
+        ContextId::Global,
+        Command::Quit,
+        KeyChord::new("q", Modifiers::primary()),
+    );
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        slot,
+        Some(KeySequence::from(KeyChord::new(
+            "q",
+            Modifiers::primary_shift(),
+        ))),
+    );
+    cx.update(|cx| apply_keymap_overrides(overrides, cx));
+
+    let rebound = run_command_for(ContextId::Global, Command::Quit).expect("quit stays bound");
+    assert!(runs_command(&rebound, Command::Quit));
+    assert!(
+        rebound.from_user_binding,
+        "the rebound chord comes from the user's binding"
+    );
 }

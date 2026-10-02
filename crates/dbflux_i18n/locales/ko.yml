@@ -39,6 +39,13 @@ access:
   ssh_failed: SSH 연결 실패
   save_as_tunnel: 터널로 저장
   ssh_disabled_hint: 배스천 호스트를 통한 연결을 구성하려면 SSH 터널을 사용하세요.
+app_menu:
+  about: "%{app} 정보"
+  services: 서비스
+  hide: "%{app} 가리기"
+  hide_others: 기타 가리기
+  show_all: 모두 보기
+  quit: "%{app} 종료"
 audit:
   toast:
     mcp_governance_persisted: MCP 거버넌스 상태를 저장했습니다.
@@ -3555,6 +3562,7 @@ settings:
       open_tab_menu: 탭 메뉴 열기
       move_tab_left: 탭을 왼쪽으로 이동
       move_tab_right: 탭을 오른쪽으로 이동
+      quit: DBFlux 종료
       focus_sidebar: 사이드바 포커스
       focus_editor: 편집기 포커스
       focus_results: 결과 포커스

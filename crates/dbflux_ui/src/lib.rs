@@ -8,6 +8,7 @@
 //! - Keymap actions and dispatcher
 
 pub mod app;
+pub mod app_menu;
 pub mod assets;
 pub mod ipc_server;
 pub mod keymap;

@@ -24,6 +24,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+N` / `Cmd+Shift+N` | Open connection manager |
 | `Ctrl+n` / `Cmd+n` | New query tab |
 | `Ctrl+w` / `Cmd+w` | Close tab |
+| `Ctrl+q` / `Cmd+q` | Quit DBFlux, asking first when a query is still running |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Move the active tab left / right |
 | `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Switch to tab N |
@@ -54,7 +55,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+M` / `Cmd+Shift+M` | Open MCP approvals |
 | `Ctrl+Shift+G` / `Cmd+Shift+G` | Refresh MCP governance |
 
-`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does, and clears the count on the status bar's error badge; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. `Ctrl+Shift+Y` lists the buttons of the newest toast on screen, such as **Copy**, **View in Audit** or **Reconnect now**, then **Show details** or **Hide details** when it has details, and **Dismiss**; the context menu keys drive it, and with no toast on screen it opens nothing. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette.
+`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does, and clears the count on the status bar's error badge; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. `Ctrl+Shift+Y` lists the buttons of the newest toast on screen, such as **Copy**, **View in Audit** or **Reconnect now**, then **Show details** or **Hide details** when it has details, and **Dismiss**; the context menu keys drive it, and with no toast on screen it opens nothing. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette. On macOS the application menu carries About, Services, Hide and Quit; Quit uses the chord above.
 
 The shell's clickable items all have a key, and none of them joins the `Tab` cycle: the activity rail entries are `Ctrl+Shift+5` .. `Ctrl+Shift+7`, `Ctrl+Shift+A` (Audit), `Ctrl+Shift+M` (Approvals) and `Ctrl+,` (Settings); the title bar's command search is `Ctrl+Shift+P` and its bell `Ctrl+Shift+B`; the status bar's tasks entry is `Ctrl+Shift+T`, its approvals entry `Ctrl+Shift+M` and its error badge `Ctrl+Shift+X`; a tab is closed with `Ctrl+w`, opened with `Ctrl+n`, reordered with `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown`, and its right-click menu opens with `Ctrl+m`. The window's own minimize, maximize and close buttons are left to the desktop's shortcuts.
 

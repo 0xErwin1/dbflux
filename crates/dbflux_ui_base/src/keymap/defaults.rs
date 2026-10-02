@@ -112,6 +112,9 @@ fn global_layer() -> KeymapLayer {
         KeyChord::new("w", Modifiers::primary()),
         Command::CloseCurrentTab,
     );
+    // Quit goes through the workspace, which asks first when a query is still
+    // running. macOS also shows this chord beside Quit in the application menu.
+    layer.bind(KeyChord::new("q", Modifiers::primary()), Command::Quit);
     // Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every platform — that is
     // the long-standing tabbed-UI idiom (browsers, terminals). Cmd+Tab on
     // macOS is the system app switcher and must not be shadowed.

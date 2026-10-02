@@ -39,6 +39,13 @@ access:
   ssh_failed: SSH connection failed
   save_as_tunnel: Save as tunnel
   ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
+app_menu:
+  about: About %{app}
+  services: Services
+  hide: Hide %{app}
+  hide_others: Hide Others
+  show_all: Show All
+  quit: Quit %{app}
 audit:
   toast:
     mcp_governance_persisted: MCP governance state persisted
@@ -3555,6 +3562,7 @@ settings:
       open_tab_menu: Open tab menu
       move_tab_left: Move tab left
       move_tab_right: Move tab right
+      quit: Quit DBFlux
       focus_sidebar: Focus sidebar
       focus_editor: Focus editor
       focus_results: Focus results

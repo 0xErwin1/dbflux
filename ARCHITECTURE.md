@@ -308,6 +308,7 @@ crates/
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
+      app_menu.rs           # macOS application menu bar (About, Services, Hide, Quit)
       ipc_server.rs         # App-control IPC server (Focus, OpenScript)
       assets.rs             # GPUI AssetSource impl for embedded SVG icons
       platform.rs           # Shim: pub use dbflux_ui_base::platform::*
@@ -881,7 +882,7 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
 - Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). File-dialog availability is probed at runtime via `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (on Linux: checks `PATH` for `xdg-desktop-portal`, `zenity`, `kdialog`); when no backend is available, exports fall back to `fallback_export_dir()` (`~/.local/share/dbflux/exports/`) with `unique_path_in()` deconfliction. A clipboard export path is also available as an alternative target.
 - Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers. DynamoDB Local is used only for integration tests and local validation; production usage targets remote AWS DynamoDB endpoints.
 - Icon system: `AppIcon` enum defined in `crates/dbflux_components/src/icons/mod.rs`; embedded SVG bytes and the `ALL_ICONS` list remain at `crates/dbflux_ui/src/ui/icons/mod.rs` (resources live under `crates/dbflux_ui/resources/`), loaded via `assets.rs`.
-- Platform detection: `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `floating_window_kind()`, and `apply_window_options()` for proper window min size hints. (Shim at `crates/dbflux_ui/src/platform.rs`.)
+- Platform detection: `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `apply_main_window_options()` for the main window, `floating_window_kind()` / `apply_window_options()` for the secondary windows, and the window min size hints. (Shim at `crates/dbflux_ui/src/platform.rs`.)
 
 ### MCP Governance System
 
