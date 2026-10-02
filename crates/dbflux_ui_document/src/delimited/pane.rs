@@ -113,6 +113,13 @@ impl DelimitedDocument {
             Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
         });
 
+        // The dialect controls, which the pane actions menu reaches from
+        // the keyboard.
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e))
+        });
+
         pane
     }
 }

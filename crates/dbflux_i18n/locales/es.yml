@@ -1762,8 +1762,15 @@ document:
     error:
       open_failed: "No se pudo abrir %{name}"
       load_more_failed: "No se pudo cargar más de %{name}"
+      reread_failed: "No se pudo volver a leer %{name}"
+      refused:
+        unsupported: "El texto %{encoding} no se puede leer con %{character} como delimitador o comilla. Elige otro delimitador, otra comilla u otra codificación."
+        line_break: "Un salto de línea no puede ser el delimitador ni la comilla. Elige otro carácter."
+        quote_equals_delimiter: "La comilla y el delimitador son ambos %{character}. Elige un carácter distinto para uno de los dos."
     warning:
       malformed_text: "Algunos bytes no son texto %{encoding} válido y se muestran como \uFFFD. Es probable que la codificación detectada sea incorrecta."
+      malformed_text_chosen: "Algunos bytes no son texto %{encoding} válido y se muestran como \uFFFD. Es probable que la codificación elegida sea incorrecta."
+      detected_delimiter_unreadable: "El delimitador detectado %{detected} no se puede leer en texto %{encoding}, por lo que el archivo se lee con %{delimiter} y es probable que sus columnas sean incorrectas. Elige otra codificación u otro delimitador."
       cannot_save_in_place: Este archivo no informa fecha de modificación ni etiqueta de contenido, por lo que no se puede guardar en su ubicación.
     status:
       delimiter: "Delimitador: %{delimiter}"
@@ -1779,9 +1786,21 @@ document:
       tab: Tabulador
       semicolon: Punto y coma
       pipe: Barra vertical
+    quote:
+      double: "Comilla doble"
+      single: "Comilla simple"
+      none: "Sin comillas"
+    toolbar:
+      delimiter: "Delimitador"
+      quote: "Comilla"
+      encoding: "Codificación"
+      header: "Fila de encabezado"
+      reset: "Volver a lo detectado"
+      detected: "%{value} (detectado)"
     footer:
       load_more: Cargar más
       loading_more: "Cargando…"
+      rereading: "Leyendo el archivo de nuevo…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analizando %{file} (%{analyzer})"
