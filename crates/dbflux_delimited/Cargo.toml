@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 chardetng.workspace = true
 encoding_rs.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
