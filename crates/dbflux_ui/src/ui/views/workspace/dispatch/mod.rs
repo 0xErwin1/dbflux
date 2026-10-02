@@ -29,6 +29,18 @@ impl CommandDispatcher for Workspace {
             return true;
         }
 
+        // Quit is the application's own command: the workspace answers it no
+        // matter which panel holds focus, asks about a running query first,
+        // and leaves the shutdown itself to the shell, which owns it and
+        // starts it on `QuitConfirmed`. While the prompt is already up that
+        // prompt decides this quit, so a second request is ignored.
+        if cmd == Command::Quit {
+            if !self.modal_active_query.read(cx).is_visible() && self.request_quit(window, cx) {
+                cx.emit(QuitConfirmed);
+            }
+            return true;
+        }
+
         // The open notifications popover owns the keyboard (its context has
         // no parent), so its commands never reach the panels behind it.
         if let Some(result) = self.dispatch_notifications(cmd, window, cx) {

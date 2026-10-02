@@ -339,6 +339,7 @@ crates/
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
+      app_menu.rs           # Barra de menú de macOS (Acerca de, Servicios, Ocultar, Salir)
       ipc_server.rs         # App-control IPC server (Focus, OpenScript)
       assets.rs             # GPUI AssetSource impl for embedded SVG icons
       platform.rs           # Shim: pub use dbflux_ui_base::platform::*
@@ -1527,8 +1528,10 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   lista `ALL_ICONS` permanecen en `crates/dbflux_ui/src/ui/icons/mod.rs` (los
   recursos viven bajo `crates/dbflux_ui/resources/`), cargados vía `assets.rs`.
 - Detección de plataforma: `crates/dbflux_ui_base/src/platform.rs` maneja las
-  diferencias entre X11/Wayland con `is_x11()`, `floating_window_kind()`, y
-  `apply_window_options()` para los hints correctos de tamaño mínimo de ventana.
+  diferencias entre X11/Wayland con `is_x11()`,
+  `apply_main_window_options()` para la ventana principal, y `floating_window_kind()` /
+  `apply_window_options()` para las ventanas secundarias, para los hints correctos de
+  tamaño mínimo de ventana.
   (Shim en `crates/dbflux_ui/src/platform.rs`.)
 
 ### Sistema de Gobernanza MCP
