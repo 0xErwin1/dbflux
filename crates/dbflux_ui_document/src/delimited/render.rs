@@ -1,12 +1,14 @@
 //! Rendering of `DelimitedDocument`.
 //!
 //! Layout, top to bottom: the warnings of the opened file, the table of the
-//! loaded records, and a footer with the delimiter, the encoding and the
-//! record count. While the first page is read, and when opening failed, a
+//! loaded records, and a footer with the delimiter, the encoding, the record
+//! count and, while the file has more records, the control that loads the
+//! next page. While the first page is read, and when opening failed, a
 //! centered notice takes the place of all three.
 
 use dbflux_components::components::data_table::DataTable;
 use dbflux_components::composites::EmptyState;
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::DocumentMetrics;
@@ -58,6 +60,39 @@ impl DelimitedDocument {
         )
     }
 
+    /// The control that loads the next page. `None` once every record is
+    /// loaded. While a page is being read it says so and takes no click.
+    fn render_load_more(&self, cx: &Context<Self>) -> Option<Button> {
+        if !self.has_more_records() {
+            return None;
+        }
+
+        let is_loading = self.is_loading_more();
+
+        let label = if is_loading {
+            dbflux_i18n::t!("document.delimited.footer.loading_more")
+        } else {
+            dbflux_i18n::t!("document.delimited.footer.load_more")
+        };
+
+        Some(
+            Button::new("delimited-load-more", label)
+                .inline()
+                .icon(AppIcon::ChevronDown)
+                .when_some(
+                    dbflux_ui_base::keymap::shortcut_label(
+                        dbflux_app::keymap::ContextId::Results,
+                        dbflux_app::keymap::Command::ResultsNextPage,
+                    ),
+                    Button::kbd,
+                )
+                .disabled(is_loading)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.load_more(cx);
+                })),
+        )
+    }
+
     fn render_loaded(&self, table: Entity<DataTable>, cx: &Context<Self>) -> AnyElement {
         div()
             .flex()
@@ -67,11 +102,13 @@ impl DelimitedDocument {
             .children(self.render_warnings(cx))
             .child(div().flex_1().min_h_0().child(table))
             .child(
-                document_footer(cx).children(
-                    self.status_items()
-                        .iter()
-                        .map(|item| div().flex_shrink_0().child(item.clone())),
-                ),
+                document_footer(cx)
+                    .children(
+                        self.status_items()
+                            .iter()
+                            .map(|item| div().flex_shrink_0().child(item.clone())),
+                    )
+                    .children(self.render_load_more(cx)),
             )
             .into_any_element()
     }

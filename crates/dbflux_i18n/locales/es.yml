@@ -1761,6 +1761,7 @@ document:
     loading: "Cargando %{name}…"
     error:
       open_failed: "No se pudo abrir %{name}"
+      load_more_failed: "No se pudo cargar más de %{name}"
     warning:
       malformed_text: "Algunos bytes no son texto %{encoding} válido y se muestran como \uFFFD. Es probable que la codificación detectada sea incorrecta."
       cannot_save_in_place: Este archivo no informa fecha de modificación ni etiqueta de contenido, por lo que no se puede guardar en su ubicación.
@@ -1778,6 +1779,9 @@ document:
       tab: Tabulador
       semicolon: Punto y coma
       pipe: Barra vertical
+    footer:
+      load_more: Cargar más
+      loading_more: "Cargando…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analizando %{file} (%{analyzer})"

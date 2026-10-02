@@ -73,7 +73,13 @@ impl Workspace {
                     return;
                 };
 
-                cx.new(|cx| DelimitedDocument::open_object(profile_id, connection, bucket, key, cx))
+                let app_state = self.app_state.clone();
+
+                cx.new(|cx| {
+                    DelimitedDocument::open_object(
+                        app_state, profile_id, connection, bucket, key, cx,
+                    )
+                })
             }
         };
         let pane = DelimitedDocument::into_pane(doc, cx);

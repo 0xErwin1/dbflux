@@ -1,6 +1,14 @@
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use dbflux_delimited::{Dialect, Encoding, RecordCount, SampleCoverage};
+use dbflux_app::keymap::Command;
+use dbflux_components::components::data_table::selection::CellCoord;
+use dbflux_delimited::{
+    Dialect, Encoding, Page, ReaderOptions, Record, RecordCount, SampleCoverage,
+};
+use dbflux_test_support::fake_driver::FakeDriver;
+use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
 use dbflux_ui_base::toast::ToastGlobal;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
@@ -9,8 +17,9 @@ use dbflux_ui_base::keyboard_coverage::KeyboardPath;
 use dbflux_ui_base::user_error::ErrorKind;
 
 use super::document::{
-    DelimitedDocument, DelimitedWarning, PAGE_SIZE, SAMPLE_BYTES, extension_hint,
+    DelimitedDocument, DelimitedWarning, PAGE_SIZE, READER_OPTIONS, SAMPLE_BYTES, extension_hint,
     open_error_to_user_facing, open_first_page, read_first_page, sample_coverage,
+    settled_record_count,
 };
 use super::source::{DelimitedLocation, open_source};
 use super::tests::{BUCKET, FakeConnection, KEY, TestDirectory};
@@ -20,6 +29,25 @@ use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
 use crate::types::{DocumentKind, DocumentState};
 
 const CITIES: &[u8] = b"name,city\nAna,Lima\nBo,Quito\n";
+
+/// Two records to a page, and a fetch window shorter than a page, so every
+/// further page is read from the source and not from bytes already fetched.
+const SMALL_PAGES: ReaderOptions = ReaderOptions {
+    page_size: NonZeroUsize::new(2).unwrap(),
+    window_size: NonZeroU64::new(16).unwrap(),
+};
+
+/// A CSV file with a header and `record_total` records whose first field is
+/// the record's index.
+fn numbered_csv(record_total: usize) -> Vec<u8> {
+    let mut bytes = b"id,city\n".to_vec();
+
+    for record in 0..record_total {
+        bytes.extend_from_slice(format!("{record},Lima\n").as_bytes());
+    }
+
+    bytes
+}
 
 /// Hosts the document `build` returns in a window, gives it the keyboard and
 /// runs the open flow to its end.
@@ -48,6 +76,116 @@ fn open_local(
     path: PathBuf,
 ) -> (Entity<DelimitedDocument>, &mut VisualTestContext) {
     open(cx, move |cx| DelimitedDocument::open_local(path, cx))
+}
+
+fn open_local_in_small_pages(
+    cx: &mut TestAppContext,
+    path: PathBuf,
+) -> (Entity<DelimitedDocument>, &mut VisualTestContext) {
+    open(cx, move |cx| {
+        DelimitedDocument::open_local_with(path, SMALL_PAGES, cx)
+    })
+}
+
+fn open_object_in_small_pages(
+    cx: &mut TestAppContext,
+    app_state: Entity<AppStateEntity>,
+    profile_id: uuid::Uuid,
+    connection: Arc<FakeConnection>,
+) -> (Entity<DelimitedDocument>, &mut VisualTestContext) {
+    open(cx, move |cx| {
+        DelimitedDocument::open_object_with(
+            app_state,
+            profile_id,
+            connection,
+            BUCKET.to_string(),
+            KEY.to_string(),
+            SMALL_PAGES,
+            cx,
+        )
+    })
+}
+
+/// An app state in which `connection` is the live connection of one
+/// profile. Returns the state and the profile id.
+fn connect_profile(
+    cx: &mut TestAppContext,
+    connection: Arc<FakeConnection>,
+) -> (Entity<AppStateEntity>, uuid::Uuid) {
+    let driver = FakeDriver::new(dbflux_core::DbKind::SQLite);
+    let (app_state, profile_id) =
+        crate::keyboard_test_support::connected_app_state(cx, &driver, "reports");
+
+    replace_connection(cx, &app_state, profile_id, connection);
+
+    (app_state, profile_id)
+}
+
+fn replace_connection(
+    cx: &mut TestAppContext,
+    app_state: &Entity<AppStateEntity>,
+    profile_id: uuid::Uuid,
+    connection: Arc<FakeConnection>,
+) {
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            let connected = state
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the profile is connected");
+
+            connected.connection = connection;
+        });
+    });
+}
+
+fn load_more(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) {
+    window.update(|_, cx| document.update(cx, |document, cx| document.load_more(cx)));
+    window.run_until_parked();
+}
+
+fn has_more_records(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+    window.update(|_, cx| document.read(cx).has_more_records())
+}
+
+fn is_loading_more(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+    window.update(|_, cx| document.read(cx).is_loading_more())
+}
+
+/// The text of the first cell of every row.
+fn first_column(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Vec<String> {
+    window.update(|_, cx| {
+        let table_state = document
+            .read(cx)
+            .table_state()
+            .expect("a loaded document has a table");
+
+        table_state
+            .read(cx)
+            .model()
+            .rows
+            .iter()
+            .map(|row| row.cells[0].edit_text())
+            .collect()
+    })
+}
+
+fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
+    window.update(|_, cx| cx.global::<ToastGlobal>().host.read(cx).last_toast_title())
+}
+
+/// The ids of the clickable elements the coverage check found in the frame.
+fn covered_ids(window: &mut VisualTestContext) -> Vec<String> {
+    let capture = FrameCapture::observe(window);
+
+    Coverage::new(DELIMITED)
+        .assert_covered(&capture.frame(window))
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect()
 }
 
 fn column_titles(
@@ -264,10 +402,11 @@ fn an_object_without_an_identity_warns_that_it_cannot_be_saved(cx: &mut TestAppC
     let connection = FakeConnection::with_object(CITIES);
     connection.store.omit_identity();
 
-    let profile_id = uuid::Uuid::new_v4();
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
 
     let (document, window) = open(cx, move |cx| {
         DelimitedDocument::open_object(
+            app_state,
             profile_id,
             connection,
             BUCKET.to_string(),
@@ -294,10 +433,12 @@ fn an_object_without_an_identity_warns_that_it_cannot_be_saved(cx: &mut TestAppC
 #[gpui::test]
 fn an_object_with_an_identity_opens_without_warnings(cx: &mut TestAppContext) {
     let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
 
     let (document, window) = open(cx, move |cx| {
         DelimitedDocument::open_object(
-            uuid::Uuid::new_v4(),
+            app_state,
+            profile_id,
             connection,
             BUCKET.to_string(),
             KEY.to_string(),
@@ -339,14 +480,16 @@ fn the_pane_matches_only_the_key_of_its_own_file(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("document-dedup");
     let (path, _) = directory.file("cities.csv", CITIES);
     let other_path = path.with_file_name("other.csv");
-    let profile_id = uuid::Uuid::new_v4();
+
+    let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
 
     let (local, window) = open_local(cx, path.clone());
 
-    let connection = FakeConnection::with_object(CITIES);
     let object = window.update(|_, cx| {
         cx.new(|cx| {
             DelimitedDocument::open_object(
+                app_state,
                 profile_id,
                 connection,
                 BUCKET.to_string(),
@@ -443,7 +586,7 @@ fn a_failed_object_range_read_keeps_the_driver_error() {
         key: KEY.to_string(),
     };
 
-    let Err(error) = open_first_page(&location, Some("csv")) else {
+    let Err(error) = open_first_page(&location, Some("csv"), READER_OPTIONS) else {
         panic!("a refused range read cannot open the file");
     };
     let reported = open_error_to_user_facing(&error, "Could not open cities.csv".to_string());
@@ -474,7 +617,7 @@ fn a_refused_dialect_is_reported_as_a_user_error() {
 
     let (source, version) = open_source(&location).expect("the test file opens");
 
-    let Err(error) = read_first_page(source, version, dialect) else {
+    let Err(error) = read_first_page(source, version, dialect, READER_OPTIONS) else {
         panic!("the reader refuses a pipe delimiter in Shift_JIS");
     };
     let reported = open_error_to_user_facing(&error, "Could not open cities.txt".to_string());
@@ -499,7 +642,7 @@ fn a_local_file_that_cannot_be_read_is_reported_as_a_storage_error() {
         path: path.with_file_name("absent.csv"),
     };
 
-    let Err(error) = open_first_page(&location, Some("csv")) else {
+    let Err(error) = open_first_page(&location, Some("csv"), READER_OPTIONS) else {
         panic!("a missing file cannot be opened");
     };
     let reported = open_error_to_user_facing(&error, "Could not open absent.csv".to_string());
@@ -544,7 +687,7 @@ fn a_file_of_exactly_the_sample_size_is_detected_as_a_whole_file() {
     let directory = TestDirectory::new("document-exact-sample");
     let (_, location) = directory.file("exact.txt", &bytes);
 
-    let Ok(opened) = open_first_page(&location, None) else {
+    let Ok(opened) = open_first_page(&location, None, READER_OPTIONS) else {
         panic!("the file opens");
     };
     assert_eq!(opened.dialect.delimiter, b'\t');
@@ -552,7 +695,7 @@ fn a_file_of_exactly_the_sample_size_is_detected_as_a_whole_file() {
     bytes.push(b'x');
     let (_, longer) = directory.file("longer.txt", &bytes);
 
-    let Ok(opened) = open_first_page(&longer, None) else {
+    let Ok(opened) = open_first_page(&longer, None, READER_OPTIONS) else {
         panic!("the file opens");
     };
     assert_eq!(opened.dialect.delimiter, b',');
@@ -662,6 +805,445 @@ fn the_delimited_document_is_covered(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+fn a_file_of_several_pages_loads_page_by_page(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-pages");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    assert_eq!(first_column(&document, window), ["0", "1"]);
+    assert_eq!(
+        status_items(&document, window)[2],
+        "2 records loaded, more in the file"
+    );
+    assert!(matches!(
+        window.update(|_, cx| document.read(cx).record_count()),
+        Some(RecordCount::IndexedSoFar(_))
+    ));
+    assert!(has_more_records(&document, window));
+
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["0", "1", "2", "3"]);
+    assert_eq!(
+        status_items(&document, window)[2],
+        "4 records loaded, more in the file"
+    );
+    assert!(has_more_records(&document, window));
+
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["0", "1", "2", "3", "4"]);
+    assert_eq!(status_items(&document, window)[2], "5 records");
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).record_count()),
+        Some(RecordCount::Total(5))
+    );
+    assert!(!has_more_records(&document, window));
+    assert_eq!(toast_count(window), 0);
+
+    load_more(&document, window);
+
+    assert_eq!(row_count(&document, window), 5);
+    assert_eq!(toast_count(window), 0);
+}
+
+/// The last page is full, and the total is still settled by the read that
+/// returns it: no further, empty, page has to be asked for.
+#[gpui::test]
+fn a_file_of_an_exact_number_of_pages_settles_its_total_with_the_last_page(
+    cx: &mut TestAppContext,
+) {
+    let directory = TestDirectory::new("document-exact-pages");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(4));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    assert!(has_more_records(&document, window));
+
+    load_more(&document, window);
+
+    assert_eq!(row_count(&document, window), 4);
+    assert_eq!(status_items(&document, window)[2], "4 records");
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).record_count()),
+        Some(RecordCount::Total(4))
+    );
+    assert!(!has_more_records(&document, window));
+    assert!(
+        !covered_ids(window)
+            .iter()
+            .any(|id| id == "delimited-load-more")
+    );
+}
+
+#[gpui::test]
+fn a_file_of_exactly_one_page_offers_no_load_more(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-one-page");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(2));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    assert_eq!(status_items(&document, window)[2], "2 records");
+    assert!(!has_more_records(&document, window));
+}
+
+#[gpui::test]
+fn a_file_shorter_than_a_page_offers_no_load_more(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-short");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path);
+
+    assert!(!has_more_records(&document, window));
+    assert!(
+        !covered_ids(window)
+            .iter()
+            .any(|id| id == "delimited-load-more")
+    );
+}
+
+#[gpui::test]
+fn a_second_request_during_a_load_is_ignored(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-one-load");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(7));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    assert!(!is_loading_more(&document, window));
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.load_more(cx);
+            assert!(document.is_loading_more());
+
+            document.load_more(cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(first_column(&document, window), ["0", "1", "2", "3"]);
+    assert!(!is_loading_more(&document, window));
+    assert!(has_more_records(&document, window));
+}
+
+#[gpui::test]
+fn a_failed_page_read_reports_one_error_keeps_the_rows_and_can_be_retried(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(&numbered_csv(5));
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state, profile_id, connection.clone());
+
+    assert_eq!(row_count(&document, window), 2);
+
+    connection
+        .store
+        .fail_reads_with("SlowDown: reduce the rate");
+    load_more(&document, window);
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(
+        last_toast_title(window).as_deref(),
+        Some("Could not load more of cities.csv")
+    );
+    assert_eq!(state(&document, window), DocumentState::Clean);
+    assert_eq!(first_column(&document, window), ["0", "1"]);
+    assert_eq!(
+        status_items(&document, window)[2],
+        "2 records loaded, more in the file"
+    );
+    assert!(has_more_records(&document, window));
+    assert!(!is_loading_more(&document, window));
+
+    connection.store.stop_failing_reads();
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["0", "1", "2", "3"]);
+    assert_eq!(toast_count(window), 1);
+}
+
+#[gpui::test]
+fn an_object_whose_profile_is_disconnected_reports_one_error_and_reads_nothing(
+    cx: &mut TestAppContext,
+) {
+    let connection = FakeConnection::with_object(&numbered_csv(5));
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state.clone(), profile_id, connection.clone());
+
+    window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            state.connections_mut().remove(&profile_id);
+        });
+    });
+    let reads_before = connection.store.range_reads();
+
+    load_more(&document, window);
+
+    assert_eq!(toast_count(window), 1);
+    assert_eq!(
+        last_toast_title(window).as_deref(),
+        Some("Could not load more of cities.csv")
+    );
+    assert_eq!(connection.store.range_reads(), reads_before);
+    assert_eq!(first_column(&document, window), ["0", "1"]);
+    assert!(has_more_records(&document, window));
+    assert!(!is_loading_more(&document, window));
+}
+
+/// The connection the document opened with is dead after a reconnect, so
+/// the next page is read through the profile's new one.
+#[gpui::test]
+fn a_reconnected_profile_reads_the_next_page_through_its_new_connection(cx: &mut TestAppContext) {
+    let bytes = numbered_csv(5);
+
+    let first = FakeConnection::with_object(&bytes);
+    let (app_state, profile_id) = connect_profile(cx, first.clone());
+
+    let (document, window) =
+        open_object_in_small_pages(cx, app_state.clone(), profile_id, first.clone());
+
+    let second = FakeConnection::with_object(&bytes);
+    replace_connection(window, &app_state, profile_id, second.clone());
+    first.store.fail_reads_with("the connection is closed");
+
+    load_more(&document, window);
+
+    assert_eq!(first_column(&document, window), ["0", "1", "2", "3"]);
+    assert_eq!(toast_count(window), 0);
+    assert!(second.store.range_reads() > 0);
+}
+
+/// The read fails after the document is gone, and nobody is told: the
+/// failure belongs to a tab that no longer exists.
+#[gpui::test]
+fn a_document_closed_during_a_load_reports_nothing(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+
+    let connection = FakeConnection::with_object(&numbered_csv(5));
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let document = cx.update(|cx| {
+        cx.new(|cx| {
+            DelimitedDocument::open_object_with(
+                app_state,
+                profile_id,
+                connection.clone(),
+                BUCKET.to_string(),
+                KEY.to_string(),
+                SMALL_PAGES,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+
+    connection
+        .store
+        .fail_reads_with("SlowDown: reduce the rate");
+
+    cx.update(|cx| {
+        document.update(cx, |document, cx| {
+            document.load_more(cx);
+            assert!(document.is_loading_more());
+        });
+    });
+
+    drop(document);
+    cx.update(|_| {});
+    cx.run_until_parked();
+
+    let toasts = cx.update(|cx| cx.global::<ToastGlobal>().host.read(cx).toast_count());
+    assert_eq!(toasts, 0);
+}
+
+/// The byte-order mark settles UTF-8. The first page is clean, and the
+/// stray bytes of the pages after it add the warning once.
+#[gpui::test]
+fn malformed_bytes_in_a_later_page_add_the_warning_once(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-malformed-later");
+    let (path, _) = directory.file(
+        "cities.csv",
+        b"\xEF\xBB\xBFid,city\n0,Lima\n1,Quito\n2,Li\xFFma\n3,Cusco\n4,Qui\xFFto\n",
+    );
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    assert!(warnings(&document, window).is_empty());
+
+    load_more(&document, window);
+
+    assert_eq!(
+        warnings(&document, window),
+        [DelimitedWarning::MalformedText]
+    );
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).warning_items().len()),
+        1
+    );
+
+    load_more(&document, window);
+
+    assert_eq!(row_count(&document, window), 5);
+    assert_eq!(
+        warnings(&document, window),
+        [DelimitedWarning::MalformedText]
+    );
+    assert_eq!(toast_count(window), 0);
+}
+
+#[gpui::test]
+fn the_selected_cell_survives_a_page_load(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-selection");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    let table_state = window.update(|_, cx| {
+        document
+            .read(cx)
+            .table_state()
+            .expect("a loaded document has a table")
+            .clone()
+    });
+    window.update(|_, cx| {
+        table_state.update(cx, |state, cx| state.select_cell(CellCoord::new(1, 1), cx));
+    });
+
+    load_more(&document, window);
+
+    window.update(|window, cx| {
+        let state = table_state.read(cx);
+
+        assert_eq!(state.model().rows.len(), 4);
+        assert_eq!(state.selection().active, Some(CellCoord::new(1, 1)));
+        assert!(state.focus_handle().is_focused(window));
+    });
+}
+
+/// `]` is the key of the next page in the results context, and the document
+/// answers it by loading one.
+#[gpui::test]
+fn the_next_page_key_loads_the_next_page(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-next-page-key");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    window.simulate_keystrokes("]");
+    window.run_until_parked();
+
+    assert_eq!(first_column(&document, window), ["0", "1", "2", "3"]);
+}
+
+#[gpui::test]
+fn the_next_page_command_is_handled_only_by_a_loaded_document(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-next-page-command");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
+    let missing = path.with_file_name("absent.csv");
+
+    let (document, window) = open_local_in_small_pages(cx, path);
+
+    let handled = window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            document.dispatch_command(Command::ResultsNextPage, window, cx)
+        })
+    });
+    window.run_until_parked();
+
+    assert!(handled);
+    assert_eq!(row_count(&document, window), 4);
+
+    let other = window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            document.dispatch_command(Command::ResultsPrevPage, window, cx)
+        })
+    });
+    assert!(!other);
+
+    let failed = window.update(|_, cx| cx.new(|cx| DelimitedDocument::open_local(missing, cx)));
+    window.run_until_parked();
+
+    let handled = window.update(|window, cx| {
+        failed.update(cx, |document, cx| {
+            document.dispatch_command(Command::ResultsNextPage, window, cx)
+        })
+    });
+    assert!(!handled);
+}
+
+#[gpui::test]
+fn the_load_more_control_is_covered_while_the_file_has_more(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-load-more-coverage");
+    let (path, _) = directory.file("numbers.csv", &numbered_csv(5));
+
+    let (_document, window) = open_local_in_small_pages(cx, path);
+
+    let checked = covered_ids(window);
+
+    assert!(
+        checked.iter().any(|id| id == "delimited-load-more"),
+        "{checked:?}"
+    );
+}
+
+#[test]
+fn the_registry_reaches_load_more_through_the_next_page_command() {
+    let load_more = DELIMITED
+        .entries
+        .iter()
+        .find(|(pattern, _)| *pattern == "delimited-load-more")
+        .map(|(_, path)| *path);
+
+    assert!(
+        matches!(
+            load_more,
+            Some(KeyboardPath::Command(Command::ResultsNextPage))
+        ),
+        "{load_more:?}"
+    );
+}
+
+#[test]
+fn a_page_shorter_than_the_page_size_settles_the_total() {
+    let page_size = NonZeroUsize::new(2).expect("a page size above zero");
+
+    let page_of = |first_record: u64, record_total: u64| Page {
+        first_record,
+        records: (0..record_total)
+            .map(|record| Record {
+                byte_range: record * 7..(record + 1) * 7,
+                fields: vec![record.to_string(), "Lima".to_string()],
+                had_replacements: false,
+            })
+            .collect(),
+    };
+
+    let full = page_of(4, 2);
+    let short = page_of(4, 1);
+    let empty = page_of(4, 0);
+
+    assert_eq!(
+        settled_record_count(&full, RecordCount::IndexedSoFar(6), page_size),
+        RecordCount::IndexedSoFar(6)
+    );
+    assert_eq!(
+        settled_record_count(&short, RecordCount::IndexedSoFar(5), page_size),
+        RecordCount::Total(5)
+    );
+    assert_eq!(
+        settled_record_count(&empty, RecordCount::IndexedSoFar(4), page_size),
+        RecordCount::Total(4)
+    );
+    assert_eq!(
+        settled_record_count(&short, RecordCount::Total(9), page_size),
+        RecordCount::Total(9)
+    );
+}
+
 /// Every string of the document resolves in English and is translated, not
 /// copied, in the other catalogs.
 #[test]
@@ -681,6 +1263,9 @@ fn the_document_strings_resolve_in_every_locale() {
         "document.delimited.delimiter.tab",
         "document.delimited.delimiter.semicolon",
         "document.delimited.delimiter.pipe",
+        "document.delimited.footer.load_more",
+        "document.delimited.footer.loading_more",
+        "document.delimited.error.load_more_failed",
     ] {
         let english = dbflux_i18n::t!(key, locale = "en");
 

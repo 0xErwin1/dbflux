@@ -1761,6 +1761,7 @@ document:
     loading: "%{name} 불러오는 중…"
     error:
       open_failed: "%{name}을(를) 열 수 없습니다"
+      load_more_failed: "%{name}을(를) 더 불러올 수 없습니다"
     warning:
       malformed_text: "일부 바이트가 올바른 %{encoding} 텍스트가 아니어서 \uFFFD(으)로 표시됩니다. 감지된 인코딩이 잘못되었을 수 있습니다."
       cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
@@ -1778,6 +1779,9 @@ document:
       tab: 탭
       semicolon: 세미콜론
       pipe: 세로 막대
+    footer:
+      load_more: 더 불러오기
+      loading_more: "불러오는 중…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"
