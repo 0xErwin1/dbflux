@@ -547,6 +547,59 @@ async fn agent_creates_inserts_and_reads_rows_over_the_wire() {
 }
 
 #[tokio::test]
+async fn list_tables_names_only_returns_names_as_strings() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, false).await;
+
+    let detailed = agent
+        .call_json("list_tables", json!({ "connection_id": connection_id }))
+        .await;
+    let entries = detailed["tables"]
+        .as_array()
+        .expect("list_tables should return a tables array");
+    assert_eq!(entries.len(), 1, "got {detailed}");
+
+    let entry = entries[0]
+        .as_object()
+        .expect("without names_only each entry is an object");
+    assert_eq!(entry["name"], json!("items"));
+    assert_eq!(entry["kind"], json!("Table"));
+    assert!(entry.contains_key("schema"), "got {detailed}");
+    assert_eq!(entry.len(), 3, "got {detailed}");
+
+    let explicit_default = agent
+        .call_json(
+            "list_tables",
+            json!({ "connection_id": connection_id, "names_only": false }),
+        )
+        .await;
+    assert_eq!(
+        explicit_default, detailed,
+        "names_only: false is the same as leaving it out"
+    );
+
+    let names = agent
+        .call_json(
+            "list_tables",
+            json!({ "connection_id": connection_id, "names_only": true }),
+        )
+        .await;
+    assert_eq!(names, json!({ "tables": ["items"] }));
+
+    let collection_names = agent
+        .call_json(
+            "list_collections",
+            json!({ "connection_id": connection_id, "names_only": true }),
+        )
+        .await;
+    assert_eq!(collection_names, names);
+}
+
+#[tokio::test]
 async fn read_only_agent_denial_is_a_jsonrpc_error_and_is_audited() {
     let directory = tempfile::tempdir().expect("create the test data directory");
     let profile = sqlite_profile(&directory);

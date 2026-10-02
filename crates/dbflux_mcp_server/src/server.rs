@@ -1130,6 +1130,113 @@ mod tests {
         );
     }
 
+    fn relational_schema_with_table_and_view() -> dbflux_core::SchemaSnapshot {
+        let mut snapshot =
+            dbflux_test_support::fixtures::relational_schema_with_table("app", "public", "users");
+
+        if let dbflux_core::DataStructure::Relational(relational) = &mut snapshot.structure
+            && let Some(schema) = relational.schemas.first_mut()
+        {
+            schema.views.push(dbflux_core::ViewInfo {
+                name: "active_users".to_string(),
+                schema: Some("public".to_string()),
+            });
+        }
+
+        snapshot
+    }
+
+    #[tokio::test]
+    async fn list_tables_returns_one_object_per_table_and_view_by_default() {
+        let driver =
+            FakeDriver::new(DbKind::Postgres).with_schema(relational_schema_with_table_and_view());
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, false)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "tables": [
+                    { "name": "users", "schema": "public", "kind": "Table" },
+                    { "name": "active_users", "schema": "public", "kind": "View" },
+                ]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_tables_names_only_returns_table_and_view_names() {
+        let driver =
+            FakeDriver::new(DbKind::Postgres).with_schema(relational_schema_with_table_and_view());
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, true)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(
+            response,
+            serde_json::json!({ "tables": ["users", "active_users"] })
+        );
+    }
+
+    fn key_value_schema_with_keyspaces() -> dbflux_core::SchemaSnapshot {
+        let keyspace = |db_index, key_count| dbflux_core::KeySpaceInfo {
+            db_index,
+            key_count,
+            memory_bytes: None,
+            avg_ttl_seconds: None,
+        };
+
+        dbflux_core::SchemaSnapshot::key_value(dbflux_core::KeyValueSchema {
+            keyspaces: vec![keyspace(0, Some(12)), keyspace(3, None)],
+            current_keyspace: Some(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn list_tables_returns_one_object_per_keyspace_by_default() {
+        let driver = FakeDriver::new(DbKind::Redis).with_schema(key_value_schema_with_keyspaces());
+        let profile = ConnectionProfile::new("test-redis", DbConfig::default_redis());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, false)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "tables": [
+                    { "db_index": 0, "key_count": 12, "kind": "Keyspace" },
+                    { "db_index": 3, "key_count": null, "kind": "Keyspace" },
+                ]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_tables_names_only_names_keyspaces_like_the_rest_of_the_app() {
+        let driver = FakeDriver::new(DbKind::Redis).with_schema(key_value_schema_with_keyspaces());
+        let profile = ConnectionProfile::new("test-redis", DbConfig::default_redis());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, true)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(response, serde_json::json!({ "tables": ["db0", "db3"] }));
+    }
+
     #[tokio::test]
     async fn connect_omits_the_database_context_without_a_database_concept() {
         let driver = FakeDriver::new(DbKind::DynamoDB);

@@ -93,8 +93,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 연결 | `get_connection_info` | metadata | 드라이버 기능과 연결 메타데이터를 가져옵니다 |
 | 스키마 | `list_databases` | metadata | 연결에서 접근할 수 있는 모든 데이터베이스를 나열합니다 |
 | 스키마 | `list_schemas` | metadata | 데이터베이스 내의 스키마를 나열합니다 |
-| 스키마 | `list_tables` | metadata | 스키마 내의 테이블과 뷰를 나열합니다 |
-| 스키마 | `list_collections` | metadata | MongoDB 컬렉션을 나열합니다 |
+| 스키마 | `list_tables` | metadata | 스키마 내의 테이블과 뷰를 나열합니다. `names_only: true`를 전달하면 항목마다 객체 하나 대신 이름을 문자열로 반환합니다 |
+| 스키마 | `list_collections` | metadata | MongoDB 컬렉션을 나열합니다. `list_tables`와 마찬가지로 `names_only`를 받습니다 |
 | 스키마 | `describe_object` | metadata | 테이블의 열/필드 정의와 인덱스를 가져옵니다 |
 | 읽기 | `select_data` | read | 테이블이나 컬렉션에 대해 구조화된 `SELECT`를 실행합니다. 지원되지 않는 `joins`는 명시적으로 거부됩니다 |
 | 읽기 | `count_records` | read | 대상의 행/문서 개수를 반환합니다 |

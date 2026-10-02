@@ -93,8 +93,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Connection | `get_connection_info` | metadata | Fetch driver capabilities and connection metadata |
 | Schema | `list_databases` | metadata | List all databases accessible on a connection |
 | Schema | `list_schemas` | metadata | List schemas within a database |
-| Schema | `list_tables` | metadata | List tables and views within a schema |
-| Schema | `list_collections` | metadata | List MongoDB collections |
+| Schema | `list_tables` | metadata | List tables and views within a schema. Pass `names_only: true` to get the names as strings instead of one object per entry |
+| Schema | `list_collections` | metadata | List MongoDB collections. Accepts `names_only` like `list_tables` |
 | Schema | `describe_object` | metadata | Get column/field definitions and indexes for a table |
 | Read | `select_data` | read | Execute a structured SELECT against a table or collection. Unsupported `joins` are rejected explicitly |
 | Read | `count_records` | read | Return a row/document count for a target |

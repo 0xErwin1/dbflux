@@ -93,8 +93,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 连接 | `get_connection_info` | metadata | 获取驱动程序能力与连接元数据 |
 | Schema | `list_databases` | metadata | 列出某个连接上可访问的所有数据库 |
 | Schema | `list_schemas` | metadata | 列出数据库内的 Schema |
-| Schema | `list_tables` | metadata | 列出 Schema 内的表与视图 |
-| Schema | `list_collections` | metadata | 列出 MongoDB 的集合 |
+| Schema | `list_tables` | metadata | 列出 Schema 内的表与视图。传入 `names_only: true` 时，以字符串形式返回名称，而不是每项一个对象 |
+| Schema | `list_collections` | metadata | 列出 MongoDB 的集合。与 `list_tables` 一样接受 `names_only` |
 | Schema | `describe_object` | metadata | 获取某个表的列/字段定义与索引 |
 | 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。不支持的 `joins` 会被明确拒绝 |
 | 读取 | `count_records` | read | 返回目标的行数/文档数 |

@@ -121,8 +121,8 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 | Tool | Description | Classification |
 |------|-------------|----------------|
 | `list_databases` | List databases on server | Metadata |
-| `list_tables` | List tables in database | Metadata |
-| `list_collections` | List collections (document databases) | Metadata |
+| `list_tables` | List tables in database. `names_only: true` returns the names as strings instead of one object per entry | Metadata |
+| `list_collections` | List collections (document databases). Accepts `names_only` like `list_tables` | Metadata |
 | `describe_object` | Get table/collection schema | Metadata |
 | `explain_query` | Get query execution plan | Metadata |
 
