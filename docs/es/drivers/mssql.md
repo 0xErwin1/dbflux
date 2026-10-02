@@ -220,8 +220,9 @@ Requiere el permiso `VIEW SERVER STATE`.
 - Comillas de identificador con `[corchetes]` con escape de `]`.
 - Literales de string Unicode `N'…'`; literales binarios `0x…` (en mayúsculas);
   `1`/`0` para valores booleanos (`BIT`).
-- Paginación `OFFSET … ROWS FETCH NEXT … ROWS ONLY` (con un fallback `ORDER BY
-  1` para que las queries con OFFSET sin ORDER BY no den error).
+- Paginación `OFFSET … ROWS FETCH NEXT … ROWS ONLY` (con un fallback
+  `ORDER BY (SELECT NULL)` para que las queries con OFFSET sin ORDER BY no den
+  error y no se ordene por ninguna columna).
 - `SELECT TOP N` no se usa; OFFSET/FETCH es la forma canónica de paginación.
 - `UPSERT` intencionalmente no se genera; `MERGE` en SQL Server tiene bugs
   conocidos y debería escribirse a mano.

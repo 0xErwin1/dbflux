@@ -343,6 +343,34 @@ impl SqlDialect for MssqlDialect {
         format!("OFFSET {} ROWS FETCH NEXT {} ROWS ONLY", offset, n)
     }
 
+    fn select_limit_offset_clause(
+        &self,
+        limit: Option<u64>,
+        offset: u64,
+        has_order_by: bool,
+    ) -> Option<String> {
+        if limit.is_none() && offset == 0 {
+            return None;
+        }
+
+        let mut clause = String::new();
+
+        // OFFSET ... FETCH is only valid after ORDER BY in T-SQL. A constant
+        // subquery satisfies it without sorting by any column, which a
+        // positional `ORDER BY 1` cannot do for text, image or xml columns.
+        if !has_order_by {
+            clause.push_str("ORDER BY (SELECT NULL)\n");
+        }
+
+        clause.push_str(&format!("OFFSET {} ROWS", offset));
+
+        if let Some(n) = limit {
+            clause.push_str(&format!(" FETCH NEXT {} ROWS ONLY", n));
+        }
+
+        Some(clause)
+    }
+
     fn having_repeats_aggregate_expressions(&self) -> bool {
         true
     }
@@ -2808,10 +2836,11 @@ impl Connection for MssqlConnection {
             }
         }
 
-        // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to `ORDER BY 1`
-        // when the caller didn't supply one so paginated browsing keeps working.
+        // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to an order-neutral
+        // `ORDER BY (SELECT NULL)` when the caller didn't supply one, which is valid
+        // for every column type.
         if request.order_by.is_empty() {
-            sql.push_str(" ORDER BY 1");
+            sql.push_str(" ORDER BY (SELECT NULL)");
         } else {
             sql.push_str(" ORDER BY ");
             let parts: Vec<String> = request
@@ -3063,7 +3092,7 @@ impl Connection for MssqlConnection {
         let query = match &request.query {
             Some(q) => q.clone(),
             None => format!(
-                "SELECT * FROM {} ORDER BY 1 OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY",
+                "SELECT * FROM {} ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY",
                 request.table.quoted_with(self.dialect())
             ),
         };
@@ -3121,9 +3150,9 @@ impl Connection for MssqlConnection {
         let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
 
         let order_by_clause = if order_by.is_empty() {
-            // OFFSET requires ORDER BY in SQL Server; default to ordering by 1 to keep paginated
-            // browses functional when the caller hasn't supplied an explicit order.
-            "ORDER BY 1".to_string()
+            // OFFSET requires ORDER BY in SQL Server; an order-neutral constant keeps
+            // paginated reads valid for every column type when no order was supplied.
+            "ORDER BY (SELECT NULL)".to_string()
         } else {
             let parts: Vec<String> = order_by
                 .iter()
@@ -6024,6 +6053,136 @@ mod tests {
         assert!(
             !sql.to_ascii_uppercase().contains(" LIMIT "),
             "sample rows SELECT for MSSQL must not use LIMIT; got: {}",
+            sql
+        );
+    }
+
+    fn visual_select_spec(limit: Option<u64>, offset: u64) -> dbflux_core::VisualQuerySpec {
+        dbflux_core::VisualQuerySpec {
+            source: dbflux_core::SourceTable {
+                schema: None,
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: dbflux_core::Projection::All,
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit,
+            offset,
+        }
+    }
+
+    fn visual_select_sql(spec: &dbflux_core::VisualQuerySpec) -> String {
+        SqlMutationGenerator::new(&MSSQL_DIALECT)
+            .generate_select(spec)
+            .expect("spec must be valid")
+            .expect("mssql generator must render a SELECT")
+            .sql
+    }
+
+    fn sorted_visual_select_spec(limit: Option<u64>, offset: u64) -> dbflux_core::VisualQuerySpec {
+        let mut spec = visual_select_spec(limit, offset);
+
+        spec.sort = vec![dbflux_core::SortEntry {
+            source_alias: "users".to_string(),
+            column: "id".to_string(),
+            direction: dbflux_core::VisualSortDirection::Desc,
+        }];
+
+        spec
+    }
+
+    #[test]
+    fn mssql_visual_select_without_sort_uses_order_neutral_order_by() {
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(None, 0)),
+            "SELECT *\nFROM [users]"
+        );
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(100), 0)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(None, 20)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 20 ROWS"
+        );
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(100), 20)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 20 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_with_sort_appends_offset_fetch_after_order_by() {
+        let order_by = "SELECT *\nFROM [users]\nORDER BY [users].[id] DESC";
+
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(None, 0)),
+            order_by
+        );
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(Some(100), 0)),
+            format!("{order_by}\nOFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY")
+        );
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(None, 20)),
+            format!("{order_by}\nOFFSET 20 ROWS")
+        );
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(Some(100), 20)),
+            format!("{order_by}\nOFFSET 20 ROWS FETCH NEXT 100 ROWS ONLY")
+        );
+    }
+
+    #[test]
+    fn mssql_grouped_visual_select_places_order_neutral_order_by_after_group_by() {
+        let mut spec = visual_select_spec(Some(100), 0);
+
+        spec.group_by = vec![dbflux_core::GroupByEntry {
+            source_alias: "users".to_string(),
+            column: "country".to_string(),
+        }];
+
+        assert_eq!(
+            visual_select_sql(&spec),
+            "SELECT [users].[country]\nFROM [users]\nGROUP BY [users].[country]\nORDER BY (SELECT NULL)\nOFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_limit_zero_is_unbounded() {
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(0), 0)),
+            "SELECT *\nFROM [users]"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_keeps_limits_beyond_u32() {
+        let limit = u64::from(u32::MAX) + 1;
+
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(limit), 0)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 0 ROWS FETCH NEXT 4294967296 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_limit_uses_offset_fetch() {
+        let sql = visual_select_sql(&visual_select_spec(Some(100), 0));
+
+        assert!(
+            !sql.to_ascii_uppercase().contains("LIMIT"),
+            "builder SELECT for MSSQL must not use LIMIT; got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"),
+            "builder SELECT for MSSQL must use OFFSET/FETCH; got: {}",
             sql
         );
     }

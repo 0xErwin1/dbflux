@@ -96,7 +96,7 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 
 - `]` 이스케이프가 있는 `[bracket]` 식별자 인용.
 - `N'…'` 유니코드 문자열 리터럴; `0x…`(대문자) 이진 리터럴; 부울(`BIT`) 값에는 `1`/`0`.
-- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 페이지 나누기(OFFSET 뒤에 ORDER BY가 없는 쿼리가 오류로 끝나지 않도록 대체 `ORDER BY 1` 포함).
+- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 페이지 나누기(OFFSET 뒤에 ORDER BY가 없는 쿼리가 오류로 끝나지 않고 어떤 열로도 정렬하지 않도록 대체 `ORDER BY (SELECT NULL)` 포함).
 - `SELECT TOP N`은 사용하지 않으며, OFFSET/FETCH가 표준 페이지 나누기 형식입니다.
 - `UPSERT`는 의도적으로 생성하지 않습니다. SQL Server의 `MERGE`에는 알려진 버그가 있어 수동으로 작성해야 합니다.
 

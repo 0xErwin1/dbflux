@@ -1169,7 +1169,7 @@ impl<'a> SqlSelectBuilder<'a> {
         let joins = self.build_joins(&spec.joins);
         let where_clause = self.build_where(spec.filter.as_ref(), &mut params, &mut param_index)?;
         let order_by = self.build_order_by(&spec.sort);
-        let limit_offset = self.build_limit_offset(spec.limit, spec.offset);
+        let limit_offset = self.build_limit_offset(spec.limit, spec.offset, order_by.is_some());
 
         let mut parts: Vec<String> = Vec::new();
         parts.push(format!("SELECT {}", projection));
@@ -1213,7 +1213,7 @@ impl<'a> SqlSelectBuilder<'a> {
             &mut param_index,
         )?;
         let order_by = self.build_order_by_grouped(&spec.sort, &spec.group_by, &spec.aggregates);
-        let limit_offset = self.build_limit_offset(spec.limit, spec.offset);
+        let limit_offset = self.build_limit_offset(spec.limit, spec.offset, order_by.is_some());
 
         let mut parts: Vec<String> = Vec::new();
         parts.push(format!("SELECT {}", projection));
@@ -1862,15 +1862,16 @@ impl<'a> SqlSelectBuilder<'a> {
         Some(format!("ORDER BY {}", entries.join(", ")))
     }
 
-    fn build_limit_offset(&self, limit: Option<u64>, offset: u64) -> Option<String> {
+    fn build_limit_offset(
+        &self,
+        limit: Option<u64>,
+        offset: u64,
+        has_order_by: bool,
+    ) -> Option<String> {
         let effective_limit = limit.filter(|&n| n > 0);
 
-        match (effective_limit, offset) {
-            (None, 0) => None,
-            (Some(n), 0) => Some(format!("LIMIT {}", n)),
-            (None, o) => Some(format!("OFFSET {}", o)),
-            (Some(n), o) => Some(format!("LIMIT {}\nOFFSET {}", n, o)),
-        }
+        self.dialect
+            .select_limit_offset_clause(effective_limit, offset, has_order_by)
     }
 }
 
@@ -3014,6 +3015,37 @@ mod tests {
             q.sql.contains("LIMIT 100"),
             "expected LIMIT 100, got: {}",
             q.sql
+        );
+    }
+
+    #[test]
+    fn default_dialect_limit_offset_output_is_pinned() {
+        let generator = SqlMutationGenerator::new(&DIALECT);
+
+        let render = |limit: Option<u64>, offset: u64| {
+            let mut spec = users_spec();
+            spec.limit = limit;
+            spec.offset = offset;
+
+            generator
+                .generate_select(&spec)
+                .expect("must succeed")
+                .expect("must be Some")
+                .sql
+        };
+
+        let base = render(None, 0);
+
+        assert!(!base.contains("LIMIT") && !base.contains("OFFSET"));
+        assert_eq!(render(Some(100), 0), format!("{base}\nLIMIT 100"));
+        assert_eq!(render(None, 20), format!("{base}\nOFFSET 20"));
+        assert_eq!(
+            render(Some(100), 20),
+            format!("{base}\nLIMIT 100\nOFFSET 20")
+        );
+        assert_eq!(
+            render(Some(u64::MAX), 0),
+            format!("{base}\nLIMIT {}", u64::MAX)
         );
     }
 
