@@ -80,10 +80,7 @@ fn lookup_translation(locale: &str, key: &str) -> Option<String> {
         current = fallback;
     }
 
-    tables
-        .get("en")
-        .and_then(|table| table.get(key))
-        .cloned()
+    tables.get("en").and_then(|table| table.get(key)).cloned()
 }
 
 /// Translates `key` for an explicit `locale`, falling back to the sub-locale
@@ -129,10 +126,8 @@ impl Language {
         static AVAILABLE: std::sync::OnceLock<Vec<Language>> = std::sync::OnceLock::new();
 
         AVAILABLE.get_or_init(|| {
-            let mut codes: Vec<&'static str> = LOCALE_SOURCES
-                .iter()
-                .map(|(locale, _)| *locale)
-                .collect();
+            let mut codes: Vec<&'static str> =
+                LOCALE_SOURCES.iter().map(|(locale, _)| *locale).collect();
             codes.sort_by(|a, b| match (*a, *b) {
                 ("en", "en") => std::cmp::Ordering::Equal,
                 ("en", _) => std::cmp::Ordering::Less,
@@ -608,7 +603,10 @@ mod tests {
                 .expect("every locale source is loaded into a table");
 
             assert_eq!(
-                table.keys().cloned().collect::<std::collections::BTreeSet<_>>(),
+                table
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>(),
                 expected,
                 "loaded table for {locale} must match its YAML file exactly"
             );
@@ -618,10 +616,7 @@ mod tests {
     #[test]
     fn missing_key_falls_back_to_english_then_to_locale_key_sentinel() {
         // A locale with no shipped catalog resolves through the English fallback.
-        assert_eq!(
-            translate_in("xx", "settings.general.save.button"),
-            "Save"
-        );
+        assert_eq!(translate_in("xx", "settings.general.save.button"), "Save");
 
         // A key missing everywhere resolves to the `{locale}.{key}` sentinel,
         // or to the bare key when the locale is empty.

@@ -31,7 +31,11 @@ fn main() {
     let mut code = String::from("static LOCALE_SOURCES: &[(&str, &str)] = &[\n");
     for (stem, path) in &catalogs {
         let stem = stem.replace('\\', "\\\\").replace('"', "\\\"");
-        let path = path.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+        let path = path
+            .display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
         code.push_str(&format!("    (\"{stem}\", include_str!(\"{path}\")),\n"));
     }
     code.push_str("];\n");
