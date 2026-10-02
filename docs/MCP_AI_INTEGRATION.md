@@ -88,7 +88,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | Group | Tool ID | Class | What it does |
 |-------|---------|-------|--------------|
 | Connection | `list_connections` | metadata | Enumerate all configured database connections |
-| Connection | `connect` | metadata | Open a session against a configured connection |
+| Connection | `connect` | metadata | Open a session against a configured connection. The response reports `current_database` and the `databases` available on the server when the driver has databases; other tools take a `database` parameter to target a different one |
 | Connection | `disconnect` | metadata | Close an open session |
 | Connection | `get_connection_info` | metadata | Fetch driver capabilities and connection metadata |
 | Schema | `list_databases` | metadata | List all databases accessible on a connection |

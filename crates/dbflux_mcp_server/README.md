@@ -112,7 +112,7 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 | Tool | Description | Classification |
 |------|-------------|----------------|
 | `list_connections` | List available database connections | Metadata |
-| `connect` | Establish connection to database | Metadata |
+| `connect` | Establish connection to database. Returns `current_database` and the `databases` available on the server when the driver has databases; other tools take a `database` parameter to target a different one | Metadata |
 | `disconnect` | Close database connection | Metadata |
 | `get_connection_info` | Get connection metadata (version, status) | Metadata |
 

@@ -88,7 +88,7 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 그룹 | 도구 ID | 클래스 | 설명 |
 |-------|---------|-------|--------------|
 | 연결 | `list_connections` | metadata | 구성된 모든 데이터베이스 연결을 나열합니다 |
-| 연결 | `connect` | metadata | 구성된 연결에 대해 세션을 엽니다 |
+| 연결 | `connect` | metadata | 구성된 연결에 대해 세션을 엽니다. 드라이버에 데이터베이스 개념이 있으면 응답에 `current_database`와 서버에서 사용할 수 있는 `databases`가 포함되며, 다른 도구는 `database` 매개변수로 다른 데이터베이스를 지정합니다 |
 | 연결 | `disconnect` | metadata | 열려 있는 세션을 닫습니다 |
 | 연결 | `get_connection_info` | metadata | 드라이버 기능과 연결 메타데이터를 가져옵니다 |
 | 스키마 | `list_databases` | metadata | 연결에서 접근할 수 있는 모든 데이터베이스를 나열합니다 |

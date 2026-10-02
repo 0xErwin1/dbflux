@@ -456,6 +456,15 @@ async fn agent_connects_and_browses_a_sqlite_profile() {
         .call_json("connect", json!({ "connection_id": connection_id }))
         .await;
     assert_eq!(connected["success"], json!(true));
+    assert_eq!(
+        connected["current_database"],
+        json!("main"),
+        "connect should name the database the session is on, got {connected}"
+    );
+    assert!(
+        connected.get("databases").is_none(),
+        "SQLite lists no databases, so the field is omitted, got {connected}"
+    );
 
     let tables = agent
         .call_json("list_tables", json!({ "connection_id": connection_id }))

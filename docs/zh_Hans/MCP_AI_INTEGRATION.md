@@ -88,7 +88,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 分组 | 工具 ID | 执行类别 | 作用 |
 |---|---|---|---|
 | 连接 | `list_connections` | metadata | 枚举所有已配置的数据库连接 |
-| 连接 | `connect` | metadata | 针对某个已配置连接打开一个会话 |
+| 连接 | `connect` | metadata | 针对某个已配置连接打开一个会话。当驱动有数据库概念时，响应会给出 `current_database` 和服务器上可用的 `databases`；其他工具通过 `database` 参数指向另一个数据库 |
 | 连接 | `disconnect` | metadata | 关闭一个已打开的会话 |
 | 连接 | `get_connection_info` | metadata | 获取驱动程序能力与连接元数据 |
 | Schema | `list_databases` | metadata | 列出某个连接上可访问的所有数据库 |
