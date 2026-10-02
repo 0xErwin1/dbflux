@@ -88,15 +88,15 @@ All six layers run inside the server process on every `tools/call` request. None
 | Group | Tool ID | Class | What it does |
 |-------|---------|-------|--------------|
 | Connection | `list_connections` | metadata | Enumerate all configured database connections |
-| Connection | `connect` | metadata | Open a session against a configured connection |
+| Connection | `connect` | metadata | Open a session against a configured connection. The response reports `current_database` and the `databases` available on the server when the driver has databases; other tools take a `database` parameter to target a different one |
 | Connection | `disconnect` | metadata | Close an open session |
 | Connection | `get_connection_info` | metadata | Fetch driver capabilities and connection metadata |
 | Schema | `list_databases` | metadata | List all databases accessible on a connection |
 | Schema | `list_schemas` | metadata | List schemas within a database |
-| Schema | `list_tables` | metadata | List tables and views within a schema |
-| Schema | `list_collections` | metadata | List MongoDB collections |
+| Schema | `list_tables` | metadata | List tables and views within a schema. Pass `names_only: true` to get the names as strings instead of one object per entry |
+| Schema | `list_collections` | metadata | List MongoDB collections. Accepts `names_only` like `list_tables` |
 | Schema | `describe_object` | metadata | Get column/field definitions and indexes for a table |
-| Read | `select_data` | read | Execute a structured SELECT against a table or collection. Unsupported `joins` are rejected explicitly |
+| Read | `select_data` | read | Execute a structured SELECT against a table or collection. `joins` to other tables run on drivers that declare join support; document, key-value and other drivers that do not declare it return an explicit error. The `on` condition accepts only column comparisons joined by `AND` |
 | Read | `count_records` | read | Return a row/document count for a target |
 | Read | `aggregate_data` | read | Run a read-only aggregation pipeline |
 | Read | `explain_query` | read | Show the query execution plan without executing the target mutation |
@@ -127,6 +127,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Audit | `query_audit_logs` | read | Search and filter the audit trail |
 | Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID |
 | Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON |
+
+When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call and the table or collection is not listed in the schema metadata of the database or schema that was queried, the error says where the name was looked up and lists the closest listed names. It reads "is not listed", because the table may not exist or the connection may not have access to it. If the call did not pass `database` and the server lists more than one database, the error adds that the table may be in another one. For tables, not collections, the three read tools do the same for a column named in `where` or `order_by`, and `select_data` for a column named in `columns`. A hint only includes names the client is allowed to list: table names need `list_tables`, column names need `describe_object`, and the database details need `list_databases`. The driver's own error text is kept at the end. The lookup runs only after the driver has failed the call, and drivers that do not expose this metadata return the original error.
 
 Deferred tools (explicitly rejected at request time in v1):
 

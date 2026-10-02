@@ -88,15 +88,15 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 그룹 | 도구 ID | 클래스 | 설명 |
 |-------|---------|-------|--------------|
 | 연결 | `list_connections` | metadata | 구성된 모든 데이터베이스 연결을 나열합니다 |
-| 연결 | `connect` | metadata | 구성된 연결에 대해 세션을 엽니다 |
+| 연결 | `connect` | metadata | 구성된 연결에 대해 세션을 엽니다. 드라이버에 데이터베이스 개념이 있으면 응답에 `current_database`와 서버에서 사용할 수 있는 `databases`가 포함되며, 다른 도구는 `database` 매개변수로 다른 데이터베이스를 지정합니다 |
 | 연결 | `disconnect` | metadata | 열려 있는 세션을 닫습니다 |
 | 연결 | `get_connection_info` | metadata | 드라이버 기능과 연결 메타데이터를 가져옵니다 |
 | 스키마 | `list_databases` | metadata | 연결에서 접근할 수 있는 모든 데이터베이스를 나열합니다 |
 | 스키마 | `list_schemas` | metadata | 데이터베이스 내의 스키마를 나열합니다 |
-| 스키마 | `list_tables` | metadata | 스키마 내의 테이블과 뷰를 나열합니다 |
-| 스키마 | `list_collections` | metadata | MongoDB 컬렉션을 나열합니다 |
+| 스키마 | `list_tables` | metadata | 스키마 내의 테이블과 뷰를 나열합니다. `names_only: true`를 전달하면 항목마다 객체 하나 대신 이름을 문자열로 반환합니다 |
+| 스키마 | `list_collections` | metadata | MongoDB 컬렉션을 나열합니다. `list_tables`와 마찬가지로 `names_only`를 받습니다 |
 | 스키마 | `describe_object` | metadata | 테이블의 열/필드 정의와 인덱스를 가져옵니다 |
-| 읽기 | `select_data` | read | 테이블이나 컬렉션에 대해 구조화된 `SELECT`를 실행합니다. 지원되지 않는 `joins`는 명시적으로 거부됩니다 |
+| 읽기 | `select_data` | read | 테이블이나 컬렉션에 대해 구조화된 `SELECT`를 실행합니다. 다른 테이블과의 `joins`는 조인 지원을 선언한 드라이버에서 실행되며, 문서형, 키-값형 및 지원을 선언하지 않은 그 밖의 드라이버는 명시적인 오류를 반환합니다. `on` 조건은 `AND`로 연결된 컬럼 비교만 허용합니다 |
 | 읽기 | `count_records` | read | 대상의 행/문서 개수를 반환합니다 |
 | 읽기 | `aggregate_data` | read | 읽기 전용 집계 파이프라인을 실행합니다 |
 | 읽기 | `explain_query` | read | 대상 변경을 실행하지 않고 쿼리 실행 계획을 보여줍니다 |
@@ -127,6 +127,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 감사 | `query_audit_logs` | read | 감사 기록을 검색하고 필터링합니다 |
 | 감사 | `get_audit_entry` | read | ID로 단일 감사 로그 항목을 가져옵니다 |
 | 감사 | `export_audit_logs` | read | 감사 로그 항목을 CSV 또는 JSON으로 내려받습니다 |
+
+드라이버가 `select_data`, `count_records`, `aggregate_data` 또는 `describe_object` 호출을 실패시켰고 조회한 데이터베이스나 스키마의 메타데이터에 해당 테이블이나 컬렉션이 나열되어 있지 않으면, 오류는 이름을 어디에서 찾았는지 알려 주고 나열된 이름 중 가장 비슷한 것을 보여 줍니다. 테이블이 존재하지 않을 수도 있고 연결에 접근 권한이 없을 수도 있으므로, 오류 문구는 "is not listed"(나열되지 않음)입니다. 호출에 `database`를 전달하지 않았고 서버가 둘 이상의 데이터베이스를 나열하면, 오류는 테이블이 다른 데이터베이스에 있을 수 있다는 내용을 덧붙입니다. 컬렉션이 아닌 테이블의 경우, 세 가지 읽기 도구는 `where`나 `order_by`에 지정된 열에 대해서도 같은 방식으로 동작하며, `select_data`는 `columns`에 지정된 열에 대해서도 그렇게 합니다. 힌트에는 클라이언트가 나열할 수 있는 이름만 포함됩니다. 테이블 이름에는 `list_tables`, 열 이름에는 `describe_object`, 데이터베이스 정보에는 `list_databases` 권한이 필요합니다. 드라이버의 원래 오류 텍스트는 끝에 그대로 유지됩니다. 이 조회는 드라이버가 호출을 실패시킨 뒤에만 실행되며, 이 메타데이터를 제공하지 않는 드라이버는 원래 오류를 반환합니다.
 
 보류된 도구 (v1에서는 요청 시점에 명시적으로 거부됨):
 

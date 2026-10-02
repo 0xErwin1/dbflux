@@ -609,8 +609,10 @@ If a column does not exist:
 1. **No subqueries**: WHERE clauses do not support subqueries or correlated queries.
    - Use multiple queries with `select_data` if needed.
 
-2. **No joins in WHERE**: WHERE clauses apply to a single table.
-   - Use `select_data` with `joins` parameter for cross-table filtering.
+2. **No joins in WHERE**: A WHERE clause does not join tables by itself.
+   - Use `select_data` with the `joins` parameter for cross-table filtering, on drivers that declare join support. Document, key-value and other drivers that do not declare it return an explicit error.
+   - With `joins`, name a column of a joined table as `qualifier.column` (`{"orders.total": {"$gte": 20}}`); a bare name is a column of the main table.
+   - With `joins`, `where` accepts `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$like`, `$ilike`, `$exists`, `null`, `$and` and `$or`. Any other operator, `$not` around anything but a null test, and nested paths are rejected with an error that names them.
 
 3. **No computed columns**: WHERE clauses cannot reference computed/virtual columns.
    - Filter results in application code after retrieval.

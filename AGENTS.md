@@ -556,7 +556,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 **Important runtime rules**:
 - `preview_mutation` must stay read-only; it may return generated SQL/query text or a non-mutating plan, but must never execute the mutation being previewed
 - `preview_ddl` is intentionally not exposed from the MCP surface until DBFlux has a truly safe schema-preview path
-- `select_data` must reject unsupported `joins` explicitly rather than ignoring them
+- `select_data` runs `joins` only on a connection whose driver declares `QueryCapabilities::supports_joins` and whose `QueryGenerator::generate_select` renders the spec; every other connection gets an explicit error, never a result with the join left out. The `on` condition is parsed into structured column comparisons (`parse_join_condition` in `dbflux_core`), table, alias and column names must be plain identifiers, and the generated query must classify as a read before it runs. Never build `JoinOn::RawExpression` from tool input
 
 **Trust model**:
 

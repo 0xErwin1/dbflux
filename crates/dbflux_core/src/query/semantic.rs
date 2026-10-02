@@ -5,6 +5,9 @@ use crate::{
     ExplainRequest, MutationRequest, OrderByColumn, QueryRequest, SqlDialect, TableBrowseRequest,
     TableCountRequest, TableRef, Value,
     driver::capabilities::{QueryLanguage, WhereOperator},
+    query::visual_query::{
+        BoolOp, Comparator, FilterNode, LiteralValue, Predicate, PredicateValue,
+    },
 };
 
 /// Typed reference to a field used in semantic filters.
@@ -102,6 +105,18 @@ impl SemanticFilter {
 
     pub fn negate(filter: SemanticFilter) -> Self {
         Self::Not(Box::new(filter))
+    }
+
+    /// Returns every field the filter tests, in tree order. A field tested
+    /// more than once appears once per predicate.
+    pub fn field_refs(&self) -> Vec<&SemanticFieldRef> {
+        match self {
+            Self::Predicate(predicate) => vec![&predicate.field],
+            Self::And(filters) | Self::Or(filters) => {
+                filters.iter().flat_map(Self::field_refs).collect()
+            }
+            Self::Not(filter) => filter.field_refs(),
+        }
     }
 }
 
@@ -474,6 +489,175 @@ pub fn render_semantic_filter_sql(
     }
 }
 
+/// Maps a column reference to the `(table alias, column)` pair of a filter
+/// predicate, or says why the reference is not valid.
+pub type ColumnResolver<'a> = dyn Fn(&ColumnRef) -> Result<(String, String), String> + 'a;
+
+/// Converts a semantic filter into the visual-query filter tree, which the
+/// structured SELECT generator renders with quoted identifiers and bound
+/// literals.
+///
+/// `resolve_column` maps each column reference to the `(table alias, column)`
+/// pair the generator quotes. The conversion is exact: an operator, field
+/// shape or value the filter tree cannot express is an error that names it,
+/// never an approximation.
+pub fn semantic_filter_to_filter_node(
+    filter: &SemanticFilter,
+    resolve_column: &ColumnResolver<'_>,
+) -> Result<FilterNode, String> {
+    match filter {
+        SemanticFilter::Predicate(predicate) => {
+            predicate_to_filter_node(predicate, false, resolve_column)
+        }
+        SemanticFilter::And(filters) => filter_group(BoolOp::And, filters, resolve_column),
+        SemanticFilter::Or(filters) => filter_group(BoolOp::Or, filters, resolve_column),
+        SemanticFilter::Not(inner) => match inner.as_ref() {
+            SemanticFilter::Predicate(predicate) if is_null_test(predicate) => {
+                predicate_to_filter_node(predicate, true, resolve_column)
+            }
+            _ => Err(
+                "$not is supported here only around a null test (use $ne or $exists instead)"
+                    .to_string(),
+            ),
+        },
+    }
+}
+
+fn filter_group(
+    op: BoolOp,
+    filters: &[SemanticFilter],
+    resolve_column: &ColumnResolver<'_>,
+) -> Result<FilterNode, String> {
+    if filters.is_empty() {
+        return Err("a filter group cannot be empty".to_string());
+    }
+
+    let children = filters
+        .iter()
+        .map(|filter| semantic_filter_to_filter_node(filter, resolve_column))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(FilterNode::Group { op, children })
+}
+
+fn is_null_test(predicate: &SemanticPredicate) -> bool {
+    match predicate.operator {
+        WhereOperator::Null => true,
+        WhereOperator::Eq => matches!(predicate.value, None | Some(Value::Null)),
+        _ => false,
+    }
+}
+
+fn predicate_to_filter_node(
+    predicate: &SemanticPredicate,
+    negated_null_test: bool,
+    resolve_column: &ColumnResolver<'_>,
+) -> Result<FilterNode, String> {
+    let column = match &predicate.field {
+        SemanticFieldRef::Column(column) => column,
+        SemanticFieldRef::Path(segments) => {
+            return Err(format!(
+                "nested path field '{}' is not supported here",
+                segments.join(".")
+            ));
+        }
+    };
+
+    let (source_alias, column) = resolve_column(column)?;
+    let is_null_value = matches!(predicate.value, None | Some(Value::Null));
+
+    let (comparator, value) = match predicate.operator {
+        _ if negated_null_test => (Comparator::IsNotNull, PredicateValue::None),
+        WhereOperator::Null => (Comparator::IsNull, PredicateValue::None),
+        WhereOperator::Eq if is_null_value => (Comparator::IsNull, PredicateValue::None),
+        WhereOperator::Ne if is_null_value => (Comparator::IsNotNull, PredicateValue::None),
+        WhereOperator::Eq => (Comparator::Eq, single_literal(predicate)?),
+        WhereOperator::Ne => (Comparator::Neq, single_literal(predicate)?),
+        WhereOperator::Gt => (Comparator::Gt, single_literal(predicate)?),
+        WhereOperator::Gte => (Comparator::Gte, single_literal(predicate)?),
+        WhereOperator::Lt => (Comparator::Lt, single_literal(predicate)?),
+        WhereOperator::Lte => (Comparator::Lte, single_literal(predicate)?),
+        WhereOperator::Like => (Comparator::Like, single_literal(predicate)?),
+        WhereOperator::ILike => (Comparator::ILike, single_literal(predicate)?),
+        WhereOperator::In => (Comparator::In, literal_list(predicate)?),
+        unsupported => {
+            return Err(format!(
+                "operator {} is not supported here",
+                where_operator_key(unsupported)
+            ));
+        }
+    };
+
+    Ok(FilterNode::Predicate(Predicate {
+        source_alias,
+        column,
+        comparator,
+        value,
+        node_id: 0,
+    }))
+}
+
+fn single_literal(predicate: &SemanticPredicate) -> Result<PredicateValue, String> {
+    let value = predicate.value.as_ref().unwrap_or(&Value::Null);
+
+    literal_from_value(value).map(PredicateValue::Single)
+}
+
+fn literal_list(predicate: &SemanticPredicate) -> Result<PredicateValue, String> {
+    let Some(Value::Array(items)) = predicate.value.as_ref() else {
+        return Err("$in requires an array of values".to_string());
+    };
+
+    if items.is_empty() {
+        return Err("$in requires at least one value".to_string());
+    }
+
+    items
+        .iter()
+        .map(literal_from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map(PredicateValue::List)
+}
+
+fn literal_from_value(value: &Value) -> Result<LiteralValue, String> {
+    match value {
+        Value::Null => Ok(LiteralValue::Null),
+        Value::Bool(value) => Ok(LiteralValue::Bool(*value)),
+        Value::Int(value) => Ok(LiteralValue::Integer(*value)),
+        Value::Float(value) => Ok(LiteralValue::Float(*value)),
+        Value::Text(value) => Ok(LiteralValue::Text(value.clone())),
+        Value::Array(_) => Err("an array value is not supported here".to_string()),
+        Value::Document(_) => Err("an object value is not supported here".to_string()),
+        _ => Err("only text, number, boolean and null values are supported here".to_string()),
+    }
+}
+
+/// The JSON key a filter uses for `operator`, for error messages.
+fn where_operator_key(operator: WhereOperator) -> &'static str {
+    match operator {
+        WhereOperator::Eq => "$eq",
+        WhereOperator::Ne => "$ne",
+        WhereOperator::Gt => "$gt",
+        WhereOperator::Gte => "$gte",
+        WhereOperator::Lt => "$lt",
+        WhereOperator::Lte => "$lte",
+        WhereOperator::Like => "$like",
+        WhereOperator::ILike => "$ilike",
+        WhereOperator::Regex => "$regex",
+        WhereOperator::Null => "null",
+        WhereOperator::In => "$in",
+        WhereOperator::NotIn => "$nin",
+        WhereOperator::Contains => "$contains",
+        WhereOperator::Overlap => "$overlap",
+        WhereOperator::ContainsAll => "$all",
+        WhereOperator::ContainsAny => "contains-any",
+        WhereOperator::Size => "$size",
+        WhereOperator::And => "$and",
+        WhereOperator::Or => "$or",
+        WhereOperator::Not => "$not",
+    }
+}
+
 fn collapse_filter_list(filters: Vec<SemanticFilter>) -> Option<SemanticFilter> {
     match filters.len() {
         0 => None,
@@ -812,6 +996,10 @@ mod tests {
         AggregateFunction, AggregateRequest, AggregateSpec, PlannedQuery, SemanticFieldRef,
         SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPredicate, SemanticRequest,
         SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
+        semantic_filter_to_filter_node,
+    };
+    use crate::query::visual_query::{
+        BoolOp, Comparator, FilterNode, LiteralValue, Predicate, PredicateValue,
     };
     use crate::{
         CollectionRef, ColumnRef, DefaultSqlDialect, OrderByColumn, QueryLanguage, QueryRequest,
@@ -829,6 +1017,249 @@ mod tests {
         ]);
 
         assert!(matches!(filter, SemanticFilter::And(children) if children.len() == 2));
+    }
+
+    #[test]
+    fn field_refs_lists_every_tested_field_in_tree_order() {
+        let filter = SemanticFilter::and(vec![
+            SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            SemanticFilter::or(vec![
+                SemanticFilter::null("deleted_at"),
+                SemanticFilter::negate(SemanticFilter::null("email")),
+            ]),
+        ]);
+
+        assert_eq!(
+            filter.field_refs(),
+            [
+                &SemanticFieldRef::named("status"),
+                &SemanticFieldRef::named("deleted_at"),
+                &SemanticFieldRef::named("email"),
+            ]
+        );
+    }
+
+    fn to_filter_node(json: serde_json::Value) -> Result<FilterNode, String> {
+        let filter = parse_semantic_filter_json(&json)
+            .expect("the filter parses")
+            .expect("the filter is not empty");
+
+        semantic_filter_to_filter_node(&filter, &|column: &ColumnRef| {
+            let alias = column.table.clone().unwrap_or_else(|| "users".to_string());
+
+            Ok((alias, column.name.clone()))
+        })
+    }
+
+    fn predicate(
+        alias: &str,
+        column: &str,
+        comparator: Comparator,
+        value: PredicateValue,
+    ) -> FilterNode {
+        FilterNode::Predicate(Predicate {
+            source_alias: alias.to_string(),
+            column: column.to_string(),
+            comparator,
+            value,
+            node_id: 0,
+        })
+    }
+
+    #[test]
+    fn filter_node_conversion_maps_comparisons_and_qualified_columns() {
+        let node = to_filter_node(serde_json::json!({
+            "status": "active",
+            "orders.total": { "$gte": 10.5 }
+        }))
+        .expect("comparisons convert");
+
+        assert_eq!(
+            node,
+            FilterNode::Group {
+                op: BoolOp::And,
+                children: vec![
+                    predicate(
+                        "orders",
+                        "total",
+                        Comparator::Gte,
+                        PredicateValue::Single(LiteralValue::Float(10.5)),
+                    ),
+                    predicate(
+                        "users",
+                        "status",
+                        Comparator::Eq,
+                        PredicateValue::Single(LiteralValue::Text("active".into())),
+                    ),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn filter_node_conversion_maps_every_scalar_operator() {
+        let cases = [
+            ("$eq", Comparator::Eq),
+            ("$ne", Comparator::Neq),
+            ("$gt", Comparator::Gt),
+            ("$gte", Comparator::Gte),
+            ("$lt", Comparator::Lt),
+            ("$lte", Comparator::Lte),
+            ("$like", Comparator::Like),
+            ("$ilike", Comparator::ILike),
+        ];
+
+        for (operator, comparator) in cases {
+            let node = to_filter_node(serde_json::json!({ "age": { operator: 7 } }))
+                .unwrap_or_else(|error| panic!("{operator} should convert: {error}"));
+
+            assert_eq!(
+                node,
+                predicate(
+                    "users",
+                    "age",
+                    comparator,
+                    PredicateValue::Single(LiteralValue::Integer(7)),
+                ),
+                "operator {operator}"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_node_conversion_maps_null_checks() {
+        let is_null = predicate("users", "email", Comparator::IsNull, PredicateValue::None);
+        let is_not_null = predicate(
+            "users",
+            "email",
+            Comparator::IsNotNull,
+            PredicateValue::None,
+        );
+
+        let null_forms = [
+            serde_json::json!({ "email": null }),
+            serde_json::json!({ "email": { "$eq": null } }),
+            serde_json::json!({ "email": { "$exists": false } }),
+        ];
+        for form in null_forms {
+            assert_eq!(to_filter_node(form.clone()), Ok(is_null.clone()), "{form}");
+        }
+
+        let not_null_forms = [
+            serde_json::json!({ "email": { "$ne": null } }),
+            serde_json::json!({ "email": { "$exists": true } }),
+            serde_json::json!({ "$not": { "email": null } }),
+        ];
+        for form in not_null_forms {
+            assert_eq!(
+                to_filter_node(form.clone()),
+                Ok(is_not_null.clone()),
+                "{form}"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_node_conversion_maps_in_and_logic() {
+        let node = to_filter_node(serde_json::json!({
+            "$or": [
+                { "id": { "$in": [1, 2] } },
+                { "$and": [{ "active": true }, { "name": { "$like": "a%" } }] }
+            ]
+        }))
+        .expect("logic converts");
+
+        assert_eq!(
+            node,
+            FilterNode::Group {
+                op: BoolOp::Or,
+                children: vec![
+                    predicate(
+                        "users",
+                        "id",
+                        Comparator::In,
+                        PredicateValue::List(vec![
+                            LiteralValue::Integer(1),
+                            LiteralValue::Integer(2)
+                        ]),
+                    ),
+                    FilterNode::Group {
+                        op: BoolOp::And,
+                        children: vec![
+                            predicate(
+                                "users",
+                                "active",
+                                Comparator::Eq,
+                                PredicateValue::Single(LiteralValue::Bool(true)),
+                            ),
+                            predicate(
+                                "users",
+                                "name",
+                                Comparator::Like,
+                                PredicateValue::Single(LiteralValue::Text("a%".into())),
+                            ),
+                        ],
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn filter_node_conversion_rejects_what_the_filter_tree_cannot_express() {
+        let cases = [
+            (serde_json::json!({ "id": { "$nin": [1, 2] } }), "$nin"),
+            (serde_json::json!({ "name": { "$regex": "^a" } }), "$regex"),
+            (
+                serde_json::json!({ "tags": { "$contains": ["a"] } }),
+                "$contains",
+            ),
+            (
+                serde_json::json!({ "tags": { "$overlap": ["a"] } }),
+                "$overlap",
+            ),
+            (serde_json::json!({ "tags": { "$all": ["a"] } }), "$all"),
+            (serde_json::json!({ "tags": { "$size": 2 } }), "$size"),
+            (serde_json::json!({ "$not": { "id": 1 } }), "$not"),
+            (serde_json::json!({ "a.b.c": 1 }), "nested"),
+            (serde_json::json!({ "id": { "$in": [] } }), "$in"),
+            (serde_json::json!({ "id": { "$in": 3 } }), "$in"),
+            (serde_json::json!({ "id": { "$in": [[1]] } }), "array"),
+            (serde_json::json!({ "id": { "$gt": [1] } }), "array"),
+            (
+                serde_json::json!({ "meta": { "$gt": { "a": 1 } } }),
+                "object",
+            ),
+        ];
+
+        for (filter, expected) in cases {
+            let error =
+                to_filter_node(filter.clone()).expect_err(&format!("{filter} must be rejected"));
+
+            assert!(
+                error.contains(expected),
+                "the rejection of {filter} should name {expected}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_node_conversion_propagates_column_resolution_errors() {
+        let filter = SemanticFilter::compare("ghost.id", WhereOperator::Eq, Value::Int(1));
+        let filter = match filter {
+            SemanticFilter::Predicate(mut predicate) => {
+                predicate.field = SemanticFieldRef::column(ColumnRef::from_qualified("ghost.id"));
+                SemanticFilter::Predicate(predicate)
+            }
+            other => other,
+        };
+
+        let error = semantic_filter_to_filter_node(&filter, &|column: &ColumnRef| {
+            Err(format!("unknown table {:?}", column.table))
+        })
+        .expect_err("a column that does not resolve is rejected");
+
+        assert!(error.contains("unknown table"), "{error}");
     }
 
     #[test]

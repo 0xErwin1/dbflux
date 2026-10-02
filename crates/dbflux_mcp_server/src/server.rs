@@ -8,7 +8,7 @@ use dbflux_core::access::{AccessHandle, AccessKind, AccessManager};
 use dbflux_core::auth::SharedDynAuthProvider;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::{CompositeValueResolver, ValueCache, ValueRef};
-use dbflux_core::{CancelToken, Connection, ConnectionOverrides, PipelineInput};
+use dbflux_core::{CancelToken, Connection, ConnectionOverrides, LogErr, PipelineInput};
 
 use crate::{
     connection_cache::CachedConnection, error_messages, governance::GovernanceMiddleware,
@@ -365,10 +365,17 @@ impl McpConnectionFactory {
         })
     }
 
-    async fn connect_and_cache(&self, connection_id: &str) -> Result<(), String> {
-        DbFluxServer::get_or_connect(self.state.clone(), connection_id).await?;
-        Ok(())
+    async fn connect_and_cache(&self, connection_id: &str) -> Result<Arc<dyn Connection>, String> {
+        DbFluxServer::get_or_connect(self.state.clone(), connection_id).await
     }
+}
+
+/// Database context of a live connection, as reported to an agent by `connect`.
+///
+/// Both parts are empty for a driver that has no concept of databases.
+pub(crate) struct DatabaseContext {
+    pub(crate) current_database: Option<String>,
+    pub(crate) databases: Vec<String>,
 }
 
 /// Main DBFlux MCP Server
@@ -591,6 +598,14 @@ impl DbFluxServer {
 
         drop(cache);
 
+        Self::profile_database(state, connection_id).await
+    }
+
+    /// Get the database a connection's profile is configured for
+    async fn profile_database(
+        state: &ServerState,
+        connection_id: &str,
+    ) -> Result<Option<String>, String> {
         let profile_uuid = connection_id
             .parse::<uuid::Uuid>()
             .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
@@ -601,6 +616,52 @@ impl DbFluxServer {
             .ok_or_else(|| error_messages::connection_not_found(connection_id))?;
 
         Ok(profile.config.database())
+    }
+
+    /// Resolve the database a live connection is on and the databases it can reach.
+    ///
+    /// The current database comes from the connection's active database, then
+    /// from the listed database flagged as current, then from the profile. A
+    /// failed lookup is logged and leaves its part empty, because the
+    /// connection itself is already established.
+    pub(crate) async fn database_context(
+        state: &ServerState,
+        connection_id: &str,
+        connection: Arc<dyn Connection>,
+    ) -> DatabaseContext {
+        let lookup = tokio::task::spawn_blocking(move || {
+            (connection.active_database(), connection.list_databases())
+        })
+        .await
+        .log_err_with("Database context lookup task failed");
+
+        let (active_database, listed) = match lookup {
+            Some((active_database, listed)) => (
+                active_database,
+                listed
+                    .log_err_with("Failed to list databases after connecting")
+                    .unwrap_or_default(),
+            ),
+            None => (None, Vec::new()),
+        };
+
+        let listed_current = listed
+            .iter()
+            .find(|database| database.is_current)
+            .map(|database| database.name.clone());
+
+        let current_database = match active_database.or(listed_current) {
+            Some(database) => Some(database),
+            None => Self::profile_database(state, connection_id)
+                .await
+                .log_err_with("Failed to read the profile database after connecting")
+                .flatten(),
+        };
+
+        DatabaseContext {
+            current_database,
+            databases: listed.into_iter().map(|database| database.name).collect(),
+        }
     }
 
     /// Connect to a different database using the same profile
@@ -656,7 +717,7 @@ impl DbFluxServer {
     pub(crate) async fn connect_cached(
         state: ServerState,
         connection_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<Arc<dyn Connection>, String> {
         McpConnectionFactory::new(state)
             .connect_and_cache(connection_id)
             .await
@@ -990,5 +1051,209 @@ mod tests {
             "pipeline path must fall back to the keyring password when the \
              pipeline resolves none"
         );
+    }
+
+    fn relational_schema_with_databases(databases: &[(&str, bool)]) -> dbflux_core::SchemaSnapshot {
+        dbflux_core::SchemaSnapshot::relational(dbflux_core::RelationalSchema {
+            databases: databases
+                .iter()
+                .map(|(name, is_current)| dbflux_core::DatabaseInfo {
+                    name: (*name).to_string(),
+                    is_current: *is_current,
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn connect_reports_the_active_database_and_the_database_names() {
+        let driver =
+            FakeDriver::new(DbKind::Postgres).with_schema(relational_schema_with_databases(&[
+                ("postgres", false),
+                ("analytics", true),
+            ]));
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::connect_impl(state, &connection_id)
+            .await
+            .expect("connect should succeed");
+
+        assert_eq!(response["success"], serde_json::json!(true));
+        assert_eq!(
+            response["message"],
+            serde_json::json!(format!("Connected to {connection_id}"))
+        );
+        assert_eq!(
+            response["current_database"],
+            serde_json::json!("postgres"),
+            "the connection's active database wins over the listing's is_current flag"
+        );
+        assert_eq!(
+            response["databases"],
+            serde_json::json!(["postgres", "analytics"])
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_falls_back_to_the_listed_current_database() {
+        let driver =
+            FakeDriver::new(DbKind::MySQL).with_schema(relational_schema_with_databases(&[
+                ("information_schema", false),
+                ("app", true),
+            ]));
+        let profile = ConnectionProfile::new("test-mysql", DbConfig::default_mysql());
+        assert_eq!(
+            profile.config.database(),
+            None,
+            "the profile must name no database for the fallback to be exercised"
+        );
+
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let connection = DbFluxServer::get_or_connect(state.clone(), &connection_id)
+            .await
+            .expect("connect should succeed");
+        assert_eq!(connection.active_database(), None);
+
+        let response = DbFluxServer::connect_impl(state, &connection_id)
+            .await
+            .expect("connect should succeed");
+
+        assert_eq!(response["current_database"], serde_json::json!("app"));
+        assert_eq!(
+            response["databases"],
+            serde_json::json!(["information_schema", "app"])
+        );
+    }
+
+    fn relational_schema_with_table_and_view() -> dbflux_core::SchemaSnapshot {
+        let mut snapshot =
+            dbflux_test_support::fixtures::relational_schema_with_table("app", "public", "users");
+
+        if let dbflux_core::DataStructure::Relational(relational) = &mut snapshot.structure
+            && let Some(schema) = relational.schemas.first_mut()
+        {
+            schema.views.push(dbflux_core::ViewInfo {
+                name: "active_users".to_string(),
+                schema: Some("public".to_string()),
+            });
+        }
+
+        snapshot
+    }
+
+    #[tokio::test]
+    async fn list_tables_returns_one_object_per_table_and_view_by_default() {
+        let driver =
+            FakeDriver::new(DbKind::Postgres).with_schema(relational_schema_with_table_and_view());
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, false)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "tables": [
+                    { "name": "users", "schema": "public", "kind": "Table" },
+                    { "name": "active_users", "schema": "public", "kind": "View" },
+                ]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_tables_names_only_returns_table_and_view_names() {
+        let driver =
+            FakeDriver::new(DbKind::Postgres).with_schema(relational_schema_with_table_and_view());
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, true)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(
+            response,
+            serde_json::json!({ "tables": ["users", "active_users"] })
+        );
+    }
+
+    fn key_value_schema_with_keyspaces() -> dbflux_core::SchemaSnapshot {
+        let keyspace = |db_index, key_count| dbflux_core::KeySpaceInfo {
+            db_index,
+            key_count,
+            memory_bytes: None,
+            avg_ttl_seconds: None,
+        };
+
+        dbflux_core::SchemaSnapshot::key_value(dbflux_core::KeyValueSchema {
+            keyspaces: vec![keyspace(0, Some(12)), keyspace(3, None)],
+            current_keyspace: Some(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn list_tables_returns_one_object_per_keyspace_by_default() {
+        let driver = FakeDriver::new(DbKind::Redis).with_schema(key_value_schema_with_keyspaces());
+        let profile = ConnectionProfile::new("test-redis", DbConfig::default_redis());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, false)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "tables": [
+                    { "db_index": 0, "key_count": 12, "kind": "Keyspace" },
+                    { "db_index": 3, "key_count": null, "kind": "Keyspace" },
+                ]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_tables_names_only_names_keyspaces_like_the_rest_of_the_app() {
+        let driver = FakeDriver::new(DbKind::Redis).with_schema(key_value_schema_with_keyspaces());
+        let profile = ConnectionProfile::new("test-redis", DbConfig::default_redis());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::list_tables_impl(state, &connection_id, None, None, true)
+            .await
+            .expect("list_tables should succeed");
+
+        assert_eq!(response, serde_json::json!({ "tables": ["db0", "db3"] }));
+    }
+
+    #[tokio::test]
+    async fn connect_omits_the_database_context_without_a_database_concept() {
+        let driver = FakeDriver::new(DbKind::DynamoDB);
+        let profile = ConnectionProfile::new("test-dynamodb", DbConfig::default_dynamodb());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver(&profile.driver_id(), Arc::new(driver), profile);
+
+        let response = DbFluxServer::connect_impl(state, &connection_id)
+            .await
+            .expect("connect should succeed");
+
+        let fields = response
+            .as_object()
+            .expect("connect should return a JSON object");
+
+        assert_eq!(response["success"], serde_json::json!(true));
+        assert!(!fields.contains_key("current_database"), "got {response}");
+        assert!(!fields.contains_key("databases"), "got {response}");
     }
 }

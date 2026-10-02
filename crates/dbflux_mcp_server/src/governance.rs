@@ -2,6 +2,7 @@
 //!
 //! Provides authorization, approval flow, and audit logging for all tool executions.
 
+use dbflux_core::LogErr;
 use dbflux_core::observability::{
     AuditContext, EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity, actions,
     new_correlation_id,
@@ -53,6 +54,60 @@ fn now_epoch_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64
+}
+
+/// Which schema metadata the current client may receive inside the error of
+/// another tool, on one connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HintPermissions {
+    /// Table, view and collection names, as `list_tables` returns them.
+    pub table_names: bool,
+
+    /// Column names, as `describe_object` returns them.
+    pub column_names: bool,
+
+    /// Database names, as `list_databases` returns them.
+    pub databases: bool,
+}
+
+/// Asks the policy engine whether the current client could run the metadata
+/// tools on `connection_id` right now, without running them.
+///
+/// A tool counts only when the decision is a plain allow: a denied tool and one
+/// that needs approval are both `false`, as is a policy that fails to
+/// evaluate. Nothing is audited and nothing is queued, because no call is
+/// made. The trusted-client and MCP-enabled checks are not repeated: the
+/// caller is already inside an authorized call by the same client on the same
+/// connection.
+pub(crate) async fn hint_permissions(state: &ServerState, connection_id: &str) -> HintPermissions {
+    let runtime = state.runtime.read().await;
+
+    let policy_engine = dbflux_policy::PolicyEngine::new(
+        runtime.policy_assignments_for_engine(),
+        runtime.roles_for_engine(),
+        runtime.policies_for_engine(),
+    );
+
+    drop(runtime);
+
+    let allowed = |tool_id: &str| {
+        let decision = policy_engine
+            .evaluate(&dbflux_policy::PolicyEvaluationRequest {
+                actor_id: state.client_id.clone(),
+                connection_id: connection_id.to_string(),
+                tool_id: tool_id.to_string(),
+                classification: ExecutionClassification::Metadata,
+            })
+            .log_err_with("Failed to evaluate a metadata tool for a not-found hint");
+
+        matches!(decision, Some(dbflux_policy::PolicyDecision::Allow))
+    };
+
+    HintPermissions {
+        table_names: allowed("list_tables"),
+        column_names: allowed("describe_object"),
+        databases: allowed("list_databases"),
+    }
 }
 
 /// Governance middleware that wraps tool execution with authorization and auditing.

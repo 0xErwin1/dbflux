@@ -112,7 +112,7 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 | Tool | Description | Classification |
 |------|-------------|----------------|
 | `list_connections` | List available database connections | Metadata |
-| `connect` | Establish connection to database | Metadata |
+| `connect` | Establish connection to database. Returns `current_database` and the `databases` available on the server when the driver has databases; other tools take a `database` parameter to target a different one | Metadata |
 | `disconnect` | Close database connection | Metadata |
 | `get_connection_info` | Get connection metadata (version, status) | Metadata |
 
@@ -121,8 +121,8 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 | Tool | Description | Classification |
 |------|-------------|----------------|
 | `list_databases` | List databases on server | Metadata |
-| `list_tables` | List tables in database | Metadata |
-| `list_collections` | List collections (document databases) | Metadata |
+| `list_tables` | List tables in database. `names_only: true` returns the names as strings instead of one object per entry | Metadata |
+| `list_collections` | List collections (document databases). Accepts `names_only` like `list_tables` | Metadata |
 | `describe_object` | Get table/collection schema | Metadata |
 | `explain_query` | Get query execution plan | Metadata |
 
@@ -130,9 +130,38 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 
 | Tool | Description | Classification |
 |------|-------------|----------------|
-| `select_data` | Query data with WHERE clause | Read |
+| `select_data` | Query data with WHERE clause, optionally across joined tables | Read |
 | `count_records` | Count records matching filter | Read |
 | `aggregate_data` | Aggregate data (COUNT, SUM, AVG, MIN, MAX) | Read |
+
+#### Joins in `select_data`
+
+`select_data` reads across tables when the call passes `joins`. It runs on drivers that declare join support and can render a structured SELECT; document, key-value and other drivers that do not declare it return an explicit error.
+
+```json
+{
+  "connection_id": "…",
+  "table": "users",
+  "columns": ["name", "o.total"],
+  "joins": [{ "type": "left", "table": "orders", "alias": "o", "on": "users.id = o.user_id" }],
+  "where": { "o.total": { "$gte": 10 } },
+  "order_by": [{ "column": "o.total", "direction": "desc" }],
+  "limit": 50
+}
+```
+
+| Part | Rule |
+|------|------|
+| `type` | `inner`, `left`, `right` or `full`. The engine rejects a type it does not have |
+| `on` | Column comparisons joined by `AND`, with `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`. Each side is `qualifier.column`. Literals, functions, `OR`, parentheses and anything else are rejected |
+| Qualifier | The name or alias of the main table, of this join or of an earlier join. A table joined twice needs aliases |
+| Names | Table, schema, alias and column names must be plain identifiers: letters, digits and underscores, not starting with a digit |
+| `columns` | `qualifier.column` for any table, or a bare name for the main table. The result names each column as it was written. A join's own `columns` are returned as `alias.column` and need the top-level `columns` |
+| No `columns` | Every column of every table, in table order. A repeated name gets a suffix: `id`, `id_2` |
+| `where`, `order_by` | Same column naming. `where` accepts `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$like`, `$ilike`, `$exists`, `null`, `$and` and `$or`; other operators are rejected |
+| `limit` | At least 1, default 100, capped at 10000 |
+
+The call stays a `Read`: the server builds the query from quoted identifiers and literals, runs it only if it classifies as a read, and records it in the audit log. A call without `joins` is unchanged.
 
 ### Data Mutations
 
@@ -625,6 +654,35 @@ See `crates/dbflux_core/src/query/column_ref.rs` for implementation.
 }
 ```
 
+### Not-Found Hints
+
+When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call, the server may add a hint in front of the error. The error stays a plain message, and the driver's own text is kept at the end.
+
+| Case | Added to the error | Needs permission for |
+|------|--------------------|----------------------|
+| Table or collection is not listed in the queried database or schema | Where the name was looked up and up to three close names | `list_tables` |
+| Same, the call did not pass `database`, and the server lists several databases | The database name, and a note that the table may be in another database | `list_databases` |
+| Column in `where` or `order_by` is not a listed column of the table (tables only, not collections) | Up to three close column names, and every column when the table has 20 or fewer | `describe_object` |
+| Column in `columns` is not in the result (`select_data` on tables) | The same column hints, taken from the result the call already read | none |
+
+```text
+Table 'usres' is not listed in schema 'public' of database 'postgres'. It may not exist, or this connection may not have access to it.
+Did you mean: users?
+This call did not pass `database`, so the table may be in another database. Pass `database` to select one (`list_databases` lists them).
+
+Original error: Select error: ...
+```
+
+Rules:
+
+- **Not listed is not the same as missing.** The hint is built from the schema metadata the driver exposes. A table the connection cannot see, or one the metadata does not cover, is also not listed, so the message never says the table does not exist.
+- **A hint only includes names the client may list.** A part is left out when the policy denies its tool to the client on that connection, or sends it to approval. With no part allowed, the original error is returned.
+- **Only some failures are looked up.** The lookup runs for a generic query failure or an explicit object-not-found error from the driver. Connection, authentication, permission, syntax, timeout, cancellation and not-supported errors are returned as they are, and so are errors raised before the driver call, such as an invalid `where`.
+- **One scope.** An unqualified name is looked up in the driver's default schema, and a qualified name in its own schema. If the qualifier is not a schema (or database) the metadata knows, the original error is returned.
+- **No guess without metadata.** The original error is returned when the name is listed (also when it differs only in case), when the scope lists nothing, when the driver exposes no listing or no column metadata, and when an `order_by` entry is an expression.
+
+Names match without regard to case or separators, so `userId` suggests `user_id`.
+
 ## Best Practices for AI Agents
 
 ### Before Querying
@@ -727,7 +785,7 @@ RUST_LOG=dbflux_mcp=trace ./target/debug/dbflux mcp --client-id test
 ### General
 
 - **No subqueries:** WHERE clauses do not support subqueries
-- **No joins in WHERE:** Use `select_data` with `joins` parameter
+- **No joins in WHERE:** Use `select_data` with the `joins` parameter, on drivers that declare join support (see [Joins in `select_data`](#joins-in-select_data))
 - **No computed columns:** Cannot reference virtual/computed columns
 - **No database functions:** Limited function support in WHERE clauses
 

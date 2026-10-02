@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::{
     helper::{IntoErrorData, to_json_content},
     server::DbFluxServer,
+    state::ServerState,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -88,7 +89,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Connect to a database using a configured connection")]
+    #[tool(
+        description = "Connect to a database using a configured connection. The response reports `current_database` and the `databases` available on the server when the driver has databases; pass the `database` parameter of other tools to target a different one."
+    )]
     async fn connect(
         &self,
         Parameters(params): Parameters<ConnectParams>,
@@ -104,19 +107,38 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    Self::connect_cached(state, &connection_id)
+                    let response = Self::connect_impl(state, &connection_id)
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![to_json_content(
-                        &serde_json::json!({
-                            "success": true,
-                            "message": format!("Connected to {}", connection_id)
-                        }),
-                    )?]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
+    }
+
+    pub(crate) async fn connect_impl(
+        state: ServerState,
+        connection_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let connection = Self::connect_cached(state.clone(), connection_id).await?;
+
+        let context = Self::database_context(&state, connection_id, connection).await;
+
+        let mut response = serde_json::json!({
+            "success": true,
+            "message": format!("Connected to {}", connection_id)
+        });
+
+        if let Some(current_database) = context.current_database {
+            response["current_database"] = serde_json::Value::String(current_database);
+        }
+
+        if !context.databases.is_empty() {
+            response["databases"] = serde_json::json!(context.databases);
+        }
+
+        Ok(response)
     }
 
     #[tool(description = "Disconnect from a database connection")]

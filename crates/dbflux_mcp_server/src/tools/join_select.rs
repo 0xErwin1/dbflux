@@ -1,0 +1,675 @@
+//! `select_data` across joined tables.
+//!
+//! The call is translated into a `VisualQuerySpec` and rendered by the
+//! connection's structured SELECT generator. Nothing the client sends is
+//! copied into the SQL: table names, aliases and column names must be plain
+//! identifiers and are quoted by the dialect, the join condition is parsed
+//! into column comparisons, and filter values are rendered as dialect
+//! literals.
+
+use std::sync::Arc;
+
+use dbflux_core::{
+    ColumnRef, Connection, ExecutionClassification, FilterNode, JoinComparison, JoinKind, JoinStep,
+    ProjectedColumn, Projection, QueryRequest, QueryResult, SemanticFilter, SortEntry, SourceTable,
+    SqlDialect, TableRef, VisualQuerySpec, VisualSortDirection, classify_query_for_governance,
+    is_plain_sql_identifier, join_on_conditions, parse_join_condition,
+    semantic_filter_to_filter_node,
+};
+
+use crate::{
+    helper::value_to_json,
+    server::DbFluxServer,
+    tools::{
+        not_found::CallFailure,
+        read::{JoinSpec, OrderByItem},
+    },
+};
+
+const JOINS_UNSUPPORTED: &str = "This connection's driver does not support joins in select_data. \
+     Query each table separately.";
+
+/// The arguments of a `select_data` call that has joins.
+pub(crate) struct JoinedSelect<'a> {
+    pub table: &'a str,
+    pub columns: Option<&'a [String]>,
+    pub filter: Option<&'a SemanticFilter>,
+    pub order_by: Option<&'a [OrderByItem]>,
+    pub limit: u32,
+    pub offset: u32,
+    pub joins: &'a [JoinSpec],
+    pub database: Option<&'a str>,
+}
+
+/// A table of the query: its name and the alias the generated SQL gives it.
+struct ScopedTable {
+    name: String,
+    alias: String,
+}
+
+/// The tables a column reference can name, main table first.
+struct JoinScope {
+    tables: Vec<ScopedTable>,
+}
+
+impl JoinScope {
+    fn source_alias(&self) -> &str {
+        self.tables
+            .first()
+            .map(|table| table.alias.as_str())
+            .unwrap_or_default()
+    }
+
+    /// Every name a reference may use: each alias and each table name.
+    fn qualifiers(&self) -> Vec<&str> {
+        let mut qualifiers: Vec<&str> = Vec::new();
+
+        for table in &self.tables {
+            for name in [table.alias.as_str(), table.name.as_str()] {
+                if !qualifiers.contains(&name) {
+                    qualifiers.push(name);
+                }
+            }
+        }
+
+        qualifiers
+    }
+
+    /// The alias `qualifier` refers to. An alias wins over a table name, and
+    /// a table name that two tables share must be written as an alias.
+    fn alias_of(&self, qualifier: &str) -> Result<&str, String> {
+        if let Some(table) = self.tables.iter().find(|table| table.alias == qualifier) {
+            return Ok(&table.alias);
+        }
+
+        let mut named = self.tables.iter().filter(|table| table.name == qualifier);
+
+        match (named.next(), named.next()) {
+            (Some(table), None) => Ok(&table.alias),
+            (Some(_), Some(_)) => Err(format!(
+                "'{qualifier}' names more than one table in this query; use its alias"
+            )),
+            (None, _) => Err(format!(
+                "'{qualifier}' is not a table in this query (known: {})",
+                self.qualifiers().join(", ")
+            )),
+        }
+    }
+
+    /// Resolves a column written as `qualifier.column` or `column`. A bare
+    /// column belongs to the main table.
+    fn resolve(&self, qualifier: Option<&str>, column: &str) -> Result<(String, String), String> {
+        require_plain_identifier("column", column)?;
+
+        let alias = match qualifier {
+            Some(qualifier) => self.alias_of(qualifier)?,
+            None => self.source_alias(),
+        };
+
+        Ok((alias.to_string(), column.to_string()))
+    }
+
+    fn resolve_text(&self, text: &str) -> Result<(String, String), String> {
+        match text.split_once('.') {
+            Some((qualifier, column)) => self.resolve(Some(qualifier), column),
+            None => self.resolve(None, text),
+        }
+    }
+}
+
+/// Security invariant: every table name, alias and column name the client
+/// sends passes through here before it reaches the generator. A plain
+/// identifier cannot close the dialect's quoting and cannot contain a
+/// parameter placeholder (`?`, `$1`, `@p1`), which the generator would
+/// otherwise replace with a filter value inside the identifier.
+fn require_plain_identifier(kind: &str, value: &str) -> Result<(), String> {
+    if is_plain_sql_identifier(value) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{kind} '{value}' must be a plain identifier when joins are used \
+         (letters, digits and underscores, not starting with a digit)"
+    ))
+}
+
+fn require_plain_table(table: &TableRef) -> Result<(), String> {
+    if let Some(schema) = &table.schema {
+        require_plain_identifier("schema", schema)?;
+    }
+
+    require_plain_identifier("table", &table.name)
+}
+
+fn join_kind(join_type: &str) -> Result<JoinKind, String> {
+    match join_type.trim().to_ascii_lowercase().as_str() {
+        "inner" => Ok(JoinKind::Inner),
+        "left" => Ok(JoinKind::Left),
+        "right" => Ok(JoinKind::Right),
+        "full" => Ok(JoinKind::Full),
+        other => Err(format!(
+            "Unsupported join type '{other}'. Supported join types: inner, left, right, full"
+        )),
+    }
+}
+
+/// Adds one join to `scope` and returns its step. The condition may name the
+/// main table, this join and the joins before it.
+fn join_step(
+    join: &JoinSpec,
+    target: &TableRef,
+    scope: &mut JoinScope,
+    dialect: &dyn SqlDialect,
+) -> Result<JoinStep, String> {
+    let kind = join_kind(&join.r#type)?;
+    require_plain_table(target)?;
+
+    let alias = match &join.alias {
+        Some(alias) => {
+            require_plain_identifier("alias", alias)?;
+            alias.clone()
+        }
+        None => target.name.clone(),
+    };
+
+    if scope
+        .tables
+        .iter()
+        .any(|table| table.alias.eq_ignore_ascii_case(&alias))
+    {
+        return Err(format!(
+            "'{alias}' is already used by another table in this query; give this join a different alias"
+        ));
+    }
+
+    scope.tables.push(ScopedTable {
+        name: target.name.clone(),
+        alias: alias.clone(),
+    });
+
+    let comparisons = parse_join_condition(&join.on, &scope.qualifiers())
+        .map_err(|error| format!("Join on '{}': {error}", target.name))?
+        .into_iter()
+        .map(|mut comparison| {
+            comparison.left.qualifier = scope.alias_of(&comparison.left.qualifier)?.to_string();
+            comparison.right.qualifier = scope.alias_of(&comparison.right.qualifier)?.to_string();
+
+            Ok(comparison)
+        })
+        .collect::<Result<Vec<JoinComparison>, String>>()?;
+
+    let on = join_on_conditions(&comparisons, |reference| {
+        format!(
+            "{}.{}",
+            dialect.quote_identifier(&reference.qualifier),
+            dialect.quote_identifier(&reference.column)
+        )
+    });
+
+    Ok(JoinStep {
+        kind,
+        from_alias: scope.source_alias().to_string(),
+        to_schema: target.schema.clone(),
+        to_table: target.name.clone(),
+        to_alias: alias,
+        on,
+    })
+}
+
+/// Builds the projection. A qualified entry is returned under the name it was
+/// written with, so two tables with the same column name stay apart.
+fn projection(request: &JoinedSelect<'_>, scope: &JoinScope) -> Result<Projection, String> {
+    let mut entries: Vec<String> = request.columns.unwrap_or_default().to_vec();
+    let has_source_columns = !entries.is_empty();
+
+    for (join, table) in request.joins.iter().zip(scope.tables.iter().skip(1)) {
+        for column in join.columns.as_deref().unwrap_or_default() {
+            require_plain_identifier("column", column)?;
+            entries.push(format!("{}.{column}", table.alias));
+        }
+    }
+
+    if entries.is_empty() {
+        return Ok(Projection::All);
+    }
+
+    if !has_source_columns {
+        return Err(
+            "A join lists `columns` but the call does not: list the main table's columns in \
+             the top-level `columns`"
+                .to_string(),
+        );
+    }
+
+    let mut projected: Vec<ProjectedColumn> = Vec::with_capacity(entries.len());
+    let mut output_names: Vec<&str> = Vec::with_capacity(entries.len());
+
+    for entry in &entries {
+        if output_names.contains(&entry.as_str()) {
+            return Err(format!("Column '{entry}' is listed more than once"));
+        }
+        output_names.push(entry);
+
+        let (source_alias, column) = scope.resolve_text(entry)?;
+
+        projected.push(ProjectedColumn {
+            source_alias,
+            column,
+            alias: entry.contains('.').then(|| entry.clone()),
+        });
+    }
+
+    Ok(Projection::Explicit(projected))
+}
+
+fn sort_entries(
+    order_by: Option<&[OrderByItem]>,
+    scope: &JoinScope,
+) -> Result<Vec<SortEntry>, String> {
+    order_by
+        .unwrap_or_default()
+        .iter()
+        .map(|item| {
+            let (source_alias, column) = scope.resolve_text(&item.column)?;
+
+            let direction = match item.direction.as_deref() {
+                Some(direction) if direction.eq_ignore_ascii_case("desc") => {
+                    VisualSortDirection::Desc
+                }
+                _ => VisualSortDirection::Asc,
+            };
+
+            Ok(SortEntry {
+                source_alias,
+                column,
+                direction,
+            })
+        })
+        .collect()
+}
+
+fn filter_node(
+    filter: Option<&SemanticFilter>,
+    scope: &JoinScope,
+) -> Result<Option<FilterNode>, String> {
+    let Some(filter) = filter else {
+        return Ok(None);
+    };
+
+    semantic_filter_to_filter_node(filter, &|column: &ColumnRef| {
+        scope.resolve(column.table.as_deref(), &column.name)
+    })
+    .map(Some)
+    .map_err(|error| format!("Filter error with joins: {error}"))
+}
+
+/// Translates the call into the spec the generator renders. `join_tables`
+/// holds the resolved table of each join, in order. Every join in the result
+/// is complete, because the generator leaves out a join it finds incomplete.
+fn build_spec(
+    request: &JoinedSelect<'_>,
+    source: &TableRef,
+    join_tables: &[TableRef],
+    dialect: &dyn SqlDialect,
+) -> Result<VisualQuerySpec, String> {
+    require_plain_table(source)?;
+
+    if request.limit == 0 {
+        return Err("limit must be at least 1 when joins are used".to_string());
+    }
+
+    let mut scope = JoinScope {
+        tables: vec![ScopedTable {
+            name: source.name.clone(),
+            alias: source.name.clone(),
+        }],
+    };
+
+    let joins = request
+        .joins
+        .iter()
+        .zip(join_tables)
+        .map(|(join, target)| join_step(join, target, &mut scope, dialect))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(VisualQuerySpec {
+        source: SourceTable {
+            schema: source.schema.clone(),
+            table: source.name.clone(),
+            alias: source.name.clone(),
+        },
+        projection: projection(request, &scope)?,
+        joins,
+        filter: filter_node(request.filter, &scope)?,
+        group_by: Vec::new(),
+        aggregates: Vec::new(),
+        having: None,
+        sort: sort_entries(request.order_by, &scope)?,
+        limit: Some(u64::from(request.limit)),
+        offset: u64::from(request.offset),
+    })
+}
+
+/// Serializes the result with unique column names, so a name two tables share
+/// is not lost when a row becomes a JSON object. A repeated name gets a
+/// numeric suffix: `id`, `id_2`.
+fn serialize_joined_result(result: &QueryResult) -> serde_json::Value {
+    let mut names: Vec<String> = Vec::with_capacity(result.columns.len());
+
+    for column in &result.columns {
+        let mut name = column.name.clone();
+        let mut occurrence = 2;
+
+        while names.contains(&name) {
+            name = format!("{}_{occurrence}", column.name);
+            occurrence += 1;
+        }
+
+        names.push(name);
+    }
+
+    let rows: Vec<serde_json::Value> = result
+        .rows
+        .iter()
+        .map(|row| {
+            let object = names
+                .iter()
+                .zip(row.iter())
+                .map(|(name, cell)| (name.clone(), value_to_json(cell)))
+                .collect::<serde_json::Map<_, _>>();
+
+            serde_json::Value::Object(object)
+        })
+        .collect();
+
+    serde_json::json!({
+        "columns": names,
+        "rows": rows,
+        "row_count": result.rows.len(),
+    })
+}
+
+impl DbFluxServer {
+    /// Runs a `select_data` call that has joins and returns the result with
+    /// the SQL that produced it.
+    pub(super) async fn select_data_joined(
+        connection: &Arc<dyn Connection>,
+        request: JoinedSelect<'_>,
+    ) -> Result<(serde_json::Value, String), CallFailure> {
+        let query_request = Self::plan_joined_select(connection, &request)?;
+        let sql = query_request.sql.clone();
+
+        let conn = connection.clone();
+        #[allow(clippy::result_large_err)]
+        let result = tokio::task::spawn_blocking(move || conn.execute(&query_request))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
+            .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
+
+        Ok((serialize_joined_result(&result), sql))
+    }
+
+    /// Checks that the driver supports joins, generates the query and checks
+    /// that it is a read.
+    fn plan_joined_select(
+        connection: &Arc<dyn Connection>,
+        request: &JoinedSelect<'_>,
+    ) -> Result<QueryRequest, String> {
+        let metadata = connection.metadata();
+
+        let declares_joins = metadata
+            .query
+            .as_ref()
+            .is_some_and(|query| query.supports_joins);
+
+        let generator = connection
+            .query_generator()
+            .filter(|_| declares_joins)
+            .ok_or_else(|| JOINS_UNSUPPORTED.to_string())?;
+
+        let source = Self::table_ref_for_connection(connection, request.table);
+        let join_tables: Vec<TableRef> = request
+            .joins
+            .iter()
+            .map(|join| Self::table_ref_for_connection(connection, &join.table))
+            .collect();
+
+        let spec = build_spec(request, &source, &join_tables, connection.dialect())?;
+
+        let select = generator
+            .generate_select(&spec)
+            .map_err(|error| format!("Select error: {error}"))?
+            .ok_or_else(|| JOINS_UNSUPPORTED.to_string())?;
+
+        let query_request = select.to_query_request(connection.dialect());
+
+        // Security invariant: the generated text runs only when it classifies
+        // as a single read, whatever the generator produced.
+        let classification = classify_query_for_governance(
+            &metadata.query_language,
+            &query_request.sql,
+            Some(connection.language_service()),
+        );
+
+        if !matches!(
+            classification,
+            ExecutionClassification::Metadata | ExecutionClassification::Read
+        ) {
+            return Err(
+                "Select error: the generated join query is not a read-only query and was not run"
+                    .to_string(),
+            );
+        }
+
+        Ok(query_request
+            .with_database(request.database.map(str::to_string))
+            .with_confirmed_ceiling(ExecutionClassification::Read))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use dbflux_core::{DefaultSqlDialect, QueryGenerator, parse_semantic_filter_json};
+
+    fn join(join_type: &str, table: &str, alias: Option<&str>, on: &str) -> JoinSpec {
+        JoinSpec {
+            r#type: join_type.to_string(),
+            table: table.to_string(),
+            on: on.to_string(),
+            alias: alias.map(str::to_string),
+            columns: None,
+        }
+    }
+
+    fn request<'a>(joins: &'a [JoinSpec]) -> JoinedSelect<'a> {
+        JoinedSelect {
+            table: "users",
+            columns: None,
+            filter: None,
+            order_by: None,
+            limit: 100,
+            offset: 0,
+            joins,
+            database: None,
+        }
+    }
+
+    fn sql_for(request: &JoinedSelect<'_>) -> Result<String, String> {
+        let join_tables: Vec<TableRef> = request
+            .joins
+            .iter()
+            .map(|join| TableRef::from_qualified(&join.table))
+            .collect();
+
+        let spec = build_spec(
+            request,
+            &TableRef::with_schema("public", "users"),
+            &join_tables,
+            &DefaultSqlDialect,
+        )?;
+
+        dbflux_core::SqlMutationGenerator::new(&DefaultSqlDialect)
+            .generate_select(&spec)
+            .map_err(|error| error.to_string())?
+            .map(|select| select.to_query_request(&DefaultSqlDialect).sql)
+            .ok_or_else(|| "no query".to_string())
+    }
+
+    #[test]
+    fn generated_sql_quotes_every_identifier_and_inlines_values_as_literals() {
+        let joins = [
+            join("left", "orders", Some("o"), "users.id = o.user_id"),
+            join(
+                "INNER",
+                "sales.items",
+                None,
+                "items.order_id = o.id AND items.qty >= o.min_qty",
+            ),
+        ];
+        let columns = vec!["email".to_string(), "o.total".to_string()];
+        let filter = parse_semantic_filter_json(&serde_json::json!({ "o.status": "it's" }))
+            .expect("the filter parses");
+        let order_by = [OrderByItem {
+            column: "items.qty".to_string(),
+            direction: Some("DESC".to_string()),
+        }];
+
+        let mut request = request(&joins);
+        request.columns = Some(&columns);
+        request.filter = filter.as_ref();
+        request.order_by = Some(&order_by);
+        request.limit = 25;
+        request.offset = 5;
+
+        assert_eq!(
+            sql_for(&request).expect("the call is valid"),
+            "SELECT \"users\".\"email\", \"o\".\"total\" AS \"o.total\"\n\
+             FROM \"public\".\"users\" AS \"users\"\n\
+             LEFT JOIN \"orders\" AS \"o\" ON \"users\".\"id\" = \"o\".\"user_id\"\n\
+             INNER JOIN \"sales\".\"items\" AS \"items\" ON \"items\".\"order_id\" = \"o\".\"id\" \
+             AND \"items\".\"qty\" >= \"o\".\"min_qty\"\n\
+             WHERE \"o\".\"status\" = 'it''s'\n\
+             ORDER BY \"items\".\"qty\" DESC\n\
+             LIMIT 25\n\
+             OFFSET 5"
+        );
+    }
+
+    #[test]
+    fn a_table_name_resolves_to_the_alias_of_its_join() {
+        let joins = [join(
+            "inner",
+            "orders",
+            Some("o"),
+            "users.id = orders.user_id",
+        )];
+
+        let sql = sql_for(&request(&joins)).expect("the table name names the aliased join");
+
+        assert!(
+            sql.contains("ON \"users\".\"id\" = \"o\".\"user_id\""),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn a_table_joined_twice_must_be_named_by_alias() {
+        let self_join = [join(
+            "inner",
+            "users",
+            Some("manager"),
+            "users.manager_id = manager.id",
+        )];
+        let sql = sql_for(&request(&self_join)).expect("'users' names the main table");
+        assert!(
+            sql.contains("ON \"users\".\"manager_id\" = \"manager\".\"id\""),
+            "{sql}"
+        );
+
+        let joins = [
+            join("inner", "orders", Some("first"), "users.id = first.user_id"),
+            join("inner", "orders", Some("last"), "users.id = orders.user_id"),
+        ];
+        let error = sql_for(&request(&joins)).expect_err("'orders' is ambiguous");
+        assert!(error.contains("names more than one table"), "{error}");
+    }
+
+    #[test]
+    fn a_join_cannot_reference_a_later_join() {
+        let joins = [
+            join("inner", "orders", None, "orders.id = items.order_id"),
+            join("inner", "items", None, "items.order_id = orders.id"),
+        ];
+
+        let error = sql_for(&request(&joins)).expect_err("'items' is joined later");
+
+        assert!(error.contains("not a table in this query"), "{error}");
+    }
+
+    #[test]
+    fn every_requested_join_is_in_the_generated_sql() {
+        let joins = [
+            join("inner", "orders", None, "users.id = orders.user_id"),
+            join("right", "items", None, "items.order_id = orders.id"),
+            join("full", "refunds", None, "refunds.item_id = items.id"),
+        ];
+
+        let sql = sql_for(&request(&joins)).expect("the call is valid");
+
+        assert_eq!(sql.matches(" JOIN ").count(), joins.len(), "{sql}");
+        assert!(sql.contains("RIGHT JOIN \"items\""), "{sql}");
+        assert!(sql.contains("FULL OUTER JOIN \"refunds\""), "{sql}");
+    }
+
+    #[test]
+    fn invalid_calls_are_rejected_before_generation() {
+        let valid_on = "users.id = orders.user_id";
+
+        let cases = [
+            (join("cross", "orders", None, valid_on), "join type"),
+            (join("inner", "orders", None, ""), "Accepted form"),
+            (join("inner", "or ders", None, valid_on), "plain identifier"),
+            (join("inner", "", None, valid_on), "plain identifier"),
+            (
+                join("inner", "orders", Some(""), valid_on),
+                "plain identifier",
+            ),
+            (
+                join("inner", "orders", Some("Users"), valid_on),
+                "already used",
+            ),
+            (join("inner", "users", None, valid_on), "already used"),
+        ];
+
+        for (join, expected) in cases {
+            let joins = [join];
+            let error = sql_for(&request(&joins)).expect_err("the call is invalid");
+
+            assert!(error.contains(expected), "expected '{expected}': {error}");
+        }
+
+        let joins = [join("inner", "orders", None, valid_on)];
+        let mut zero_limit = request(&joins);
+        zero_limit.limit = 0;
+        let error = sql_for(&zero_limit).expect_err("limit 0 would drop the LIMIT clause");
+        assert!(error.contains("limit must be at least 1"), "{error}");
+    }
+
+    #[test]
+    fn join_columns_need_the_top_level_columns() {
+        let mut joined = join("inner", "orders", None, "users.id = orders.user_id");
+        joined.columns = Some(vec!["total".to_string()]);
+        let joins = [joined];
+
+        let error = sql_for(&request(&joins)).expect_err("the main table's columns are missing");
+        assert!(error.contains("top-level `columns`"), "{error}");
+
+        let columns = vec!["orders.total".to_string()];
+        let mut duplicated = request(&joins);
+        duplicated.columns = Some(&columns);
+        let error = sql_for(&duplicated).expect_err("the column is listed twice");
+        assert!(error.contains("listed more than once"), "{error}");
+    }
+}
