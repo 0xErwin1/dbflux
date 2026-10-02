@@ -30,6 +30,7 @@ members = [
     "crates/dbflux_tunnel_core",
     "crates/dbflux_export",
     "crates/dbflux_transfer",
+    "crates/dbflux_delimited",
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
     "crates/dbflux_ssm",
@@ -177,6 +178,8 @@ fuzzy-matcher = "0.3"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "json"] }
 csv = "1"
+encoding_rs = "0.8"
+chardetng = "1"
 semver = "1"
 chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2"
