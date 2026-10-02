@@ -1614,12 +1614,13 @@ impl ShellMetrics {
     pub const CARD_LABEL_PADDING_TOP: Pixels = px(12.0);
     pub const CARD_PADDING_X: Pixels = px(14.0);
     pub const CARD_LABEL_PADDING_BOTTOM: Pixels = px(8.0);
-    /// Start rows: 36 px, 12 px gap, 16 px icon. Recent rows: 34 px, 10 px
-    /// gap, 15 px icon, 11.5 px metadata.
+    /// Start rows: 36 px, 12 px gap, 16 px icon. Recent rows: 36 px, 10 px
+    /// gap, 15 px icon, 11.5 px metadata. Both row heights match so the two
+    /// cards are the same height when each holds the same number of rows.
     pub const START_ROW_HEIGHT: Pixels = px(36.0);
     pub const START_ROW_GAP: Pixels = px(12.0);
     pub const START_ROW_ICON: Pixels = px(16.0);
-    pub const RECENT_ROW_HEIGHT: Pixels = px(34.0);
+    pub const RECENT_ROW_HEIGHT: Pixels = px(36.0);
     pub const RECENT_ROW_GAP: Pixels = px(10.0);
     pub const RECENT_ROW_ICON: Pixels = px(15.0);
     pub const RECENT_META_FONT: Pixels = px(11.5);
