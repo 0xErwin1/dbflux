@@ -38,6 +38,8 @@ pub enum DocumentKind {
     ObjectEditor,
     // Offline analysis report for a driver's native dump/export file
     DumpAnalysis,
+    // A delimited text file (CSV or TSV) opened as a table
+    Delimited,
     // MCP approvals queue (agent calls parked for a person)
     McpApprovals,
     // Migrate-data wizard (table -> table, cross-connection)

@@ -1757,6 +1757,27 @@ document:
         references: REFERÊNCIAS
         row: LINHA
       title: "Linha %{row}"
+  delimited:
+    loading: "Carregando %{name}…"
+    error:
+      open_failed: "Não foi possível abrir %{name}"
+    warning:
+      malformed_text: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação detectada provavelmente está errada."
+      cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
+    status:
+      delimiter: "Delimitador: %{delimiter}"
+      encoding: "Codificação: %{encoding}"
+      records:
+        all:
+          one: "%{count} registro"
+          many: "%{count} registros"
+        of_total: "%{loaded} de %{total} registros carregados"
+        partial: "%{loaded} registros carregados, há mais no arquivo"
+    delimiter:
+      comma: Vírgula
+      tab: Tabulação
+      semicolon: Ponto e vírgula
+      pipe: Barra vertical
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"
