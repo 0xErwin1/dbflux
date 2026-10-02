@@ -12,6 +12,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Vertical scrolling in wide tables** — The vertical scrollbar stays at the visible right edge of the table, even when more columns extend off-screen. It no longer requires scrolling horizontally to the last column before the scrollbar can be used.
 * **Empty workspace in longer languages** — The start card of the empty workspace is wider, so labels such as Command palette in Spanish no longer wrap onto a second line beside their shortcut keys.
 * **MongoDB over SSH tunnels and replica sets** — A MongoDB connection entered as fields now connects to exactly the host it names (`directConnection=true`, as Compass does). Before, the driver replaced that host with the members the server advertises, so through an SSH tunnel or proxy to a replica set whose member is named after the remote loopback (`127.0.0.1:27017`) it left the tunnel and timed out with `ReplicaSetNoPrimary`, or reached a local MongoDB on the same port.
 * **MongoDB SSL mode "on"** — Connecting with SSL mode **on** no longer fails with `tlsallowinvalidhostnames is an invalid option`. The driver's rustls backend does not accept that option, and `tlsAllowInvalidCertificates` already skips the hostname check there.
