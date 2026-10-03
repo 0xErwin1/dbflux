@@ -24,20 +24,29 @@ use super::tests::{FakeConnection, TestDirectory};
 use super::text::{TextEnd, TextRow};
 use super::text_view::{DelimitedView, TextMode};
 
-fn view(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> DelimitedView {
+pub(super) fn view(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> DelimitedView {
     window.update(|_, cx| document.read(cx).view())
 }
 
-fn mode(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> TextMode {
+pub(super) fn mode(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> TextMode {
     window.update(|_, cx| document.read(cx).text_mode())
 }
 
-fn context(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> ContextId {
+pub(super) fn context(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> ContextId {
     window.update(|_, cx| document.read(cx).active_context())
 }
 
 /// The text the text view's editor holds.
-fn text(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> String {
+pub(super) fn text(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> String {
     window.update(|_, cx| {
         document
             .read(cx)
@@ -86,7 +95,10 @@ fn active_cell(
     window.update(|_, cx| table_state.read(cx).selection().active)
 }
 
-fn text_end(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> TextEnd {
+pub(super) fn text_end(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> TextEnd {
     window.update(|_, cx| {
         document
             .read(cx)
@@ -867,7 +879,10 @@ fn replace_in_text(
     });
 }
 
-fn is_editable(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+pub(super) fn is_editable(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> bool {
     window.update(|_, cx| document.read(cx).is_text_editable())
 }
 
@@ -880,7 +895,10 @@ fn apply_error(
 
 /// The cells the table shows, pending changes included and deleted rows
 /// left out.
-fn shown_rows(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> Vec<String> {
+pub(super) fn shown_rows(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Vec<String> {
     let table = table_state(document, window);
 
     window.update(|_, cx| {
