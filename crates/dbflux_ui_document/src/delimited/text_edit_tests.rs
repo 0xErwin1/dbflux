@@ -18,7 +18,8 @@ use gpui::{AppContext as _, Entity, TestAppContext};
 use super::page_model::PageModel;
 use super::text::{RenderedText, SourceSpan, TEXT_LIMITS, TextRow, check_pending, render_raw};
 use super::text_edit::{
-    Step, TextEditError, TextEdits, apply_to_pending, edit_script, shortest_edit_script, text_edits,
+    AddedInsert, Step, TextEditError, TextEdits, apply_to_pending, edit_script,
+    shortest_edit_script, text_edits,
 };
 use super::text_view::apply_text_edits;
 
@@ -37,6 +38,15 @@ fn csv(has_header: bool) -> Dialect {
 
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| value.to_string()).collect()
+}
+
+/// A row added with `values` at `anchor`, after the inserts already there.
+fn added(anchor: InsertAnchor, values: &[&str]) -> AddedInsert {
+    AddedInsert {
+        anchor,
+        fields: strings(values),
+        before: None,
+    }
 }
 
 fn cells(values: &[&str]) -> Vec<CellValue> {
@@ -163,7 +173,7 @@ fn a_line_inserted_in_the_middle_goes_after_the_row_before_it() {
     assert_eq!(
         fixture.replaced("Bo,", "Cy,Rome\nBo,"),
         Ok(TextEdits {
-            added_inserts: vec![(InsertAnchor::After(0), strings(&["Cy", "Rome"]))],
+            added_inserts: vec![added(InsertAnchor::After(0), &["Cy", "Rome"])],
             ..TextEdits::default()
         })
     );
@@ -176,7 +186,7 @@ fn a_line_inserted_above_the_first_record_goes_above_the_first_row() {
     assert_eq!(
         fixture.replaced("Ana,", "Cy,Rome\nAna,"),
         Ok(TextEdits {
-            added_inserts: vec![(InsertAnchor::BeforeFirst, strings(&["Cy", "Rome"]))],
+            added_inserts: vec![added(InsertAnchor::BeforeFirst, &["Cy", "Rome"])],
             ..TextEdits::default()
         })
     );
@@ -189,7 +199,7 @@ fn a_line_added_at_the_end_goes_after_the_last_row() {
     assert_eq!(
         fixture.edits_for("name,city\nAna,Lima\nBo,Quito\nCy,Rome\n"),
         Ok(TextEdits {
-            added_inserts: vec![(InsertAnchor::After(1), strings(&["Cy", "Rome"]))],
+            added_inserts: vec![added(InsertAnchor::After(1), &["Cy", "Rome"])],
             ..TextEdits::default()
         })
     );
@@ -221,7 +231,7 @@ fn lines_replaced_by_more_lines_are_changed_rows_and_inserts() {
                 (1, 0, "Y".to_string()),
                 (1, 1, "2".to_string()),
             ],
-            added_inserts: vec![(InsertAnchor::After(1), strings(&["Z", "3"]))],
+            added_inserts: vec![added(InsertAnchor::After(1), &["Z", "3"])],
             ..TextEdits::default()
         })
     );
@@ -270,7 +280,7 @@ fn a_pending_insert_is_edited_and_removed_through_its_line() {
 }
 
 #[test]
-fn a_new_line_above_a_pending_insert_of_the_same_anchor_moves_that_insert_below_it() {
+fn a_new_line_above_a_pending_insert_of_the_same_anchor_goes_before_it_and_leaves_it_alone() {
     let mut fixture = Fixture::whole(CITIES, csv(true));
     fixture
         .buffer
@@ -279,11 +289,10 @@ fn a_new_line_above_a_pending_insert_of_the_same_anchor_moves_that_insert_below_
     assert_eq!(
         fixture.replaced("Cy,Rome", "Di,Oslo\nCy,Rome"),
         Ok(TextEdits {
-            removed_inserts: vec![0],
-            added_inserts: vec![
-                (InsertAnchor::After(0), strings(&["Di", "Oslo"])),
-                (InsertAnchor::After(0), strings(&["Cy", "Rome"])),
-            ],
+            added_inserts: vec![AddedInsert {
+                before: Some(0),
+                ..added(InsertAnchor::After(0), &["Di", "Oslo"])
+            }],
             ..TextEdits::default()
         })
     );
@@ -549,7 +558,7 @@ fn one_line_inserted_into_a_long_text_is_one_insert() {
     assert_eq!(
         fixture.replaced("1500,v1500\n", "1500,v1500\nnew,row\n"),
         Ok(TextEdits {
-            added_inserts: vec![(InsertAnchor::After(1500), strings(&["new", "row"]))],
+            added_inserts: vec![added(InsertAnchor::After(1500), &["new", "row"])],
             ..TextEdits::default()
         })
     );
@@ -571,7 +580,7 @@ fn scattered_edits_of_a_long_text_map_to_their_own_rows() {
         Ok(TextEdits {
             base_cells: vec![(700, 1, "changed".to_string())],
             deleted_rows: vec![10],
-            added_inserts: vec![(InsertAnchor::After(2990), strings(&["new", "row"]))],
+            added_inserts: vec![added(InsertAnchor::After(2990), &["new", "row"])],
             ..TextEdits::default()
         })
     );
@@ -1453,6 +1462,22 @@ fn random_case(cx: &mut TestAppContext, case: usize) -> bool {
     let untouched_before = untouched_rows(&fixture);
     let had_header = fixture.model.header().cloned();
 
+    // Whether the apply makes a step of the table's undo history: every
+    // operation does, except a cell set to the value its record holds when
+    // nothing was staged for it.
+    let makes_an_undo_step = !edits.deleted_rows.is_empty()
+        || !edits.removed_inserts.is_empty()
+        || !edits.added_inserts.is_empty()
+        || !edits.insert_cells.is_empty()
+        || edits.base_cells.iter().any(|(row, column, value)| {
+            let own = fixture.model.records()[*row]
+                .fields
+                .get(*column)
+                .map_or("", String::as_str);
+
+            own != value || fixture.buffer.is_cell_dirty(*row, *column)
+        });
+
     let table_model = Arc::new(fixture.model.table_model());
     let buffer = fixture.buffer.clone();
     let table_state = cx.new(|cx| {
@@ -1467,6 +1492,30 @@ fn random_case(cx: &mut TestAppContext, case: usize) -> bool {
         apply_text_edits(&edits, &mut fixture.model, state, cx).expect("the edits apply");
     });
     fixture.buffer = table_state.read_with(cx, |state, _| state.edit_buffer().clone());
+
+    // As for the rows below: when a line the user touched reads as a
+    // rendered line, or a line appears twice, which row is the user's cannot
+    // be told.
+    let rendered_lines: Vec<&str> = rendered
+        .layout
+        .records
+        .iter()
+        .map(|record| split_terminator(&rendered.text[record.text.clone()]).0)
+        .collect();
+    let edited_lines: Vec<&str> = lines
+        .iter()
+        .map(|line| split_terminator(&line.text).0)
+        .collect();
+    let is_ambiguous = lines.iter().any(|line| {
+        line.touch != Touch::Untouched && rendered_lines.contains(&split_terminator(&line.text).0)
+    }) || edited_lines
+        .iter()
+        .enumerate()
+        .any(|(index, line)| edited_lines[..index].contains(line));
+
+    if makes_an_undo_step && !is_ambiguous {
+        check_one_undo(cx, &table_state, &lines, &dialect, &context);
+    }
 
     assert_eq!(
         Ok(simulated_edit_set),
@@ -1655,6 +1704,108 @@ fn random_case(cx: &mut TestAppContext, case: usize) -> bool {
     }
 
     true
+}
+
+/// Every visual row of the table: whether it is marked for deletion, and
+/// its cells with the pending changes.
+fn table_rows(
+    table_state: &Entity<DataTableState>,
+    cx: &mut TestAppContext,
+) -> Vec<(bool, Vec<String>)> {
+    table_state.read_with(cx, |state, _| {
+        let buffer = state.edit_buffer();
+        let model = state.model();
+        let absent = CellValue::text("");
+
+        buffer
+            .compute_visual_order()
+            .into_iter()
+            .map(|source| match source {
+                VisualRowSource::Base(row) => (
+                    buffer.is_pending_delete(row),
+                    (0..model.col_count())
+                        .map(|column| {
+                            let base = model.cell(row, column).unwrap_or(&absent);
+                            buffer.get_cell(row, column, base).edit_text()
+                        })
+                        .collect(),
+                ),
+
+                VisualRowSource::Insert(index) => (
+                    false,
+                    buffer.pending_inserts()[index]
+                        .data
+                        .iter()
+                        .map(CellValue::edit_text)
+                        .collect(),
+                ),
+            })
+            .collect()
+    })
+}
+
+/// Undoes one step of the table's history after an applied text edit and
+/// checks that it changed only a row the user edited: it removes a row the
+/// user added, takes back the user's change of a row, or brings back a row
+/// the user removed. A row the user did not touch is never removed or
+/// changed.
+fn check_one_undo(
+    cx: &mut TestAppContext,
+    table_state: &Entity<DataTableState>,
+    lines: &[Line],
+    dialect: &Dialect,
+    context: &str,
+) {
+    let user_rows: Vec<Vec<String>> = lines
+        .iter()
+        .filter(|line| matches!(line.touch, Touch::New | Touch::Changed))
+        .map(|line| trimmed(&parse_text(&line.text, dialect).expect("a line reads")[0].fields))
+        .collect();
+
+    let applied = table_rows(table_state, cx);
+
+    table_state.update(cx, |state, _| {
+        assert!(
+            state.edit_buffer_mut().undo(),
+            "{context}: there is a step to undo"
+        );
+    });
+
+    let undone = table_rows(table_state, cx);
+
+    let differs = |index: usize| applied.get(index) != undone.get(index);
+    let first = (0..applied.len().max(undone.len()))
+        .find(|index| differs(*index))
+        .unwrap_or_else(|| panic!("{context}: one undo changed nothing"));
+
+    let made_by_the_user = |row: &(bool, Vec<String>)| user_rows.contains(&trimmed(&row.1));
+
+    if undone.len() + 1 == applied.len() {
+        assert!(
+            made_by_the_user(&applied[first]),
+            "{context}: one undo removed {:?}, a row the user did not add",
+            applied[first]
+        );
+    } else if undone.len() == applied.len() {
+        let changed: Vec<usize> = (0..applied.len()).filter(|index| differs(*index)).collect();
+
+        assert_eq!(changed.len(), 1, "{context}: one undo changed {changed:?}");
+
+        let was_deleted_by_the_user = applied[first].0 && !undone[first].0;
+
+        assert!(
+            was_deleted_by_the_user || made_by_the_user(&applied[first]),
+            "{context}: one undo changed {:?} into {:?}, a row the user did not edit",
+            applied[first],
+            undone[first]
+        );
+    } else {
+        assert_eq!(
+            undone.len(),
+            applied.len() + 1,
+            "{context}: one undo brought back a row the user removed, or nothing else"
+        );
+    }
 }
 
 /// Random small files of every encoding, delimiter, quoting and header the

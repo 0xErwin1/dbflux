@@ -39,9 +39,10 @@
 //!   field is an empty one.
 //! - A new record is a pending insert where the text puts it: after the row
 //!   before it, as the table anchors a row added below one, or above the
-//!   first row. The table orders the rows of one anchor by when they were
-//!   added, so a pending insert of that anchor that the text puts after a new
-//!   record is removed and added again after it.
+//!   first row. The table orders the rows of one anchor by their place in its
+//!   list of pending inserts, so a new record that the text puts before a
+//!   pending insert of the same anchor is placed before it in that list, and
+//!   that insert is left as it is, in the table and in its undo history.
 //! - A removed record marks its loaded record for deletion, and removes a
 //!   pending insert.
 //! - The header is the first record, when the text has one. A changed field
@@ -53,7 +54,7 @@
 //!   header gained the columns in the same text. Fewer fields are allowed.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Range;
 
@@ -87,7 +88,20 @@ pub(super) struct TextEdits {
     pub(super) removed_inserts: Vec<usize>,
 
     /// Rows to insert, in the order they are added.
-    pub(super) added_inserts: Vec<(InsertAnchor, Vec<String>)>,
+    pub(super) added_inserts: Vec<AddedInsert>,
+}
+
+/// A row the edited text adds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AddedInsert {
+    pub(super) anchor: InsertAnchor,
+    pub(super) fields: Vec<String>,
+
+    /// The pending insert of the same anchor the text puts right after it,
+    /// by its index before any change: the row goes before that insert,
+    /// which keeps its place, its values and its undo history. `None` puts
+    /// it after the inserts of its anchor.
+    pub(super) before: Option<usize>,
 }
 
 impl TextEdits {
@@ -674,7 +688,9 @@ impl RowEdits<'_> {
             InsertAnchor::End
         };
 
-        let mut groups_with_new_rows: HashSet<InsertGroup> = HashSet::new();
+        // The new rows that go before the next kept pending insert of their
+        // group, by their index among the added rows.
+        let mut waiting: Vec<(usize, InsertGroup)> = Vec::new();
 
         for pairing in self.pairings() {
             match pairing {
@@ -687,8 +703,15 @@ impl RowEdits<'_> {
                 Pairing::Added(new) => {
                     let fields = self.checked_fields(new)?;
 
-                    edits.added_inserts.push((anchor, fields.to_vec()));
-                    groups_with_new_rows.insert(insert_group(anchor, base_row_count));
+                    waiting.push((
+                        edits.added_inserts.len(),
+                        insert_group(anchor, base_row_count),
+                    ));
+                    edits.added_inserts.push(AddedInsert {
+                        anchor,
+                        fields: fields.to_vec(),
+                        before: None,
+                    });
                 }
 
                 Pairing::Same(old, new) | Pairing::Changed(old, new) => {
@@ -723,14 +746,20 @@ impl RowEdits<'_> {
 
                             anchor = pending.anchor;
 
-                            // A new record before it in its group: the table
-                            // shows that group by the order of adding.
-                            if groups_with_new_rows.contains(&insert_group(anchor, base_row_count))
-                            {
-                                edits.removed_inserts.push(insert);
-                                edits.added_inserts.push((anchor, fields.to_vec()));
-                                continue;
-                            }
+                            // The new rows of its group so far go before it.
+                            let group = insert_group(anchor, base_row_count);
+
+                            waiting.retain(|(added, waiting_group)| {
+                                if *waiting_group != group {
+                                    return true;
+                                }
+
+                                if let Some(added) = edits.added_inserts.get_mut(*added) {
+                                    added.before = Some(insert);
+                                }
+
+                                false
+                            });
 
                             for (column, value) in changed_cells(old_values, fields) {
                                 edits.insert_cells.push((insert, column, value));
@@ -1431,23 +1460,60 @@ pub(super) fn apply_to_pending(
         buffer.mark_for_delete(*row);
     }
 
+    change_inserts(edits, buffer, column_count);
+
+    Ok(())
+}
+
+/// Removes and adds the pending inserts of `edits` in `buffer`, as both
+/// appliers do: the removed ones from the last, then each new one at its
+/// anchor, before the kept insert the text puts after it, or after the
+/// inserts of its anchor, padded to `column_count` fields. A new row placed
+/// before a kept insert takes that insert's place in the list, which moves
+/// the kept insert and the ones after it up by one: no kept insert is
+/// removed or changed, so no step of the undo history touches a row the
+/// user did not edit.
+pub(super) fn change_inserts(edits: &TextEdits, buffer: &mut EditBuffer, column_count: usize) {
+    // Which insert, by its index before any change, is at each place now.
+    let mut original: Vec<Option<usize>> = (0..buffer.pending_inserts().len()).map(Some).collect();
+
     let mut removed = edits.removed_inserts.clone();
     removed.sort_unstable();
     removed.dedup();
 
     for insert in removed.into_iter().rev() {
         buffer.remove_pending_insert_by_idx(insert);
+
+        if insert < original.len() {
+            original.remove(insert);
+        }
     }
 
-    for (anchor, fields) in &edits.added_inserts {
-        let mut row: Vec<CellValue> = fields.iter().map(|field| CellValue::text(field)).collect();
+    for added in &edits.added_inserts {
+        let mut row: Vec<CellValue> = added
+            .fields
+            .iter()
+            .map(|field| CellValue::text(field))
+            .collect();
 
         if row.len() < column_count {
             row.resize(column_count, CellValue::text(""));
         }
 
-        buffer.add_pending_insert_at(*anchor, row);
-    }
+        let place = added
+            .before
+            .and_then(|before| original.iter().position(|insert| *insert == Some(before)));
 
-    Ok(())
+        match place {
+            Some(place) => {
+                buffer.add_pending_insert_at_index(place, added.anchor, row);
+                original.insert(place, None);
+            }
+
+            None => {
+                buffer.add_pending_insert_at(added.anchor, row);
+                original.push(None);
+            }
+        }
+    }
 }

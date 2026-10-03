@@ -1684,3 +1684,61 @@ fn the_message_of_a_text_that_no_longer_matches_its_rows_names_a_way_out() {
     assert!(cause.contains("undo"), "{cause}");
     assert!(!cause.contains("switch to the table"), "{cause}");
 }
+
+// -- A row added above a pending insert --------------------------------------------------
+
+/// The text puts a new row above a pending insert the user did not touch:
+/// the table shows it there, one undo removes only the new row, and a save
+/// before or after that undo keeps the pending insert.
+#[gpui::test]
+fn a_row_added_above_a_pending_insert_leaves_that_insert_alone_in_undo_and_save(
+    cx: &mut TestAppContext,
+) {
+    for undo_first in [false, true] {
+        let directory = TestDirectory::new("text-edit-above-insert");
+        let path = local_file(&directory, "cities.csv", CITIES);
+
+        let (document, window) = open_local(cx, path.clone());
+
+        let table = table_state(&document, window);
+        window.update(|_, cx| {
+            table.update(cx, |state, cx| {
+                state.edit_buffer_mut().add_pending_insert_at(
+                    InsertAnchor::After(0),
+                    vec![CellValue::text("Cy"), CellValue::text("Rome")],
+                );
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        press(window, "t");
+        replace_in_text(&document, window, "Cy,Rome", "New,Row\nCy,Rome");
+        show(&document, window, DelimitedView::Table);
+
+        assert_eq!(
+            shown_rows(&document, window),
+            ["Ana|Lima", "New|Row", "Cy|Rome", "Bo|Quito"]
+        );
+
+        if undo_first {
+            window.dispatch_action(dbflux_components::components::data_table::actions::Undo);
+            window.run_until_parked();
+
+            assert_eq!(
+                shown_rows(&document, window),
+                ["Ana|Lima", "Cy|Rome", "Bo|Quito"],
+                "only the new row goes"
+            );
+        }
+
+        super::editing_tests::save(&document, window);
+
+        let expected: &[u8] = if undo_first {
+            b"name,city\nAna,Lima\nCy,Rome\nBo,Quito\n"
+        } else {
+            b"name,city\nAna,Lima\nNew,Row\nCy,Rome\nBo,Quito\n"
+        };
+        assert_eq!(read(&path), expected);
+    }
+}
