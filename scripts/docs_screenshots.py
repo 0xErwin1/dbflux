@@ -70,6 +70,10 @@ SCREENSHOT_RETRY_SECONDS = 2
 KEY_ATTEMPTS = 3
 KEY_RETRY_SECONDS = 15
 ENSURE_QUICK_CHECK_MS = 1_000
+COMMAND_TIMEOUT_SECONDS = 300
+# `docker run` may pull an image first.
+CONTAINER_START_TIMEOUT_SECONDS = 1_200
+WORK_DIR_MARKER = ".dbflux-docs-work-dir"
 ENSURE_CHECK_MS = 15_000
 
 DESCRIPTOR_PATTERN = re.compile(r"descriptor (?:\x1b\[[0-9;]*m)*(\S+\.json)")
@@ -141,8 +145,17 @@ DEMO_SERVICES = (
 )
 
 
-def run_command(command: list[str], *, check: bool = True, **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(command, check=check, text=True, capture_output=True, **kwargs)
+def run_command(
+    command: list[str],
+    *,
+    check: bool = True,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
+    **kwargs,
+) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, check=check, text=True, capture_output=True, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired as error:
+        raise ScreenshotError(f"{' '.join(command[:3])} did not finish within {timeout:.0f} s") from error
 
 
 def remove_demo_containers() -> None:
@@ -160,7 +173,7 @@ def start_demo_service(service: DemoService) -> None:
     for key, value in service.environment.items():
         command += ["-e", f"{key}={value}"]
 
-    result = run_command([*command, service.image], check=False)
+    result = run_command([*command, service.image], check=False, timeout=CONTAINER_START_TIMEOUT_SECONDS)
 
     if result.returncode != 0:
         raise ScreenshotError(
@@ -751,6 +764,19 @@ def fill_placeholders(value, placeholders: dict[str, str]):
     return value
 
 
+def find_labelled(session: McpSession, arguments: dict) -> dict:
+    """The element labelled `label`, taking the `index`-th match."""
+
+    label = arguments["label"]
+    index = arguments.get("index", 0)
+    matches = session.find(label, exact=arguments.get("exact", True))
+
+    if len(matches) <= index:
+        raise ScreenshotError(f"no element labelled {label!r} (match {index}) is visible")
+
+    return matches[index]
+
+
 def resolve_label(session: McpSession, arguments: dict) -> dict:
     """Replaces a `label` argument with the `id` of the element carrying that label.
 
@@ -761,16 +787,8 @@ def resolve_label(session: McpSession, arguments: dict) -> dict:
     if "label" not in arguments:
         return arguments
 
-    resolved = dict(arguments)
-    label = resolved.pop("label")
-    exact = resolved.pop("exact", True)
-    index = resolved.pop("index", 0)
-    matches = session.find(label, exact=exact)
-
-    if len(matches) <= index:
-        raise ScreenshotError(f"no element labelled {label!r} (match {index}) is visible")
-
-    resolved["id"] = matches[index]["id"]
+    resolved = {key: value for key, value in arguments.items() if key not in ("label", "exact", "index")}
+    resolved["id"] = find_labelled(session, arguments)["id"]
 
     return resolved
 
@@ -782,12 +800,9 @@ def click_label(session: McpSession, arguments: dict) -> None:
     expose a click action.
     """
 
-    element_id = resolve_label(session, arguments)["id"]
-    bounds = next(
-        element["bounds"]
-        for element in session.find(arguments["label"], exact=arguments.get("exact", True))
-        if element["id"] == element_id
-    )
+    # One lookup for both the match and its bounds: the tree can change between
+    # two lookups while a connection opens.
+    bounds = find_labelled(session, arguments)["bounds"]
     center = {"x": bounds["x"] + bounds["width"] / 2, "y": bounds["y"] + bounds["height"] / 2}
 
     try:
@@ -1187,13 +1202,37 @@ def check_prerequisites(arguments: argparse.Namespace) -> Environment:
 
 
 def reset_work_dir(work_dir: Path) -> None:
+    """Empties the work directory, refusing to delete one this script did not create.
+
+    The directory is wiped on every run, so a mistyped `--work-dir` must not
+    point it at someone's files: only a directory carrying the marker file, or
+    an empty one, is reused.
+    """
+
     if work_dir.is_symlink():
         raise ScreenshotError(f"the work directory {work_dir} is a symbolic link; refusing to use it")
 
     if work_dir.exists():
-        shutil.rmtree(work_dir)
+        if not work_dir.is_dir():
+            raise ScreenshotError(f"the work directory {work_dir} is not a directory")
 
-    work_dir.mkdir(parents=True, mode=0o700)
+        if any(work_dir.iterdir()) and not (work_dir / WORK_DIR_MARKER).is_file():
+            raise ScreenshotError(
+                f"the work directory {work_dir} is not empty and was not created by this script; "
+                "pass an empty or new --work-dir"
+            )
+
+        try:
+            shutil.rmtree(work_dir)
+        except OSError as error:
+            raise ScreenshotError(f"could not clear the work directory {work_dir}: {error}") from error
+
+    try:
+        work_dir.mkdir(parents=True, mode=0o700)
+    except OSError as error:
+        raise ScreenshotError(f"could not create the work directory {work_dir}: {error}") from error
+
+    (work_dir / WORK_DIR_MARKER).write_text("Created by scripts/docs_screenshots.py; deleted on every run.\n")
     (work_dir / "logs").mkdir()
 
 
