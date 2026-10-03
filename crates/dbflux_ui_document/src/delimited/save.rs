@@ -184,7 +184,7 @@ fn save_local(path: &Path, request: &SaveRequest<'_>) -> Result<SourceVersion, S
             path,
             std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                "the file is read-only",
+                dbflux_i18n::t!("document.delimited.error.storage.read_only_file"),
             ),
         ));
     }
