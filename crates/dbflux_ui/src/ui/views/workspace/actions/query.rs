@@ -365,6 +365,11 @@ impl Workspace {
                 continue;
             }
 
+            if tab.tab_kind == crate::ui::document::DelimitedDocument::SESSION_TAB_KIND {
+                self.restore_delimited_tab(tab, cx);
+                continue;
+            }
+
             let (content, path, scratch_path, shadow_path, physical_baseline) = match tab
                 .tab_kind
                 .as_str()

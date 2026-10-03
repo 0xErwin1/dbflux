@@ -3477,6 +3477,7 @@ scripts:
       sql: Archivos SQL
       javascript_mongodb: JavaScript (MongoDB)
       redis: Redis
+      delimited: Archivos CSV / TSV
       all_files: Todos los archivos
   error:
     read_file_failed: "No se pudo leer el archivo %{path}: %{error}"

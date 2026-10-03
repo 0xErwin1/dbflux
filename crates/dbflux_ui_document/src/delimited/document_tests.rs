@@ -729,6 +729,59 @@ fn the_pane_matches_only_the_key_of_its_own_file(cx: &mut TestAppContext) {
     });
 }
 
+/// A local file is recorded in the workspace session by its path, so it is
+/// reopened at startup. An object needs its profile's live connection and is
+/// not recorded, as the object editor's tabs are not.
+#[gpui::test]
+fn the_session_records_a_local_file_by_its_path_and_no_object(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("document-session");
+    let (path, _) = directory.file("cities.csv", CITIES);
+
+    let connection = FakeConnection::with_object(CITIES);
+    let (app_state, profile_id) = connect_profile(cx, connection.clone());
+
+    let (local, window) = open_local(cx, path.clone());
+
+    let object = window.update(|_, cx| {
+        cx.new(|cx| {
+            DelimitedDocument::open_object(
+                app_state,
+                profile_id,
+                connection,
+                BUCKET.to_string(),
+                KEY.to_string(),
+                cx,
+            )
+        })
+    });
+    window.run_until_parked();
+
+    window.update(|_, cx| {
+        let local_pane = DelimitedDocument::into_pane(local.clone(), cx);
+        let object_pane = DelimitedDocument::into_pane(object.clone(), cx);
+
+        let snapshot = local_pane
+            .session_tab_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot(cx))
+            .expect("a local file takes part in the session");
+
+        assert_eq!(snapshot.kind, "Delimited");
+        assert_eq!(snapshot.id, local.read(cx).id());
+        assert_eq!(snapshot.title, "cities.csv");
+        assert_eq!(snapshot.file_path.as_deref(), Some(path.as_path()));
+        assert_eq!(snapshot.scratch_path, None);
+        assert_eq!(snapshot.shadow_path, None);
+        assert_eq!(snapshot.exec_ctx.connection_id, None);
+
+        let object_snapshot = object_pane
+            .session_tab_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot(cx));
+        assert!(object_snapshot.is_none());
+    });
+}
+
 #[gpui::test]
 fn the_loaded_table_is_editable_by_position_and_holds_the_keyboard(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("document-focus");
@@ -912,6 +965,23 @@ fn the_extension_hint_is_the_text_after_the_last_dot() {
     assert_eq!(extension_hint("archive.tar.csv"), Some("csv"));
     assert_eq!(extension_hint("cities"), None);
     assert_eq!(extension_hint(".csv"), None);
+}
+
+#[test]
+fn only_a_csv_or_tsv_extension_in_any_letter_case_opens_as_delimited() {
+    use crate::delimited::is_delimited_path;
+    use std::path::Path;
+
+    assert!(is_delimited_path(Path::new("a.csv")));
+    assert!(is_delimited_path(Path::new("B.TSV")));
+    assert!(is_delimited_path(Path::new("/home/ana/Reports.Csv")));
+    assert!(is_delimited_path(Path::new("2026/q1/cities.tsv")));
+
+    assert!(!is_delimited_path(Path::new("notes.txt")));
+    assert!(!is_delimited_path(Path::new("cities.csv.gz")));
+    assert!(!is_delimited_path(Path::new("csv")));
+    assert!(!is_delimited_path(Path::new(".csv")));
+    assert!(!is_delimited_path(Path::new("reports/csv/")));
 }
 
 /// A header click has no action here, so the registry must not name a

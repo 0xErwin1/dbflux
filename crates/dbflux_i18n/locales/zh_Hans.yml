@@ -3477,6 +3477,7 @@ scripts:
       sql: SQL 文件
       javascript_mongodb: JavaScript（MongoDB）
       redis: Redis
+      delimited: CSV / TSV 文件
       all_files: 所有文件
   error:
     read_file_failed: "读取文件 %{path} 失败：%{error}"
