@@ -1047,6 +1047,7 @@ impl DelimitedDocument {
                 }
 
                 self.show_saved_file(*reopened, cx);
+                self.notify_object_saved(cx);
                 true
             }
         };
@@ -1078,6 +1079,18 @@ impl DelimitedDocument {
 
                 self.phase = DelimitedPhase::Failed(cause);
             }
+        }
+    }
+
+    /// Tells the opener of an object that a save replaced it. A local file
+    /// has no opener to tell.
+    fn notify_object_saved(&self, cx: &mut App) {
+        let DelimitedFileKey::Object { key, .. } = self.file() else {
+            return;
+        };
+
+        if let Some(on_saved) = self.on_object_saved.clone() {
+            on_saved(key, cx);
         }
     }
 

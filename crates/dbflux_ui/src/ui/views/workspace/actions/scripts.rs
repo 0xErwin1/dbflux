@@ -1,24 +1,25 @@
 use super::*;
+use crate::ui::document::DelimitedFileKey;
 use crate::ui::labels::{
-    documents_default_title, scripts_filter_all_files_label,
+    documents_default_title, scripts_filter_all_files_label, scripts_filter_delimited_label,
     scripts_filter_javascript_mongodb_label, scripts_filter_redis_label, scripts_filter_sql_label,
     scripts_open_dialog_title, scripts_read_file_failed_message,
 };
 
 impl Workspace {
-    /// Opens a file dialog to pick a script file and opens it in a new tab.
+    /// Opens a file dialog to pick a script, CSV or TSV file and opens it
+    /// through [`Self::open_script_from_path`].
     pub(in crate::ui::views::workspace) fn open_script_file(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_manager = self.tab_manager.clone();
-
         cx.spawn(async move |this, cx| {
             let dialog_title = scripts_open_dialog_title();
             let sql_filter_label = scripts_filter_sql_label();
             let javascript_mongodb_filter_label = scripts_filter_javascript_mongodb_label();
             let redis_filter_label = scripts_filter_redis_label();
+            let delimited_filter_label = scripts_filter_delimited_label();
             let all_files_filter_label = scripts_filter_all_files_label();
 
             let file_handle = rfd::AsyncFileDialog::new()
@@ -26,6 +27,7 @@ impl Workspace {
                 .add_filter(&sql_filter_label, &["sql"])
                 .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
                 .add_filter(&redis_filter_label, &["redis", "red"])
+                .add_filter(&delimited_filter_label, &["csv", "tsv"])
                 .add_filter(&all_files_filter_label, &["*"])
                 .pick_file()
                 .await;
@@ -36,47 +38,9 @@ impl Workspace {
 
             let path = handle.path().to_path_buf();
 
-            // Check if this file is already open
-            let already_open = cx.update(|cx| {
-                tab_manager.read(cx).find_by_key(
-                    &crate::ui::document::DocumentKey::File { path: path.clone() },
-                    cx,
-                )
-            });
-
-            if let Some(id) = already_open {
-                cx.update(|cx| {
-                    tab_manager.update(cx, |mgr, cx| {
-                        mgr.activate(id, cx);
-                    });
-                });
-                return;
-            }
-
-            // Read file content on background thread
-            let read_path = path.clone();
-            let content = cx
-                .background_executor()
-                .spawn(async move { std::fs::read_to_string(&read_path) })
-                .await;
-
-            let content = match content {
-                Ok(c) => c,
-                Err(e) => {
-                    report_error_async(
-                        UserFacingError::new(
-                            ErrorKind::Storage,
-                            scripts_read_file_failed_message(path.display(), e),
-                        ),
-                        cx,
-                    );
-                    return;
-                }
-            };
-
             cx.update(|cx| {
                 this.update(cx, |ws, cx| {
-                    ws.open_script_with_content(path, content, cx);
+                    ws.open_script_from_path(path, cx);
                 })
                 .unwrap_or_else(|inner_error| {
                     log::warn!(
@@ -89,8 +53,19 @@ impl Workspace {
         .detach();
     }
 
-    /// Opens a script file from a known path (e.g., from sidebar recent files).
+    /// Opens a file from a known path: the file dialog, recent files, the
+    /// command palette, the scripts sidebar, the settings window and IPC all
+    /// come through here.
+    ///
+    /// A `.csv` or `.tsv` file, in any letter case, opens as a table in the
+    /// delimited document. Every other file opens in the code editor, or
+    /// focuses the tab that already shows it.
     pub fn open_script_from_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if crate::ui::document::delimited::is_delimited_path(&path) {
+            self.open_delimited_file(DelimitedFileKey::Local { path }, None, cx);
+            return;
+        }
+
         let tab_manager = self.tab_manager.clone();
 
         // Check if already open

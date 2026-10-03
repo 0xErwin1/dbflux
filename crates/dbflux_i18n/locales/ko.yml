@@ -3477,6 +3477,7 @@ scripts:
       sql: SQL 파일
       javascript_mongodb: JavaScript (MongoDB)
       redis: Redis
+      delimited: CSV / TSV 파일
       all_files: 모든 파일
   error:
     read_file_failed: "%{path} 파일을 읽지 못했습니다: %{error}"
