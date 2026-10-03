@@ -522,7 +522,9 @@ fn parse_error(edited: &str, start: usize, error: ParseTextError) -> TextEditErr
             encoding,
         },
 
-        ParseTextError::Dialect(error) => TextEditError::Dialect(error.to_string()),
+        ParseTextError::Dialect(error) => {
+            TextEditError::Dialect(crate::labels::delimited_read_error_cause(&error))
+        }
     }
 }
 

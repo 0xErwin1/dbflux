@@ -1,6 +1,6 @@
 # 执行查询
 
-使用 `Ctrl+n`（macOS 上为 `Cmd+n`）新建查询标签页，或使用 `Ctrl+o` 打开脚本文件。编辑器的查询语言（SQL、MongoDB 查询语法、Redis 命令等）由当前活动连接的驱动决定，该驱动同时决定语法高亮方式和占位提示文本。
+使用 `Ctrl+n`（macOS 上为 `Cmd+n`）新建查询标签页，或使用 `Ctrl+o` 打开脚本文件。编辑器的查询语言（SQL、MongoDB 查询语法、Redis 命令等）由当前活动连接的驱动决定，该驱动同时决定语法高亮方式和占位提示文本。`.csv` 或 `.tsv` 文件则以表格形式打开；参见 [CSV 和 TSV 文件](CSV_FILES.md)。
 
 对于 SQL 连接，[可视化查询构建器](QUERY_BUILDER.md)可以在不编写 SQL 的情况下构建查询。
 

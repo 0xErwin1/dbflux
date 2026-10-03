@@ -1799,6 +1799,28 @@ document:
         unsupported: "%{encoding} text cannot be read with %{character} as its delimiter or quote. Choose another delimiter, quote or encoding."
         line_break: "A line break cannot be the delimiter or the quote. Choose another character."
         quote_equals_delimiter: "The quote and the delimiter are both %{character}. Choose a different character for one of them."
+      storage:
+        read: "Could not read the file: %{cause}"
+        local_io: "Could not access %{path}: %{cause}"
+        temporary_file: "Could not save %{target}: writing a temporary file in %{directory} failed: %{cause}"
+        object_store: "Could not access %{bucket}/%{key}: %{cause}"
+        read_only_file: "The file is read-only."
+      read:
+        unexpected_length: "The file returned a different number of bytes than were asked for, so it could not be read."
+      write:
+        sink: "Could not write the edited file: %{cause}"
+        records_moved: "The file no longer matches the records that were loaded from it. Reload the file and edit it again."
+        conflicting_edits: "The pending edits change the same record in ways that conflict, so the file was not written."
+        unencodable: "A value contains %{character}, which %{encoding} cannot represent. Remove the character or change the file's encoding."
+        unquotable: "A value contains the delimiter or a line break, starts with U+FEFF, or is the only and empty field of its record, and the file has no quote character to enclose it. Change the value or choose a quote character."
+        leading_byte_order_mark: "A record would become the first of the file, and its leading U+FEFF would then be read as a byte-order mark and lost. Edit the first field of that record, or keep a record before it."
+        fused_line_break: "Removing these records would merge an empty line into the line break before it, and the file has no quote character to keep it apart. Delete that empty line too, or choose a quote character."
+        truncated_code_unit: "The file ends in the middle of a character, so it cannot be edited as it is. Replace or delete its last record in the same save."
+        unclosed_quote: "A record ends inside a quoted field that is never closed, so a column cannot be added after it. Edit that record first."
+      page:
+        out_of_order: "The page starts at record %{found}, and the next record to load is %{expected}."
+        no_header: "The file has no header record, so its columns have no names."
+        column_out_of_range: "There is no column at index %{column}."
     warning:
       malformed_text: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The detected encoding is probably wrong."
       malformed_text_chosen: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The chosen encoding is probably wrong."

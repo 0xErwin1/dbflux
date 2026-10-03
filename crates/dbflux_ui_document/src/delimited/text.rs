@@ -284,7 +284,9 @@ impl fmt::Display for RawTextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PageModel(error) => fmt::Display::fmt(error, formatter),
-            Self::Write(error) => fmt::Display::fmt(error, formatter),
+            Self::Write(error) => {
+                formatter.write_str(&crate::labels::delimited_write_error_cause(error))
+            }
         }
     }
 }
