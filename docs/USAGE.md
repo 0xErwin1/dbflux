@@ -20,6 +20,8 @@ launch to your first query; otherwise pick the page for what you are doing.
   console.
 - [Document Collections](DOCUMENTS.md) — table, tree, and JSON views of
   documents.
+- [CSV and TSV Files](CSV_FILES.md) — opening, editing, and saving delimited
+  files as a table or as text.
 - [Charts](CHARTS.md) and [Dashboards](DASHBOARDS.md) — charting results and
   building dashboards.
 - [Keyboard Reference](KEYBOARD.md) — every default binding, including Vim mode.

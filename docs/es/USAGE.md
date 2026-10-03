@@ -20,6 +20,8 @@ a tu primera query; si no, elige la página de lo que estás haciendo.
   de comandos.
 - [Colecciones de documentos](DOCUMENTS.md) — vistas de tabla, árbol y JSON de
   los documentos.
+- [Archivos CSV y TSV](CSV_FILES.md) — abrir, editar y guardar archivos
+  delimitados como tabla o como texto.
 - [Gráficos](CHARTS.md) y [Dashboards](DASHBOARDS.md) — graficar resultados y
   construir dashboards.
 - [Referencia de teclado](KEYBOARD.md) — todos los atajos por defecto, incluido
