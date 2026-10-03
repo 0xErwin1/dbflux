@@ -11,8 +11,8 @@ use encoding_rs::{
 
 use super::reader::never_collides_with_a_trail_byte;
 use super::{
-    ByteSource, Dialect, FileSource, MemorySource, PagedReader, ReadError, ReaderOptions, Record,
-    RecordCount, SourceError,
+    ByteSource, Dialect, FileSource, MemorySource, PagedReader, ParseTextError, ReadError,
+    ReaderOptions, Record, RecordCount, SourceError, TextRecord, parse_text,
 };
 
 /// An in-memory source that remembers every range it was asked for.
@@ -1178,3 +1178,122 @@ fn the_header_bytes_follow_an_invalidation() {
 }
 
 const UTF_8_MARK_BYTES: &[u8] = b"\xEF\xBB\xBF";
+
+// -- Reading a text --------------------------------------------------------------
+
+/// The records `text` parses into, with the text of each.
+fn parsed(text: &str, dialect: Dialect) -> Vec<(String, Vec<String>)> {
+    parse_text(text, &dialect)
+        .unwrap()
+        .into_iter()
+        .map(|record| (text[record.text_range].to_string(), record.fields))
+        .collect()
+}
+
+fn strings(fields: &[&str]) -> Vec<String> {
+    fields.iter().map(|field| field.to_string()).collect()
+}
+
+/// A text reads as the reader reads the same text written in the dialect's
+/// encoding: the same fields, and records that tile the text as the reader's
+/// tile the bytes.
+#[test]
+fn a_text_reads_as_its_encoded_bytes_read() {
+    let text = "name,note\r\nAna,\"a, \"\"b\"\"\nc\"\n\nJos\u{e9},x\rlast,\"open";
+
+    for (encoding, bytes) in [
+        (UTF_8, text.as_bytes().to_vec()),
+        (UTF_16LE, utf16le(text)),
+        (UTF_16BE, utf16be(text)),
+        (WINDOWS_1252, WINDOWS_1252.encode(text).0.into_owned()),
+    ] {
+        let dialect = dialect(encoding);
+
+        let mut reader = open(&bytes, dialect, 3, 4);
+        let read: Vec<Vec<String>> = all_records(&mut reader)
+            .into_iter()
+            .map(|record| record.fields)
+            .collect();
+
+        let records = parse_text(text, &dialect).unwrap();
+        let fields: Vec<Vec<String>> = records.iter().map(|record| record.fields.clone()).collect();
+
+        assert_eq!(fields, read, "{}", encoding.name());
+
+        let mut end = 0;
+
+        for record in &records {
+            assert_eq!(record.text_range.start, end, "{}", encoding.name());
+            end = record.text_range.end;
+        }
+
+        assert_eq!(end, text.len(), "{}", encoding.name());
+    }
+
+    assert_eq!(
+        parsed(text, dialect(UTF_8)),
+        [
+            ("name,note\r\n".to_string(), strings(&["name", "note"])),
+            (
+                "Ana,\"a, \"\"b\"\"\nc\"\n".to_string(),
+                strings(&["Ana", "a, \"b\"\nc"])
+            ),
+            ("\n".to_string(), strings(&[""])),
+            ("Jos\u{e9},x\r".to_string(), strings(&["Jos\u{e9}", "x"])),
+            ("last,\"open".to_string(), strings(&["last", "open"])),
+        ]
+    );
+}
+
+#[test]
+fn only_a_last_record_left_inside_a_quoted_field_is_marked() {
+    let records = parse_text("a,\"b\nc\"\nd,\"e\nf", &dialect(UTF_8)).unwrap();
+
+    let marks: Vec<bool> = records
+        .iter()
+        .map(|record| record.ends_inside_quotes)
+        .collect();
+
+    assert_eq!(marks, [false, true]);
+    assert_eq!(records[1].fields, strings(&["d", "e\nf"]));
+}
+
+#[test]
+fn an_empty_text_has_no_records() {
+    assert_eq!(
+        parse_text("", &dialect(UTF_8)).unwrap(),
+        Vec::<TextRecord>::new()
+    );
+}
+
+#[test]
+fn a_character_the_encoding_cannot_hold_is_refused_with_its_offset() {
+    let error = parse_text("a,b\nc,\u{4e2d}\n", &dialect(WINDOWS_1252)).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            ParseTextError::UnencodableCharacter {
+                offset: 6,
+                character: '\u{4e2d}',
+                encoding: "windows-1252",
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_dialect_the_reader_refuses_is_refused() {
+    let refused = Dialect {
+        delimiter: b'\n',
+        ..dialect(UTF_8)
+    };
+
+    assert!(matches!(
+        parse_text("a\n", &refused),
+        Err(ParseTextError::Dialect(ReadError::LineBreakInDialect {
+            byte: b'\n'
+        }))
+    ));
+}
