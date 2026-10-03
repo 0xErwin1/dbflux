@@ -632,7 +632,8 @@ impl<S: ByteSource> PagedReader<S> {
     ///
     /// Offset zero invalidates everything: the byte-order mark and the header
     /// are always read again, even when the source had neither before. So
-    /// does any other `offset` inside the byte-order mark or the header.
+    /// does any other `offset` inside the byte-order mark or the header, and
+    /// a source that now ends at or before the first data byte.
     pub fn invalidate_from_offset(&mut self, offset: u64) -> Result<(), ReadError> {
         let data_start = self.page_starts.first().copied().unwrap_or_default();
 
@@ -642,11 +643,15 @@ impl<S: ByteSource> PagedReader<S> {
 
         self.length = self.source.byte_length()?;
 
+        if data_start >= self.length {
+            return self.prepare();
+        }
+
         let kept_pages = self.page_starts.partition_point(|start| *start <= offset);
         self.page_starts.truncate(kept_pages);
 
         self.indexed_records = self.first_record_of(kept_pages.saturating_sub(1));
-        self.total_records = (data_start >= self.length).then_some(0);
+        self.total_records = None;
         self.cursor = Cursor::default();
 
         Ok(())
