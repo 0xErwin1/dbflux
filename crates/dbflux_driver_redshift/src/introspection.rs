@@ -193,6 +193,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 presentation: CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         })
         .collect())
@@ -509,6 +510,7 @@ pub(crate) fn get_table_details(
         presentation: CollectionPresentation::DataGrid,
         child_items: None,
         storage_hints,
+        pseudo_columns: Box::default(),
     })
 }
 

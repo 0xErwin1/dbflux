@@ -2001,6 +2001,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -2190,6 +2191,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         let mut metadata = SqlCompletionMetadata::default();
@@ -2223,6 +2225,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -2357,6 +2360,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let db2 = (
             "db2".to_string(),
@@ -2405,6 +2409,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 

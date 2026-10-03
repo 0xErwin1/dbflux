@@ -669,6 +669,7 @@ impl Connection for CloudWatchConnection {
             presentation: CollectionPresentation::EventStream,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
     }
 

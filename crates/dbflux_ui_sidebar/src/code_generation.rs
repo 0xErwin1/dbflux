@@ -188,6 +188,7 @@ impl Sidebar {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         if let Some(gen_type) = SqlGenerationType::from_generator_id(generator_id) {

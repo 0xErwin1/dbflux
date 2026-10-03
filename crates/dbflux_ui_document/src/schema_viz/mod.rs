@@ -1042,6 +1042,7 @@ impl SchemaVizDocument {
             presentation: CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
     }
 

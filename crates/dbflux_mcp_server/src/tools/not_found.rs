@@ -8,6 +8,10 @@
 //! hint is included only when the client may call the tool that normally
 //! returns it. When the metadata cannot settle the question the original error
 //! is returned unchanged.
+//!
+//! `select_data` on tables also checks its column references before it runs
+//! (see [`check_columns`]), because some engines do not fail on an unknown
+//! column.
 
 use std::sync::Arc;
 
@@ -26,6 +30,8 @@ use crate::{
 const MAX_LISTED_COLUMNS: usize = 20;
 
 const NOT_LISTED_REASON: &str = "It may not exist, or this connection may not have access to it.";
+
+const NOT_RUN: &str = "The query was not run.";
 
 /// The error of a failed tool call, with whether a not-found lookup is worth
 /// running for it.
@@ -96,6 +102,59 @@ pub(crate) struct FailedCall<'a> {
 
     /// Column names the call referenced in its filter and sort.
     pub columns: Vec<String>,
+}
+
+/// A column a call names, with the table it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColumnReference {
+    pub table: TableRef,
+    pub column: String,
+}
+
+/// A `select_data` call whose column references are checked before it runs.
+pub(crate) struct ColumnCheck<'a> {
+    pub state: &'a ServerState,
+    pub connection_id: &'a str,
+    pub connection: &'a Arc<dyn Connection>,
+
+    /// The `database` argument of the call, when it passed one.
+    pub database: Option<&'a str>,
+
+    pub references: Vec<ColumnReference>,
+}
+
+/// The names a table's metadata lists, as the column check and the hint
+/// compare them.
+struct TableColumns {
+    columns: Vec<String>,
+
+    /// Names the driver declared the engine resolves on this table although
+    /// `columns` does not list them. They count as present but are never
+    /// suggested or listed, because they are not columns of the table.
+    pseudo_columns: Vec<String>,
+}
+
+impl TableColumns {
+    fn from_details(details: TableInfo) -> Option<Self> {
+        Some(Self {
+            columns: details
+                .columns?
+                .into_iter()
+                .map(|column| column.name)
+                .collect(),
+            pseudo_columns: details.pseudo_columns.into_vec(),
+        })
+    }
+
+    fn lists(&self, name: &str) -> bool {
+        contains_name(&self.columns, name) || contains_name(&self.pseudo_columns, name)
+    }
+
+    /// Whether `name` is a pseudo-column and not a listed column, which a
+    /// table may have under the same name.
+    fn is_pseudo_column(&self, name: &str) -> bool {
+        !contains_name(&self.columns, name) && contains_name(&self.pseudo_columns, name)
+    }
 }
 
 /// Where a name is looked up.
@@ -179,6 +238,190 @@ pub(crate) fn with_column_hints(message: String, wanted: &str, available: &[&str
     format!("{message}. {}", hints.join(" "))
 }
 
+/// Whether the connection's engine reads a quoted identifier that names no
+/// column as a string literal, which is when a call is checked before it runs.
+/// An engine that fails on an unknown column gets the hint after the failure
+/// instead.
+pub(crate) fn misreads_unknown_identifiers(connection: &dyn Connection) -> bool {
+    connection
+        .metadata()
+        .syntax
+        .as_ref()
+        .is_some_and(|syntax| syntax.misreads_unknown_quoted_identifiers)
+}
+
+/// Refuses the call when it names a column its table's metadata does not
+/// list, and returns the refusal message. On success, returns the references
+/// that name a pseudo-column of their table rather than a listed column.
+///
+/// Callers run it only where [`misreads_unknown_identifiers`] holds: SQLite
+/// reads an unknown double-quoted identifier as a string literal, so a
+/// misspelled column in a filter returns no rows instead of an error. The
+/// check reads the column names of each referenced table once, through
+/// `table_details`, and compares names with ASCII case folding, the only
+/// folding SQLite applies. A pseudo-column the driver declared for the table,
+/// such as SQLite's `rowid`, counts as listed.
+///
+/// It never refuses on missing evidence. A table whose scope cannot be
+/// resolved, whose lookup fails or is not supported, or whose metadata lists
+/// no columns is not checked, and the call runs as before.
+///
+/// The refusal names the closest and the available columns only when the
+/// client may call `describe_object`. Without that permission it says only
+/// that the column is not listed for the table.
+pub(crate) async fn check_columns(check: &ColumnCheck<'_>) -> Result<Vec<ColumnReference>, String> {
+    let listed = list_tables(check).await;
+
+    for (table, columns) in &listed {
+        let Some(columns) = columns else {
+            continue;
+        };
+
+        let unlisted = check
+            .references
+            .iter()
+            .filter(|reference| &reference.table == table)
+            .find(|reference| !columns.lists(&reference.column));
+
+        if let Some(reference) = unlisted {
+            let allowed = governance::hint_permissions(check.state, check.connection_id).await;
+
+            let message = if allowed.column_names {
+                unlisted_column_message(&reference.column, &table.name, &columns.columns)
+            } else {
+                unlisted_column_line(&reference.column, &table.name)
+            };
+
+            return Err(format!("{message}\n\n{NOT_RUN}"));
+        }
+    }
+
+    Ok(pseudo_column_references(check, &listed))
+}
+
+/// The references of `check` that name a pseudo-column of their table,
+/// without refusing anything. Used where the engine fails loudly on an unknown
+/// column and only the pseudo-columns matter.
+pub(crate) async fn pseudo_columns(check: &ColumnCheck<'_>) -> Vec<ColumnReference> {
+    let listed = list_tables(check).await;
+
+    pseudo_column_references(check, &listed)
+}
+
+/// Reads the names each table of `check` lists, one `table_details` lookup
+/// per table.
+async fn list_tables(check: &ColumnCheck<'_>) -> Vec<(TableRef, Option<TableColumns>)> {
+    let mut tables: Vec<TableRef> = Vec::new();
+
+    for reference in &check.references {
+        if !tables.contains(&reference.table) {
+            tables.push(reference.table.clone());
+        }
+    }
+
+    if tables.is_empty() {
+        return Vec::new();
+    }
+
+    let connection = check.connection.clone();
+    let database = check.database.map(str::to_string);
+
+    tokio::task::spawn_blocking(move || {
+        tables
+            .into_iter()
+            .map(|table| {
+                let columns = listed_columns(connection.as_ref(), &table, database.as_deref());
+                (table, columns)
+            })
+            .collect()
+    })
+    .await
+    .log_err_with("Column check task failed")
+    .unwrap_or_default()
+}
+
+fn pseudo_column_references(
+    check: &ColumnCheck<'_>,
+    listed: &[(TableRef, Option<TableColumns>)],
+) -> Vec<ColumnReference> {
+    check
+        .references
+        .iter()
+        .filter(|reference| {
+            listed.iter().any(|(table, columns)| {
+                &reference.table == table
+                    && columns
+                        .as_ref()
+                        .is_some_and(|columns| columns.is_pseudo_column(&reference.column))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Reads the column names of `table` for the column check. `None` means the
+/// check cannot be made for it, which is logged at debug level only.
+fn listed_columns(
+    connection: &dyn Connection,
+    table: &TableRef,
+    database: Option<&str>,
+) -> Option<TableColumns> {
+    let syntax = connection.metadata().syntax.as_ref();
+    let supports_schemas = syntax.is_some_and(|syntax| syntax.supports_schemas);
+
+    // Without schemas, a qualifier on the table name is not a schema, and the
+    // metadata lookup may not honour it, so the columns could belong to
+    // another table.
+    let schema = match (&table.schema, supports_schemas) {
+        (Some(schema), true) => Some(schema.clone()),
+        (None, true) => match syntax.and_then(|syntax| syntax.default_schema.clone()) {
+            Some(schema) => Some(schema),
+            None => {
+                log::debug!(
+                    "Column check skipped for '{}': no schema to look it up in",
+                    table.name
+                );
+                return None;
+            }
+        },
+        (Some(qualifier), false) => {
+            log::debug!(
+                "Column check skipped for '{qualifier}.{}': the driver has no schemas",
+                table.name
+            );
+            return None;
+        }
+        (None, false) => None,
+    };
+
+    let database = database
+        .map(str::to_string)
+        .or_else(|| connection.active_database())
+        .unwrap_or_default();
+
+    let details = match connection.table_details(&database, schema.as_deref(), &table.name) {
+        Ok(details) => details,
+        Err(error) => {
+            log::debug!(
+                "Column check skipped for '{}': cannot read its columns: {error}",
+                table.name
+            );
+            return None;
+        }
+    };
+
+    let columns = TableColumns::from_details(details).filter(|listed| !listed.columns.is_empty());
+
+    if columns.is_none() {
+        log::debug!(
+            "Column check skipped for '{}': the metadata lists no columns",
+            table.name
+        );
+    }
+
+    columns
+}
+
 async fn hint(call: &FailedCall<'_>) -> Option<String> {
     let allowed = governance::hint_permissions(call.state, call.connection_id).await;
 
@@ -212,19 +455,16 @@ async fn hint(call: &FailedCall<'_>) -> Option<String> {
 
     let columns = table_columns(call.connection, &scope, &call.target.name).await?;
 
-    if columns.is_empty() {
+    if columns.columns.is_empty() {
         return None;
     }
 
-    let unlisted = call
-        .columns
-        .iter()
-        .find(|column| !contains_name(&columns, column))?;
+    let unlisted = call.columns.iter().find(|column| !columns.lists(column))?;
 
     Some(unlisted_column_message(
         unlisted,
         &call.target.name,
-        &columns,
+        &columns.columns,
     ))
 }
 
@@ -333,13 +573,13 @@ fn listed_names(
     object_names(&listing.tables, &listing.views, schema)
 }
 
-/// Reads the column names of a table. `None` means the driver has no column
-/// metadata for it or the lookup failed.
+/// Reads the column and pseudo-column names of a table. `None` means the
+/// driver has no column metadata for it or the lookup failed.
 async fn table_columns(
     connection: &Arc<dyn Connection>,
     scope: &Scope,
     table: &str,
-) -> Option<Vec<String>> {
+) -> Option<TableColumns> {
     let connection = connection.clone();
     let database = scope.database.clone().unwrap_or_default();
     let schema = scope.schema.clone();
@@ -354,9 +594,7 @@ async fn table_columns(
     .await
     .log_err_with("Column lookup task failed")??;
 
-    let columns = details.columns?;
-
-    Some(columns.into_iter().map(|column| column.name).collect())
+    TableColumns::from_details(details)
 }
 
 /// Unwraps a metadata lookup. A driver that does not implement the lookup is
@@ -460,12 +698,12 @@ fn object_names(
     (schema.is_none() || !names.is_empty()).then_some(names)
 }
 
-/// A name that differs only in case counts as present, because the metadata
-/// does not say how the engine folds an identifier in this position.
-fn contains_name(names: &[String], wanted: &str) -> bool {
-    let wanted = wanted.to_lowercase();
-
-    names.iter().any(|name| name.to_lowercase() == wanted)
+/// A name that differs only in ASCII case counts as present, because the
+/// metadata does not say how the engine folds an identifier in this position.
+/// Only ASCII letters fold, as in SQLite: the Kelvin sign is not `K`, and `É`
+/// is not `é`.
+pub(crate) fn contains_name(names: &[String], wanted: &str) -> bool {
+    names.iter().any(|name| name.eq_ignore_ascii_case(wanted))
 }
 
 fn unlisted_object_message(
@@ -512,12 +750,14 @@ fn unlisted_object_message(
 fn unlisted_column_message(column: &str, table: &str, columns: &[String]) -> String {
     let available: Vec<&str> = columns.iter().map(String::as_str).collect();
 
-    let mut lines = vec![format!(
-        "Column '{column}' is not listed among the columns of table '{table}'."
-    )];
+    let mut lines = vec![unlisted_column_line(column, table)];
     lines.extend(column_hints(column, &available));
 
     lines.join("\n")
+}
+
+fn unlisted_column_line(column: &str, table: &str) -> String {
+    format!("Column '{column}' is not listed among the columns of table '{table}'.")
 }
 
 fn column_hints(wanted: &str, available: &[&str]) -> Vec<String> {
@@ -727,6 +967,26 @@ mod tests {
     fn a_name_that_differs_only_in_case_counts_as_present() {
         assert!(contains_name(&names(&["Users"]), "users"));
         assert!(!contains_name(&names(&["Users"]), "user"));
+    }
+
+    #[test]
+    fn only_ascii_letters_fold_when_names_are_compared() {
+        assert!(!contains_name(&names(&["key"]), "\u{212A}ey"));
+        assert!(!contains_name(&names(&["café"]), "CAFÉ"));
+        assert!(contains_name(&names(&["café"]), "CAFé"));
+    }
+
+    #[test]
+    fn a_declared_pseudo_column_counts_as_listed_in_any_case() {
+        let listed = TableColumns {
+            columns: names(&["label"]),
+            pseudo_columns: names(&["rowid", "_rowid_"]),
+        };
+
+        assert!(listed.lists("label"));
+        assert!(listed.lists("ROWID"));
+        assert!(listed.lists("_rowid_"));
+        assert!(!listed.lists("oid"));
     }
 
     #[test]

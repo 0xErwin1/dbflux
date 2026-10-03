@@ -855,6 +855,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -919,6 +920,7 @@ mod tests {
                 columns: vec!["id".into()],
                 detail: Some("KEY".into()),
             }]),
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -1105,6 +1107,26 @@ mod tests {
             hex_bytes(GOLDEN_TABLE_DETAILS_BYTES),
             "TableDetails wire encoding drifted from the captured legacy bytes"
         );
+    }
+
+    #[test]
+    fn pseudo_columns_never_reach_the_wire() {
+        let mut table = nontrivial_table_info();
+        table.pseudo_columns = Box::new(["rowid".into(), "ctid".into()]);
+
+        let encoded =
+            postcard::to_allocvec(&DriverResponseBody::TableDetails { table }).expect("serialize");
+        assert_eq!(
+            encoded,
+            hex_bytes(GOLDEN_TABLE_DETAILS_BYTES),
+            "declaring pseudo-columns changed the TableDetails wire encoding"
+        );
+
+        let decoded: DriverResponseBody = postcard::from_bytes(&encoded).expect("deserialize");
+        match decoded {
+            DriverResponseBody::TableDetails { table } => assert!(table.pseudo_columns.is_empty()),
+            other => panic!("unexpected response body: {other:?}"),
+        }
     }
 
     #[test]

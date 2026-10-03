@@ -3196,6 +3196,7 @@ mod tests {
                 presentation: Default::default(),
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             })
         }
     }
@@ -3214,6 +3215,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -3574,6 +3576,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let changes = vec![dbflux_core::TableChange::TableAdded(info)];
 
@@ -3633,6 +3636,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let changes = vec![dbflux_core::TableChange::TableAdded(info)];
 

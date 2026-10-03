@@ -790,6 +790,7 @@ impl Connection for DynamoConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             })
             .collect();
 
@@ -3881,6 +3882,7 @@ fn build_table_info_from_description(
         presentation: dbflux_core::CollectionPresentation::DataGrid,
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 

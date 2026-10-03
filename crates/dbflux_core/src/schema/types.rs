@@ -700,6 +700,18 @@ pub struct TableInfo {
     /// Column metadata. `None` = not yet loaded (lazy), `Some(vec)` = loaded.
     pub columns: Option<Vec<ColumnInfo>>,
 
+    /// Names the engine resolves on this table in a query although `columns`
+    /// does not list them, such as SQLite's `rowid` or PostgreSQL's `ctid`.
+    ///
+    /// A driver fills it in `table_details`, and only with names this table
+    /// really has: a SQLite `WITHOUT ROWID` table gets no `rowid`. Empty when
+    /// the driver declares none or the details are not loaded.
+    ///
+    /// Not serialized, so the driver RPC wire format is unchanged and tables
+    /// of external RPC drivers always carry an empty list.
+    #[serde(skip)]
+    pub pseudo_columns: Box<[String]>,
+
     /// Index metadata. `None` = not yet loaded (lazy), `Some(data)` = loaded.
     pub indexes: Option<IndexData>,
 
@@ -1296,6 +1308,26 @@ mod tests {
         let json = minimal_table_info_json();
         let decoded: TableInfo = serde_json::from_value(json).expect("deserialize");
         assert!(decoded.storage_hints.is_none());
+    }
+
+    #[test]
+    fn table_info_pseudo_columns_are_empty_unless_a_driver_sets_them() {
+        let decoded: TableInfo =
+            serde_json::from_value(minimal_table_info_json()).expect("deserialize");
+        assert!(decoded.pseudo_columns.is_empty());
+
+        let declared = TableInfo {
+            pseudo_columns: Box::new(["rowid".to_string()]),
+            ..decoded
+        };
+        let json = serde_json::to_value(&declared).expect("serialize");
+        assert!(
+            json.get("pseudo_columns").is_none(),
+            "pseudo-columns are never serialized: {json}"
+        );
+
+        let redecoded: TableInfo = serde_json::from_value(json).expect("deserialize");
+        assert!(redecoded.pseudo_columns.is_empty());
     }
 
     #[test]

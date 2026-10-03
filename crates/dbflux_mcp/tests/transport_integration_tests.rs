@@ -50,6 +50,7 @@ impl IntegrationHarness {
                     supports_schemas: true,
                     default_schema: Some("public".to_string()),
                     case_sensitive_identifiers: true,
+                    misreads_unknown_quoted_identifiers: false,
                 },
                 query: QueryCapabilities::default(),
                 ddl: DdlCapabilities::default(),

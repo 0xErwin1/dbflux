@@ -1506,6 +1506,19 @@ pub struct SyntaxInfo {
 
     /// Whether identifier names are case-sensitive.
     pub case_sensitive_identifiers: bool,
+
+    /// Whether the engine reads a quoted identifier that names no column as
+    /// a string literal instead of failing, so a misspelled column returns
+    /// wrong rows rather than an error. SQLite does this with its
+    /// double-quoted string literal fallback
+    /// (<https://www.sqlite.org/quirks.html#dblquote>).
+    ///
+    /// Callers that build queries from names they cannot vouch for check
+    /// those names against the metadata first on such engines. Not
+    /// serialized, so the driver RPC wire format is unchanged and external
+    /// RPC drivers report `false`.
+    #[serde(skip)]
+    pub misreads_unknown_quoted_identifiers: bool,
 }
 
 impl Default for SyntaxInfo {
@@ -1517,6 +1530,7 @@ impl Default for SyntaxInfo {
             supports_schemas: false,
             default_schema: None,
             case_sensitive_identifiers: true,
+            misreads_unknown_quoted_identifiers: false,
         }
     }
 }
@@ -2968,6 +2982,7 @@ mod tests {
             supports_schemas: true,
             default_schema: Some("dbo".to_string()),
             case_sensitive_identifiers: false,
+            misreads_unknown_quoted_identifiers: false,
         };
         assert_eq!(custom.identifier_quote, '[');
         assert_eq!(custom.placeholder_style, PlaceholderStyle::NamedColon);

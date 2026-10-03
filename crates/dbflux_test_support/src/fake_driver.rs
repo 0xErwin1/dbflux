@@ -802,6 +802,7 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
         supports_schemas: true,
         default_schema: Some("public".to_string()),
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities {
@@ -856,6 +857,7 @@ static FAKE_CLICKHOUSE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![dbflux_core::PaginationStyle::Offset],
@@ -948,6 +950,7 @@ static FAKE_TURSO_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities::default()),
@@ -987,6 +990,7 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities {
@@ -1047,6 +1051,7 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities::default()),
@@ -1091,6 +1096,7 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities::default()),

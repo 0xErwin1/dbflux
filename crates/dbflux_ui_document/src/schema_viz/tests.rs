@@ -77,6 +77,7 @@ fn make_table(name: &str, n_cols: usize) -> TableInfo {
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
@@ -117,6 +118,7 @@ fn make_fk_table(name: &str, ref_table: &str) -> TableInfo {
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
@@ -1057,6 +1059,7 @@ fn per_table_response(
         presentation: CollectionPresentation::DataGrid,
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
@@ -1398,6 +1401,7 @@ fn loader_returns_unfiltered_bulk_maps_for_cache_seeding() {
                 presentation: CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }],
             views: Vec::new(),
             custom_types: None,
@@ -1578,6 +1582,7 @@ fn loader_global_bulks_each_schema_once_without_table_details() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
                 TableInfo {
                     name: "sessions".to_owned(),
@@ -1590,6 +1595,7 @@ fn loader_global_bulks_each_schema_once_without_table_details() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
                 TableInfo {
                     name: "audit_log".to_owned(),
@@ -1602,6 +1608,7 @@ fn loader_global_bulks_each_schema_once_without_table_details() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
                 TableInfo {
                     name: "audit_archive".to_owned(),
@@ -1614,6 +1621,7 @@ fn loader_global_bulks_each_schema_once_without_table_details() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
             ],
             views: Vec::new(),
@@ -1801,6 +1809,7 @@ fn loader_global_not_supported_columns_fall_back_per_relation() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
                 TableInfo {
                     name: "audit_log".to_owned(),
@@ -1813,6 +1822,7 @@ fn loader_global_not_supported_columns_fall_back_per_relation() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
             ],
             views: Vec::new(),
@@ -1913,6 +1923,7 @@ fn loader_global_succeeds_with_empty_indexes_and_fks_when_bulk_seams_fail() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
                 TableInfo {
                     name: "posts".to_owned(),
@@ -1925,6 +1936,7 @@ fn loader_global_succeeds_with_empty_indexes_and_fks_when_bulk_seams_fail() {
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
             ],
             views: Vec::new(),

@@ -1828,6 +1828,7 @@ pub(crate) mod shared_coordinator_tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 

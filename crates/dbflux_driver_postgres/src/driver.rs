@@ -87,6 +87,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: true,
         default_schema: Some("public".to_string()),
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -2020,6 +2021,15 @@ impl Connection for PostgresConnection {
         let indexes = get_indexes(&mut client, schema_name, table)?;
         let foreign_keys = get_foreign_keys(&mut client, schema_name, table)?;
         let constraints = get_constraints(&mut client, schema_name, table)?;
+        let pseudo_columns = match get_system_columns(&mut client, schema_name, table) {
+            Ok(names) => names,
+            Err(error) => {
+                log::warn!(
+                    "[SCHEMA] Cannot read the system columns of {schema_name}.{table}: {error}"
+                );
+                Box::default()
+            }
+        };
 
         log::debug!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -2042,6 +2052,7 @@ impl Connection for PostgresConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -2854,6 +2865,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         })
         .collect();
@@ -3194,6 +3206,42 @@ fn get_foreign_keys(
     );
 
     Ok(fks)
+}
+
+/// Reads the system columns of a relation (`ctid`, `xmin`, `tableoid`, ...),
+/// which a query may name although they are not user columns:
+/// <https://www.postgresql.org/docs/current/ddl-system-columns.html>.
+///
+/// The catalog lists them as the `pg_attribute` rows with a negative `attnum`
+/// (<https://www.postgresql.org/docs/current/catalog-pg-attribute.html>), so
+/// the answer follows the relation: tables, partitioned, materialized and
+/// foreign tables have them, a view has none.
+const SYSTEM_COLUMNS_QUERY: &str = r#"
+    SELECT a.attname
+    FROM pg_catalog.pg_attribute a
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1
+      AND c.relname = $2
+      AND a.attnum < 0
+    ORDER BY a.attnum DESC
+"#;
+
+fn get_system_columns(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Box<[String]>, DbError> {
+    let rows = client
+        .query(SYSTEM_COLUMNS_QUERY, &[&schema, &table])
+        .map_err(|e| format_pg_query_error(&e))?;
+
+    rows.iter()
+        .map(|row| {
+            row.try_get::<_, String>(0)
+                .map_err(|e| format_pg_query_error(&e))
+        })
+        .collect()
 }
 
 fn get_constraints(
@@ -4324,6 +4372,61 @@ impl<'a> FromSql<'a> for PgNumericText {
     }
 }
 
+/// An unsigned system integer as the binary protocol sends it: `oid`, `xid`
+/// and `cid` in 4 big-endian bytes, `xid8` in 8. These are the types of the
+/// `tableoid`, `xmin`, `xmax`, `cmin` and `cmax` system columns:
+/// <https://www.postgresql.org/docs/current/datatype-oid.html>.
+struct PgSystemInteger(u64);
+
+impl<'a> FromSql<'a> for PgSystemInteger {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if let Ok(bytes) = <[u8; 4]>::try_from(raw) {
+            return Ok(Self(u64::from(u32::from_be_bytes(bytes))));
+        }
+
+        <[u8; 8]>::try_from(raw)
+            .map(|bytes| Self(u64::from_be_bytes(bytes)))
+            .map_err(|_| numeric_decode_error("system integer payload has an unexpected length"))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "oid" | "xid" | "cid" | "xid8")
+    }
+}
+
+fn system_integer_value(PgSystemInteger(value): PgSystemInteger) -> Value {
+    match i64::try_from(value) {
+        Ok(value) => Value::Int(value),
+        Err(_) => Value::Text(value.to_string()),
+    }
+}
+
+/// A `tid`, the type of the `ctid` system column: a 4-byte block number and a
+/// 2-byte tuple index, rendered as PostgreSQL prints it, `(0,1)`.
+struct PgTid(String);
+
+impl<'a> FromSql<'a> for PgTid {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let bytes = <[u8; 6]>::try_from(raw)
+            .map_err(|_| numeric_decode_error("tid payload has an unexpected length"))?;
+
+        let block = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let offset = u16::from_be_bytes([bytes[4], bytes[5]]);
+
+        Ok(Self(format!("({block},{offset})")))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.name() == "tid"
+    }
+}
+
 /// Maps a column decode result to a cell value.
 ///
 /// A real SQL NULL becomes `Null`. A decode failure (the decoder rejects the
@@ -4696,6 +4799,12 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
         }),
 
         "bytea" => decode_to_value(row, idx, type_name, Value::Bytes),
+
+        "oid" | "xid" | "cid" | "xid8" => {
+            decode_to_value(row, idx, type_name, system_integer_value)
+        }
+
+        "tid" => decode_to_value(row, idx, type_name, |PgTid(text)| Value::Text(text)),
 
         _ => match col_type.kind() {
             Kind::Enum(_) => decode_to_value(row, idx, type_name, |PgText(text)| Value::Text(text)),
@@ -6157,6 +6266,7 @@ mod tests {
         plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
         undecodable_to_value, unsupported_type_names, with_client_identity,
     };
+    use super::{PgSystemInteger, PgTid, system_integer_value};
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
         CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
@@ -6320,6 +6430,49 @@ mod tests {
 
     fn wep(position: u16, weight: u16) -> u16 {
         (weight << 14) | position
+    }
+
+    #[test]
+    fn system_integers_decode_from_their_binary_payloads() {
+        let decode =
+            |ty: &Type, raw: &[u8]| PgSystemInteger::from_sql(ty, raw).map(system_integer_value);
+
+        assert!(matches!(
+            decode(&Type::XID, &[0, 0, 2, 234]),
+            Ok(Value::Int(746))
+        ));
+        assert!(matches!(
+            decode(&Type::OID, &[0, 0, 64, 0]),
+            Ok(Value::Int(16384))
+        ));
+        assert!(matches!(
+            decode(&Type::CID, &[255, 255, 255, 255]),
+            Ok(Value::Int(4_294_967_295))
+        ));
+        assert!(matches!(
+            decode(&Type::XID, &[0, 0, 0, 1, 0, 0, 2, 234]),
+            Ok(Value::Int(4_294_968_042))
+        ));
+        assert!(matches!(
+            decode(&Type::XID, &[255; 8]),
+            Ok(Value::Text(text)) if text == "18446744073709551615"
+        ));
+        assert!(decode(&Type::XID, &[1, 2, 3]).is_err());
+
+        for ty in [Type::OID, Type::XID, Type::CID] {
+            assert!(PgSystemInteger::accepts(&ty), "{ty}");
+        }
+        assert!(!PgSystemInteger::accepts(&Type::INT4));
+    }
+
+    #[test]
+    fn tid_decodes_to_its_text_form() {
+        let PgTid(text) =
+            PgTid::from_sql(&Type::TID, &[0, 0, 0, 3, 0, 17]).expect("valid tid payload");
+
+        assert_eq!(text, "(3,17)");
+        assert!(PgTid::from_sql(&Type::TID, &[0, 0, 0, 3]).is_err());
+        assert!(PgTid::accepts(&Type::TID));
     }
 
     #[test]

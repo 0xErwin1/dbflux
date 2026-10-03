@@ -2491,6 +2491,7 @@ fn resolve_special_db_children(
                     presentation: collection.presentation,
                     child_items: collection.child_items.clone(),
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 })
                 .collect::<Vec<_>>();
 
@@ -3876,6 +3877,7 @@ mod tests {
                 presentation: CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             },
             &Default::default(),
             &Default::default(),
@@ -3922,6 +3924,7 @@ mod tests {
                     presentation: CollectionPresentation::EventStream,
                 }]),
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             },
             &Default::default(),
             &Default::default(),
@@ -3964,6 +3967,7 @@ mod tests {
                 presentation: CollectionPresentation::EventStream,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             },
             &Default::default(),
             &child_cache,
@@ -4607,6 +4611,7 @@ mod tests {
             presentation: CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 

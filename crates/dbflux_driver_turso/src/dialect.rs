@@ -518,6 +518,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let sql = generate_create_table(&table);
         assert_eq!(

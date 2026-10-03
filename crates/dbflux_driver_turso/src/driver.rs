@@ -75,6 +75,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: true,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -356,6 +357,19 @@ mod tests {
         assert!(!extracted.contains_key("password"));
 
         assert!(driver.build_config(&FormValues::new()).is_err());
+    }
+
+    /// libSQL server keeps SQLite's double-quoted string literal fallback:
+    /// `SELECT "nope" FROM t` returns the text `nope` on v0.24.33.
+    #[test]
+    fn turso_declares_that_it_misreads_unknown_quoted_identifiers() {
+        let syntax = TursoDriver::new()
+            .metadata()
+            .syntax
+            .clone()
+            .expect("Turso declares its syntax");
+
+        assert!(syntax.misreads_unknown_quoted_identifiers);
     }
 
     #[test]
