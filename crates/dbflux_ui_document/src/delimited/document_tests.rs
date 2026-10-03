@@ -492,6 +492,38 @@ fn the_unreadable_delimiter_warning_goes_once_the_file_is_read_another_way(
     assert!(!warnings(&document, window).contains(&DelimitedWarning::DetectedDelimiterUnreadable));
 }
 
+/// Switching the header flag keeps the fallback delimiter, so the file is
+/// still read with the comma and the warning stays.
+#[gpui::test]
+fn the_unreadable_delimiter_warning_stays_when_only_the_header_flag_changes(
+    cx: &mut TestAppContext,
+) {
+    let directory = TestDirectory::new("document-refused-header");
+    let (path, _) = directory.file("names.txt", &shift_jis_with_pipes());
+
+    let (document, window) = open_local(cx, path);
+
+    window.update(|_, cx| document.update(cx, |document, cx| document.toggle_header(cx)));
+    window.run_until_parked();
+
+    let (in_effect, detected) = window.update(|_, cx| {
+        let document = document.read(cx);
+
+        (
+            document.dialect().expect("the file is loaded"),
+            document.detected_dialect().expect("the file is loaded"),
+        )
+    });
+
+    assert_eq!(toast_count(window), 0);
+    assert_eq!(in_effect.delimiter, b',');
+    assert_ne!(in_effect.has_header, detected.has_header);
+    assert_eq!(
+        warnings(&document, window),
+        [DelimitedWarning::DetectedDelimiterUnreadable]
+    );
+}
+
 /// Detection never reports ISO-2022-JP, in which the reader refuses every
 /// delimiter. The dialect is stated here to reach the case with no
 /// delimiter to fall back to, which keeps the refusal.
