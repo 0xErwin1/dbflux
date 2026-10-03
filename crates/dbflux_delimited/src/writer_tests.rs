@@ -221,6 +221,27 @@ impl ByteSource for FlakySource {
     }
 }
 
+/// An in-memory source that remembers every range it was asked for.
+struct RecordingSource {
+    bytes: Vec<u8>,
+    requests: RefCell<Vec<Range<u64>>>,
+}
+
+impl ByteSource for RecordingSource {
+    fn byte_length(&self) -> Result<u64, SourceError> {
+        Ok(self.bytes.len() as u64)
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError> {
+        self.requests.borrow_mut().push(range.clone());
+
+        let end = (range.end as usize).min(self.bytes.len());
+        let start = (range.start as usize).min(end);
+
+        Ok(self.bytes[start..end].to_vec())
+    }
+}
+
 /// A sink that accepts `capacity` bytes and then fails.
 struct FullSink {
     capacity: usize,
@@ -284,6 +305,54 @@ fn a_replaced_record_leaves_every_other_byte_and_keeps_its_terminator() {
     let expected = concat(&[&MIXED[..13], b"30,40\r", &MIXED[17..]]);
 
     assert_saves_as(MIXED, dialect(UTF_8), &edits, &expected);
+}
+
+#[test]
+fn an_edited_record_is_not_read_again_for_its_terminator() {
+    let records = ranges(MIXED, dialect(UTF_8));
+
+    let source = RecordingSource {
+        bytes: MIXED.to_vec(),
+        requests: RefCell::new(Vec::new()),
+    };
+
+    let edits = EditSet {
+        replacements: vec![replace(records[2].clone(), &["30", "40"])],
+        insertions: vec![insert(
+            InsertPosition::Before(records[3].clone()),
+            &["n", "m"],
+        )],
+        ..EditSet::new(MIXED.len() as u64)
+    };
+
+    let mut output = Vec::new();
+
+    write_edited(
+        &source,
+        &dialect(UTF_8),
+        &edits,
+        NonZeroU64::new(64).unwrap(),
+        &mut output,
+    )
+    .unwrap();
+
+    let expected = concat(&[&MIXED[..13], b"30,40\r", b"n,m\r\n", &MIXED[17..]]);
+    assert_eq!(output, expected);
+
+    // The terminator of an edited record comes from the read that checks its
+    // boundaries, so no read starts in the middle of the record to fetch its
+    // last code units again.
+    for record in [&records[2], &records[3]] {
+        let tail_reads: Vec<_> = source
+            .requests
+            .borrow()
+            .iter()
+            .filter(|request| request.start > record.start && request.end <= record.end)
+            .cloned()
+            .collect();
+
+        assert!(tail_reads.is_empty(), "{record:?}: {tail_reads:?}");
+    }
 }
 
 #[test]
