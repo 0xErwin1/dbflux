@@ -615,17 +615,29 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
 /// file order, so the document does not sort and a column header click has
 /// no action for a key to reach. The column prompt and the offer to load the
 /// rest confirm with Enter and close with Escape, and the modal cell editor
-/// saves with its save key and closes with Escape.
+/// saves with its save key and closes with Escape. `t` switches between the
+/// table and the text view and `Shift+T` between raw and aligned text, in
+/// the tab's context: in the text view, Escape first takes the keyboard out
+/// of the text editor, whose context is `TextInput`.
 pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     name: "delimited file",
     contexts: &[
         ContextId::Results,
         ContextId::DataTable,
+        ContextId::TextInput,
         ContextId::Modal,
         ContextId::CellEditorModal,
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "segmented-delimited-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "segmented-delimited-text-mode-*",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
         (
             "header-col-*",
             KeyboardPath::MouseOnly(
