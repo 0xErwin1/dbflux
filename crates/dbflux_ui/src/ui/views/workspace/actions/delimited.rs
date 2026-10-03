@@ -104,6 +104,50 @@ impl Workspace {
         self.pending_focus = Some(FocusTarget::Document);
         cx.notify();
     }
+
+    /// Reopens a local file the workspace session recorded, with its dialect
+    /// detected again.
+    ///
+    /// A file that cannot be opened any more is skipped with a log line, as a
+    /// file-backed script that cannot be read is, so startup raises no toast
+    /// for a failure the user did not just cause. Unlike
+    /// [`Self::open_delimited_file`], the path is not resolved again, not
+    /// recorded in recent files and does not take the keyboard.
+    pub(in crate::ui::views::workspace) fn restore_delimited_tab(
+        &mut self,
+        tab: &dbflux_storage::repositories::state::sessions::RestoredTab,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = tab.file_path.clone() else {
+            log::warn!(
+                "Delimited tab '{}' has no file_path in restored session — skipping",
+                tab.title
+            );
+            return;
+        };
+
+        if let Err(error) = std::fs::File::open(&path) {
+            log::warn!(
+                "Delimited tab '{}' cannot open {}: {error} — skipping",
+                tab.title,
+                path.display()
+            );
+            return;
+        }
+
+        let key = DocumentKey::Delimited(DelimitedFileKey::Local { path: path.clone() });
+
+        if self.tab_manager.read(cx).find_by_key(&key, cx).is_some() {
+            return;
+        }
+
+        let doc = cx.new(|cx| DelimitedDocument::open_local(path, cx));
+        let pane = DelimitedDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+    }
 }
 
 #[cfg(test)]
@@ -896,5 +940,233 @@ mod tests {
         );
 
         assert_eq!(tab_kinds(window, &workspace), [DocumentKind::ObjectEditor]);
+    }
+
+    // -- Session ---------------------------------------------------------------
+
+    /// The tabs the workspace session holds in its storage, in their order.
+    fn session_tabs(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Vec<dbflux_storage::repositories::state::sessions::RestoredTab> {
+        window.update(|_, cx| {
+            let runtime = workspace.read(cx).app_state.read(cx).storage_runtime();
+
+            runtime
+                .sessions()
+                .restore_session(runtime.artifacts())
+                .expect("the session must be readable")
+                .map(|session| session.tabs)
+                .unwrap_or_default()
+        })
+    }
+
+    /// A session tab of `tab_kind` on `file_path`, as `write_session_manifest`
+    /// records it.
+    fn session_tab(
+        tab_kind: &str,
+        title: &str,
+        file_path: Option<PathBuf>,
+        position: usize,
+    ) -> dbflux_storage::repositories::state::sessions::WorkspaceTab {
+        dbflux_storage::repositories::state::sessions::WorkspaceTab {
+            id: uuid::Uuid::new_v4().to_string(),
+            tab_kind: tab_kind.to_string(),
+            language: "sql".to_string(),
+            exec_ctx: dbflux_core::ExecutionContext::default(),
+            scratch_path: None,
+            shadow_path: None,
+            file_path,
+            title: title.to_string(),
+            position,
+            is_pinned: false,
+        }
+    }
+
+    /// Stores a session holding `tabs`, then restores it into the workspace
+    /// the way startup does.
+    fn restore(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        tabs: Vec<dbflux_storage::repositories::state::sessions::WorkspaceTab>,
+        active_index: Option<usize>,
+    ) {
+        window.update(|_, cx| {
+            let runtime = workspace.read(cx).app_state.read(cx).storage_runtime();
+
+            runtime
+                .sessions()
+                .save_workspace_session(
+                    &dbflux_storage::repositories::state::sessions::WorkspaceSessionManifest {
+                        version: 1,
+                        active_index,
+                        tabs,
+                    },
+                )
+                .expect("the session must be storable");
+        });
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.restore_session(window, cx));
+        });
+        window.run_until_parked();
+    }
+
+    fn active_title(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Option<String> {
+        window.update(|_, cx| {
+            let tab_manager = workspace.read(cx).tab_manager.read(cx);
+            let active_id = tab_manager.active_id();
+
+            tab_manager
+                .documents()
+                .iter()
+                .find(|tab| Some(tab.id()) == active_id)
+                .map(|tab| tab.tab_title(cx))
+        })
+    }
+
+    #[gpui::test]
+    fn an_open_local_file_is_recorded_in_the_session_by_its_path(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+
+        open(window, &workspace, file.key());
+
+        let tabs = session_tabs(window, &workspace);
+        let resolved = std::fs::canonicalize(&file.path).expect("the test file must resolve");
+
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].tab_kind, "Delimited");
+        assert_eq!(tabs[0].file_path.as_deref(), Some(resolved.as_path()));
+        assert_eq!(tabs[0].title, "cities.csv");
+    }
+
+    #[gpui::test]
+    fn an_object_is_not_recorded_in_the_session(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", b"name,city\nAna,Lima\n")]);
+        let profile_id = connect_object_store(window, &workspace, store);
+
+        open_in_editor(
+            window,
+            &workspace,
+            profile_id,
+            "2026/cities.csv",
+            ignore_saves(),
+        );
+
+        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Delimited]);
+        assert!(
+            session_tabs(window, &workspace).is_empty(),
+            "an object needs a live connection, so like the object editor it is not restored"
+        );
+    }
+
+    #[gpui::test]
+    fn restoring_a_session_reopens_a_local_file_with_its_detected_dialect(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+
+        restore(
+            window,
+            &workspace,
+            vec![session_tab(
+                "Delimited",
+                "cities.csv",
+                Some(file.path.clone()),
+                0,
+            )],
+            Some(0),
+        );
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
+        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Delimited]);
+        assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn restoring_keeps_the_order_and_the_active_tab_among_other_documents(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let first = TestFile::new("first.sql");
+        let table = TestFile::new("cities.csv");
+        let last = TestFile::new("last.sql");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("FileBacked", "first.sql", Some(first.path.clone()), 0),
+                session_tab("Delimited", "cities.csv", Some(table.path.clone()), 1),
+                session_tab("FileBacked", "last.sql", Some(last.path.clone()), 2),
+            ],
+            Some(1),
+        );
+
+        assert_eq!(
+            tab_titles(window, &workspace),
+            ["first.sql", "cities.csv", "last.sql"]
+        );
+        assert_eq!(
+            active_title(window, &workspace).as_deref(),
+            Some("cities.csv")
+        );
+
+        let kinds: Vec<String> = session_tabs(window, &workspace)
+            .into_iter()
+            .map(|tab| tab.tab_kind)
+            .collect();
+        assert_eq!(kinds, ["FileBacked", "Delimited", "FileBacked"]);
+    }
+
+    /// A file that is gone at startup is skipped, as a file-backed script is,
+    /// without a toast for a failure the user did not just cause.
+    #[gpui::test]
+    fn a_file_missing_at_restore_is_skipped_without_a_report(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let missing = file.directory.join("absent.csv");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Delimited", "absent.csv", Some(missing), 0),
+                session_tab("Delimited", "no-path.csv", None, 1),
+            ],
+            Some(0),
+        );
+
+        assert!(tab_titles(window, &workspace).is_empty());
+        assert_eq!(toast_count(window), 0);
+    }
+
+    /// A session stored before delimited tabs took part holds only script
+    /// tabs, and restores as it did.
+    #[gpui::test]
+    fn a_session_without_delimited_tabs_restores_as_before(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let script = TestFile::new("report.sql");
+
+        restore(
+            window,
+            &workspace,
+            vec![session_tab(
+                "FileBacked",
+                "report.sql",
+                Some(script.path.clone()),
+                0,
+            )],
+            Some(0),
+        );
+
+        assert_eq!(tab_titles(window, &workspace), ["report.sql"]);
+        assert_eq!(
+            active_title(window, &workspace).as_deref(),
+            Some("report.sql")
+        );
     }
 }

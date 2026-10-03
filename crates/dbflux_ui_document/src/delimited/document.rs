@@ -514,6 +514,9 @@ pub struct DelimitedDocument {
 impl EventEmitter<DocumentEvent> for DelimitedDocument {}
 
 impl DelimitedDocument {
+    /// The `tab_kind` a local file is recorded under in the workspace session.
+    pub const SESSION_TAB_KIND: &'static str = "Delimited";
+
     /// Opens the local file at `path`.
     pub fn open_local(path: PathBuf, cx: &mut Context<Self>) -> Self {
         Self::open_local_with(path, READER_OPTIONS, cx)
