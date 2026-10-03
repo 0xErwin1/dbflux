@@ -435,7 +435,7 @@ pub fn write_edited<S: ByteSource, W: Write>(
         });
     }
 
-    let plan = Plan::build(edits, &renderer, &bounds, header_start)?;
+    let mut plan = Plan::build(edits, &renderer, &bounds, header_start)?;
 
     let final_record_deleted =
         plan.final_record_is(&bounds, |action| matches!(action, Action::Delete));
@@ -449,7 +449,7 @@ pub fn write_edited<S: ByteSource, W: Write>(
         written: 0,
     };
 
-    output.check_before_writing(&plan, &bounds, byte_order_mark(dialect.encoding))?;
+    output.check_before_writing(&mut plan, &bounds, byte_order_mark(dialect.encoding))?;
 
     let fallback_terminator = if edits.insertions.is_empty() {
         Vec::new()
@@ -529,6 +529,10 @@ struct RecordPlan {
     /// The rendered fields to add after its last field, each led by a
     /// delimiter, when they differ from the ones every other record gets.
     appended: Option<Vec<u8>>,
+
+    /// The terminator its bytes in the source end with, taken from the read
+    /// that checks its boundaries before anything is written.
+    terminator: Vec<u8>,
 }
 
 /// The rendered fields that appended columns add to a record, each led by a
@@ -679,6 +683,7 @@ fn planned_record<'a>(
         inserted_before: Vec::new(),
         action: Action::Keep,
         appended: None,
+        terminator: Vec::new(),
     });
 
     if record.end != range.end {
@@ -1098,23 +1103,18 @@ impl<S: ByteSource, W: Write> Output<'_, S, W> {
         for (start, record) in records {
             self.copy(position..start)?;
 
-            let needs_terminator =
-                !record.inserted_before.is_empty() || matches!(record.action, Action::Replace(_));
-
-            let terminator = if needs_terminator {
-                self.terminator_of(start..record.end)?
-            } else {
-                Vec::new()
-            };
-
-            self.write_inserted(&record.inserted_before, &terminator, fallback_terminator)?;
+            self.write_inserted(
+                &record.inserted_before,
+                &record.terminator,
+                fallback_terminator,
+            )?;
 
             position = match record.action {
                 Action::Keep => start,
 
                 Action::Replace(rendered) => {
                     self.write(&rendered)?;
-                    self.write(&terminator)?;
+                    self.write(&record.terminator)?;
 
                     record.end
                 }
@@ -1213,10 +1213,11 @@ impl<S: ByteSource, W: Write> Output<'_, S, W> {
 
 impl<S: ByteSource, W> Output<'_, S, W> {
     /// Runs every check that needs the source and can be made before the
-    /// first byte is written.
+    /// first byte is written, and keeps the terminator of each edited record
+    /// from the read that checks it.
     fn check_before_writing(
         &self,
-        plan: &Plan,
+        plan: &mut Plan,
         bounds: &Range<u64>,
         mark: &[u8],
     ) -> Result<(), WriteError> {
@@ -1235,8 +1236,8 @@ impl<S: ByteSource, W> Output<'_, S, W> {
             });
         }
 
-        for (start, record) in &plan.records {
-            self.check_record_boundaries(&(*start..record.end), bounds)?;
+        for (start, record) in &mut plan.records {
+            record.terminator = self.check_record_boundaries(&(*start..record.end), bounds)?;
         }
 
         self.check_first_record(plan, bounds, mark)
@@ -1244,7 +1245,8 @@ impl<S: ByteSource, W> Output<'_, S, W> {
 
     /// Checks that `range`, which is inside `bounds`, starts where a record
     /// starts and holds exactly one record, with one read of the range and
-    /// one code unit on each side of it.
+    /// one code unit on each side of it, and returns the terminator the
+    /// record ends with, empty when it has none.
     ///
     /// The start is accepted after a line break that does not split a
     /// carriage return from its line feed, and at the start of the data. The
@@ -1254,7 +1256,7 @@ impl<S: ByteSource, W> Output<'_, S, W> {
         &self,
         range: &Range<u64>,
         bounds: &Range<u64>,
-    ) -> Result<(), WriteError> {
+    ) -> Result<Vec<u8>, WriteError> {
         let not_a_record = || WriteError::NotARecord {
             range: range.clone(),
         };
@@ -1288,13 +1290,14 @@ impl<S: ByteSource, W> Output<'_, S, W> {
             }
         }
 
-        let length = record_length(record, &self.layout, read_end >= bounds.end);
+        let length = record_length(record, &self.layout, read_end >= bounds.end)
+            .filter(|length| to_u64(*length) == range.end - range.start)
+            .ok_or_else(not_a_record)?;
 
-        if length.map(to_u64) != Some(range.end - range.start) {
-            return Err(not_a_record());
-        }
+        let record = record.get(..length).ok_or_else(not_a_record)?;
+        let content_length = record.len() - terminator_length(record, &self.layout);
 
-        Ok(())
+        Ok(record.get(content_length..).unwrap_or_default().to_vec())
     }
 
     /// Refuses a save after which a source without a byte-order mark would
