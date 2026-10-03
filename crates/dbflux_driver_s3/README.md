@@ -24,6 +24,7 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 - Every CRUD/mutation operation (upload, delete, recursive delete, folder/bucket create, bucket delete, save-back edit, rename, presign) is audited under the object-storage `EventCategory`, with credentials and presigned URLs never logged or persisted.
 - Permission and not-found errors (`AccessDenied`, `NoSuchBucket`, `NoSuchKey`) are formatted with the affected bucket/key named in the message, not just AWS's generic error text.
 - Client identity: every request carries `dbflux-<version>` as the AWS SDK app name, visible in CloudTrail's `userAgent` field.
+- Bounded byte-range reads (`get_object_range`): a half-open range is fetched with a ranged `GetObject` request instead of the whole object, and a range that starts at or past the end of the object (`InvalidRange`, HTTP 416) returns an empty result.
 
 ## Limitations
 

@@ -144,6 +144,54 @@ fn minio_list_objects_paginates_one_level_with_prefixes() -> Result<(), DbError>
 
 #[test]
 #[ignore = "requires Docker daemon"]
+#[allow(clippy::reversed_empty_ranges)]
+fn minio_get_object_range_matches_the_same_slice_of_a_full_read() -> Result<(), DbError> {
+    containers::with_minio_endpoint(|minio| {
+        let store = connect_minio(&minio)?;
+
+        let bucket = "dbflux-range-read-test";
+        create_bucket(store.as_ref(), bucket)?;
+
+        let content: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
+        store.put_object(bucket, "data/window.bin", content.clone(), None)?;
+        store.put_object(bucket, "data/empty.bin", Vec::new(), None)?;
+
+        let full = store.get_object(bucket, "data/window.bin")?;
+        assert_eq!(full, content);
+
+        let window = store.get_object_range(bucket, "data/window.bin", 1000..1500)?;
+        assert_eq!(window, full[1000..1500]);
+
+        let first_byte = store.get_object_range(bucket, "data/window.bin", 0..1)?;
+        assert_eq!(first_byte, full[0..1]);
+
+        let tail = store.get_object_range(bucket, "data/window.bin", 4000..10_000)?;
+        assert_eq!(tail, full[4000..]);
+
+        let at_end = store.get_object_range(bucket, "data/window.bin", 4096..5000)?;
+        assert!(at_end.is_empty());
+
+        let past_end = store.get_object_range(bucket, "data/window.bin", 9000..9500)?;
+        assert!(past_end.is_empty());
+
+        let empty_range = store.get_object_range(bucket, "data/window.bin", 10..10)?;
+        assert!(empty_range.is_empty());
+
+        let inverted_range = store.get_object_range(bucket, "data/window.bin", 20..10)?;
+        assert!(inverted_range.is_empty());
+
+        let empty_object = store.get_object_range(bucket, "data/empty.bin", 0..100)?;
+        assert!(empty_object.is_empty());
+
+        let missing = store.get_object_range(bucket, "data/missing.bin", 0..100);
+        assert!(missing.is_err(), "a missing key must stay an error");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn minio_put_get_upload_copy_and_delete_object_round_trip() -> Result<(), DbError> {
     containers::with_minio_endpoint(|minio| {
         let store = connect_minio(&minio)?;
