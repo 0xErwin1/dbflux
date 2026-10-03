@@ -208,7 +208,9 @@ impl DelimitedDocument {
     /// Appends a column named `name` after the last one and shows it in the
     /// table with every pending edit kept. Refused and reported unless every
     /// record is loaded, and while a save or a reread runs. Does nothing while
-    /// a dialog is open.
+    /// a dialog is open. An edit of the text view's text is applied first,
+    /// because the text is mapped back through the columns it was rendered
+    /// with, and nothing changes when it cannot be applied.
     pub fn append_column(&mut self, name: String, cx: &mut Context<Self>) {
         let title = self.title();
 
@@ -218,7 +220,7 @@ impl DelimitedDocument {
             return;
         }
 
-        if self.has_open_dialog() {
+        if self.has_open_dialog() || !self.apply_text(cx) {
             return;
         }
 
@@ -239,7 +241,9 @@ impl DelimitedDocument {
     /// appended this session, and shows the name in the table with every
     /// pending edit kept. Refused and reported for a file without a header
     /// record, and while a save or a reread runs. Does nothing while a dialog
-    /// is open.
+    /// is open. An edit of the text view's text is applied first, because
+    /// the text is mapped back through the columns it was rendered with, and
+    /// nothing changes when it cannot be applied.
     pub fn rename_column(&mut self, column: usize, name: String, cx: &mut Context<Self>) {
         let title = self.title();
 
@@ -249,7 +253,7 @@ impl DelimitedDocument {
             return;
         }
 
-        if self.has_open_dialog() {
+        if self.has_open_dialog() || !self.apply_text(cx) {
             return;
         }
 
@@ -402,10 +406,12 @@ impl DelimitedDocument {
     /// it starts. Cancelling stops the read before its next page and keeps
     /// the pages read until then. A failed page stops the read, is reported,
     /// and keeps the pages before it. Does nothing when a page cannot be
-    /// asked for now ([`Self::can_load_more`]). An object is read through the
-    /// live connection of its profile, as a further page is.
+    /// asked for now ([`Self::can_load_more`]), or when an edit of the text
+    /// view's text, which is applied first, cannot be applied. An object is
+    /// read through the live connection of its profile, as a further page
+    /// is.
     pub fn load_rest(&mut self, cx: &mut Context<Self>) {
-        if !self.can_load_more() {
+        if !self.can_load_more() || !self.apply_text(cx) {
             return;
         }
 

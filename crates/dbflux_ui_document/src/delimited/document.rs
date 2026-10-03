@@ -51,7 +51,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use super::columns::{ColumnPrompt, ColumnPromptRequest, LoadRestPrompt, LoadingRest};
-use super::editing::{CellEditRequest, CellEditTarget, pad_pending_inserts};
+use super::editing::{CellEditRequest, CellEditTarget, install_page_model, pad_pending_inserts};
 use super::page_model::{PageModel, PageModelError};
 use super::source::{DelimitedLocation, DelimitedSource, SourceVersion, StorageError, open_source};
 use super::text::{MAX_TEXT_BYTES, SourceSpan};
@@ -311,23 +311,10 @@ impl LoadedFile {
     /// its index and every column its position, and a pending insert gets an
     /// empty field for each new column.
     pub(super) fn show_page_model(&mut self, cx: &mut App) {
-        let model = Arc::new(self.page_model.table_model());
-        let row_count = model.row_count();
-        let column_count = model.col_count();
+        let page_model = &self.page_model;
 
         self.table_state.update(cx, |state, cx| {
-            if state.is_editing() {
-                state.stop_editing(true, cx);
-            }
-
-            let pending = state.edit_buffer().clone();
-
-            state.set_model(model, ModelSwap::KeepCursor, cx);
-
-            *state.edit_buffer_mut() = pending;
-            state.edit_buffer_mut().set_base_row_count(row_count);
-            pad_pending_inserts(state.edit_buffer_mut(), column_count);
-            cx.notify();
+            install_page_model(state, page_model, cx);
         });
 
         self.status_items = status_items(&self.dialect, &self.page_model);
@@ -1160,14 +1147,16 @@ impl DelimitedDocument {
 
     /// Reads the next page on the background executor and appends it to the
     /// table. Does nothing while a page is being read, while the file is
-    /// read again under an override, and once every record is loaded.
+    /// read again under an override, and once every record is loaded. An
+    /// edit of the text view's text is applied first, and nothing is read
+    /// when it cannot be.
     ///
     /// An object is read through the live connection of its profile, resolved
     /// here for every page: the one the file was opened with is dead after a
     /// disconnect or a reconnect. A profile that is not connected is reported
     /// and nothing is read.
     pub fn load_more(&mut self, cx: &mut Context<Self>) {
-        if !self.can_load_more() {
+        if !self.can_load_more() || !self.apply_text(cx) {
             return;
         }
 
@@ -1390,23 +1379,25 @@ impl DelimitedDocument {
     /// without reading anything.
     ///
     /// Any other override is refused and reported while the document has
-    /// unsaved changes or a save runs, because the reread would drop them. A
-    /// value still in the inline editor is committed first and counts. The table is
-    /// read-only while a reread runs, for the same reason.
+    /// unsaved changes or a save runs, because the reread would drop them. The table is
+    /// read-only while a reread runs, for the same reason. An edit of the
+    /// text view's text is applied first, so it counts as such a change, and
+    /// a text that cannot be applied refuses the override. A value still in
+    /// the inline editor is committed first and counts too.
     ///
     /// An object is read through the live connection of its profile, as a
     /// further page is.
     pub fn set_dialect_overrides(&mut self, overrides: DialectOverrides, cx: &mut Context<Self>) {
         let title = self.title();
 
-        self.commit_active_inline_edit(cx);
-        let holds_changes = self.is_dirty() || self.saving;
-
         // The dialog's outcome belongs to the rows the reread would replace.
-        if self.has_open_dialog() {
+        if self.has_open_dialog() || !self.apply_text(cx) {
             self.show_requested_dialect(cx);
             return;
         }
+
+        self.commit_active_inline_edit(cx);
+        let holds_changes = self.is_dirty() || self.saving;
 
         let Some(loaded) = self.loaded_mut() else {
             return;
@@ -1469,13 +1460,15 @@ impl DelimitedDocument {
     ///
     /// Refused and reported while the document has unsaved changes or a
     /// save runs, because the reread drops every pending edit: the user
-    /// saves or discards them first. A value still in the inline editor is
-    /// committed first and counts. Replaces a reread that is running. An
+    /// saves or discards them first. An edit of the text view's text is
+    /// applied first, so it counts as such a change, and a text that cannot
+    /// be applied refuses the reload. A value still in the inline editor is
+    /// committed first and counts too. Replaces a reread that is running. An
     /// object is read through the live connection of its profile.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let title = self.title();
 
-        if self.loaded().is_none() || self.has_open_dialog() {
+        if self.loaded().is_none() || self.has_open_dialog() || !self.apply_text(cx) {
             return;
         }
 
