@@ -261,7 +261,20 @@ export function docImages(options: {
             'content-type',
             CONTENT_TYPES[extname(source).toLowerCase()] ?? 'application/octet-stream',
           );
-          createReadStream(source).pipe(response);
+          // The map is built once at startup, so the file may be gone by now
+          // (a re-run of fetch-docs clears `.versions/`). Without a listener the
+          // stream's error would crash the dev server.
+          const stream = createReadStream(source);
+          stream.on('error', () => {
+            if (response.headersSent) {
+              response.destroy();
+              return;
+            }
+
+            response.removeHeader('content-type');
+            next();
+          });
+          stream.pipe(response);
         });
       },
       'astro:build:done': async ({ dir }) => {
