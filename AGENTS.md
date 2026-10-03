@@ -705,6 +705,17 @@ Rules that matter when touching documentation:
   name a file are rewritten to site routes at build time, so `[Settings](SETTINGS.md)` works in
   both places.
 - Diagrams go in ```mermaid fences. They render as diagrams on the site; ASCII art does not.
+- Screenshots live in `docs/images/<page>/` as WebP, one light and one dark file, and every locale
+  shares them: `images/...` from `docs/`, `../images/...` from a translation. Embed them with
+  `<picture>` so GitHub and the site both pick the theme's image:
+
+  ```html
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/usage/main-window-dark.webp">
+    <img src="images/usage/main-window-light.webp" alt="The main window with a PostgreSQL table open">
+  </picture>
+  ```
+
 - Adding a document to `docs/` gives it a page automatically. Its place in the reading order is
   declared in `web/src/data/nav.ts`; unlisted documents still get a page and appear under "Not yet
   filed" on the documentation index.
