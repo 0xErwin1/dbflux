@@ -1074,25 +1074,37 @@ mod tests {
         }))
         .expect("comparisons convert");
 
-        assert_eq!(
-            node,
-            FilterNode::Group {
-                op: BoolOp::And,
-                children: vec![
-                    predicate(
-                        "orders",
-                        "total",
-                        Comparator::Gte,
-                        PredicateValue::Single(LiteralValue::Float(10.5)),
-                    ),
-                    predicate(
-                        "users",
-                        "status",
-                        Comparator::Eq,
-                        PredicateValue::Single(LiteralValue::Text("active".into())),
-                    ),
-                ],
+        let FilterNode::Group { op, mut children } = node else {
+            panic!("two keys should convert to a group, got {node:?}");
+        };
+
+        // The children follow the JSON object's key order, which is sorted or
+        // insertion order depending on whether another crate in the build
+        // enables serde_json's `preserve_order`. The AND does not depend on it.
+        children.sort_by_key(|child| match child {
+            FilterNode::Predicate(predicate) => {
+                (predicate.source_alias.clone(), predicate.column.clone())
             }
+            other => panic!("expected only predicates, got {other:?}"),
+        });
+
+        assert_eq!(op, BoolOp::And);
+        assert_eq!(
+            children,
+            vec![
+                predicate(
+                    "orders",
+                    "total",
+                    Comparator::Gte,
+                    PredicateValue::Single(LiteralValue::Float(10.5)),
+                ),
+                predicate(
+                    "users",
+                    "status",
+                    Comparator::Eq,
+                    PredicateValue::Single(LiteralValue::Text("active".into())),
+                ),
+            ]
         );
     }
 
