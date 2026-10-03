@@ -224,6 +224,123 @@ return, even while the show-password toggle displays it in plain text.
 Screenshots and recordings are pixels. A secret drawn in plain text on screen is
 visible in them.
 
+## Regenerating documentation screenshots
+
+`scripts/docs_screenshots.py` produces the screenshots used by the
+documentation. It starts demo databases in Docker, runs DBFlux on a headless X
+server, drives it through `gpui-mcp` and writes one light and one dark WebP per
+shot to `docs/images/<page>/<name>-light.webp` and `<name>-dark.webp`. No window
+opens on your desktop.
+
+```mermaid
+flowchart LR
+    Seed["seed files"] --> Docker["demo databases (Docker)"]
+    Script["docs_screenshots.py"] --> Docker
+    Script -- "MCP over stdio" --> Server["gpui-mcp"]
+    Server --> App["DBFlux on Xvfb"]
+    App --> Docker
+    Script --> Images["WebP images"]
+```
+
+The images show the English interface. Every locale of the documentation uses
+the same files.
+
+### Prerequisites
+
+- Docker, with its daemon running. The script starts PostgreSQL, MongoDB and
+  Redis containers named `dbflux-docs-*`, bound to `127.0.0.1` on ports 55432,
+  57017 and 56379, and removes them when it finishes or fails.
+- The Nix dev shell, which provides Xvfb, xdotool, `cwebp` and Mesa's software
+  Vulkan driver. The script reads the driver's ICD file from
+  `DBFLUX_DOCS_VULKAN_ICD`, which the dev shell sets. Outside it, install those
+  tools and pass `--vulkan-icd <mesa>/share/vulkan/icd.d/lvp_icd.x86_64.json`.
+- The two binaries:
+
+  ```sh
+  cargo build --release -p dbflux --features ui-automation
+  cargo build -p gpui-mcp-server
+  ```
+
+- No other DBFlux release build running on the machine. A second instance of the
+  same build profile hands over to the running one through the app-control
+  socket and exits, and the script reports that.
+
+### Running
+
+```sh
+nix develop -c python3 scripts/docs_screenshots.py
+```
+
+| Option | Effect |
+|---|---|
+| `--out <DIR>` | Where the images go. Defaults to `docs/images`. |
+| `--only <PAGE/NAME>` | Take only this shot, such as `usage/main-window`. Repeat it for several. |
+| `--theme light\|dark\|both` | Which themes to capture. Defaults to both. |
+| `--keep-running` | Leave the containers, Xvfb and the DBFlux process of the last or the failed shot running, to inspect them. |
+| `--dbflux <PATH>`, `--gpui-mcp <PATH>` | The binaries. Default to `target/release/dbflux` and `target/debug/gpui-mcp`. |
+| `--launcher "<COMMAND>"` | A command that prefixes both binaries. Use it to start them through a specific dynamic loader when they were built against a different glibc than the shell provides, for example `--launcher "$GLIBC/lib/ld-linux-x86-64.so.2 --library-path $GLIBC/lib:$LD_LIBRARY_PATH"`. |
+| `--vulkan-icd <PATH>` | The ICD file of a software Vulkan driver, when `DBFLUX_DOCS_VULKAN_ICD` is not set. |
+| `--work-dir <DIR>` | Scratch directory for the DBFlux profile, the SQLite demo file and the logs. Defaults to `/tmp/dbflux-docs` and is wiped at the start of every run. |
+
+A run takes a few minutes. Under software rendering DBFlux draws about one frame
+per second, so every step waits for the state it expects instead of for a fixed
+time, and repeats an input that did not take effect.
+
+The run first launches DBFlux once to dismiss the first-run dialog, turn off the
+update check, create one connection per demo database through the Connection
+Manager and select the theme in Settings. It saves that profile, and starts
+every shot in a fresh DBFlux process from a copy of it, so a shot looks the same
+whether it runs alone or with the others. The main window is resized to 1600 by
+900 logical pixels at a UI scale of 2, and each image is scaled down to one
+pixel per logical pixel.
+
+Two runs give the same images except for values DBFlux measures, such as the
+connection latency and query durations in the sidebar, the result footer and the
+status bar.
+
+When a step fails, the script saves the window at that moment next to the logs
+in `<work-dir>/logs/` and prints its path.
+
+### Adding a shot
+
+Shots are declared in `scripts/docs_screenshots/shots.py`. A shot is one `Shot`
+entry: the documentation page, a name, and the steps that bring a freshly
+started DBFlux, with the demo connections saved and nothing connected, into the
+state to capture.
+
+```python
+Shot(
+    page="usage",
+    name="main-window",
+    steps=(
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        *open_sidebar_item("customers", "Ada Hayashi", exact=True),
+    ),
+),
+```
+
+- A step is a call to one of the [tools](#tools) above, such as
+  `key("ctrl-n")` or `call("set_text", id="...", text="...")`, or a step of the
+  runner: `open_window` and `close_window` for the Connection Manager and
+  Settings, `click_label`, `wait_gone`, `wait_selected`, `wait_value` and
+  `pause`. A tool step can name its element by `label` when its id changes from
+  run to run.
+- Wrap every action whose effect matters in `ensure(check, *actions)`, which
+  repeats the actions until the check passes. It checks before acting and again
+  after the window settles, so a click that took effect late is not repeated.
+- `crop=Region(x, y, width, height)` keeps part of the window, in logical
+  pixels. `region=` captures only that part with `screenshot_region` instead.
+- The demo data lives in `scripts/docs_screenshots/seed/`. It is synthetic and
+  derived from fixed values, so seeding it twice gives the same rows.
+
+To find the ids and labels of the elements a new shot needs, add the shot with
+the steps you have so far and run it with `--only <page/name> --keep-running`.
+DBFlux stays open on the screen the steps reached, and the script prints its
+display and descriptor. Connect an MCP client to it with
+`DISPLAY=<display> gpui-mcp --endpoint <descriptor>` and read the element tree.
+Run the shot again until the images are right, and look at both themes before
+committing them.
+
 ## Limitations
 
 - No screenshots of native Wayland windows. Run under XWayland as described
