@@ -694,6 +694,25 @@ fn invalidating_from_an_offset_keeps_the_pages_that_start_before_it() {
 }
 
 #[test]
+fn invalidating_after_the_source_shrank_to_its_header_forgets_every_later_page() {
+    let with_header = Dialect {
+        has_header: true,
+        ..dialect(UTF_8)
+    };
+    let mut reader = open(b"id\n1\n2\n3\n4\n5\n", with_header, 2, 64);
+    reader.read_page(2).unwrap();
+    assert_eq!(reader.record_count(), RecordCount::Total(5));
+
+    // Every record is gone, and the offset still points past page 1's start.
+    reader.source_mut().bytes = b"id\n".to_vec();
+    reader.invalidate_from_offset(9).unwrap();
+
+    assert_eq!(reader.record_count(), RecordCount::Total(0));
+    assert!(reader.read_page(1).unwrap().records.is_empty());
+    assert_eq!(reader.record_count(), RecordCount::Total(0));
+}
+
+#[test]
 fn invalidating_inside_the_header_reads_the_header_again() {
     let with_header = Dialect {
         has_header: true,
