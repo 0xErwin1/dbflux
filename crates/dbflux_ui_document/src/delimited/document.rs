@@ -815,6 +815,44 @@ impl DelimitedDocument {
         let controls = DialectControls::new(&detected, cx);
         controls.show(&dialect, cx);
 
+        let mut subscriptions = vec![sort_subscription];
+        subscriptions.extend(Self::subscribe_to_dialect_controls(&controls, cx));
+        self._subscriptions = subscriptions;
+
+        let table = cx.new(|cx| DataTable::new("delimited-table", table_state.clone(), cx));
+
+        let status_items = status_items(&dialect, &page_model);
+
+        let mut loaded = LoadedFile {
+            detected,
+            dialect,
+            overrides,
+            requested_overrides: overrides,
+            fallback,
+            reread_task: None,
+            reread_generation: 0,
+            reader_epoch: 0,
+            controls,
+            version,
+            reader: Some(reader),
+            page_model,
+            warnings: Vec::new(),
+            warning_items: Vec::new(),
+            table_state,
+            table,
+            status_items,
+        };
+
+        loaded.refresh_warnings();
+        loaded
+    }
+
+    /// Turns a selection in the delimiter, quote or encoding select into an
+    /// override.
+    fn subscribe_to_dialect_controls(
+        controls: &DialectControls,
+        cx: &mut Context<Self>,
+    ) -> Vec<Subscription> {
         let delimiter_subscription = cx.subscribe(
             &controls.delimiter,
             |this, _, event: &DropdownSelectionChanged, cx| {
@@ -846,39 +884,11 @@ impl DelimitedDocument {
             },
         );
 
-        self._subscriptions = vec![
-            sort_subscription,
+        vec![
             delimiter_subscription,
             quote_subscription,
             encoding_subscription,
-        ];
-
-        let table = cx.new(|cx| DataTable::new("delimited-table", table_state.clone(), cx));
-
-        let status_items = status_items(&dialect, &page_model);
-
-        let mut loaded = LoadedFile {
-            detected,
-            dialect,
-            overrides,
-            requested_overrides: overrides,
-            fallback,
-            reread_task: None,
-            reread_generation: 0,
-            reader_epoch: 0,
-            controls,
-            version,
-            reader: Some(reader),
-            page_model,
-            warnings: Vec::new(),
-            warning_items: Vec::new(),
-            table_state,
-            table,
-            status_items,
-        };
-
-        loaded.refresh_warnings();
-        loaded
+        ]
     }
 
     // -- Further pages -------------------------------------------------------
