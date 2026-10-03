@@ -1846,6 +1846,16 @@ document:
       body: "Uma coluna só pode ser adicionada quando todos os registros do arquivo estão carregados, e até agora %{loaded} registros deste arquivo de %{size} foram carregados. Carregar o restante lê na memória todos os registros que faltam, o que demora em um arquivo grande. Você pode cancelar pelo rodapé, e os registros lidos até então continuam carregados."
       confirm: "Carregar o restante"
       cancel: "Cancelar o carregamento"
+    view:
+      table: "Tabela"
+      text: "Texto"
+      raw: "Bruto"
+      aligned: "Alinhado"
+    text:
+      more_in_file: "O arquivo tem mais registros. Carregue mais para mostrá-los aqui."
+      capped: "O texto mostra os primeiros %{shown} dos %{loaded} registros carregados. A tabela mostra todos."
+      render_failed: "As alterações pendentes não podem ser mostradas como texto: %{cause}"
+      aligned_hint: "O texto alinhado é para leitura: uma quebra de linha dentro de um valor aparece como ↵, uma tabulação como ⇥, e um valor com mais de %{width} caracteres é cortado."
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"

@@ -1846,6 +1846,16 @@ document:
       body: "只有在文件的所有记录都加载后才能添加列，目前已加载这个 %{size} 文件中的 %{loaded} 条记录。加载其余部分会把剩余的所有记录读入内存，大文件需要一些时间。可以在底栏取消，届时已读取的记录仍保持加载。"
       confirm: "加载其余部分"
       cancel: "取消加载"
+    view:
+      table: "表格"
+      text: "文本"
+      raw: "原始"
+      aligned: "对齐"
+    text:
+      more_in_file: "文件中还有更多记录。加载更多即可在此显示。"
+      capped: "文本只显示已加载的 %{loaded} 条记录中的前 %{shown} 条。表格会显示全部记录。"
+      render_failed: "无法以文本显示待保存的更改：%{cause}"
+      aligned_hint: "对齐文本仅供阅读：值中的换行显示为 ↵，制表符显示为 ⇥，超过 %{width} 个字符的值会被截断。"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"

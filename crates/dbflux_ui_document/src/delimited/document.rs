@@ -1,5 +1,6 @@
 //! The delimited file tab: a CSV or TSV file, local or in object storage,
-//! shown as a read-only table of the pages loaded so far.
+//! shown as a table of the pages loaded so far, or as their text
+//! (`text_view.rs`).
 //!
 //! Opening reads the file on the background executor and never on the
 //! foreground: the source is opened, a leading sample decides the dialect, and
@@ -18,6 +19,11 @@
 //! arrives. The latest override wins. A reread that a later override
 //! replaced, and a page read through the reader a reread replaced, are
 //! dropped when they come back.
+//!
+//! Every page read also keeps the bytes of its records, up to
+//! [`MAX_TEXT_BYTES`] for the whole file, from which the text view renders
+//! the raw text. They are the bytes the reader fetched for the page, so
+//! keeping them costs no read.
 //!
 //! The table is editable by row position once the file is loaded, unless
 //! the file cannot be saved in place. Editing and saving live in
@@ -48,6 +54,8 @@ use super::columns::{ColumnPrompt, ColumnPromptRequest, LoadRestPrompt, LoadingR
 use super::editing::{CellEditRequest, CellEditTarget, pad_pending_inserts};
 use super::page_model::{PageModel, PageModelError};
 use super::source::{DelimitedLocation, DelimitedSource, SourceVersion, StorageError, open_source};
+use super::text::{MAX_TEXT_BYTES, SourceSpan};
+use super::text_view::TextViewState;
 use super::toolbar::{DELIMITERS, DialectControls, QUOTES};
 use crate::dedup::DelimitedFileKey;
 use crate::handle::DocumentEvent;
@@ -179,6 +187,9 @@ pub(super) struct OpenedFile {
     pub(super) version: SourceVersion,
     pub(super) reader: PagedReader<DelimitedSource>,
     pub(super) page_model: PageModel,
+
+    /// The bytes of the loaded records kept for the text view.
+    pub(super) source_span: SourceSpan,
 }
 
 /// What a background page read hands to the foreground.
@@ -188,6 +199,10 @@ pub(super) struct ReadPage {
     /// The reader's count after the read, as [`settled_record_count`] left
     /// it.
     pub(super) record_count: RecordCount,
+
+    /// The bytes of the page's leading records that fit in the budget the
+    /// read was given, for the text view. `None` when none was kept.
+    pub(super) bytes: Option<Vec<u8>>,
 }
 
 /// A file whose first page is loaded.
@@ -247,6 +262,10 @@ pub(super) struct LoadedFile {
     pub(super) source_length: u64,
 
     pub(super) page_model: PageModel,
+
+    /// The bytes of the loaded records the text view renders the raw text
+    /// from, kept up to [`MAX_TEXT_BYTES`] and read with the pages.
+    pub(super) source_span: SourceSpan,
 
     /// Whether the document had unsaved changes when this was last worked
     /// out, so a change of it is told to the tab once.
@@ -313,6 +332,13 @@ impl LoadedFile {
 
         self.status_items = status_items(&self.dialect, &self.page_model);
         self.refresh_warnings();
+    }
+
+    /// Appends the page of `read` to the page model, and its kept bytes to
+    /// the source span. Nothing changes when the page does not follow the
+    /// loaded records.
+    pub(super) fn append_read(&mut self, read: ReadPage) -> Result<(), PageModelError> {
+        append_read(&mut self.page_model, &mut self.source_span, read)
     }
 
     /// Works out the warnings of the file as it is read now, and their
@@ -406,9 +432,11 @@ impl LoadedFile {
             version,
             reader,
             page_model,
+            source_span,
         } = opened;
 
         self.dialect = dialect;
+        self.source_span = source_span;
         self.source_length = reader.source_length();
         self.reader = Some(reader);
         self.reader_epoch += 1;
@@ -483,6 +511,9 @@ pub struct DelimitedDocument {
 
     /// The open offer to load the rest of the file before a column is added.
     pub(super) load_rest_prompt: Option<LoadRestPrompt>,
+
+    /// Which view shows the file, and the text view's state.
+    pub(super) text: TextViewState,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -581,6 +612,7 @@ impl DelimitedDocument {
             pending_column_prompt: None,
             column_prompt: None,
             load_rest_prompt: None,
+            text: TextViewState::default(),
             _subscriptions: Vec::new(),
         };
 
@@ -661,23 +693,57 @@ impl DelimitedDocument {
         self.is_active_tab = active;
     }
 
+    /// `TextInput` while the text view's editor holds the keyboard, whose
+    /// keys are then the editor's, and `Results` otherwise.
     pub fn active_context(&self) -> dbflux_app::keymap::ContextId {
-        dbflux_app::keymap::ContextId::Results
+        if self.text_has_keyboard() {
+            dbflux_app::keymap::ContextId::TextInput
+        } else {
+            dbflux_app::keymap::ContextId::Results
+        }
     }
 
     /// Table navigation and editing run inside the embedded `DataTable`
     /// through its own key context, and its save key reaches the document as
     /// a save request of the table. The commands of the document are the
     /// next page, which a loaded file answers by loading one, the reload
-    /// (`RefreshSchema`), and the save commands that reach the tab from
-    /// elsewhere.
+    /// (`RefreshSchema`), the save commands that reach the tab from
+    /// elsewhere, and the view switches: `CycleDocumentView` switches
+    /// between the table and the text, and `CycleResultView` between the raw
+    /// and the aligned text while the text is shown. In the text view Escape
+    /// hands the keyboard from the editor to the tab, as the object editor
+    /// does, so that the `Results` keys reach it, and Enter hands it back.
     pub fn dispatch_command(
         &mut self,
         command: dbflux_app::keymap::Command,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        use super::text_view::DelimitedView;
+
         match command {
+            dbflux_app::keymap::Command::CycleDocumentView if self.can_switch_view() => {
+                self.toggle_view(cx);
+                true
+            }
+
+            dbflux_app::keymap::Command::CycleResultView
+                if self.loaded().is_some() && self.view() == DelimitedView::Text =>
+            {
+                self.cycle_text_mode(cx);
+                true
+            }
+
+            dbflux_app::keymap::Command::Cancel if self.text_has_keyboard() => {
+                self.release_text_keyboard(window, cx);
+                true
+            }
+
+            dbflux_app::keymap::Command::Execute if self.can_take_text_keyboard() => {
+                self.focus(window, cx);
+                true
+            }
+
             dbflux_app::keymap::Command::ResultsNextPage if self.loaded().is_some() => {
                 self.load_more(cx);
                 true
@@ -701,7 +767,13 @@ impl DelimitedDocument {
         }
     }
 
+    /// Gives the keyboard to the view that is shown: the table, or the text
+    /// view's editor.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_text(window, cx) {
+            return;
+        }
+
         match &self.phase {
             DelimitedPhase::Loaded(loaded) => {
                 let handle = loaded.table_state.read(cx).focus_handle().clone();
@@ -939,6 +1011,7 @@ impl DelimitedDocument {
             version,
             reader,
             page_model,
+            source_span,
         } = opened;
 
         // A detected dialect the reader refuses is opened under another
@@ -982,6 +1055,7 @@ impl DelimitedDocument {
             reader: Some(reader),
             source_length,
             page_model,
+            source_span,
             is_dirty: false,
             warnings: Vec::new(),
             warning_items: Vec::new(),
@@ -1001,7 +1075,9 @@ impl DelimitedDocument {
     /// indicator before it reports the change, and the indicator is cleared
     /// again here. Row operations and save requests are the document's to
     /// carry out. A staged cell edit emits no event, only a notification, so
-    /// the dirty state is worked out again on every change of the table.
+    /// the dirty state is worked out again on every change of the table, and
+    /// the text view is marked to be rendered again the next time it is
+    /// drawn.
     fn subscribe_to_table(
         table_state: &Entity<DataTableState>,
         cx: &mut Context<Self>,
@@ -1030,6 +1106,7 @@ impl DelimitedDocument {
             });
 
             this.refresh_dirty(cx);
+            this.mark_text_stale(cx);
         });
 
         vec![table_subscription, dirty_observation]
@@ -1110,13 +1187,14 @@ impl DelimitedDocument {
         };
         let page_index = loaded.page_model.next_page();
         let reader_epoch = loaded.reader_epoch;
+        let keep_budget = loaded.source_span.budget(MAX_TEXT_BYTES);
 
         if let Some(connection) = connection {
             reader.source_mut().use_connection(connection);
         }
 
         let task = cx.background_executor().spawn(async move {
-            let result = read_page(&mut reader, page_index, page_size);
+            let result = read_page(&mut reader, page_index, page_size, keep_budget);
 
             (reader, result)
         });
@@ -1220,12 +1298,7 @@ impl DelimitedDocument {
 
         loaded.reader = Some(reader);
 
-        let appended = result.and_then(|read| {
-            loaded
-                .page_model
-                .append_page(read.page, read.record_count)
-                .map_err(OpenError::from)
-        });
+        let appended = result.and_then(|read| loaded.append_read(read).map_err(OpenError::from));
 
         match appended {
             Ok(_) => loaded.show_page_model(cx),
@@ -1711,10 +1784,15 @@ pub(super) fn reread_pages(
             break;
         }
 
-        let read = read_page(&mut opened.reader, page_index, reader_options.page_size)?;
-        opened
-            .page_model
-            .append_page(read.page, read.record_count)?;
+        let keep_budget = opened.source_span.budget(MAX_TEXT_BYTES);
+        let read = read_page(
+            &mut opened.reader,
+            page_index,
+            reader_options.page_size,
+            keep_budget,
+        )?;
+
+        append_read(&mut opened.page_model, &mut opened.source_span, read)?;
     }
 
     Ok(opened)
@@ -1737,10 +1815,13 @@ pub(super) fn read_first_page(
 ) -> Result<OpenedFile, OpenError> {
     let mut reader = PagedReader::open(source, dialect, reader_options)?;
 
-    let first = read_page(&mut reader, 0, reader_options.page_size)?;
+    let mut source_span = header_source_span(&reader);
+    let keep_budget = source_span.budget(MAX_TEXT_BYTES);
+
+    let first = read_page(&mut reader, 0, reader_options.page_size, keep_budget)?;
 
     let mut page_model = PageModel::new(reader.header().cloned());
-    page_model.append_page(first.page, first.record_count)?;
+    append_read(&mut page_model, &mut source_span, first)?;
 
     Ok(OpenedFile {
         detected: dialect,
@@ -1748,20 +1829,66 @@ pub(super) fn read_first_page(
         version,
         reader,
         page_model,
+        source_span,
     })
 }
 
+/// The kept bytes of a file whose reader `reader` was just opened: the
+/// header's, which the reader fetched to read it, when they fit in
+/// [`MAX_TEXT_BYTES`]. A header that does not fit closes the span, so that
+/// no record is kept without the header before it.
+fn header_source_span(reader: &PagedReader<DelimitedSource>) -> SourceSpan {
+    let start = reader.byte_order_mark_length();
+
+    match reader.header_bytes() {
+        None => SourceSpan::new(start, Vec::new()),
+
+        Some(bytes) if bytes.len() <= MAX_TEXT_BYTES => SourceSpan::new(start, bytes.to_vec()),
+
+        Some(_) => {
+            let mut span = SourceSpan::new(start, Vec::new());
+            span.close();
+            span
+        }
+    }
+}
+
+/// Appends the page of `read` to `page_model`, and its kept bytes to
+/// `source_span`. Nothing changes when the page does not follow the loaded
+/// records.
+pub(super) fn append_read(
+    page_model: &mut PageModel,
+    source_span: &mut SourceSpan,
+    read: ReadPage,
+) -> Result<(), PageModelError> {
+    let before = page_model.records().len();
+
+    page_model.append_page(read.page, read.record_count)?;
+
+    let appended = page_model.records().get(before..).unwrap_or_default();
+    source_span.extend_with_records(appended, read.bytes);
+
+    Ok(())
+}
+
 /// Reads page `page_index` through `reader`, whose pages hold `page_size`
-/// records. Blocks on file or network I/O.
+/// records, and the bytes of its leading records that fit in `keep_budget`
+/// bytes, for the text view. The bytes come from the read itself. Blocks on
+/// file or network I/O.
 pub(super) fn read_page(
     reader: &mut PagedReader<DelimitedSource>,
     page_index: usize,
     page_size: NonZeroUsize,
+    keep_budget: usize,
 ) -> Result<ReadPage, OpenError> {
-    let page = reader.read_page(page_index)?;
+    let (page, bytes) = reader.read_page_with_bytes(page_index, keep_budget)?;
     let record_count = settled_record_count(&page, reader.record_count(), page_size);
 
-    Ok(ReadPage { page, record_count })
+    Ok(ReadPage {
+        page,
+        record_count,
+        bytes: (!bytes.is_empty()).then_some(bytes),
+    })
 }
 
 /// The record count to keep with `page`, after whose read the reader
