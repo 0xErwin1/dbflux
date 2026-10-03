@@ -1,9 +1,13 @@
 //! Rendering of `DelimitedDocument`.
 //!
-//! Layout, top to bottom: the dialect toolbar, the warnings of the opened
-//! file, the table of the loaded records, and a footer with the delimiter,
-//! the encoding, the record count and, while the file has more records, the
-//! control that loads the next page. While the file is read again under an
+//! Layout, top to bottom: the toolbar, the warnings of the opened file, the
+//! table of the loaded records, and a footer with the delimiter, the
+//! encoding, the record count and, while the file has more records, the
+//! control that loads the next page. The toolbar holds the dialect controls,
+//! the control that reads the file again from its source and, for a file
+//! that can be saved in place, the controls that insert a row above the
+//! cursor, discard the changes and save them. The toolbar wraps when the tab
+//! is narrow; the footer is one fixed row. While the file is read again under an
 //! override the footer says so and that control takes no click. While the
 //! first page is read, and when opening failed, a centered notice takes the
 //! place of all four.
@@ -40,9 +44,10 @@ impl DelimitedDocument {
             .into_any_element()
     }
 
-    /// The dialect toolbar: the delimiter, quote and encoding selects, the
-    /// header checkbox and the control that drops every override. `None`
-    /// until the file is loaded. The row wraps when the tab is narrow.
+    /// The toolbar: the delimiter, quote and encoding selects, the header
+    /// checkbox, the control that drops every override, the reload and the
+    /// edit controls. `None` until the file is loaded. The row wraps when the
+    /// tab is narrow.
     fn render_dialect_toolbar(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let controls = self.dialect_controls()?;
         let requested = self.requested_dialect()?;
@@ -84,6 +89,7 @@ impl DelimitedDocument {
 
         Some(
             div()
+                .id("delimited-toolbar")
                 .flex()
                 .flex_wrap()
                 .flex_shrink_0()
@@ -107,6 +113,9 @@ impl DelimitedDocument {
                     &controls.encoding,
                 ))
                 .child(reset)
+                .child(self.render_reload(cx))
+                .child(div().flex_1())
+                .children(self.render_edit_controls(cx))
                 .into_any_element(),
         )
     }
@@ -171,6 +180,90 @@ impl DelimitedDocument {
         )
     }
 
+    /// The control that reads the file again from its source. It takes a
+    /// click while there are changes too, and then says why it refuses.
+    fn render_reload(&self, cx: &Context<Self>) -> Button {
+        Button::new(
+            "delimited-reload",
+            dbflux_i18n::t!("document.delimited.action.reload"),
+        )
+        .inline()
+        .icon(AppIcon::RefreshCcw)
+        .when_some(
+            dbflux_ui_base::keymap::shortcut_label(
+                dbflux_app::keymap::ContextId::Results,
+                dbflux_app::keymap::Command::RefreshSchema,
+            ),
+            Button::kbd,
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.reload(cx);
+        }))
+    }
+
+    /// The controls that insert a row above the cursor, discard the changes
+    /// and save them. Empty for a file that cannot be saved in place, whose
+    /// table is read-only. Discard and save take a click only while there
+    /// are changes and no save runs, and insert only while the rows can be
+    /// edited.
+    fn render_edit_controls(&self, cx: &Context<Self>) -> Vec<Button> {
+        if !self.shows_edit_controls() {
+            return Vec::new();
+        }
+
+        let insert_above = Button::new(
+            "delimited-insert-above",
+            dbflux_i18n::t!("document.delimited.action.insert_above"),
+        )
+        .inline()
+        .icon(AppIcon::Plus)
+        .disabled(!self.can_edit())
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.insert_row_above(cx);
+        }));
+
+        let discard = Button::new(
+            "delimited-discard",
+            dbflux_i18n::t!("document.delimited.action.discard"),
+        )
+        .inline()
+        .icon(AppIcon::RotateCcw)
+        .disabled(!self.can_save_or_discard())
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.discard_changes(cx);
+        }));
+
+        let (save_label, save_icon) = if self.is_saving() {
+            (
+                dbflux_i18n::t!("document.delimited.action.saving"),
+                AppIcon::Loader,
+            )
+        } else {
+            (
+                dbflux_i18n::t!("document.delimited.action.save"),
+                AppIcon::Save,
+            )
+        };
+
+        let save = Button::new("delimited-save", save_label)
+            .inline()
+            .primary()
+            .icon(save_icon)
+            .when_some(
+                dbflux_ui_base::keymap::shortcut_label(
+                    dbflux_app::keymap::ContextId::DataTable,
+                    dbflux_app::keymap::Command::SaveRow,
+                ),
+                Button::kbd,
+            )
+            .disabled(!self.can_save_or_discard())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.save(cx);
+            }));
+
+        vec![insert_above, discard, save]
+    }
+
     fn render_loaded(&self, table: Entity<DataTable>, cx: &Context<Self>) -> AnyElement {
         div()
             .flex()
@@ -182,6 +275,7 @@ impl DelimitedDocument {
             .child(div().flex_1().min_h_0().child(table))
             .child(
                 document_footer(cx)
+                    .id("delimited-footer")
                     .children(
                         self.status_items()
                             .iter()

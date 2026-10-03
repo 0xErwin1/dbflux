@@ -31,18 +31,18 @@ use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
 use crate::pane::PaneActionRun;
 use crate::types::{DocumentKind, DocumentState};
 
-const CITIES: &[u8] = b"name,city\nAna,Lima\nBo,Quito\n";
+pub(super) const CITIES: &[u8] = b"name,city\nAna,Lima\nBo,Quito\n";
 
 /// Two records to a page, and a fetch window shorter than a page, so every
 /// further page is read from the source and not from bytes already fetched.
-const SMALL_PAGES: ReaderOptions = ReaderOptions {
+pub(super) const SMALL_PAGES: ReaderOptions = ReaderOptions {
     page_size: NonZeroUsize::new(2).unwrap(),
     window_size: NonZeroU64::new(16).unwrap(),
 };
 
 /// A CSV file with a header and `record_total` records whose first field is
 /// the record's index.
-fn numbered_csv(record_total: usize) -> Vec<u8> {
+pub(super) fn numbered_csv(record_total: usize) -> Vec<u8> {
     let mut bytes = b"id,city\n".to_vec();
 
     for record in 0..record_total {
@@ -54,7 +54,7 @@ fn numbered_csv(record_total: usize) -> Vec<u8> {
 
 /// Hosts the document `build` returns in a window, gives it the keyboard and
 /// runs the open flow to its end.
-fn open(
+pub(super) fn open(
     cx: &mut TestAppContext,
     build: impl FnOnce(&mut gpui::Context<DelimitedDocument>) -> DelimitedDocument + 'static,
 ) -> (Entity<DelimitedDocument>, &mut VisualTestContext) {
@@ -74,14 +74,14 @@ fn open(
     (document, window)
 }
 
-fn open_local(
+pub(super) fn open_local(
     cx: &mut TestAppContext,
     path: PathBuf,
 ) -> (Entity<DelimitedDocument>, &mut VisualTestContext) {
     open(cx, move |cx| DelimitedDocument::open_local(path, cx))
 }
 
-fn open_local_in_small_pages(
+pub(super) fn open_local_in_small_pages(
     cx: &mut TestAppContext,
     path: PathBuf,
 ) -> (Entity<DelimitedDocument>, &mut VisualTestContext) {
@@ -90,7 +90,7 @@ fn open_local_in_small_pages(
     })
 }
 
-fn open_object_in_small_pages(
+pub(super) fn open_object_in_small_pages(
     cx: &mut TestAppContext,
     app_state: Entity<AppStateEntity>,
     profile_id: uuid::Uuid,
@@ -111,7 +111,7 @@ fn open_object_in_small_pages(
 
 /// An app state in which `connection` is the live connection of one
 /// profile. Returns the state and the profile id.
-fn connect_profile(
+pub(super) fn connect_profile(
     cx: &mut TestAppContext,
     connection: Arc<FakeConnection>,
 ) -> (Entity<AppStateEntity>, uuid::Uuid) {
@@ -142,12 +142,15 @@ fn replace_connection(
     });
 }
 
-fn load_more(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) {
+pub(super) fn load_more(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) {
     window.update(|_, cx| document.update(cx, |document, cx| document.load_more(cx)));
     window.run_until_parked();
 }
 
-fn has_more_records(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+pub(super) fn has_more_records(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> bool {
     window.update(|_, cx| document.read(cx).has_more_records())
 }
 
@@ -156,7 +159,7 @@ fn is_loading_more(document: &Entity<DelimitedDocument>, window: &mut VisualTest
 }
 
 /// The text of the first cell of every row.
-fn first_column(
+pub(super) fn first_column(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Vec<String> {
@@ -176,12 +179,12 @@ fn first_column(
     })
 }
 
-fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
+pub(super) fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
     window.update(|_, cx| cx.global::<ToastGlobal>().host.read(cx).last_toast_title())
 }
 
 /// The ids of the clickable elements the coverage check found in the frame.
-fn covered_ids(
+pub(super) fn covered_ids(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Vec<String> {
@@ -198,7 +201,7 @@ fn covered_ids(
 
 /// The ids of the entries of the pane actions menu, as the workspace lists
 /// them.
-fn pane_action_ids(
+pub(super) fn pane_action_ids(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Vec<String> {
@@ -212,7 +215,7 @@ fn pane_action_ids(
     })
 }
 
-fn column_titles(
+pub(super) fn column_titles(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Vec<String> {
@@ -232,7 +235,10 @@ fn column_titles(
     })
 }
 
-fn row_count(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> usize {
+pub(super) fn row_count(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> usize {
     window.update(|_, cx| {
         let table_state = document
             .read(cx)
@@ -243,7 +249,7 @@ fn row_count(document: &Entity<DelimitedDocument>, window: &mut VisualTestContex
     })
 }
 
-fn status_items(
+pub(super) fn status_items(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Vec<String> {
@@ -257,18 +263,21 @@ fn status_items(
     })
 }
 
-fn warnings(
+pub(super) fn warnings(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Vec<DelimitedWarning> {
     window.update(|_, cx| document.read(cx).warnings().to_vec())
 }
 
-fn state(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> DocumentState {
+pub(super) fn state(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> DocumentState {
     window.update(|_, cx| document.read(cx).state())
 }
 
-fn toast_count(window: &mut VisualTestContext) -> usize {
+pub(super) fn toast_count(window: &mut VisualTestContext) -> usize {
     window.update(|_, cx| cx.global::<ToastGlobal>().host.read(cx).toast_count())
 }
 
@@ -662,8 +671,8 @@ fn the_pane_reports_the_file_name_and_no_unsaved_changes(cx: &mut TestAppContext
         assert!(pane.can_close(cx));
         assert_eq!(pane.change_summary(cx), None);
         assert!(
-            !pane.save_for_close(window, cx),
-            "there is nothing a save could write"
+            pane.save_for_close(window, cx),
+            "a file without edits closes without a write"
         );
     });
 }
@@ -721,7 +730,7 @@ fn the_pane_matches_only_the_key_of_its_own_file(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_loaded_table_is_read_only_and_holds_the_keyboard(cx: &mut TestAppContext) {
+fn the_loaded_table_is_editable_by_position_and_holds_the_keyboard(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("document-focus");
     let (path, _) = directory.file("cities.csv", CITIES);
 
@@ -734,7 +743,10 @@ fn the_loaded_table_is_read_only_and_holds_the_keyboard(cx: &mut TestAppContext)
             .expect("a loaded document has a table")
             .read(cx);
 
-        assert!(!table_state.is_editable());
+        assert!(table_state.is_editable());
+        assert!(table_state.is_positional_editing());
+        assert!(table_state.is_insertable());
+        assert!(table_state.pk_columns().is_empty());
         assert!(table_state.focus_handle().is_focused(window));
     });
 }
@@ -1524,13 +1536,13 @@ fn the_document_strings_resolve_in_every_locale() {
 
 /// One record of each kind detection needs to settle on windows-1252: the
 /// bytes above 0x7F are not valid UTF-8.
-const WINDOWS_1252_NAMES: &[u8] = b"name;city\nJos\xE9;M\xE1laga\nMar\xEDa;C\xF3rdoba\n";
+pub(super) const WINDOWS_1252_NAMES: &[u8] = b"name;city\nJos\xE9;M\xE1laga\nMar\xEDa;C\xF3rdoba\n";
 
-fn encoding(label: &str) -> &'static Encoding {
+pub(super) fn encoding(label: &str) -> &'static Encoding {
     Encoding::for_label(label.as_bytes()).expect("a known encoding label")
 }
 
-fn set_overrides(
+pub(super) fn set_overrides(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     overrides: DialectOverrides,
@@ -1543,7 +1555,10 @@ fn set_overrides(
     window.run_until_parked();
 }
 
-fn dialect(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> Dialect {
+pub(super) fn dialect(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Dialect {
     window.update(|_, cx| {
         document
             .read(cx)
@@ -1603,7 +1618,11 @@ fn is_rereading(document: &Entity<DelimitedDocument>, window: &mut VisualTestCon
 }
 
 /// Runs the entry `id` of the pane actions menu, as choosing it does.
-fn run_pane_action(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext, id: &str) {
+pub(super) fn run_pane_action(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+    id: &str,
+) {
     let action = window
         .update(|_, cx| document.read(cx).pane_actions(document))
         .into_iter()
@@ -2374,7 +2393,7 @@ fn the_header_and_reset_entries_of_the_pane_actions_run_their_controls(cx: &mut 
 }
 
 #[gpui::test]
-fn the_pane_handle_lists_the_dialect_actions(cx: &mut TestAppContext) {
+fn the_pane_handle_lists_the_dialect_and_edit_actions(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("toolbar-pane-handle");
     let (path, _) = directory.file("cities.csv", CITIES);
 
@@ -2395,7 +2414,10 @@ fn the_pane_handle_lists_the_dialect_actions(cx: &mut TestAppContext) {
             "delimited-quote",
             "delimited-header",
             "delimited-encoding",
-            "delimited-dialect-reset"
+            "delimited-dialect-reset",
+            "delimited-insert-above",
+            "delimited-discard",
+            "delimited-reload"
         ]
     );
 }

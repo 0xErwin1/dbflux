@@ -1758,11 +1758,22 @@ document:
         row: ROW
       title: "Row %{row}"
   delimited:
+    unsaved_summary: "Unsaved edits to %{name}"
     loading: "Loading %{name}…"
     error:
       open_failed: "Could not open %{name}"
       load_more_failed: "Could not load more of %{name}"
       reread_failed: "Could not re-read %{name}"
+      save_failed: "Could not save %{name}"
+      source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
+      next_page_required: "A row was added after the last loaded record, so its place in the file is not known yet. Load the next page, then save again."
+      full_load_required: "A column was added before the whole file was loaded. Load every page, then save again."
+      saved_version_unknown: "%{name} was saved, but its new version could not be read"
+      reopen_failed: "%{name} was saved, but could not be opened again"
+      unsaved_changes_block_reread: "The table has unsaved changes, which reading the file again would drop. Save or discard them first."
+      save_while_rereading: "The file is being read again, which replaces the rows these edits belong to. Wait until it has been read, then save."
+      add_row_failed: "Could not add a row to %{name}"
+      no_columns: "The file has no columns, so a new row would have no fields and the saved file would not keep it."
       refused:
         unsupported: "%{encoding} text cannot be read with %{character} as its delimiter or quote. Choose another delimiter, quote or encoding."
         line_break: "A line break cannot be the delimiter or the quote. Choose another character."
@@ -1801,6 +1812,12 @@ document:
       load_more: Load more
       loading_more: "Loading…"
       rereading: "Reading the file again…"
+    action:
+      save: Save
+      saving: "Saving…"
+      discard: "Discard changes"
+      insert_above: "Insert row above"
+      reload: "Reload from file"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"

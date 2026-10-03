@@ -2849,6 +2849,39 @@ pub(crate) fn delimited_reread_failed_message(file_name: &str) -> String {
     dbflux_i18n::t!("document.delimited.error.reread_failed", name = file_name)
 }
 
+/// Summary of a delimited file tab's unsaved changes, for its dirty-dot
+/// tooltip and the unsaved-changes dialog.
+pub(crate) fn delimited_unsaved_summary(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.unsaved_summary", name = file_name)
+}
+
+/// Summary of the error reported when a save of a delimited file did not
+/// write it.
+pub(crate) fn delimited_save_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.save_failed", name = file_name)
+}
+
+/// Summary of the error reported when a row cannot be added to a delimited
+/// file.
+pub(crate) fn delimited_add_row_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.add_row_failed", name = file_name)
+}
+
+/// Summary of the warning reported when a delimited file was saved and its
+/// new version could not be read.
+pub(crate) fn delimited_saved_version_unknown_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.saved_version_unknown",
+        name = file_name
+    )
+}
+
+/// Summary of the error reported when a delimited file was saved and could
+/// not be opened again.
+pub(crate) fn delimited_reopen_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.reopen_failed", name = file_name)
+}
+
 /// Why the reader refuses a dialect, with what the user can change. `None`
 /// for an error that is not a refusal of the dialect.
 pub(crate) fn delimited_refused_dialect_cause(

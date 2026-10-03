@@ -607,9 +607,10 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
 };
 
 /// A delimited file tab: the dialect toolbar, the table of the records
-/// loaded so far and the control that loads the next page (`]`). The pane
-/// actions list the toolbar: each select entry opens its list with the
-/// keyboard on it. The rows stay in file order, so the document does not
+/// loaded so far, the control that loads the next page (`]`), the reload
+/// (`f5`) and the edit controls. The pane actions list the toolbar, insert
+/// above, discard and reload: each select entry opens its list with the
+/// keyboard on it. Save is the table's save key. The rows stay in file order, so the document does not
 /// sort and a column header click has no action for a key to reach.
 pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     name: "delimited file",
@@ -639,6 +640,16 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
         (
             "delimited-dialect-reset",
             KeyboardPath::Menu("delimited-dialect-reset"),
+        ),
+        ("delimited-save", KeyboardPath::Command(Command::SaveRow)),
+        ("delimited-discard", KeyboardPath::Menu("delimited-discard")),
+        (
+            "delimited-insert-above",
+            KeyboardPath::Menu("delimited-insert-above"),
+        ),
+        (
+            "delimited-reload",
+            KeyboardPath::Command(Command::RefreshSchema),
         ),
     ],
 };

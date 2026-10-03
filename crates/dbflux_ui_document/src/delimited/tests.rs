@@ -173,6 +173,7 @@ pub(super) struct FakeObjectStore {
     read_failure: Mutex<Option<String>>,
     upload_failure: Mutex<Option<String>>,
     head_failure_after_upload: Mutex<Option<String>>,
+    one_head_failure_after_upload: Mutex<Option<String>>,
     range_reads: AtomicUsize,
     change_etag_at_range_read: AtomicUsize,
     omit_identity: AtomicBool,
@@ -184,7 +185,7 @@ impl FakeObjectStore {
         format!("etag-{}", self.generation.fetch_add(1, Ordering::SeqCst))
     }
 
-    fn store(&self, bytes: &[u8], content_type: Option<&str>) {
+    pub(super) fn store(&self, bytes: &[u8], content_type: Option<&str>) {
         let object = StoredObject {
             bytes: bytes.to_vec(),
             etag: self.next_etag(),
@@ -199,7 +200,7 @@ impl FakeObjectStore {
 
     /// Gives the object a new etag without changing its bytes, which is what
     /// another writer storing the same number of bytes looks like.
-    fn change_etag(&self) {
+    pub(super) fn change_etag(&self) {
         let etag = self.next_etag();
 
         if let Some(object) = self
@@ -212,7 +213,7 @@ impl FakeObjectStore {
         }
     }
 
-    fn bytes(&self) -> Vec<u8> {
+    pub(super) fn bytes(&self) -> Vec<u8> {
         self.with_object(BUCKET, KEY, |object| object.bytes.clone())
             .expect("the object exists")
     }
@@ -222,7 +223,7 @@ impl FakeObjectStore {
             .expect("the object exists")
     }
 
-    fn head_calls(&self) -> usize {
+    pub(super) fn head_calls(&self) -> usize {
         self.head_calls.load(Ordering::SeqCst)
     }
 
@@ -243,14 +244,24 @@ impl FakeObjectStore {
         self.range_reads.load(Ordering::SeqCst)
     }
 
-    fn fail_uploads_with(&self, message: &str) {
+    pub(super) fn fail_uploads_with(&self, message: &str) {
         *self.upload_failure.lock().expect("the upload failure") = Some(message.to_string());
     }
 
     /// Makes every `head_object` fail once an upload has happened.
-    fn fail_heads_after_an_upload_with(&self, message: &str) {
+    pub(super) fn fail_heads_after_an_upload_with(&self, message: &str) {
         *self
             .head_failure_after_upload
+            .lock()
+            .expect("the head failure") = Some(message.to_string());
+    }
+
+    /// Makes the first `head_object` after an upload fail, and only that
+    /// one, which is a store that cannot report the version of an object it
+    /// just stored and answers again right after.
+    pub(super) fn fail_one_head_after_an_upload_with(&self, message: &str) {
+        *self
+            .one_head_failure_after_upload
             .lock()
             .expect("the head failure") = Some(message.to_string());
     }
@@ -320,6 +331,18 @@ impl ObjectStoreConnection for FakeObjectStore {
             && !self.uploaded_from().is_empty()
         {
             return Err(DbError::query_failed(message));
+        }
+
+        if !self.uploaded_from().is_empty() {
+            let one_failure = self
+                .one_head_failure_after_upload
+                .lock()
+                .expect("the head failure")
+                .take();
+
+            if let Some(message) = one_failure {
+                return Err(DbError::query_failed(message));
+            }
         }
 
         let omit_identity = self.omit_identity.load(Ordering::SeqCst);

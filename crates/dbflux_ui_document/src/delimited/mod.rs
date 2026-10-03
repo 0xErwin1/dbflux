@@ -11,10 +11,13 @@
 //! I/O.
 //!
 //! The document is the tab: it opens a file through the storage layer on the
-//! background executor and shows the page model in a table. Its toolbar shows
-//! the dialect the file was read with and overrides parts of it.
+//! background executor and shows the page model in a table, which edits the
+//! loaded records by position and saves them through the storage layer. Its
+//! toolbar shows the dialect the file was read with and overrides parts of
+//! it.
 
 mod document;
+mod editing;
 mod page_model;
 mod pane;
 mod render;
@@ -24,6 +27,8 @@ mod toolbar;
 
 #[cfg(test)]
 mod document_tests;
+#[cfg(test)]
+mod editing_tests;
 #[cfg(test)]
 mod page_model_tests;
 #[cfg(test)]
