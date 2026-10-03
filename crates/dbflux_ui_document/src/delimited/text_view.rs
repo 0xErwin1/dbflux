@@ -62,7 +62,7 @@ use super::text::{
     ALIGNED_MAX_WIDTH, RenderedText, TEXT_LIMITS, TextEnd, TextLayout, TextRow, check_pending,
     render_aligned, render_raw,
 };
-use super::text_edit::{TextEditError, TextEdits, apply_to_pending, text_edits};
+use super::text_edit::{TextEditError, TextEdits, apply_to_pending, change_inserts, text_edits};
 use dbflux_components::components::data_table::DataTableState;
 use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -918,8 +918,10 @@ fn is_save_key(keystroke: &Keystroke) -> bool {
 /// the page model make for the user: the column renames and appended
 /// columns first, with the table rebuilt for them and every pending edit
 /// kept, then the cell edits, the deletions, the removed inserts, from the
-/// last, and the new inserts, padded to the columns. Each of the table's
-/// operations is a step of its undo history, as when the user makes it.
+/// last, and the new inserts, padded to the columns, each before the kept
+/// insert the text puts after it ([`change_inserts`]). Each of the table's
+/// operations is a step of its undo history, as when the user makes it, and
+/// none of them removes or changes a row the user did not edit.
 ///
 /// # Errors
 ///
@@ -957,25 +959,8 @@ pub(super) fn apply_text_edits(
         buffer.mark_for_delete(*row);
     }
 
-    let mut removed = edits.removed_inserts.clone();
-    removed.sort_unstable();
-    removed.dedup();
-
-    for insert in removed.into_iter().rev() {
-        buffer.remove_pending_insert_by_idx(insert);
-    }
-
     let column_count = state.col_count();
-
-    for (anchor, fields) in &edits.added_inserts {
-        let mut row: Vec<CellValue> = fields.iter().map(|field| CellValue::text(field)).collect();
-
-        if row.len() < column_count {
-            row.resize(column_count, CellValue::text(""));
-        }
-
-        state.edit_buffer_mut().add_pending_insert_at(*anchor, row);
-    }
+    change_inserts(edits, state.edit_buffer_mut(), column_count);
 
     cx.notify();
 
