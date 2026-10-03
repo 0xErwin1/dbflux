@@ -1278,6 +1278,7 @@ pub(crate) mod object_tree_adapter_tests {
             presentation: CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 

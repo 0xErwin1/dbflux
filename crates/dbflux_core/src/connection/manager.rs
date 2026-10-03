@@ -4210,6 +4210,7 @@ mod tests {
                 presentation: Default::default(),
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         }
 
@@ -5054,6 +5055,7 @@ mod tests {
                 presentation: Default::default(),
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }],
             views: Vec::new(),
             custom_types: None,
@@ -5143,6 +5145,7 @@ mod tests {
                     presentation: Default::default(),
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 }],
                 views: Vec::new(),
                 custom_types: None,
@@ -5998,6 +6001,7 @@ mod tests {
                     columns: Vec::new(),
                     detail: None,
                 }]),
+                pseudo_columns: Box::default(),
             })
         }
 

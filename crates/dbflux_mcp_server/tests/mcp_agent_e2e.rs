@@ -2146,3 +2146,197 @@ async fn join_calls_refuse_what_the_engine_would_misread() {
         .await;
     assert_eq!(counted["count"], json!(3));
 }
+
+// ---------------------------------------------------------------------------
+// select_data pseudo-columns
+// ---------------------------------------------------------------------------
+
+/// Creates `notes`, a rowid table with no `INTEGER PRIMARY KEY` (so `rowid` is
+/// not an alias of a listed column), and `codes`, a `WITHOUT ROWID` table, in
+/// the profile's file before the agent connects.
+fn create_rowid_tables(directory: &tempfile::TempDir) {
+    let connection = rusqlite::Connection::open(directory.path().join("agent.sqlite"))
+        .expect("open the test database");
+
+    connection
+        .execute_batch(
+            "CREATE TABLE notes (label TEXT NOT NULL);
+             INSERT INTO notes (label) VALUES ('alpha'), ('beta'), ('gamma');
+             CREATE TABLE codes (code TEXT PRIMARY KEY, label TEXT NOT NULL) WITHOUT ROWID;
+             INSERT INTO codes (code, label) VALUES ('a', 'alpha'), ('b', 'beta');",
+        )
+        .expect("create the rowid test tables");
+}
+
+async fn start_rowid_agent() -> (Agent, String, tempfile::TempDir) {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    create_rowid_tables(&directory);
+
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
+
+    agent
+        .call_json("connect", json!({ "connection_id": connection_id }))
+        .await;
+
+    (agent, connection_id, directory)
+}
+
+#[tokio::test]
+async fn select_data_accepts_sqlite_rowid_on_a_rowid_table() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    let filtered = agent
+        .call_json(
+            "select_data",
+            json!({
+                "connection_id": connection_id,
+                "table": "notes",
+                "columns": ["label"],
+                "where": { "ROWID": 2 }
+            }),
+        )
+        .await;
+    assert_eq!(filtered["rows"], json!([{ "label": "beta" }]));
+
+    let sorted = agent
+        .call_json(
+            "select_data",
+            json!({
+                "connection_id": connection_id,
+                "table": "notes",
+                "order_by": [{ "column": "_rowid_", "direction": "desc" }],
+                "limit": 2
+            }),
+        )
+        .await;
+    assert_eq!(
+        sorted["rows"],
+        json!([{ "label": "gamma" }, { "label": "beta" }])
+    );
+}
+
+/// Without joins the rows come from a `SELECT *` browse and `columns` is
+/// applied to the result, which never carries a pseudo-column. The call passes
+/// the column check and then fails with an explicit error instead of a
+/// silent result.
+#[tokio::test]
+async fn select_data_without_joins_cannot_project_a_pseudo_column() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    let message = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "notes", "columns": ["rowid", "label"] }),
+    )
+    .await;
+
+    assert!(
+        message.starts_with("Select error: column 'rowid' not found in result set"),
+        "got: {message}"
+    );
+    assert!(!message.contains(NOT_RUN), "got: {message}");
+}
+
+#[tokio::test]
+async fn select_data_keeps_pseudo_columns_out_of_the_refusal_hints() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    let misspelled = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "notes", "where": { "labl": "alpha" } }),
+    )
+    .await;
+    assert_eq!(
+        misspelled,
+        format!(
+            "Column 'labl' is not listed among the columns of table 'notes'.\n\
+             Did you mean: label?\n\
+             Available columns: label\n\n\
+             {NOT_RUN}"
+        )
+    );
+
+    let near_rowid = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "notes", "columns": ["rowidd"] }),
+    )
+    .await;
+    assert_eq!(
+        near_rowid,
+        format!(
+            "Column 'rowidd' is not listed among the columns of table 'notes'.\n\
+             Available columns: label\n\n\
+             {NOT_RUN}"
+        )
+    );
+}
+
+#[tokio::test]
+async fn select_data_refuses_rowid_on_a_without_rowid_table() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    let cases = [
+        ("where", json!({ "where": { "rowid": 1 } })),
+        ("columns", json!({ "columns": ["rowid", "label"] })),
+    ];
+
+    for (case, mut arguments) in cases {
+        arguments["connection_id"] = json!(connection_id);
+        arguments["table"] = json!("codes");
+
+        let message = tool_error(&agent, "select_data", arguments).await;
+
+        assert!(
+            message.starts_with("Column 'rowid' is not listed among the columns of table 'codes'."),
+            "rowid in {case} must be refused, not read as a string literal: {message}"
+        );
+        assert!(message.ends_with(NOT_RUN), "rowid in {case}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn join_call_accepts_a_pseudo_column_qualified_by_an_alias() {
+    let (agent, connection_id, _directory) = start_join_agent().await;
+
+    let mut arguments = customers_join_orders(&connection_id, "inner");
+    arguments["joins"][0]["alias"] = json!("o");
+    arguments["joins"][0]["on"] = json!("customers.id = o.customer_id");
+    arguments["columns"] = json!(["name", "o.rowid", "customers.oid"]);
+    arguments["where"] = json!({ "o.rowid": { "$gte": 11 } });
+    arguments["order_by"] = json!([{ "column": "o._rowid_" }]);
+
+    let selected = agent.call_json("select_data", arguments).await;
+
+    assert_eq!(
+        selected["rows"],
+        json!([
+            { "name": "Ada", "o.rowid": 11, "customers.oid": 1 },
+            { "name": "Bo", "o.rowid": 12, "customers.oid": 2 }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn failure_hint_does_not_blame_a_declared_pseudo_column() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    // `$regex` renders an operator SQLite rejects, so the call fails and the
+    // not-found hint runs over the columns the filter names.
+    let message = tool_error(
+        &agent,
+        "count_records",
+        json!({
+            "connection_id": connection_id,
+            "table": "notes",
+            "where": { "rowid": { "$regex": "^1" } }
+        }),
+    )
+    .await;
+
+    assert!(!message.contains("not listed"), "got: {message}");
+    assert!(!message.contains("Did you mean"), "got: {message}");
+}

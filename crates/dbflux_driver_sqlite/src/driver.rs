@@ -998,6 +998,7 @@ impl Connection for SqliteConnection {
         let indexes = self.get_indexes(&conn, table)?;
         let foreign_keys = self.get_foreign_keys(&conn, table)?;
         let constraints = self.get_constraints(&conn, table)?;
+        let pseudo_columns = rowid_pseudo_columns(&conn, table);
 
         log::debug!(
             "[SCHEMA] Table {}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -1019,6 +1020,7 @@ impl Connection for SqliteConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -1601,6 +1603,7 @@ impl SqliteConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             })
             .collect();
 
@@ -2793,6 +2796,36 @@ mod cancel_tests {
     }
 }
 
+/// Names SQLite resolves on every rowid table although `PRAGMA table_info`
+/// does not list them: <https://www.sqlite.org/lang_createtable.html#rowid>.
+const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
+
+/// The rowid names when `table` is an ordinary rowid table in the main
+/// schema, and none for a `WITHOUT ROWID`, virtual or shadow table.
+///
+/// Reads `PRAGMA table_list` (SQLite 3.37.0 and later, which the bundled
+/// library satisfies): `type` is `table` for an ordinary table and `wr` is 1
+/// for a `WITHOUT ROWID` one. A failed lookup declares nothing, so the column
+/// check refuses the names as it would without this metadata.
+fn rowid_pseudo_columns(conn: &RusqliteConnection, table: &str) -> Box<[String]> {
+    let shape = conn.query_row(
+        "SELECT type, wr FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
+        [table],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    );
+
+    match shape {
+        Ok((kind, without_rowid)) if kind == "table" && without_rowid == 0 => {
+            ROWID_NAMES.iter().map(|name| name.to_string()).collect()
+        }
+        Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => Box::default(),
+        Err(error) => {
+            log::warn!("[SCHEMA] Cannot read the table shape of '{table}': {error}");
+            Box::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2805,6 +2838,37 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
         WhereOperator,
     };
+
+    /// `table_details` declares `rowid`, `oid` and `_rowid_` only for rowid
+    /// tables (<https://www.sqlite.org/lang_createtable.html#rowid>).
+    #[test]
+    fn table_details_declares_rowid_names_only_for_rowid_tables() {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch(
+            "CREATE TABLE notes (label TEXT);
+             CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);
+             CREATE TABLE codes (code TEXT PRIMARY KEY) WITHOUT ROWID;",
+        )
+        .expect("create the tables");
+
+        let connection =
+            SqliteConnection::for_test(Arc::new(Mutex::new(SqliteConnectionState::new(raw))));
+
+        let pseudo_columns = |table: &str| {
+            connection
+                .table_details("main", None, table)
+                .expect("read the table details")
+                .pseudo_columns
+        };
+
+        assert_eq!(*pseudo_columns("notes"), ["rowid", "oid", "_rowid_"]);
+        assert_eq!(*pseudo_columns("items"), ["rowid", "oid", "_rowid_"]);
+        assert!(pseudo_columns("codes").is_empty());
+    }
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
 
@@ -2903,6 +2967,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         let composite_pk = TableInfo {
@@ -2933,6 +2998,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         let single_sql = sqlite_generate_create_table(&single_pk);

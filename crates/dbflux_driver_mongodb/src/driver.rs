@@ -2364,6 +2364,7 @@ impl Connection for MongoConnection {
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 }
             })
             .collect();
@@ -2494,6 +2495,7 @@ impl Connection for MongoConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
     }
 

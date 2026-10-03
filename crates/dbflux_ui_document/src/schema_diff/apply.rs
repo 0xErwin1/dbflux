@@ -223,6 +223,7 @@ fn table_info_from_ref(table: &TableRef) -> TableInfo {
         presentation: Default::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
@@ -1129,6 +1130,7 @@ mod tests {
                 presentation: Default::default(),
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         }
 
@@ -2268,6 +2270,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let table = TableRef {
             schema: Some("public".to_string()),
@@ -2330,6 +2333,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let table = TableRef {
             schema: None,

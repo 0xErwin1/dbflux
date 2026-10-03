@@ -198,6 +198,7 @@ impl TursoConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             })
             .collect())
     }
@@ -211,6 +212,29 @@ impl TursoConnection {
             .filter_map(|row| row.into_iter().next().and_then(value_to_string))
             .map(|name| ViewInfo { name, schema: None })
             .collect())
+    }
+
+    /// The rowid names when the server reports `table` as an ordinary rowid
+    /// table through `PRAGMA table_list` (SQLite 3.37.0 and later; libSQL
+    /// server v0.24.33 answers it). A server that cannot answer gets none, so
+    /// the column check refuses the names as it would without this metadata.
+    fn get_pseudo_columns(&self, table: &str) -> Box<[String]> {
+        let shape = self.run(
+            "SELECT type, wr FROM pragma_table_list WHERE schema = 'main' AND name = ?",
+            vec![TursoValue::Text(table.to_string())],
+        );
+
+        match shape {
+            Ok(result) => result
+                .rows
+                .first()
+                .map(|row| rowid_pseudo_columns(row))
+                .unwrap_or_default(),
+            Err(error) => {
+                log::debug!("[SCHEMA] Cannot read the table shape of '{table}': {error}");
+                Box::default()
+            }
+        }
     }
 
     fn get_columns(&self, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
@@ -483,6 +507,24 @@ fn value_to_string(value: Value) -> Option<String> {
     }
 }
 
+/// Names SQLite resolves on every rowid table although `PRAGMA table_info`
+/// does not list them: <https://www.sqlite.org/lang_createtable.html#rowid>.
+const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
+
+/// The rowid names for a `pragma_table_list` row of `type` and `wr` that
+/// describes an ordinary table (`type` = `table`) with a rowid (`wr` = 0).
+fn rowid_pseudo_columns(shape: &[Value]) -> Box<[String]> {
+    match shape {
+        [kind, without_rowid, ..]
+            if value_to_string(kind.clone()).as_deref() == Some("table")
+                && value_to_i64(without_rowid) == Some(0) =>
+        {
+            ROWID_NAMES.iter().map(|name| name.to_string()).collect()
+        }
+        _ => Box::default(),
+    }
+}
+
 fn value_to_i64(value: &Value) -> Option<i64> {
     match value {
         Value::Int(i) => Some(*i),
@@ -676,6 +718,7 @@ impl Connection for TursoConnection {
         let indexes = self.get_indexes(table)?;
         let foreign_keys = self.get_foreign_keys(table)?;
         let constraints = self.get_constraints(table)?;
+        let pseudo_columns = self.get_pseudo_columns(table);
 
         Ok(TableInfo {
             name: table.to_string(),
@@ -688,6 +731,7 @@ impl Connection for TursoConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -1432,6 +1476,25 @@ mod tests {
             Some("length(b) < 10")
         );
         assert!(extract_check_constraints("CREATE TABLE t (a INT)").is_empty());
+    }
+
+    #[test]
+    fn rowid_names_are_declared_only_for_ordinary_rowid_tables() {
+        let shape =
+            |kind: &str, without_rowid: Value| vec![Value::Text(kind.into()), without_rowid];
+
+        assert_eq!(
+            *rowid_pseudo_columns(&shape("table", Value::Int(0))),
+            ["rowid", "oid", "_rowid_"]
+        );
+        assert_eq!(
+            *rowid_pseudo_columns(&shape("table", Value::Text("0".into()))),
+            ["rowid", "oid", "_rowid_"]
+        );
+        assert!(rowid_pseudo_columns(&shape("table", Value::Int(1))).is_empty());
+        assert!(rowid_pseudo_columns(&shape("view", Value::Int(0))).is_empty());
+        assert!(rowid_pseudo_columns(&shape("virtual", Value::Int(0))).is_empty());
+        assert!(rowid_pseudo_columns(&[]).is_empty());
     }
 
     #[test]

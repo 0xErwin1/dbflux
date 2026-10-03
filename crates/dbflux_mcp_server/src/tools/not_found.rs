@@ -123,6 +123,34 @@ pub(crate) struct ColumnCheck<'a> {
     pub references: Vec<ColumnReference>,
 }
 
+/// The names a table's metadata lists, as the column check and the hint
+/// compare them.
+struct TableColumns {
+    columns: Vec<String>,
+
+    /// Names the driver declared the engine resolves on this table although
+    /// `columns` does not list them. They count as present but are never
+    /// suggested or listed, because they are not columns of the table.
+    pseudo_columns: Vec<String>,
+}
+
+impl TableColumns {
+    fn from_details(details: TableInfo) -> Option<Self> {
+        Some(Self {
+            columns: details
+                .columns?
+                .into_iter()
+                .map(|column| column.name)
+                .collect(),
+            pseudo_columns: details.pseudo_columns.into_vec(),
+        })
+    }
+
+    fn lists(&self, name: &str) -> bool {
+        contains_name(&self.columns, name) || contains_name(&self.pseudo_columns, name)
+    }
+}
+
 /// Where a name is looked up.
 #[derive(Clone)]
 struct Scope {
@@ -218,7 +246,8 @@ pub(crate) fn is_checkable_column(text: &str) -> bool {
 /// filter returns no rows instead of an error. The check reads the column
 /// names of each referenced table once, through `table_details`, and compares
 /// names case-insensitively, because the driver metadata does not say how the
-/// engine folds a column name.
+/// engine folds a column name. A pseudo-column the driver declared for the
+/// table, such as SQLite's `rowid`, counts as listed.
 ///
 /// It never refuses on missing evidence. A table whose scope cannot be
 /// resolved, whose lookup fails or is not supported, or whose metadata lists
@@ -243,7 +272,7 @@ pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<(), String> 
     let connection = check.connection.clone();
     let database = check.database.map(str::to_string);
 
-    let listed: Vec<(TableRef, Option<Vec<String>>)> = tokio::task::spawn_blocking(move || {
+    let listed: Vec<(TableRef, Option<TableColumns>)> = tokio::task::spawn_blocking(move || {
         tables
             .into_iter()
             .map(|table| {
@@ -265,13 +294,13 @@ pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<(), String> 
             .references
             .iter()
             .filter(|reference| &reference.table == table)
-            .find(|reference| !contains_name(columns, &reference.column));
+            .find(|reference| !columns.lists(&reference.column));
 
         if let Some(reference) = unlisted {
             let allowed = governance::hint_permissions(check.state, check.connection_id).await;
 
             let message = if allowed.column_names {
-                unlisted_column_message(&reference.column, &table.name, columns)
+                unlisted_column_message(&reference.column, &table.name, &columns.columns)
             } else {
                 unlisted_column_line(&reference.column, &table.name)
             };
@@ -289,7 +318,7 @@ fn listed_columns(
     connection: &dyn Connection,
     table: &TableRef,
     database: Option<&str>,
-) -> Option<Vec<String>> {
+) -> Option<TableColumns> {
     let syntax = connection.metadata().syntax.as_ref();
     let supports_schemas = syntax.is_some_and(|syntax| syntax.supports_schemas);
 
@@ -334,22 +363,16 @@ fn listed_columns(
         }
     };
 
-    let columns: Vec<String> = details
-        .columns
-        .unwrap_or_default()
-        .into_iter()
-        .map(|column| column.name)
-        .collect();
+    let columns = TableColumns::from_details(details).filter(|listed| !listed.columns.is_empty());
 
-    if columns.is_empty() {
+    if columns.is_none() {
         log::debug!(
             "Column check skipped for '{}': the metadata lists no columns",
             table.name
         );
-        return None;
     }
 
-    Some(columns)
+    columns
 }
 
 async fn hint(call: &FailedCall<'_>) -> Option<String> {
@@ -385,19 +408,16 @@ async fn hint(call: &FailedCall<'_>) -> Option<String> {
 
     let columns = table_columns(call.connection, &scope, &call.target.name).await?;
 
-    if columns.is_empty() {
+    if columns.columns.is_empty() {
         return None;
     }
 
-    let unlisted = call
-        .columns
-        .iter()
-        .find(|column| !contains_name(&columns, column))?;
+    let unlisted = call.columns.iter().find(|column| !columns.lists(column))?;
 
     Some(unlisted_column_message(
         unlisted,
         &call.target.name,
-        &columns,
+        &columns.columns,
     ))
 }
 
@@ -506,13 +526,13 @@ fn listed_names(
     object_names(&listing.tables, &listing.views, schema)
 }
 
-/// Reads the column names of a table. `None` means the driver has no column
-/// metadata for it or the lookup failed.
+/// Reads the column and pseudo-column names of a table. `None` means the
+/// driver has no column metadata for it or the lookup failed.
 async fn table_columns(
     connection: &Arc<dyn Connection>,
     scope: &Scope,
     table: &str,
-) -> Option<Vec<String>> {
+) -> Option<TableColumns> {
     let connection = connection.clone();
     let database = scope.database.clone().unwrap_or_default();
     let schema = scope.schema.clone();
@@ -527,9 +547,7 @@ async fn table_columns(
     .await
     .log_err_with("Column lookup task failed")??;
 
-    let columns = details.columns?;
-
-    Some(columns.into_iter().map(|column| column.name).collect())
+    TableColumns::from_details(details)
 }
 
 /// Unwraps a metadata lookup. A driver that does not implement the lookup is
@@ -902,6 +920,19 @@ mod tests {
     fn a_name_that_differs_only_in_case_counts_as_present() {
         assert!(contains_name(&names(&["Users"]), "users"));
         assert!(!contains_name(&names(&["Users"]), "user"));
+    }
+
+    #[test]
+    fn a_declared_pseudo_column_counts_as_listed_in_any_case() {
+        let listed = TableColumns {
+            columns: names(&["label"]),
+            pseudo_columns: names(&["rowid", "_rowid_"]),
+        };
+
+        assert!(listed.lists("label"));
+        assert!(listed.lists("ROWID"));
+        assert!(listed.lists("_rowid_"));
+        assert!(!listed.lists("oid"));
     }
 
     #[test]

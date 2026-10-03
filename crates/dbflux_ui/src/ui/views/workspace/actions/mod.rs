@@ -528,6 +528,7 @@ mod tests {
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
                 TableInfo {
                     name: "orders".to_string(),
@@ -540,6 +541,7 @@ mod tests {
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 },
             ],
             views: vec![ViewInfo {
@@ -592,6 +594,7 @@ mod tests {
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 }],
                 views: vec![],
                 custom_types: None,

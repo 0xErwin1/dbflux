@@ -2020,6 +2020,7 @@ impl Connection for PostgresConnection {
         let indexes = get_indexes(&mut client, schema_name, table)?;
         let foreign_keys = get_foreign_keys(&mut client, schema_name, table)?;
         let constraints = get_constraints(&mut client, schema_name, table)?;
+        let pseudo_columns = get_system_columns(&mut client, schema_name, table)?;
 
         log::debug!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -2042,6 +2043,7 @@ impl Connection for PostgresConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -2854,6 +2856,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         })
         .collect();
@@ -3194,6 +3197,42 @@ fn get_foreign_keys(
     );
 
     Ok(fks)
+}
+
+/// Reads the system columns of a relation (`ctid`, `xmin`, `tableoid`, ...),
+/// which a query may name although they are not user columns:
+/// <https://www.postgresql.org/docs/current/ddl-system-columns.html>.
+///
+/// The catalog lists them as the `pg_attribute` rows with a negative `attnum`
+/// (<https://www.postgresql.org/docs/current/catalog-pg-attribute.html>), so
+/// the answer follows the relation: tables, partitioned, materialized and
+/// foreign tables have them, a view has none.
+const SYSTEM_COLUMNS_QUERY: &str = r#"
+    SELECT a.attname
+    FROM pg_catalog.pg_attribute a
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1
+      AND c.relname = $2
+      AND a.attnum < 0
+    ORDER BY a.attnum DESC
+"#;
+
+fn get_system_columns(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Box<[String]>, DbError> {
+    let rows = client
+        .query(SYSTEM_COLUMNS_QUERY, &[&schema, &table])
+        .map_err(|e| format_pg_query_error(&e))?;
+
+    rows.iter()
+        .map(|row| {
+            row.try_get::<_, String>(0)
+                .map_err(|e| format_pg_query_error(&e))
+        })
+        .collect()
 }
 
 fn get_constraints(

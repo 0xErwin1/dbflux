@@ -2239,6 +2239,7 @@ impl Connection for MssqlConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             });
         }
 
@@ -2310,6 +2311,7 @@ impl Connection for MssqlConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
     }
 
@@ -6380,6 +6382,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 

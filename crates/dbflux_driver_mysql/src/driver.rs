@@ -2282,6 +2282,7 @@ impl Connection for MysqlConnection {
         let indexes = fetch_indexes(&mut conn, database, table)?;
         let foreign_keys = fetch_foreign_keys(&mut conn, database, table)?;
         let constraints = fetch_constraints(&mut conn, database, table)?;
+        let pseudo_columns = rowid_pseudo_columns(self.kind, &columns, &indexes);
 
         log::info!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -2304,6 +2305,7 @@ impl Connection for MysqlConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -3810,6 +3812,7 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
         .collect())
 }
@@ -3925,6 +3928,79 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
     }
 
     Ok(indexes_map.into_values().collect())
+}
+
+/// `_rowid` when the table's key makes it valid, otherwise nothing.
+///
+/// MySQL resolves `_rowid` to a primary key made of one integer column, or,
+/// without a primary key, to the first `UNIQUE NOT NULL` index when that index
+/// is one integer column
+/// (<https://dev.mysql.com/doc/refman/8.4/en/create-index.html>). `SHOW INDEX`
+/// loses which unique index comes first, so without a primary key `_rowid` is
+/// declared only when every `UNIQUE NOT NULL` index is one integer column.
+///
+/// MariaDB documents `_rowid` only as the primary key
+/// (<https://mariadb.com/docs/server/reference/sql-functions/pseudo-columns/_rowid>),
+/// so it gets the primary-key rule alone.
+fn rowid_pseudo_columns(
+    kind: DbKind,
+    columns: &[ColumnInfo],
+    indexes: &[IndexInfo],
+) -> Box<[String]> {
+    let column = |name: &str| columns.iter().find(|column| column.name == name);
+
+    let is_integer_column = |name: &str| {
+        column(name).is_some_and(|column| {
+            let base = column
+                .type_name
+                .split(['(', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            matches!(
+                base.as_str(),
+                "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint"
+            )
+        })
+    };
+
+    let is_single_integer = |index: &IndexInfo| match index.columns.as_slice() {
+        [only] => is_integer_column(only),
+        _ => false,
+    };
+
+    let valid = match indexes.iter().find(|index| index.is_primary) {
+        Some(primary) => is_single_integer(primary),
+        None if kind == DbKind::MariaDB => false,
+        None => {
+            let unique: Vec<&IndexInfo> = indexes.iter().filter(|index| index.is_unique).collect();
+
+            let every_part_is_a_column = unique
+                .iter()
+                .all(|index| index.columns.iter().all(|part| column(part).is_some()));
+
+            let not_null: Vec<&IndexInfo> = unique
+                .into_iter()
+                .filter(|index| {
+                    index
+                        .columns
+                        .iter()
+                        .all(|part| column(part).is_some_and(|column| !column.nullable))
+                })
+                .collect();
+
+            every_part_is_a_column
+                && !not_null.is_empty()
+                && not_null.iter().all(|index| is_single_integer(index))
+        }
+    };
+
+    if valid {
+        Box::new(["_rowid".to_string()])
+    } else {
+        Box::default()
+    }
 }
 
 /// A functional key part (MySQL 8.0.13+) has a NULL column name and carries its
@@ -4533,6 +4609,7 @@ fn resolve_write_privilege(
 
 #[cfg(test)]
 mod tests {
+    use super::rowid_pseudo_columns;
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
         MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
@@ -4547,6 +4624,77 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
     use mysql::{Conn, Opts, OptsBuilder};
+
+    fn rowid_column(name: &str, type_name: &str, nullable: bool) -> dbflux_core::ColumnInfo {
+        dbflux_core::ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    fn rowid_index(name: &str, columns: &[&str], primary: bool) -> dbflux_core::IndexInfo {
+        dbflux_core::IndexInfo {
+            name: name.to_string(),
+            columns: columns.iter().map(|column| column.to_string()).collect(),
+            is_unique: true,
+            is_primary: primary,
+        }
+    }
+
+    /// `_rowid` conditions from
+    /// <https://dev.mysql.com/doc/refman/8.4/en/create-index.html> and
+    /// <https://mariadb.com/docs/server/reference/sql-functions/pseudo-columns/_rowid>.
+    #[test]
+    fn rowid_is_declared_only_for_a_single_integer_key() {
+        let columns = [
+            rowid_column("id", "bigint unsigned", false),
+            rowid_column("code", "int(11)", false),
+            rowid_column("slug", "varchar(32)", false),
+            rowid_column("maybe", "int", true),
+        ];
+        let rowid = |kind: DbKind, indexes: &[dbflux_core::IndexInfo]| {
+            rowid_pseudo_columns(kind, &columns, indexes)
+        };
+        let declared: Box<[String]> = Box::new(["_rowid".to_string()]);
+
+        let integer_primary = [rowid_index("PRIMARY", &["id"], true)];
+        assert_eq!(rowid(DbKind::MySQL, &integer_primary), declared);
+        assert_eq!(rowid(DbKind::MariaDB, &integer_primary), declared);
+
+        let text_primary = [
+            rowid_index("PRIMARY", &["slug"], true),
+            rowid_index("u_code", &["code"], false),
+        ];
+        assert!(rowid(DbKind::MySQL, &text_primary).is_empty());
+
+        let composite_primary = [rowid_index("PRIMARY", &["id", "code"], true)];
+        assert!(rowid(DbKind::MySQL, &composite_primary).is_empty());
+
+        let integer_unique = [rowid_index("u_code", &["code"], false)];
+        assert_eq!(rowid(DbKind::MySQL, &integer_unique), declared);
+        assert!(rowid(DbKind::MariaDB, &integer_unique).is_empty());
+
+        let mixed_unique = [
+            rowid_index("u_slug", &["slug"], false),
+            rowid_index("u_code", &["code"], false),
+        ];
+        assert!(rowid(DbKind::MySQL, &mixed_unique).is_empty());
+
+        let nullable_unique = [rowid_index("u_maybe", &["maybe"], false)];
+        assert!(rowid(DbKind::MySQL, &nullable_unique).is_empty());
+
+        let functional_unique = [
+            rowid_index("u_code", &["code"], false),
+            rowid_index("u_lower", &["(lower(`slug`))"], false),
+        ];
+        assert!(rowid(DbKind::MySQL, &functional_unique).is_empty());
+
+        assert!(rowid(DbKind::MySQL, &[]).is_empty());
+    }
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},

@@ -4405,6 +4405,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let create = TableLevelAction::Create(Box::new(table_info), None);
         let drop = TableLevelAction::Drop(TableRef {
