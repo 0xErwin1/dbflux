@@ -258,12 +258,18 @@ impl LoadedFile {
     /// text.
     ///
     /// The unreadable-delimiter warning stays while the file is read with
-    /// the dialect it was opened with in place of the detected one, and goes
-    /// once the user reads it another way.
+    /// the delimiter and the encoding it was opened with in place of the
+    /// detected dialect, whatever the quote and the header flag, and goes
+    /// once the user changes either of the two.
     fn refresh_warnings(&mut self) {
         let mut warnings = Vec::new();
 
-        if self.fallback == Some(self.dialect) {
+        let reads_with_fallback_delimiter = self.fallback.is_some_and(|fallback| {
+            fallback.delimiter == self.dialect.delimiter
+                && fallback.encoding == self.dialect.encoding
+        });
+
+        if reads_with_fallback_delimiter {
             warnings.push(DelimitedWarning::DetectedDelimiterUnreadable);
         }
 
