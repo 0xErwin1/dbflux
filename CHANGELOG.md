@@ -45,6 +45,10 @@ All notable changes to DBFlux will be documented in this file.
 
 * **MCP script tools stay inside the scripts folder** — The MCP `get_script`, `update_script`, `delete_script`, `create_script`, `list_scripts` and `execute_script` tools now refuse a path that leads out of DBFlux's scripts folder, whether through `..`, an absolute path or a symlink that points elsewhere, and `create_script` refuses a name or extension that contains a path separator. Before, an MCP client allowed to use these tools could read, overwrite or delete files outside the scripts folder by passing a path such as `../../.ssh/config`.
 
+### Fixed
+
+* **Edits in the data grid that were not saved** — An edit that only swapped whitespace in a value, such as a space for a tab or a line break, or that only changed text past the value's 200th character, is now saved; before, it was dropped without a message. Set NULL on a cell holding the text `NULL`, and Unset field on a document field holding the text `missing`, now take effect. Committing a decimal value such as `1.0` without changing it no longer saves it again. Pasting a cell's copied value back onto the same cell no longer stages a change; before, a NULL cell was set to an empty string, and a long value, or one with Windows line breaks, could be overwritten by its copy, in which tabs and line breaks are spaces. A row whose delete is undone keeps its cell edits, so Save all saves them. Undo and redo no longer change a table that cannot be edited.
+
 ## [0.8.6] - 2026-10-02
 
 ### Added

@@ -386,6 +386,12 @@ impl gpui::Render for DataTable {
         let s = self.state.clone();
         let on_undo = move |_: &Undo, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
+                // A host makes the table read-only while its edits must not
+                // change, so the history must not change them either.
+                if !state.is_editable() && !state.is_insertable() {
+                    return;
+                }
+
                 // Stop editing before undo to avoid stale visual index references
                 if state.is_editing() {
                     state.stop_editing(false, cx);
@@ -407,6 +413,12 @@ impl gpui::Render for DataTable {
         let s = self.state.clone();
         let on_redo = move |_: &Redo, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
+                // A host makes the table read-only while its edits must not
+                // change, so the history must not change them either.
+                if !state.is_editable() && !state.is_insertable() {
+                    return;
+                }
+
                 // Stop editing before redo to avoid stale visual index references
                 if state.is_editing() {
                     state.stop_editing(false, cx);
@@ -1680,5 +1692,74 @@ mod tests {
             x_after, x_before,
             "vertical track click must not scroll horizontally"
         );
+    }
+
+    fn dirty_cells(visual: &mut VisualTestContext, state: &Entity<DataTableState>) -> usize {
+        visual.update(|_, cx| state.read(cx).edit_buffer().dirty_rows().len())
+    }
+
+    fn set_editable(
+        visual: &mut VisualTestContext,
+        state: &Entity<DataTableState>,
+        editable: bool,
+    ) {
+        visual.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.set_positional_editing(editable);
+                state.set_insertable(editable);
+            });
+        });
+    }
+
+    /// A host makes a table read-only while its edits must not change (a
+    /// save or a reload is running): undo and redo then change nothing.
+    #[gpui::test]
+    fn undo_and_redo_change_nothing_in_a_read_only_table(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("undo-test-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("the state entity must be created");
+
+        visual.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_positional_editing(true);
+                state
+                    .edit_buffer_mut()
+                    .set_cell(0, 1, CellValue::text("edited"));
+                state.focus(window, cx);
+            });
+        });
+        visual.run_until_parked();
+
+        set_editable(visual, &state, false);
+        visual.dispatch_action(actions::Undo);
+        assert_eq!(dirty_cells(visual, &state), 1, "undo is refused");
+
+        set_editable(visual, &state, true);
+        visual.dispatch_action(actions::Undo);
+        assert_eq!(dirty_cells(visual, &state), 0, "undo runs");
+
+        set_editable(visual, &state, false);
+        visual.dispatch_action(actions::Redo);
+        assert_eq!(dirty_cells(visual, &state), 0, "redo is refused");
+
+        set_editable(visual, &state, true);
+        visual.dispatch_action(actions::Redo);
+        assert_eq!(dirty_cells(visual, &state), 1, "redo runs");
     }
 }
