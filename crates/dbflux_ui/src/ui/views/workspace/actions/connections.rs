@@ -184,18 +184,26 @@ impl Workspace {
 
     /// Checks whether the application may quit now.
     ///
-    /// Returns `true` when no query is running on any connection. Otherwise
-    /// opens the active-query prompt and returns `false`; choosing "Quit
-    /// anyway" then emits [`QuitConfirmed`].
+    /// Returns `true` when no query is running on any connection and no open
+    /// document has changes the quit cannot save on its own. Otherwise opens
+    /// one prompt and returns `false`: the active-query prompt when a query
+    /// runs, and the unsaved-changes prompt when it does not. "Quit anyway"
+    /// in the first opens the second when it is needed, so the two never show
+    /// at once. The answer that quits emits [`QuitConfirmed`].
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        !self.prompt_active_query(ActiveQueryScope::Quit, window, cx)
+        if self.prompt_active_query(ActiveQueryScope::Quit, window, cx) {
+            return false;
+        }
+
+        !self.prompt_unsaved_before_quit(Vec::new(), window, cx)
     }
 
     /// Close action for the main window's in-app (Linux CSD) title bar.
     ///
     /// Follows the window-manager close: [`Self::request_quit`] first, so a
-    /// running query opens the prompt, then graceful shutdown through
-    /// [`QuitConfirmed`]. Removing the window directly would skip both.
+    /// running query or unsaved changes open their prompt, then graceful
+    /// shutdown through [`QuitConfirmed`]. Removing the window directly would
+    /// skip both.
     pub(in crate::ui::views::workspace) fn title_bar_close_handler(
         &self,
         cx: &mut Context<Self>,
@@ -318,8 +326,16 @@ impl Workspace {
                     self.cancel_running_queries(profile_filter, cx);
                     self.disconnect_profile_now(profile_id, cx);
                 }
-                // The shutdown sequence cancels every task itself.
-                ActiveQueryScope::Quit => cx.emit(QuitConfirmed),
+                // The shutdown sequence cancels every task itself. The
+                // unsaved-changes prompt comes next when a document needs it,
+                // and keeps the keyboard.
+                ActiveQueryScope::Quit => {
+                    if self.prompt_unsaved_before_quit(Vec::new(), window, cx) {
+                        return;
+                    }
+
+                    cx.emit(QuitConfirmed);
+                }
             },
         }
 

@@ -348,6 +348,10 @@ pub struct Workspace {
     /// chooses an outcome.
     pending_active_query: Option<ActiveQueryScope>,
     modal_unsaved_changes: Entity<crate::ui::overlays::modals::ModalUnsavedChanges>,
+    /// The quit the unsaved-changes prompt holds, from the moment it asks
+    /// until the saves it started have reported. `None` while the prompt is
+    /// closed or guards a tab close.
+    pending_quit: Option<PendingQuit>,
     modal_drop_table: Entity<crate::ui::overlays::modals::ModalDropTable>,
     /// Item ID of the drop-table pending delete, consumed when modal confirms.
     pending_drop_table_item_id: Option<String>,
@@ -416,10 +420,30 @@ enum ActiveQueryScope {
     Quit,
 }
 
-/// Emitted when a quit started inside the workspace may proceed: the user
-/// chose "Quit anyway" in the active-query prompt, or closed the window from
-/// the in-app title bar with no query running. The application shell owns
-/// shutdown and starts it on this event.
+/// A quit the unsaved-changes prompt holds. `discard` lists the documents
+/// whose changes the user chose to drop in this quit so far; they are dropped
+/// when the quit goes on, and not asked about again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingQuit {
+    /// The prompt is open.
+    Asking {
+        discard: Vec<crate::ui::document::DocumentId>,
+    },
+    /// The user chose to save `waiting`. Once each of them reported, or its
+    /// tab closed, the quit checks every document again and goes on when
+    /// nothing needs asking. `failed` is set by the first save that did not
+    /// succeed, which drops the quit.
+    Saving {
+        waiting: Vec<crate::ui::document::DocumentId>,
+        failed: bool,
+        discard: Vec<crate::ui::document::DocumentId>,
+    },
+}
+
+/// Emitted when a quit started inside the workspace may proceed: nothing
+/// needed asking, or the user answered every prompt the quit opened (the
+/// active-query prompt, then the unsaved-changes prompt) with a choice that
+/// quits. The application shell owns shutdown and starts it on this event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuitConfirmed;
 
@@ -618,6 +642,14 @@ impl Workspace {
             window,
             |this, _, outcome: &crate::ui::overlays::modals::UnsavedChangesOutcome, window, cx| {
                 use crate::ui::overlays::modals::UnsavedChangesOutcome;
+
+                // A prompt opened for a quit is answered for the quit: its
+                // tabs stay open, whatever the answer.
+                if matches!(this.pending_quit, Some(PendingQuit::Asking { .. })) {
+                    this.resolve_quit_prompt(outcome, window, cx);
+                    return;
+                }
+
                 match outcome {
                     UnsavedChangesOutcome::DiscardAll(ids) => {
                         // Close the documents the dialog listed, nothing else:
@@ -1549,6 +1581,8 @@ impl Workspace {
                         this.new_query_tab_with_content(sql.clone(), window, cx);
                     }
                     TabManagerEvent::SaveFinished { id, succeeded } => {
+                        this.leave_quit_wait(*id, *succeeded, window, cx);
+
                         if !succeeded && this.tab_manager.read(cx).active_id() == Some(*id) {
                             // Save As was dismissed or the write failed: the tab
                             // keeps its changes and gets the keyboard back.
@@ -1562,7 +1596,10 @@ impl Workspace {
                         this.tab_manager
                             .update(cx, |mgr, cx| mgr.focus_active(window, cx));
                     }
-                    TabManagerEvent::Closed(_) => {
+                    TabManagerEvent::Closed(id) => {
+                        // A closed tab never reports its save.
+                        this.leave_quit_wait(*id, true, window, cx);
+
                         // With a tab left, the `Activated` that follows hands
                         // the rail over. With none, nothing owns it any more.
                         if this.tab_manager.read(cx).active_id().is_none() {
@@ -1608,6 +1645,7 @@ impl Workspace {
             modal_active_query,
             pending_active_query: None,
             modal_unsaved_changes,
+            pending_quit: None,
             modal_drop_table,
             pending_drop_table_item_id: None,
             modal_tunnel_auth,

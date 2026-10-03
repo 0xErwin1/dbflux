@@ -636,6 +636,12 @@ impl Workspace {
     ) {
         use crate::ui::overlays::modals::UnsavedChangesRequest;
 
+        // The prompt now guards this close, not the quit it showed for. A
+        // quit whose saves run is not the prompt's, and stays pending.
+        if matches!(self.pending_quit, Some(PendingQuit::Asking { .. })) {
+            self.pending_quit = None;
+        }
+
         self.modal_unsaved_changes.update(cx, |modal, cx| {
             modal.open(UnsavedChangesRequest { entries }, cx);
         });

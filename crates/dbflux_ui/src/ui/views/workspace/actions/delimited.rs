@@ -154,8 +154,12 @@ impl Workspace {
 mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-    use crate::ui::document::{DelimitedFileKey, DocumentKind, DocumentState};
-    use crate::ui::views::workspace::Workspace;
+    use crate::ui::document::{
+        DelimitedDocument, DelimitedFileKey, DocumentId, DocumentKind, DocumentState, Tab,
+    };
+    use crate::ui::overlays::modals::UnsavedChangesOutcome;
+    use crate::ui::views::workspace::{QuitConfirmed, Workspace};
+    use dbflux_components::components::data_table::model::CellValue;
     use dbflux_ui_base::AppStateEntity;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::cell::RefCell;
@@ -684,12 +688,22 @@ mod tests {
 
         fn upload_object(
             &self,
-            _bucket: &str,
-            _key: &str,
-            _source_path: &std::path::Path,
+            bucket: &str,
+            key: &str,
+            source_path: &std::path::Path,
             _content_type: Option<&str>,
         ) -> Result<(), dbflux_core::DbError> {
-            not_used()
+            self.bytes(bucket, key)?;
+
+            let bytes = std::fs::read(source_path)
+                .map_err(|error| dbflux_core::DbError::query_failed(error.to_string()))?;
+
+            self.objects
+                .lock()
+                .expect("the object map")
+                .insert(key.to_string(), bytes);
+
+            Ok(())
         }
 
         fn delete_object(&self, _bucket: &str, _key: &str) -> Result<(), dbflux_core::DbError> {
@@ -1168,5 +1182,711 @@ mod tests {
             active_title(window, &workspace).as_deref(),
             Some("report.sql")
         );
+    }
+
+    // -- Quitting --------------------------------------------------------------
+
+    const CITIES: &[u8] = b"name,city\nAna,Lima\n";
+    const EDITED: &[u8] = b"name,city\nAna,Cusco\n";
+
+    /// Opens `document` in a tab, as `open_delimited_file` does, so the test
+    /// keeps the typed entity, and waits for its first page.
+    fn open_document(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        build: impl FnOnce(&mut gpui::Context<DelimitedDocument>) -> DelimitedDocument + 'static,
+    ) -> Entity<DelimitedDocument> {
+        let document = window.update(|_, cx| {
+            let document = cx.new(build);
+            let pane = DelimitedDocument::into_pane(document.clone(), cx);
+            let tab_manager = workspace.read(cx).tab_manager.clone();
+
+            tab_manager.update(cx, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx);
+            });
+
+            document
+        });
+        window.run_until_parked();
+
+        document
+    }
+
+    fn open_local_document(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        path: PathBuf,
+    ) -> Entity<DelimitedDocument> {
+        open_document(window, workspace, move |cx| {
+            DelimitedDocument::open_local(path, cx)
+        })
+    }
+
+    fn open_object_document(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        store: std::sync::Arc<ObjectStoreFake>,
+    ) -> Entity<DelimitedDocument> {
+        open_object_document_at(window, workspace, store, "2026/cities.csv")
+    }
+
+    fn open_object_document_at(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        store: std::sync::Arc<ObjectStoreFake>,
+        key: &'static str,
+    ) -> Entity<DelimitedDocument> {
+        let profile_id = connect_object_store(window, workspace, store.clone());
+        let app_state = window.update(|_, cx| workspace.read(cx).app_state.clone());
+
+        open_document(window, workspace, move |cx| {
+            DelimitedDocument::open_object(
+                app_state,
+                profile_id,
+                std::sync::Arc::new(ObjectConnection { store }),
+                BUCKET.to_string(),
+                key.to_string(),
+                cx,
+            )
+        })
+    }
+
+    /// Stages "Cusco" for the city of the first record.
+    fn edit_first_city(window: &mut VisualTestContext, document: &Entity<DelimitedDocument>) {
+        window.update(|_, cx| {
+            let table_state = document
+                .read(cx)
+                .table_state()
+                .expect("the file is loaded")
+                .clone();
+
+            table_state.update(cx, |state, cx| {
+                state.stage_cell_value(0, 1, CellValue::text("Cusco"));
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| document.read(cx).is_dirty()));
+    }
+
+    fn is_dirty(window: &mut VisualTestContext, document: &Entity<DelimitedDocument>) -> bool {
+        window.update(|_, cx| document.read(cx).is_dirty())
+    }
+
+    fn request_quit(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        let allowed = window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.request_quit(window, cx))
+        });
+        window.run_until_parked();
+
+        allowed
+    }
+
+    fn count_quit_confirmed(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Rc<std::cell::Cell<usize>> {
+        let count = Rc::new(std::cell::Cell::new(0));
+        let sink = count.clone();
+
+        window.update(|_, cx| {
+            cx.subscribe(workspace, move |_, _: &QuitConfirmed, _| {
+                sink.set(sink.get() + 1);
+            })
+            .detach();
+        });
+
+        count
+    }
+
+    fn unsaved_prompt_visible(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> bool {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .modal_unsaved_changes
+                .read(cx)
+                .is_visible()
+        })
+    }
+
+    fn query_prompt_visible(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        window.update(|_, cx| workspace.read(cx).modal_active_query.read(cx).is_visible())
+    }
+
+    fn choose_save(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.clone();
+            modal.update(cx, |modal, cx| modal.confirm(cx));
+        });
+        window.run_until_parked();
+    }
+
+    fn choose_cancel(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.clone();
+            modal.update(cx, |modal, cx| modal.cancel(cx));
+        });
+        window.run_until_parked();
+    }
+
+    /// Chooses "Don't save" for `listed`, the documents the prompt lists, as
+    /// its button does.
+    fn choose_discard(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        listed: Vec<DocumentId>,
+    ) {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.clone();
+            modal.update(cx, |modal, cx| {
+                cx.emit(UnsavedChangesOutcome::DiscardAll(listed));
+                modal.close(cx);
+            });
+        });
+        window.run_until_parked();
+    }
+
+    /// Runs the shutdown's document flush the way `main.rs` polls it, until
+    /// nothing is outstanding.
+    fn flush_documents(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        for _ in 0..50 {
+            let outstanding = window.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.flush_pending_document_edits(cx)
+                })
+            });
+            window.run_until_parked();
+
+            if !outstanding {
+                return;
+            }
+        }
+
+        panic!("the document flush never finished");
+    }
+
+    fn document_id(
+        window: &mut VisualTestContext,
+        document: &Entity<DelimitedDocument>,
+    ) -> DocumentId {
+        window.update(|_, cx| document.read(cx).id())
+    }
+
+    #[gpui::test]
+    fn quitting_with_a_clean_csv_tab_asks_nothing(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        open_local_document(window, &workspace, file.path.clone());
+
+        assert!(request_quit(window, &workspace));
+        assert!(!unsaved_prompt_visible(window, &workspace));
+
+        flush_documents(window, &workspace);
+        assert_eq!(std::fs::read(&file.path).expect("the file reads"), CITIES);
+    }
+
+    #[gpui::test]
+    fn a_dirty_local_tab_that_saves_safely_is_saved_on_quit_without_asking(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let document = open_local_document(window, &workspace, file.path.clone());
+
+        edit_first_city(window, &document);
+
+        assert!(request_quit(window, &workspace));
+        assert!(!unsaved_prompt_visible(window, &workspace));
+
+        flush_documents(window, &workspace);
+
+        assert_eq!(std::fs::read(&file.path).expect("the file reads"), EDITED);
+        assert!(!is_dirty(window, &document));
+        assert_eq!(toast_count(window), 0);
+        assert_eq!(
+            tab_titles(window, &workspace),
+            ["cities.csv"],
+            "the tab stays"
+        );
+    }
+
+    /// The file changed elsewhere, so a save would be refused: the quit
+    /// asks. Returns the bytes the other writer left in the file.
+    fn quit_over_a_file_changed_elsewhere(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        file: &TestFile,
+    ) -> (Entity<DelimitedDocument>, &'static [u8]) {
+        let document = open_local_document(window, workspace, file.path.clone());
+        edit_first_city(window, &document);
+
+        let theirs: &'static [u8] = b"name,city\nAna,Lima\nBo,Quito\n";
+        std::fs::write(&file.path, theirs).expect("the test file is writable");
+
+        assert!(!request_quit(window, workspace));
+        assert!(unsaved_prompt_visible(window, workspace));
+
+        (document, theirs)
+    }
+
+    #[gpui::test]
+    fn cancel_on_a_file_changed_elsewhere_keeps_the_app_and_the_edits(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let (document, theirs) = quit_over_a_file_changed_elsewhere(window, &workspace, &file);
+
+        choose_cancel(window, &workspace);
+
+        assert_eq!(quit_confirmed.get(), 0);
+        assert!(!unsaved_prompt_visible(window, &workspace));
+        assert!(is_dirty(window, &document));
+        assert_eq!(std::fs::read(&file.path).expect("the file reads"), theirs);
+    }
+
+    #[gpui::test]
+    fn discard_on_a_file_changed_elsewhere_quits_and_writes_nothing(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let (document, theirs) = quit_over_a_file_changed_elsewhere(window, &workspace, &file);
+        let id = document_id(window, &document);
+
+        choose_discard(window, &workspace, vec![id]);
+
+        assert_eq!(quit_confirmed.get(), 1);
+        assert!(!is_dirty(window, &document));
+
+        flush_documents(window, &workspace);
+
+        assert_eq!(std::fs::read(&file.path).expect("the file reads"), theirs);
+        assert_eq!(toast_count(window), 0);
+        assert_eq!(
+            tab_titles(window, &workspace),
+            ["cities.csv"],
+            "the tab stays"
+        );
+    }
+
+    #[gpui::test]
+    fn a_refused_save_on_a_file_changed_elsewhere_keeps_the_app_and_the_edits(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let (document, theirs) = quit_over_a_file_changed_elsewhere(window, &workspace, &file);
+
+        choose_save(window, &workspace);
+
+        assert_eq!(quit_confirmed.get(), 0);
+        assert_eq!(toast_count(window), 1, "the refused save is reported once");
+        assert!(is_dirty(window, &document));
+        assert_eq!(std::fs::read(&file.path).expect("the file reads"), theirs);
+        assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
+    }
+
+    #[gpui::test]
+    fn a_dirty_object_asks_and_save_uploads_before_the_quit(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_object_document(window, &workspace, store.clone());
+
+        edit_first_city(window, &document);
+
+        assert!(!request_quit(window, &workspace));
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 0);
+
+        choose_save(window, &workspace);
+
+        assert_eq!(
+            store.bytes(BUCKET, "2026/cities.csv").ok().as_deref(),
+            Some(EDITED)
+        );
+        assert_eq!(quit_confirmed.get(), 1);
+        assert!(!is_dirty(window, &document));
+        assert_eq!(
+            tab_titles(window, &workspace),
+            ["cities.csv"],
+            "the tab stays"
+        );
+    }
+
+    /// A local file too large for the shutdown's flush budget asks, and
+    /// "Don't save" keeps the shutdown flush from writing it: without the
+    /// discard the flush would save a dirty local file.
+    #[gpui::test]
+    fn a_large_local_file_discarded_on_quit_is_not_written(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("large.csv");
+
+        let mut bytes = b"name,city\n".to_vec();
+        while bytes.len() <= 17 * 1024 * 1024 {
+            bytes.extend_from_slice(b"Ana,Lima\n");
+        }
+        std::fs::write(&file.path, &bytes).expect("the test file is writable");
+
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_local_document(window, &workspace, file.path.clone());
+        let id = document_id(window, &document);
+
+        edit_first_city(window, &document);
+
+        assert!(!request_quit(window, &workspace));
+        assert!(unsaved_prompt_visible(window, &workspace));
+
+        choose_discard(window, &workspace, vec![id]);
+        flush_documents(window, &workspace);
+
+        assert_eq!(quit_confirmed.get(), 1);
+        assert!(
+            std::fs::read(&file.path).expect("the file reads") == bytes,
+            "the discarded edit is not written"
+        );
+    }
+
+    /// Chooses Save for `selected` only, as the button does with the other
+    /// entries unchecked.
+    fn choose_save_of(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        selected: Vec<DocumentId>,
+    ) {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.clone();
+            modal.update(cx, |modal, cx| {
+                cx.emit(UnsavedChangesOutcome::SaveSelected(selected));
+                modal.close(cx);
+            });
+        });
+        window.run_until_parked();
+    }
+
+    /// Starts the saves of the prompt's Save without letting them run, so the
+    /// test can act while they are in flight.
+    fn start_save_without_running_it(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.clone();
+            modal.update(cx, |modal, cx| modal.confirm(cx));
+        });
+    }
+
+    fn stage_first_city(window: &mut VisualTestContext, document: &Entity<DelimitedDocument>) {
+        window.update(|_, cx| {
+            let table_state = document
+                .read(cx)
+                .table_state()
+                .expect("the file is loaded")
+                .clone();
+
+            table_state.update(cx, |state, cx| {
+                state.stage_cell_value(0, 1, CellValue::text("Cusco"));
+                cx.notify();
+            });
+        });
+    }
+
+    fn quit_is_pending(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        window.update(|_, cx| workspace.read(cx).pending_quit.is_some())
+    }
+
+    /// An unchecked entry keeps its edits, as in the tab-close prompt, and the
+    /// quit does not go on while it has them: the prompt asks again.
+    #[gpui::test]
+    fn an_unchecked_tab_keeps_its_edits_and_the_quit_asks_again(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("a.csv", CITIES), ("b.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let first = open_object_document_at(window, &workspace, store.clone(), "a.csv");
+        let second = open_object_document_at(window, &workspace, store.clone(), "b.csv");
+        let first_id = document_id(window, &first);
+
+        edit_first_city(window, &first);
+        edit_first_city(window, &second);
+
+        assert!(!request_quit(window, &workspace));
+        choose_save_of(window, &workspace, vec![first_id]);
+
+        assert_eq!(store.bytes(BUCKET, "a.csv").ok().as_deref(), Some(EDITED));
+        assert_eq!(store.bytes(BUCKET, "b.csv").ok().as_deref(), Some(CITIES));
+        assert!(
+            is_dirty(window, &second),
+            "the unchecked tab keeps its edits"
+        );
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    /// One refused save among several keeps the application open: the others
+    /// land, and the refusal is reported once.
+    #[gpui::test]
+    fn one_failed_save_among_several_keeps_the_app_open(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+
+        let local = open_local_document(window, &workspace, file.path.clone());
+        let object = open_object_document(window, &workspace, store.clone());
+
+        edit_first_city(window, &local);
+        edit_first_city(window, &object);
+        std::fs::write(&file.path, b"name,city\nAna,Lima\nBo,Quito\n")
+            .expect("the test file is writable");
+
+        assert!(!request_quit(window, &workspace));
+        choose_save(window, &workspace);
+
+        assert_eq!(
+            store.bytes(BUCKET, "2026/cities.csv").ok().as_deref(),
+            Some(EDITED)
+        );
+        assert!(is_dirty(window, &local));
+        assert_eq!(toast_count(window), 1);
+        assert_eq!(quit_confirmed.get(), 0);
+        assert!(!quit_is_pending(window, &workspace));
+    }
+
+    /// A second quit while the first one's saves run replaces it: the first
+    /// one's saves landing do not quit.
+    #[gpui::test]
+    fn a_second_quit_during_the_saves_replaces_the_first(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_object_document(window, &workspace, store.clone());
+
+        edit_first_city(window, &document);
+
+        assert!(!request_quit(window, &workspace));
+        start_save_without_running_it(window, &workspace);
+
+        let allowed = window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.request_quit(window, cx))
+        });
+        assert!(!allowed, "the save still runs, so the second quit asks");
+        window.run_until_parked();
+
+        assert_eq!(
+            store.bytes(BUCKET, "2026/cities.csv").ok().as_deref(),
+            Some(EDITED)
+        );
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 0);
+
+        choose_cancel(window, &workspace);
+
+        assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    /// A tab dirtied while the quit's saves run is asked about before the
+    /// quit goes on.
+    #[gpui::test]
+    fn a_tab_dirtied_during_the_saves_is_asked_about(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("a.csv", CITIES), ("b.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let first = open_object_document_at(window, &workspace, store.clone(), "a.csv");
+        let second = open_object_document_at(window, &workspace, store.clone(), "b.csv");
+
+        edit_first_city(window, &first);
+
+        assert!(!request_quit(window, &workspace));
+        start_save_without_running_it(window, &workspace);
+        stage_first_city(window, &second);
+        window.run_until_parked();
+
+        assert_eq!(store.bytes(BUCKET, "a.csv").ok().as_deref(), Some(EDITED));
+        assert!(is_dirty(window, &second));
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    /// A tab saved on quit without asking is checked again after "Don't
+    /// save": its file changed while the prompt was open, so it asks now.
+    #[gpui::test]
+    fn dont_save_checks_the_other_tabs_again(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+
+        let local = open_local_document(window, &workspace, file.path.clone());
+        let object = open_object_document(window, &workspace, store);
+        let object_id = document_id(window, &object);
+
+        edit_first_city(window, &local);
+        edit_first_city(window, &object);
+
+        assert!(!request_quit(window, &workspace));
+        std::fs::write(&file.path, b"name,city\nAna,Lima\nBo,Quito\n")
+            .expect("the test file is writable");
+
+        choose_discard(window, &workspace, vec![object_id]);
+
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert!(is_dirty(window, &local));
+        assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    /// A tab closed while its quit save runs leaves the wait, so the quit
+    /// goes on instead of waiting for a report that never comes.
+    #[gpui::test]
+    fn a_tab_closed_during_its_quit_save_leaves_the_wait(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_object_document(window, &workspace, store);
+        let id = document_id(window, &document);
+
+        edit_first_city(window, &document);
+
+        assert!(!request_quit(window, &workspace));
+        start_save_without_running_it(window, &workspace);
+
+        window.update(|_, cx| {
+            let tab_manager = workspace.read(cx).tab_manager.clone();
+            tab_manager.update(cx, |manager, cx| manager.close(id, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    /// A tab-close prompt opened while the quit's saves run does not drop
+    /// the quit: it is still pending and asks about what is left.
+    #[gpui::test]
+    fn a_close_prompt_during_the_saves_keeps_the_quit(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("a.csv", CITIES), ("b.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let first = open_object_document_at(window, &workspace, store.clone(), "a.csv");
+        let second = open_object_document_at(window, &workspace, store.clone(), "b.csv");
+        let second_id = document_id(window, &second);
+
+        edit_first_city(window, &first);
+
+        assert!(!request_quit(window, &workspace));
+        start_save_without_running_it(window, &workspace);
+
+        stage_first_city(window, &second);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.close_tab(second_id, window, cx)
+            });
+        });
+
+        assert!(
+            quit_is_pending(window, &workspace),
+            "the close prompt keeps the quit"
+        );
+
+        window.run_until_parked();
+
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert!(quit_is_pending(window, &workspace));
+
+        choose_discard(window, &workspace, vec![second_id]);
+
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    /// The running-query prompt comes first, and "Quit anyway" leads to the
+    /// unsaved-changes prompt instead of quitting: the two never show at
+    /// once, and each shows once.
+    #[gpui::test]
+    fn a_running_query_asks_first_and_the_unsaved_changes_ask_next(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_object_document(window, &workspace, store.clone());
+        let id = document_id(window, &document);
+
+        edit_first_city(window, &document);
+
+        let profile_id = window.update(|_, cx| {
+            document
+                .read(cx)
+                .connection_id()
+                .expect("an object has a profile")
+        });
+        window.update(|_, cx| {
+            let app_state = workspace.read(cx).app_state.clone();
+            app_state.update(cx, |state, _| {
+                state.start_task_for_target(
+                    dbflux_core::TaskKind::Query,
+                    "SELECT 1",
+                    Some(dbflux_core::TaskTarget {
+                        profile_id,
+                        database: None,
+                    }),
+                );
+            });
+        });
+
+        assert!(!request_quit(window, &workspace));
+        assert!(query_prompt_visible(window, &workspace));
+        assert!(!unsaved_prompt_visible(window, &workspace));
+
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_active_query.clone();
+            modal.update(cx, |modal, cx| modal.force(cx));
+        });
+        window.run_until_parked();
+
+        assert!(!query_prompt_visible(window, &workspace));
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 0);
+
+        choose_discard(window, &workspace, vec![id]);
+
+        assert!(!query_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    #[gpui::test]
+    fn the_title_bar_close_asks_about_a_dirty_object(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_object_document(window, &workspace, store);
+
+        edit_first_city(window, &document);
+
+        window.update(|window, cx| {
+            let handler =
+                workspace.update(cx, |workspace, cx| workspace.title_bar_close_handler(cx));
+            handler(window, cx);
+        });
+        window.run_until_parked();
+
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    /// The prompt opened for a quit is answered for the quit: "Don't save"
+    /// keeps the tab, where the same answer for a tab close removes it.
+    #[gpui::test]
+    fn discarding_for_a_quit_does_not_close_the_tab(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let document = open_object_document(window, &workspace, store);
+        let id = document_id(window, &document);
+
+        edit_first_city(window, &document);
+
+        assert!(!request_quit(window, &workspace));
+        choose_discard(window, &workspace, vec![id]);
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
     }
 }
