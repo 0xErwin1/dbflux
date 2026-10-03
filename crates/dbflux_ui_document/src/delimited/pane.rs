@@ -66,7 +66,7 @@ impl DelimitedDocument {
                 let e = entity.clone();
                 Box::new(move |cx| e.read(cx).active_context())
             },
-            // change_summary — always `None`: the table is read-only
+            // change_summary — `Some` while there are unsaved changes
             {
                 let e = entity.clone();
                 Box::new(move |cx| e.read(cx).change_summary())
@@ -106,15 +106,14 @@ impl DelimitedDocument {
             },
         );
 
-        // The interrupted-close save. Nothing is ever unsaved, so the
-        // document starts no save and answers `false`.
+        // The interrupted-close save: the tab closes once the save lands.
         pane.save_for_close = Some({
             let e = entity.clone();
             Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
         });
 
-        // The dialect controls, which the pane actions menu reaches from
-        // the keyboard.
+        // The dialect and edit controls, which the pane actions menu
+        // reaches from the keyboard.
         pane.pane_actions = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).pane_actions(&e))

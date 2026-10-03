@@ -277,6 +277,13 @@ impl PageModel {
         !self.appended_columns.is_empty() || !self.header_renames.is_empty()
     }
 
+    /// Drops every rename and every appended column, which leaves the
+    /// columns as the loaded records form them.
+    pub fn discard_column_changes(&mut self) {
+        self.header_renames.clear();
+        self.appended_columns.clear();
+    }
+
     /// Adds a column after the last one. Refused with
     /// [`PageModelError::FullLoadRequired`] unless every record is loaded,
     /// because the column's position is the width of the widest record and

@@ -1758,11 +1758,22 @@ document:
         row: LINHA
       title: "Linha %{row}"
   delimited:
+    unsaved_summary: "Edições não salvas em %{name}"
     loading: "Carregando %{name}…"
     error:
       open_failed: "Não foi possível abrir %{name}"
       load_more_failed: "Não foi possível carregar mais de %{name}"
       reread_failed: "Não foi possível ler %{name} novamente"
+      save_failed: "Não foi possível salvar %{name}"
+      source_changed: "O arquivo foi alterado em outro lugar desde que foi aberto, então nada foi salvo e suas edições foram mantidas. Para ver o novo conteúdo, descarte suas edições e escolha Recarregar do arquivo, e depois refaça-as."
+      next_page_required: "Uma linha foi adicionada depois do último registro carregado, então sua posição no arquivo ainda não é conhecida. Carregue a próxima página e salve novamente."
+      full_load_required: "Uma coluna foi adicionada antes de o arquivo inteiro ser carregado. Carregue todas as páginas e salve novamente."
+      saved_version_unknown: "%{name} foi salvo, mas não foi possível ler a nova versão"
+      reopen_failed: "%{name} foi salvo, mas não foi possível abri-lo novamente"
+      unsaved_changes_block_reread: "A tabela tem alterações não salvas, que seriam perdidas ao ler o arquivo novamente. Salve ou descarte-as primeiro."
+      save_while_rereading: "O arquivo está sendo lido novamente, o que substitui as linhas a que estas edições pertencem. Aguarde a leitura terminar e salve novamente."
+      add_row_failed: "Não foi possível adicionar uma linha a %{name}"
+      no_columns: "O arquivo não tem colunas, então uma nova linha não teria campos e o arquivo salvo não a manteria."
       refused:
         unsupported: "O texto %{encoding} não pode ser lido com %{character} como delimitador ou aspas. Escolha outro delimitador, outras aspas ou outra codificação."
         line_break: "Uma quebra de linha não pode ser o delimitador nem as aspas. Escolha outro caractere."
@@ -1801,6 +1812,12 @@ document:
       load_more: Carregar mais
       loading_more: "Carregando…"
       rereading: "Lendo o arquivo novamente…"
+    action:
+      save: Salvar
+      saving: "Salvando…"
+      discard: "Descartar alterações"
+      insert_above: "Inserir linha acima"
+      reload: "Recarregar do arquivo"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"

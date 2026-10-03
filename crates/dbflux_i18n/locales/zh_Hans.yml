@@ -1758,11 +1758,22 @@ document:
         row: 行
       title: "行 %{row}"
   delimited:
+    unsaved_summary: "%{name} 有未保存的编辑"
     loading: "正在加载 %{name}…"
     error:
       open_failed: "无法打开 %{name}"
       load_more_failed: "无法加载 %{name} 的更多内容"
       reread_failed: "无法重新读取 %{name}"
+      save_failed: "无法保存 %{name}"
+      source_changed: "文件在打开后已在别处被修改，因此未保存任何内容，你的编辑仍然保留。要查看新内容，请放弃编辑并选择从文件重新加载，然后重新编辑。"
+      next_page_required: "在最后加载的记录之后添加了一行，其在文件中的位置尚不确定。请加载下一页，然后再次保存。"
+      full_load_required: "在加载整个文件之前添加了一列。请加载所有页面，然后再次保存。"
+      saved_version_unknown: "%{name} 已保存，但无法读取其新版本"
+      reopen_failed: "%{name} 已保存，但无法重新打开"
+      unsaved_changes_block_reread: "表格有未保存的更改，重新读取文件会丢弃这些更改。请先保存或放弃它们。"
+      save_while_rereading: "文件正在重新读取，这会替换这些编辑所属的行。请等待读取完成后再保存。"
+      add_row_failed: "无法向 %{name} 添加行"
+      no_columns: "该文件没有列，新行将没有字段，保存后的文件也不会保留它。"
       refused:
         unsupported: "无法以 %{character} 作为分隔符或引号读取 %{encoding} 文本。请选择其他分隔符、引号或编码。"
         line_break: "换行符不能用作分隔符或引号。请选择其他字符。"
@@ -1801,6 +1812,12 @@ document:
       load_more: 加载更多
       loading_more: "正在加载…"
       rereading: "正在重新读取文件…"
+    action:
+      save: 保存
+      saving: "正在保存…"
+      discard: "放弃更改"
+      insert_above: "在上方插入行"
+      reload: "从文件重新加载"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"
