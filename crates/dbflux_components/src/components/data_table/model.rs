@@ -1143,6 +1143,17 @@ impl EditBuffer {
             && state.is_pending_delete()
         {
             self.push_undo(EditAction::UnmarkDelete { row });
+            self.lift_delete(row);
+        }
+    }
+
+    /// Takes a row out of `PendingDelete` into the state it had before it
+    /// was marked: dirty while it holds staged cells, which a delete keeps,
+    /// and clean otherwise.
+    fn lift_delete(&mut self, row: usize) {
+        if self.overrides.keys().any(|&(r, _)| r == row) {
+            self.row_states.insert(row, RowState::Dirty);
+        } else {
             self.row_states.remove(&row);
         }
     }
@@ -1327,7 +1338,7 @@ impl EditBuffer {
             }
 
             EditAction::MarkDelete { row } => {
-                self.row_states.remove(&row);
+                self.lift_delete(row);
                 self.redo_stack.push(EditAction::MarkDelete { row });
             }
 
@@ -1444,7 +1455,7 @@ impl EditBuffer {
             }
 
             EditAction::UnmarkDelete { row } => {
-                self.row_states.remove(&row);
+                self.lift_delete(row);
                 self.undo_stack.push(EditAction::UnmarkDelete { row });
             }
 
@@ -2025,5 +2036,46 @@ mod tests {
 
         let (_, dropped_rows) = reload(&buffer, &model, &model, &[0]);
         assert_eq!(dropped_rows, 1);
+    }
+
+    /// Undoing a delete puts the row back in the state it had before: dirty
+    /// while it holds staged cells, so a save of every pending change still
+    /// finds it, and clean otherwise.
+    #[test]
+    fn undoing_a_delete_restores_the_state_the_row_had() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(2);
+
+        buffer.set_cell(0, 0, CellValue::text("edited"));
+        buffer.mark_for_delete(0);
+        buffer.mark_for_delete(1);
+
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+
+        assert!(buffer.row_state(0).is_dirty());
+        assert!(buffer.row_state(1).is_clean());
+        assert_eq!(buffer.dirty_rows(), vec![0]);
+        assert!(buffer.pending_delete_rows().is_empty());
+    }
+
+    /// Unmarking a delete, and redoing an unmark, do the same.
+    #[test]
+    fn unmarking_a_delete_restores_the_state_the_row_had() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(1);
+
+        buffer.set_cell(0, 0, CellValue::text("edited"));
+        buffer.mark_for_delete(0);
+        buffer.unmark_delete(0);
+
+        assert!(buffer.row_state(0).is_dirty());
+
+        assert!(buffer.undo());
+        assert!(buffer.row_state(0).is_pending_delete());
+
+        assert!(buffer.redo());
+        assert!(buffer.row_state(0).is_dirty());
+        assert_eq!(buffer.dirty_rows(), vec![0]);
     }
 }
