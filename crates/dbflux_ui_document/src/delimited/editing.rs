@@ -1100,12 +1100,14 @@ impl DelimitedDocument {
     /// is false only for a file that is not loaded.
     ///
     /// Asking while a save runs is intentional: that save then reports the
-    /// outcome the quit waits for.
+    /// outcome the quit waits for. A close that asked for that save no longer
+    /// closes the tab when it lands.
     pub fn save_for_quit(&mut self, cx: &mut Context<Self>) -> bool {
         if self.loaded().is_none() {
             return false;
         }
 
+        self.close_after_save = false;
         self.save(cx);
         true
     }
