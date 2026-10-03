@@ -2385,11 +2385,7 @@ impl DataGridPanel {
                 return;
             };
 
-            state.stage_cell_value(
-                coord.row,
-                coord.col,
-                dbflux_components::components::data_table::model::CellValue::text(&text),
-            );
+            state.stage_pasted_text(coord.row, coord.col, &text);
 
             cx.notify();
         });
@@ -2904,7 +2900,7 @@ impl DataGridPanel {
                 Some(VisualRowSource::Insert(insert_idx)) => buffer
                     .pending_inserts()
                     .get(insert_idx)
-                    .and_then(|pi| pi.insert_after)
+                    .and_then(|pi| pi.insert_after())
                     .unwrap_or(self.result.rows.len().saturating_sub(1)),
                 None => self.result.rows.len().saturating_sub(1),
             }
@@ -3103,7 +3099,7 @@ impl DataGridPanel {
                 let insert_after = buffer
                     .pending_inserts()
                     .get(insert_idx)
-                    .and_then(|pi| pi.insert_after)
+                    .and_then(|pi| pi.insert_after())
                     .unwrap_or(base_row_count.saturating_sub(1));
 
                 let values = buffer

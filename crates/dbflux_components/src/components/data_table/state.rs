@@ -112,8 +112,13 @@ pub struct DataTableState {
     /// source-table columns remain editable.
     readonly_columns: HashSet<usize>,
 
-    /// Whether this table is editable (requires PK for row identification).
+    /// Whether this table is editable (requires PK for row identification,
+    /// unless `positional_rows` is set).
     is_editable: bool,
+
+    /// Whether rows are identified by their position instead of by
+    /// `pk_columns`. Set for a source that has no key, such as a file.
+    positional_rows: bool,
 
     /// Whether this table supports INSERT operations (add/duplicate rows).
     /// True for Table and Collection sources, false for query results.
@@ -164,6 +169,7 @@ impl DataTableState {
             fk_columns: HashSet::new(),
             readonly_columns: HashSet::new(),
             is_editable: false,
+            positional_rows: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
             document: None,
@@ -815,15 +821,38 @@ impl DataTableState {
 
     // --- Edit Mode ---
 
-    /// Check if the table is editable (has primary key columns).
+    /// Check if the table is editable (has primary key columns, or
+    /// identifies its rows by position).
     pub fn is_editable(&self) -> bool {
         self.is_editable
     }
 
     /// Set the primary key column indices and update editability.
+    ///
+    /// Rows are identified by these columns from here on, which ends
+    /// positional editing.
     pub fn set_pk_columns(&mut self, pk_columns: Vec<usize>) {
         self.is_editable = !pk_columns.is_empty();
+        self.positional_rows = false;
         self.pk_columns = pk_columns;
+    }
+
+    /// Make the table editable with rows identified by their position, for a
+    /// source whose rows have no key. No column is a key column, so no header
+    /// draws a key icon. `false` makes the table read-only.
+    ///
+    /// A pending edit then belongs to a row index. It only stays on the row it
+    /// was made on while the host keeps every row at its index: see
+    /// [`DataTableState::snapshot_pending_edits`].
+    pub fn set_positional_editing(&mut self, editable: bool) {
+        self.pk_columns.clear();
+        self.positional_rows = editable;
+        self.is_editable = editable;
+    }
+
+    /// Whether the table is editable with rows identified by their position.
+    pub fn is_positional_editing(&self) -> bool {
+        self.positional_rows
     }
 
     /// Get the primary key column indices.
@@ -1151,19 +1180,19 @@ impl DataTableState {
     /// A value that matches what the row already holds has to drop any staged
     /// value instead of staging one, or the row keeps showing the edited value
     /// and stays marked as modified.
+    ///
+    /// The match is on the values, not on the text the grid draws for them:
+    /// see [`super::model::CellValue::holds_same_value`].
     pub fn stage_base_cell_value(
         &mut self,
         base_idx: usize,
         col: usize,
         cell_value: super::model::CellValue,
     ) {
-        let base_text = self
-            .model
-            .cell(base_idx, col)
-            .map(|cell| cell.display_text().to_string())
-            .unwrap_or_default();
+        let absent_cell = super::model::CellValue::text("");
+        let base_cell = self.model.cell(base_idx, col).unwrap_or(&absent_cell);
 
-        if cell_value.display_text().as_ref() == base_text.as_str() {
+        if base_cell.holds_same_value(&cell_value) {
             self.edit_buffer.clear_cell(base_idx, col);
         } else {
             self.edit_buffer.set_cell(base_idx, col, cell_value);
@@ -1195,6 +1224,43 @@ impl DataTableState {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 self.edit_buffer
                     .set_insert_cell(insert_idx, col, cell_value);
+            }
+            None => {}
+        }
+    }
+
+    /// Stage text pasted onto a cell addressed the way the table displays it.
+    ///
+    /// Copy writes a cell as [`clipboard::format_cell`] does, which turns
+    /// tabs and line breaks into spaces, so pasting a cell's copied text back
+    /// onto its row must not replace the row's line breaks: a paste that
+    /// matches the copied form of the row's own value is no change. Typed
+    /// values are not compared this way, because a typed change to
+    /// whitespace is an edit.
+    pub fn stage_pasted_text(&mut self, visual_row: usize, col: usize, text: &str) {
+        use super::model::{CellValue, VisualRowSource};
+
+        match self
+            .edit_buffer
+            .compute_visual_order()
+            .get(visual_row)
+            .copied()
+        {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let is_copied_form = self
+                    .model
+                    .cell(base_idx, col)
+                    .is_some_and(|cell| clipboard::format_cell(cell) == text);
+
+                if is_copied_form {
+                    self.edit_buffer.clear_cell(base_idx, col);
+                } else {
+                    self.stage_base_cell_value(base_idx, col, CellValue::text(text));
+                }
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                self.edit_buffer
+                    .set_insert_cell(insert_idx, col, CellValue::text(text));
             }
             None => {}
         }
@@ -1274,7 +1340,15 @@ impl DataTableState {
     /// Lift the pending edits off the current rows, keyed by primary key, so
     /// [`DataTableState::restore_pending_edits`] can lay them onto the model
     /// that replaces this one.
+    ///
+    /// With positional editing the edits are keyed by row index instead, so
+    /// they are only restored onto the right rows by a model that kept every
+    /// row it already had at its index.
     pub fn snapshot_pending_edits(&self) -> KeyedPendingEdits {
+        if self.positional_rows {
+            return self.edit_buffer.snapshot_by_position(&self.model);
+        }
+
         self.edit_buffer
             .snapshot_by_identity(&self.model, &self.pk_columns)
     }
@@ -2660,5 +2734,581 @@ mod tests {
             );
             assert_eq!(s.edit_buffer().base_row_count(), 1);
         });
+    }
+
+    // =========================================================================
+    // Positional editing — rows identified by position, no key columns
+    // =========================================================================
+
+    /// A two-row state in a window, editable by position and insertable.
+    fn positional_state(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<super::DataTableState>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(two_row_model(), cx);
+                s.set_positional_editing(true);
+                s.set_insertable(true);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        (state, window)
+    }
+
+    #[gpui::test]
+    fn positional_editing_edits_rows_without_key_columns(cx: &mut gpui::TestAppContext) {
+        let (state, window) = positional_state(cx);
+
+        window.update(|_, app| {
+            let s = state.read(app);
+            assert!(s.is_editable());
+            assert!(s.is_positional_editing());
+            assert!(
+                s.pk_columns().is_empty(),
+                "the header and record mode draw a key icon on every key column"
+            );
+        });
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(
+                    s.start_editing(CellCoord::new(1, 1), window, cx),
+                    "a base row must be editable"
+                );
+                s.cell_input().cloned().expect("cell input for the edit")
+            })
+        });
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                assert_eq!(
+                    s.edit_buffer()
+                        .row_changes(1)
+                        .into_iter()
+                        .map(|(col, value)| (col, value.edit_text()))
+                        .collect::<Vec<_>>(),
+                    vec![(1usize, "carol".to_string())]
+                );
+
+                s.edit_buffer_mut().mark_for_delete(0);
+                s.edit_buffer_mut()
+                    .add_pending_insert_after(1, vec![CellValue::text(""), CellValue::text("")]);
+            });
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.edit_buffer().is_pending_delete(0));
+                assert_eq!(s.row_count(), 3);
+                assert!(
+                    s.start_editing(CellCoord::new(2, 1), window, cx),
+                    "the inserted row must be editable"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn key_columns_replace_positional_editing(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, two_row_model());
+
+        cx.update(|cx| {
+            state.update(cx, |s, _cx| {
+                assert!(!s.is_editable());
+
+                s.set_positional_editing(true);
+                s.set_pk_columns(vec![0]);
+                assert!(s.is_editable());
+                assert!(!s.is_positional_editing());
+                assert_eq!(s.pk_columns(), &[0]);
+
+                s.set_positional_editing(true);
+                assert!(s.pk_columns().is_empty());
+
+                s.set_pk_columns(Vec::new());
+                assert!(
+                    !s.is_editable(),
+                    "a table given no key columns is read-only, as it always was"
+                );
+                assert!(!s.is_positional_editing());
+
+                s.set_positional_editing(true);
+                s.set_positional_editing(false);
+                assert!(!s.is_editable());
+            });
+        });
+    }
+
+    /// The model swap of a page append: every row keeps its index, so edits
+    /// keyed by position land on the rows they were made on.
+    #[gpui::test]
+    fn positional_edits_survive_a_model_swap_through_snapshot_and_restore(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = state_of(cx, model_of(&["id", "name"], 2));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_positional_editing(true);
+                s.stage_cell_value(1, 1, CellValue::text("edited"));
+                s.edit_buffer_mut().mark_for_delete(0);
+
+                let edits = s.snapshot_pending_edits();
+                s.set_model(model_of(&["id", "name"], 4), ModelSwap::KeepCursor, cx);
+                assert!(!s.has_pending_operations(), "set_model drops pending edits");
+
+                assert_eq!(s.restore_pending_edits(edits, cx), 0);
+                assert!(s.edit_buffer().is_cell_dirty(1, 1));
+                assert!(s.edit_buffer().is_pending_delete(0));
+                assert!(s.is_editable(), "a model swap keeps the editing mode");
+            });
+        });
+    }
+
+    /// The other way to carry edits over a swap that keeps every row at its
+    /// index: write the saved buffer back. Unlike a snapshot it keeps the
+    /// undo history.
+    #[gpui::test]
+    fn a_saved_edit_buffer_written_back_after_a_model_swap_keeps_edits_and_undo(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::model::VisualRowSource;
+
+        let state = state_of(cx, model_of(&["id", "name"], 2));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_positional_editing(true);
+                s.stage_cell_value(1, 1, CellValue::text("edited"));
+
+                let saved = s.edit_buffer().clone();
+                s.set_model(model_of(&["id", "name"], 4), ModelSwap::KeepCursor, cx);
+                *s.edit_buffer_mut() = saved;
+                s.edit_buffer_mut().set_base_row_count(4);
+
+                assert!(s.edit_buffer().is_cell_dirty(1, 1));
+                assert_eq!(
+                    s.edit_buffer().compute_visual_order(),
+                    (0..4).map(VisualRowSource::Base).collect::<Vec<_>>()
+                );
+
+                assert!(s.edit_buffer_mut().undo());
+                assert!(!s.has_pending_operations());
+            });
+        });
+    }
+
+    // =========================================================================
+    // A pending insert above the first row
+    // =========================================================================
+
+    #[gpui::test]
+    fn the_cursor_reaches_and_edits_a_row_inserted_above_the_first_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::events::Direction;
+        use super::super::model::InsertAnchor;
+
+        let (state, window) = positional_state(cx);
+
+        let insert_idx = window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.select_cell(CellCoord::new(0, 1), cx);
+
+                let insert_idx = s.edit_buffer_mut().add_pending_insert_at(
+                    InsertAnchor::BeforeFirst,
+                    vec![CellValue::text(""), CellValue::text("")],
+                );
+
+                assert_eq!(s.row_count(), 3);
+
+                s.move_active(Direction::Down, false, cx);
+                s.move_active(Direction::Up, false, cx);
+                insert_idx
+            })
+        });
+
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(0, 1)),
+            "the first visual row is the inserted one"
+        );
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.cell_input().cloned().expect("cell input for the edit")
+            })
+        });
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("top", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        window.update(|_, app| {
+            let s = state.read(app);
+            assert_eq!(
+                s.edit_buffer()
+                    .get_pending_insert_by_idx(insert_idx)
+                    .and_then(|cells| cells.get(1))
+                    .map(CellValue::edit_text)
+                    .as_deref(),
+                Some("top"),
+                "the typed value must land on the inserted row"
+            );
+            assert!(
+                !s.edit_buffer().has_changes(),
+                "no base row was edited: the first base row is now the second visual row"
+            );
+        });
+    }
+
+    // =========================================================================
+    // Staging compares the values the cells hold, not the text drawn for them
+    // =========================================================================
+
+    /// A one-column, one-row editable state whose only cell holds `cell`.
+    fn single_cell_state(
+        cx: &mut gpui::TestAppContext,
+        cell: CellValue,
+    ) -> gpui::Entity<super::DataTableState> {
+        let columns = vec![ColumnSpec {
+            id: "value".into(),
+            title: "value".into(),
+            kind: ColumnKind::Text,
+            align: TextAlign::Left,
+            type_name: "text".into(),
+        }];
+        let rows = vec![RowData { cells: vec![cell] }];
+        let state = state_of(cx, std::sync::Arc::new(TableModel::new(columns, rows)));
+
+        cx.update(|cx| state.update(cx, |s, _cx| s.set_pk_columns(vec![0])));
+
+        state
+    }
+
+    /// Stages `value` on the only cell and reports whether the cell is left
+    /// with a pending change.
+    fn stage_on_single_cell(
+        cx: &mut gpui::TestAppContext,
+        state: &gpui::Entity<super::DataTableState>,
+        value: CellValue,
+    ) -> bool {
+        cx.update(|cx| {
+            state.update(cx, |s, _cx| {
+                s.stage_cell_value(0, 0, value);
+                s.edit_buffer().is_cell_dirty(0, 0)
+            })
+        })
+    }
+
+    #[gpui::test]
+    fn a_line_break_replaced_by_a_space_is_staged(cx: &mut gpui::TestAppContext) {
+        let state = single_cell_state(cx, CellValue::text("a\nb"));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("a b")),
+            "the grid draws both values as `a b`, but they are different values"
+        );
+    }
+
+    #[gpui::test]
+    fn a_whitespace_only_change_is_staged(cx: &mut gpui::TestAppContext) {
+        let state = single_cell_state(cx, CellValue::text("a\tb"));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("a b")),
+            "a tab turned into a space must be staged"
+        );
+
+        let state = single_cell_state(cx, CellValue::text("a\r\nb"));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("a\n\nb")),
+            "a carriage return turned into a line feed must be staged"
+        );
+    }
+
+    #[gpui::test]
+    fn a_change_in_the_tail_of_a_long_value_is_staged(cx: &mut gpui::TestAppContext) {
+        let original = "x".repeat(2_000);
+        let edited = format!("{}y", &original[..1_999]);
+        let state = single_cell_state(cx, CellValue::text(&original));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text(&edited)),
+            "a change past the part of the value the grid draws must be staged"
+        );
+
+        let staged = cx.update(|cx| {
+            state
+                .read(cx)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .map(|(_, value)| value.edit_text())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(staged, vec![edited]);
+    }
+
+    #[gpui::test]
+    fn re_entering_the_value_a_cell_holds_is_not_staged(cx: &mut gpui::TestAppContext) {
+        let long_value = "x".repeat(2_000);
+
+        for value in ["a\nb", "a\tb", " padded ", "", long_value.as_str()] {
+            let state = single_cell_state(cx, CellValue::text(value));
+
+            assert!(
+                !stage_on_single_cell(cx, &state, CellValue::text(value)),
+                "the value {value:?} was staged over itself"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn editing_a_long_value_back_to_the_original_leaves_the_cell_clean(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let original = "x".repeat(2_000);
+        let edited = format!("{}y", &original[..1_999]);
+        let state = single_cell_state(cx, CellValue::text(&original));
+
+        assert!(stage_on_single_cell(cx, &state, CellValue::text(&edited)));
+        assert!(
+            !stage_on_single_cell(cx, &state, CellValue::text(&original)),
+            "typing the original value back must drop the pending change"
+        );
+
+        cx.update(|cx| {
+            let s = state.read(cx);
+            assert!(s.edit_buffer().row_state(0).is_clean());
+            assert!(!s.has_pending_operations());
+        });
+    }
+
+    #[gpui::test]
+    fn null_and_text_are_different_values(cx: &mut gpui::TestAppContext) {
+        let state = single_cell_state(cx, CellValue::null());
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("")),
+            "an empty string over a null is a change"
+        );
+
+        let state = single_cell_state(cx, CellValue::null());
+        assert!(
+            !stage_on_single_cell(cx, &state, CellValue::null()),
+            "a null over a null is not a change"
+        );
+
+        let state = single_cell_state(cx, CellValue::text("NULL"));
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::null()),
+            "a null over the text `NULL` is a change, though both are drawn as `NULL`"
+        );
+
+        let state = single_cell_state(cx, CellValue::text(""));
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::null()),
+            "a null over an empty string is a change"
+        );
+    }
+
+    /// The inline editor hands every value back as text, so a typed cell must
+    /// recognise its own value in the text the editor opened with and in the
+    /// text the grid draws for it.
+    #[gpui::test]
+    fn a_typed_cell_recognises_its_own_value_as_text(cx: &mut gpui::TestAppContext) {
+        let cases = [
+            (CellValue::int(42), "42"),
+            (CellValue::bool(true), "true"),
+            (CellValue::float(1.0), "1"),
+            (CellValue::float(1.0), "1.0"),
+            (CellValue::float(2.5), "2.5"),
+        ];
+
+        for (cell, typed) in cases {
+            let state = single_cell_state(cx, cell.clone());
+
+            assert!(
+                !stage_on_single_cell(cx, &state, CellValue::text(typed)),
+                "{typed:?} typed over {cell:?} was staged"
+            );
+        }
+
+        let state = single_cell_state(cx, CellValue::int(42));
+        assert!(stage_on_single_cell(cx, &state, CellValue::text("43")));
+
+        let state = single_cell_state(cx, CellValue::int(42));
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("42 ")),
+            "added whitespace is a change"
+        );
+    }
+
+    /// Cells whose drawn and copied text is a placeholder, not their value.
+    fn placeholder_cells() -> Vec<CellValue> {
+        vec![
+            CellValue::bytes(16),
+            CellValue::unsupported("geometry"),
+            CellValue::auto_generated("nextval('users_id_seq')"),
+            CellValue::nested(false, 3),
+            CellValue::nested(true, 2),
+        ]
+    }
+
+    /// Staging the placeholder of a cell whose value it cannot spell out must
+    /// not write the placeholder text over that value, whether it reaches
+    /// the cell as the text copy produces or as the text the grid draws.
+    #[gpui::test]
+    fn the_placeholder_of_a_value_is_never_a_change_to_it(cx: &mut gpui::TestAppContext) {
+        use super::super::clipboard::format_cell;
+
+        for cell in placeholder_cells() {
+            for placeholder in [format_cell(&cell), cell.display_text().to_string()] {
+                let state = single_cell_state(cx, cell.clone());
+
+                assert!(
+                    !stage_on_single_cell(cx, &state, CellValue::text(&placeholder)),
+                    "{placeholder:?} staged over {cell:?}"
+                );
+
+                let other_cell_of_the_same_kind = single_cell_state(cx, cell.clone());
+
+                assert!(
+                    !stage_on_single_cell(
+                        cx,
+                        &other_cell_of_the_same_kind,
+                        CellValue::text(&placeholder)
+                    ),
+                    "{placeholder:?} staged over another {cell:?}"
+                );
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn typing_the_placeholder_of_a_bytes_cell_over_it_is_not_a_change(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = single_cell_state(cx, CellValue::bytes(4));
+
+        assert!(
+            !stage_on_single_cell(cx, &state, CellValue::text("<4 bytes>")),
+            "typing the placeholder must not stage it as the column's new bytes"
+        );
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("<5 bytes>")),
+            "other text over a bytes cell is still a change"
+        );
+    }
+
+    /// A cell too long for the inline editor asks the host for a modal editor
+    /// with the full value, and the host stages the result through
+    /// `stage_cell_value`.
+    #[gpui::test]
+    fn the_modal_edit_path_stages_a_tail_only_change(cx: &mut gpui::TestAppContext) {
+        use super::super::events::DataTableEvent;
+
+        let original = format!("{}\nlast line", "x".repeat(2_000));
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view({
+            let original = original.clone();
+            move |_window, cx| {
+                let columns = vec![ColumnSpec {
+                    id: "value".into(),
+                    title: "value".into(),
+                    kind: ColumnKind::Text,
+                    align: TextAlign::Left,
+                    type_name: "text".into(),
+                }];
+                let rows = vec![RowData {
+                    cells: vec![CellValue::text(&original)],
+                }];
+                let model = std::sync::Arc::new(TableModel::new(columns, rows));
+
+                let state = cx.new(|cx| {
+                    let mut s = super::DataTableState::new(model, cx);
+                    s.set_pk_columns(vec![0]);
+                    s
+                });
+                holder_clone.replace(Some(state.clone()));
+                StateHarness { state }
+            }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = window.update(|_, app| {
+            let requested = requested.clone();
+            app.subscribe(&state, move |_state, event: &DataTableEvent, _app| {
+                if let DataTableEvent::ModalEditRequested { value, .. } = event {
+                    requested.borrow_mut().push(value.clone());
+                }
+            })
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 0), window, cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            requested.borrow().as_slice(),
+            std::slice::from_ref(&original),
+            "the modal editor must open with the full value"
+        );
+
+        let edited = format!("{}\nlast lime", "x".repeat(2_000));
+        window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                s.stage_cell_value(0, 0, CellValue::text(&edited));
+            });
+        });
+
+        let staged = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .map(|(_, value)| value.edit_text())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            staged,
+            vec![edited],
+            "a change in the tail of a long value must be staged"
+        );
     }
 }

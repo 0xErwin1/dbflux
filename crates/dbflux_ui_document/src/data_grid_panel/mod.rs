@@ -9311,6 +9311,152 @@ mod tests {
         );
     }
 
+    /// Copy flattens tabs and line breaks and writes a placeholder for a
+    /// value it cannot spell out, so pasting a cell's copied text back onto
+    /// it, or onto another cell holding the same kind of value, must not
+    /// stage that text as a change.
+    #[gpui::test]
+    fn pasting_a_cells_copied_text_back_is_not_a_change(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::selection::CellCoord;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        // Kept out of the window's tree: rendering the panel would drain its
+        // pending actions into a query nothing can answer.
+        struct Harness;
+
+        impl gpui::Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div()
+            }
+        }
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("testdb".to_string()),
+                    table: TableRef::with_schema("public", "notes"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), Vec::new(), window, cx);
+
+                let column = |name: &str, type_name: &str, kind: ColumnKind| ColumnMeta {
+                    name: name.to_string(),
+                    type_name: type_name.to_string(),
+                    kind,
+                    nullable: true,
+                    is_primary_key: false,
+                };
+                let columns = vec![
+                    column("id", "int4", ColumnKind::Integer),
+                    column("note", "text", ColumnKind::Text),
+                    column("blob", "bytea", ColumnKind::Unknown),
+                    column("shape", "geometry", ColumnKind::Unknown),
+                ];
+                let rows = vec![
+                    vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Text("a\nb".to_string()),
+                        dbflux_core::Value::Bytes(vec![1; 16]),
+                        dbflux_core::Value::Unsupported("geometry".to_string()),
+                    ],
+                    vec![
+                        dbflux_core::Value::Int(2),
+                        dbflux_core::Value::Text("a\tb".to_string()),
+                        dbflux_core::Value::Bytes(vec![2; 16]),
+                        dbflux_core::Value::Unsupported("geometry".to_string()),
+                    ],
+                ];
+                panel.result = QueryResult::table(columns, rows, None, Duration::ZERO);
+                panel.pk_columns = vec!["id".to_string()];
+                panel
+            });
+            panel_handle.replace(Some(panel));
+            Harness
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel must be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.rebuild_table(None, cx));
+        });
+
+        let table_state = window.update(|_, app| {
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("table_state must exist after rebuild_table")
+        });
+        assert!(
+            window.update(|_, app| table_state.read(app).is_editable()),
+            "the fixture grid must be editable"
+        );
+
+        let copy_and_paste = |window: &mut gpui::VisualTestContext,
+                              from: CellCoord,
+                              to: CellCoord|
+         -> (String, bool) {
+            window.update(|window, app| {
+                let copied = table_state.update(app, |state, cx| {
+                    state.select_cell(from, cx);
+                    state.copy_selection().expect("one selected cell copies")
+                });
+                app.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()));
+
+                table_state.update(app, |state, cx| state.select_cell(to, cx));
+                panel.update(app, |panel, cx| panel.handle_paste(window, cx));
+
+                let staged = table_state.read(app).has_pending_operations();
+                (copied, staged)
+            })
+        };
+
+        let pastes = [
+            (CellCoord::new(0, 1), CellCoord::new(0, 1)),
+            (CellCoord::new(1, 1), CellCoord::new(1, 1)),
+            (CellCoord::new(0, 2), CellCoord::new(0, 2)),
+            (CellCoord::new(0, 2), CellCoord::new(1, 2)),
+            (CellCoord::new(0, 3), CellCoord::new(0, 3)),
+            (CellCoord::new(0, 3), CellCoord::new(1, 3)),
+        ];
+
+        for (from, to) in pastes {
+            let (copied, staged) = copy_and_paste(window, from, to);
+
+            assert!(
+                !staged,
+                "pasting {copied:?} copied from {from:?} onto {to:?} staged a change"
+            );
+        }
+
+        window.update(|window, app| {
+            app.write_to_clipboard(gpui::ClipboardItem::new_string("a  b".to_string()));
+            table_state.update(app, |state, cx| state.select_cell(CellCoord::new(0, 1), cx));
+            panel.update(app, |panel, cx| panel.handle_paste(window, cx));
+        });
+        assert!(
+            window.update(|_, app| table_state.read(app).edit_buffer().is_cell_dirty(0, 1)),
+            "pasting text that is not the cell's copied form is a change"
+        );
+    }
+
     #[gpui::test]
     fn grouped_result_after_rebuild_leaves_record_mode(cx: &mut TestAppContext) {
         init_test_runtime(cx);
