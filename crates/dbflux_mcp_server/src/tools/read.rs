@@ -1521,6 +1521,7 @@ mod tests {
     /// the same JSON as the browse path. The same request, without
     /// pseudo-columns, goes through both paths here and the results are
     /// compared whole: keys, column order and value encoding.
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn generated_select_returns_the_browse_shape() {
         let db_file = tempfile::NamedTempFile::new().expect("tempfile");
