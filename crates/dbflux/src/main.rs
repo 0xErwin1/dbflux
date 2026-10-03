@@ -472,8 +472,8 @@ fn run_gui() {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
 
-                // "Quit anyway" in the active-query prompt resumes the close
-                // the prompt interrupted.
+                // The answer that quits in the active-query or the
+                // unsaved-changes prompt resumes the close it interrupted.
                 let app_state_for_quit = app_state.clone();
                 cx.subscribe(&workspace, move |_, _: &QuitConfirmed, cx| {
                     initiate_graceful_shutdown(&app_state_for_quit, cx);
@@ -584,8 +584,9 @@ fn run_gui() {
                         return false;
                     }
 
-                    // A running query asks first; the shutdown starts from the
-                    // prompt's "Quit anyway" instead of from here.
+                    // A running query, then unsaved changes the quit cannot
+                    // save on its own, ask first; the shutdown then starts
+                    // from the answer that quits instead of from here.
                     let workspace = WORKSPACE_FOR_SHUTDOWN
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())

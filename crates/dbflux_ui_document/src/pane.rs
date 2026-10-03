@@ -44,6 +44,23 @@ pub enum CloseDisposition {
     KeepOpen,
 }
 
+/// What quitting the application means for a document's pending edits,
+/// decided by the document before the quit starts.
+///
+/// A pane reports it through [`PaneHandle::quit_disposition`]; panes that do
+/// not report one count as [`QuitDisposition::Clean`], which keeps the quit
+/// behaviour every other document had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitDisposition {
+    /// Nothing is pending: quitting loses nothing.
+    Clean,
+    /// The shutdown flush saves the pending edits without asking.
+    SavedOnQuit,
+    /// The pending edits cannot be saved safely while quitting, so the user
+    /// decides whether to save or drop them before the quit starts.
+    NeedsDecision,
+}
+
 /// An empty script tab whose backing file may be deleted as the tab closes.
 ///
 /// Reports what the document knows without reading anything: the file it owns and
@@ -373,6 +390,20 @@ pub struct PaneHandle {
     /// so its policy never applies; the workspace consults this through
     /// [`PaneHandle::has_close_policy`] rather than reading the field directly.
     pub decides_own_close: Option<Box<dyn Fn(&App) -> bool>>,
+
+    /// Reports what quitting means for the document's pending edits (see
+    /// [`QuitDisposition`]). `None` for documents that do not take part in
+    /// the quit check.
+    pub quit_disposition: Option<Box<dyn Fn(&App) -> QuitDisposition>>,
+
+    /// Saves the document for a quit the user confirmed, without closing its
+    /// tab, and reports the outcome through `DocumentEvent::SaveFinished`.
+    /// Returns whether a save started. `None` for documents without one.
+    pub save_for_quit: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
+
+    /// Drops the document's pending edits for a quit the user confirmed
+    /// without saving them, so the shutdown flush does not write them.
+    pub discard_for_quit: Option<Box<dyn Fn(&mut App)>>,
 }
 
 impl PaneHandle {
@@ -443,6 +474,9 @@ impl PaneHandle {
             apply_for_close: None,
             resolve_close: None,
             decides_own_close: None,
+            quit_disposition: None,
+            save_for_quit: None,
+            discard_for_quit: None,
         }
     }
 
@@ -632,6 +666,30 @@ impl PaneHandle {
         match self.resolve_close.as_ref() {
             Some(resolve) => resolve(window, cx),
             None => CloseDisposition::CloseNow,
+        }
+    }
+
+    /// What quitting means for the document's pending edits. A pane that
+    /// does not take part in the quit check reports
+    /// [`QuitDisposition::Clean`].
+    pub fn quit_disposition(&self, cx: &App) -> QuitDisposition {
+        self.quit_disposition
+            .as_ref()
+            .map_or(QuitDisposition::Clean, |disposition| disposition(cx))
+    }
+
+    /// Starts the save of a quit the user confirmed. Returns `false` when the
+    /// document has no such save, or could not start one.
+    pub fn save_for_quit(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.save_for_quit
+            .as_ref()
+            .is_some_and(|save| save(window, cx))
+    }
+
+    /// Drops the pending edits for a quit the user confirmed without saving.
+    pub fn discard_for_quit(&self, cx: &mut App) {
+        if let Some(discard) = self.discard_for_quit.as_ref() {
+            discard(cx);
         }
     }
 

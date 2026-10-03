@@ -48,12 +48,24 @@ use super::document::{
     pages_to_read_again, reread_pages,
 };
 use super::page_model::PageModelError;
-use super::save::{SaveOutcome, save_edited};
-use super::source::StorageError;
+use super::save::{SaveOutcome, check_local_save, save_edited, verify_version};
+use super::source::{DelimitedLocation, StorageError, read_version};
 use crate::dedup::DelimitedFileKey;
 use crate::handle::DocumentEvent;
 use crate::object_text::record_save_audit;
-use crate::pane::PaneAction;
+use crate::pane::{PaneAction, QuitDisposition};
+
+/// The largest local file the shutdown flush saves without asking.
+///
+/// A save reads the whole file and writes it again, then syncs it to disk,
+/// and the shutdown waits 2 s for every pending document write
+/// (`DOCUMENT_FLUSH_TIMEOUT` in the `dbflux` binary) before it stops the
+/// process. At a conservative 16 MiB/s for reading, writing and syncing
+/// together (a slow disk or a network file system), 16 MiB takes 1 s, which
+/// leaves half the budget for the sync's latency and for the scripts that
+/// flush within the same wait. A larger file asks before the quit, where its
+/// save has all the time it needs.
+pub(super) const SHUTDOWN_SAVE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 /// A cell the table asked the modal editor for: its position as the table
 /// shows it and the value the cell holds now, edits included.
@@ -129,10 +141,11 @@ impl CellEditRefusal {
 /// What a background save hands to the foreground.
 enum SaveResult {
     /// The file holds the edited bytes. `reopened` is its first page, read
-    /// again with the dialect in effect, boxed because a reader is large.
+    /// again with the dialect in effect, boxed because a reader is large, and
+    /// `None` for a save that does not read the file again.
     Saved {
         outcome: SaveOutcome,
-        reopened: Box<Result<OpenedFile, OpenError>>,
+        reopened: Option<Box<Result<OpenedFile, OpenError>>>,
     },
 
     /// Nothing replaced the file.
@@ -822,6 +835,15 @@ impl DelimitedDocument {
     /// recorded. A tab closed while its save runs drops the outcome without a
     /// report, and the save itself completes.
     pub fn save(&mut self, cx: &mut Context<Self>) {
+        self.start_save(true, cx);
+    }
+
+    /// [`Self::save`], reading the saved file again only when `reopen` is
+    /// set. A save that does not read it again drops the pending changes
+    /// once the file holds them, and leaves the rows it shows as they were:
+    /// only the shutdown flush saves that way, because nothing will show the
+    /// file afterwards.
+    fn start_save(&mut self, reopen: bool, cx: &mut Context<Self>) {
         if self.saving {
             return;
         }
@@ -830,7 +852,7 @@ impl DelimitedDocument {
             return;
         };
 
-        self.start_save(edit_set, cx);
+        self.spawn_save(edit_set, reopen, cx);
     }
 
     /// Runs every check a save needs before it writes: applies the text view's
@@ -919,10 +941,11 @@ impl DelimitedDocument {
     }
 
     /// Captures what the save reads from the loaded file, marks the document
-    /// as saving, and writes `edit_set` and reads the file again in the
-    /// background. The result is recorded in the audit log when the save is
-    /// audited, and applied to the document if it is still open.
-    fn start_save(&mut self, edit_set: EditSet, cx: &mut Context<Self>) {
+    /// as saving, and writes `edit_set` in the background, reading the file
+    /// again after it when `reopen` is set. The result is recorded in the
+    /// audit log when the save is audited, and applied to the document if it
+    /// is still open.
+    fn spawn_save(&mut self, edit_set: EditSet, reopen: bool, cx: &mut Context<Self>) {
         let Some(loaded) = self.loaded() else {
             self.report_save_outcome(false, cx);
             return;
@@ -949,7 +972,8 @@ impl DelimitedDocument {
             ) {
                 Ok(outcome) => SaveResult::Saved {
                     outcome,
-                    reopened: Box::new(reread_pages(&location, dialect, reader_options, pages)),
+                    reopened: reopen
+                        .then(|| Box::new(reread_pages(&location, dialect, reader_options, pages))),
                 },
 
                 Err(error) => SaveResult::Refused(error),
@@ -1009,6 +1033,133 @@ impl DelimitedDocument {
         true
     }
 
+    // -- Quitting ------------------------------------------------------------
+
+    /// What quitting means for the pending changes.
+    ///
+    /// A clean document loses nothing. A local file whose save would go
+    /// through now is saved by the shutdown flush without asking. Everything
+    /// else needs the user's decision before the quit starts: an object,
+    /// because an upload while quitting can fail or be cut short, and a local
+    /// file whose save would be refused now.
+    ///
+    /// A local save goes through when no save, reread or load of the rest of
+    /// the file runs, the file is at most [`SHUTDOWN_SAVE_MAX_BYTES`] long,
+    /// it is still the version that was opened and that version can show a
+    /// change ([`super::save::verify_version`]), its permission bits allow
+    /// writing and its directory takes a staging file
+    /// ([`super::save::check_local_save`]), an edit of the text applies, and
+    /// the pending state passes the writer's check
+    /// ([`Self::pending_state_writes`]). The file system checks are a few
+    /// calls on the UI thread, one of which creates and removes a staging
+    /// file, and nothing is reported.
+    ///
+    /// A save that passes this check can still fail when it writes, which the
+    /// save reports itself.
+    pub fn quit_disposition(&self, cx: &App) -> QuitDisposition {
+        if !self.is_dirty() {
+            return QuitDisposition::Clean;
+        }
+
+        let local_save_goes_through = matches!(self.file(), DelimitedFileKey::Local { .. })
+            && self.local_save_goes_through_now(cx);
+
+        if local_save_goes_through {
+            QuitDisposition::SavedOnQuit
+        } else {
+            QuitDisposition::NeedsDecision
+        }
+    }
+
+    fn local_save_goes_through_now(&self, cx: &App) -> bool {
+        let Some(loaded) = self.loaded() else {
+            return false;
+        };
+
+        if self.saving || loaded.is_rereading() || self.is_loading_rest() {
+            return false;
+        }
+
+        if loaded.source_length > SHUTDOWN_SAVE_MAX_BYTES {
+            return false;
+        }
+
+        let DelimitedLocation::Local { path } = &self.location else {
+            return false;
+        };
+
+        let version_matches = read_version(&self.location)
+            .is_ok_and(|current| verify_version(&loaded.version, &current).is_ok());
+
+        version_matches && check_local_save(path).is_ok() && self.pending_state_writes(cx)
+    }
+
+    /// Saves as part of a quit the user confirmed. The tab stays open, and
+    /// the outcome is reported like any save, through
+    /// `DocumentEvent::SaveFinished`. Returns whether a save started, which
+    /// is false only for a file that is not loaded.
+    ///
+    /// Asking while a save runs is intentional: that save then reports the
+    /// outcome the quit waits for.
+    pub fn save_for_quit(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.loaded().is_none() {
+            return false;
+        }
+
+        self.save(cx);
+        true
+    }
+
+    /// Drops the pending changes for a quit the user confirmed without
+    /// saving them, and keeps the shutdown flush from writing them even when
+    /// the discard itself cannot run (a save or a dialog in the way).
+    pub fn discard_for_quit(&mut self, cx: &mut Context<Self>) {
+        self.discarded_for_quit = true;
+        self.discard_changes(cx);
+    }
+
+    /// The document's part of the shutdown flush: a local file with pending
+    /// changes is saved through [`Self::save`], once, without closing the
+    /// tab. Returns whether a save is still running, so the shutdown loop can
+    /// wait for it.
+    ///
+    /// The first poll decides. A save already running is waited for and not
+    /// repeated, and changes the user discarded for the quit are not written.
+    /// The save does not read the file again ([`Self::start_save`]), so it
+    /// costs one rewrite of the file. A save that fails reports through the
+    /// error seam like any save, and is not retried by later polls.
+    ///
+    /// An object is never uploaded while quitting: a quit from the window
+    /// asked about it first. Its pending changes reach here only from a quit
+    /// that could not ask (a terminal signal), and are then dropped with one
+    /// warning in the log naming the object.
+    pub fn flush_for_shutdown(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.shutdown_save_started {
+            self.shutdown_save_started = true;
+
+            let pending = self.is_dirty() && !self.saving && !self.discarded_for_quit;
+
+            match self.file() {
+                DelimitedFileKey::Local { .. } if pending => self.start_save(false, cx),
+
+                DelimitedFileKey::Object { bucket, key, .. } if pending => {
+                    let object = format!("{bucket}/{key}");
+
+                    log::warn!(
+                        "Unsaved changes to {object} were dropped at shutdown: an object is \
+                         not uploaded while quitting"
+                    );
+
+                    self.dropped_at_shutdown.push(object);
+                }
+
+                _ => {}
+            }
+        }
+
+        self.saving
+    }
+
     /// The edit set of the pending changes. `None` when the file is not
     /// loaded.
     fn edit_set(&self, cx: &App) -> Option<Result<EditSet, PageModelError>> {
@@ -1056,8 +1207,10 @@ impl DelimitedDocument {
             SaveResult::Saved { outcome, reopened } => {
                 // A reopen that failed is reported on its own, and its
                 // message already says the file was saved.
+                let reopen_failed = reopened.as_ref().is_some_and(|reopened| reopened.is_err());
+
                 if let SaveOutcome::SavedVersionUnknown(error) = outcome
-                    && reopened.is_ok()
+                    && !reopen_failed
                 {
                     let summary = crate::labels::delimited_saved_version_unknown_message(&title);
 
@@ -1068,7 +1221,11 @@ impl DelimitedDocument {
                     );
                 }
 
-                self.show_saved_file(*reopened, cx);
+                match reopened {
+                    Some(reopened) => self.show_saved_file(*reopened, cx),
+                    None => self.discard_changes(cx),
+                }
+
                 self.notify_object_saved(cx);
                 true
             }
