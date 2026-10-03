@@ -727,6 +727,22 @@ hacer se abre con **Guardar** enfocado, así que `Enter` guarda. `Tab` y
 `Shift+Tab` pasan entre **Guardar**, **Cancelar** y **Descartar** sin salir del
 diálogo, `Enter` o `Space` presionan el botón enfocado y `Escape` cancela.
 
+## Archivos CSV y TSV
+
+Una pestaña CSV o TSV toma en su tabla las teclas de
+[Tabla de datos](#tabla-de-datos), y estas. Ver
+[Archivos CSV y TSV](CSV_FILES.md).
+
+| Teclas | Acción |
+|--------|--------|
+| `t` | Cambiar entre la tabla y el texto |
+| `Shift+t` | Cambiar el texto entre Sin formato y Alineado |
+| `Escape` / `Enter` | Sacar el teclado del texto / devolverlo |
+| `]` | Cargar los siguientes 500 registros |
+| `F5` | Volver a leer el archivo desde su origen |
+| `Ctrl+s` / `Cmd+s` | Guardar, desde la tabla o desde el texto |
+| `m` (o `Shift+F10`) | Acciones del panel: los controles del dialecto, Insertar fila arriba, Agregar columna, Renombrar columna, Descartar cambios, Recargar desde el archivo y Cancelar la carga mientras se carga el resto del archivo |
+
 ## Visor de auditoría
 
 | Teclas | Acción |

@@ -58,12 +58,16 @@ The crate has no dependency on `dbflux_core` or on any UI crate.
   - `invalidate_from_offset` and `invalidate_from_page` discard the index after a byte offset or a
     page start and read the source's length again. Offset zero and page zero also read the
     byte-order mark and the header again.
+  - `source_length` is the length every returned byte range was read against, and
+    `byte_order_mark_length` is the length of the mark at the start of the source, which belongs to
+    no record.
 - `parse_text` reads decoded text, such as an edited copy of a file's text, into the records the
   reader would read from the same text written in the dialect's encoding: the text is encoded and
   scanned with the reader's own scanner and field splitting. Each record carries its range in the
   text and whether it ends inside a quoted field that is never closed. The header is the first
   record, and a leading U+FEFF is part of the first field. A character the encoding cannot
-  represent is refused with its offset in the text.
+  represent is refused with its offset in the text, and a dialect the reader refuses is refused
+  the same way.
 - `write_edited` writes a source to a `std::io::Write` sink with an `EditSet` applied. It produces
   the new bytes only: replacing the file and invalidating a reader's index are the caller's.
   - An `EditSet` replaces the fields of existing records (the header included, which is how a
@@ -86,9 +90,10 @@ The crate has no dependency on `dbflux_core` or on any UI crate.
     field of its record. A quote inside a quoted field is doubled.
   - Rendered text is encoded in the dialect's encoding, UTF-16 LE and BE included. A character the
     encoding cannot represent is an error that names the record and the character.
-  - `render_record` and `render_appended_fields` render one record, or the fields appended columns
-    add to a copied record, by these same rules, for a caller that shows pending edits without
-    writing them.
+  - `render_record` renders one record without its terminator, and `render_appended_fields` the
+    fields appended columns add to a copied record, each led by the delimiter. Both use these same
+    rules and the dialect's encoding, for a caller that shows pending edits without writing them,
+    and both refuse a dialect the reader refuses.
   - An inserted record takes the terminator of the record it is placed before, or of the last
     record when inserted at the end, then the first terminator of the file, then a line feed.
   - These are refused before the first byte is written and leave the sink untouched: a source

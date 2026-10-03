@@ -4,7 +4,8 @@ Abre una nueva pestaña de query con `Ctrl+n` (`Cmd+n` en macOS), o abre un
 archivo de script con `Ctrl+o`. El lenguaje de query del editor (SQL, sintaxis
 de queries de MongoDB, comandos de Redis, etc.) lo determina el driver de la
 conexión activa, que también controla el resaltado de sintaxis y el texto de
-placeholder.
+placeholder. Un archivo `.csv` o `.tsv` se abre como tabla; ver
+[Archivos CSV y TSV](CSV_FILES.md).
 
 Para conexiones SQL, el [Constructor visual de queries](QUERY_BUILDER.md)
 compone queries sin escribir SQL.
