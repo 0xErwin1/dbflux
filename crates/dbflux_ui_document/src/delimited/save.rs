@@ -49,8 +49,10 @@ pub enum SaveOutcome {
 /// writable by its owner only, then given the target's permission bits,
 /// synced to disk and renamed onto the target, so a reader of the path sees
 /// either the whole old file or the whole new one. A symlink is followed and
-/// the file it points at is replaced. A read-only target is refused instead
-/// of being replaced through its directory.
+/// the file it points at is replaced. A target this process may not write is
+/// refused instead of being replaced through its directory: one whose
+/// permission bits forbid writing, and one the operating system refuses to
+/// open for writing, such as a file owned by another user.
 ///
 /// The saved file is a new file under the old name. Its permission bits are
 /// the old file's. Its owner is the user who saved it, access control lists
@@ -185,6 +187,8 @@ fn save_local(path: &Path, request: &SaveRequest<'_>) -> Result<SourceVersion, S
         ));
     }
 
+    check_write_access(path, &destination)?;
+
     let source = FileSource::new(file);
 
     let target = path.display().to_string();
@@ -224,6 +228,18 @@ fn save_local(path: &Path, request: &SaveRequest<'_>) -> Result<SourceVersion, S
             Err(error)
         }
     }
+}
+
+/// Refuses a save to `destination` when the operating system does not let
+/// this process open it for writing, which also covers ownership and access
+/// control lists that the permission bits do not show. The file is opened
+/// without truncation and closed at once, so its content is untouched.
+fn check_write_access(path: &Path, destination: &Path) -> Result<(), StorageError> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(destination)
+        .map(drop)
+        .map_err(|error| StorageError::local_io(path, error))
 }
 
 /// Gives the staged file the permissions of the file it replaces and syncs

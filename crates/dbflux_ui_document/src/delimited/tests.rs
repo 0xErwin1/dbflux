@@ -775,6 +775,43 @@ fn a_local_save_refuses_a_read_only_file() {
 
 #[cfg(unix)]
 #[test]
+fn a_local_save_refuses_a_file_the_user_cannot_write_even_when_others_can() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TestDirectory::new("not-writable-by-owner");
+    let (path, location) = directory.file("cities.csv", CITIES);
+
+    // The group and others may write, so the permission bits alone do not
+    // read as read-only, but the owner, who runs the test, may not.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o466))
+        .expect("the seeded permissions must apply");
+
+    // A privileged process can write the file, and the refusal this test
+    // asserts does not apply to it.
+    if std::fs::File::options().write(true).open(&path).is_ok() {
+        return;
+    }
+
+    let version = read_version(&location).expect("the version reads");
+    let edits = replace_record(&location, utf8(), 0, &["Ana", "Cusco"]);
+
+    let error = save_edited(&location, &version, &utf8(), &edits, window())
+        .expect_err("a file the user cannot write must be refused");
+
+    assert!(
+        matches!(
+            &error,
+            StorageError::LocalIo { source, .. }
+                if source.kind() == std::io::ErrorKind::PermissionDenied
+        ),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).expect("the file reads"), CITIES);
+    assert_eq!(directory.entry_names(), ["cities.csv"]);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_local_save_through_a_symlink_writes_the_file_the_link_points_at() {
     let directory = TestDirectory::new("symlink");
     let (target, _target_location) = directory.file("real.csv", CITIES);
