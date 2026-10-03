@@ -67,8 +67,10 @@ pub enum SaveOutcome {
 /// the path may then name the old file again. Other platforms do not sync
 /// the directory.
 ///
-/// The version check and the rename are separate system calls: a change that
-/// another process makes between them is overwritten.
+/// The version is checked again after the edited bytes are staged, right
+/// before the rename, as an object's is before its upload. That last check
+/// and the rename are still separate system calls: a change that another
+/// process makes between them is overwritten.
 ///
 /// The outcome is always [`SaveOutcome::Saved`], with the version taken from
 /// the new file before it was renamed.
@@ -204,7 +206,17 @@ fn save_local(path: &Path, request: &SaveRequest<'_>) -> Result<SourceVersion, S
     let staged = create_staging_file(&staged_path).map_err(staging_error)?;
 
     let committed = write_staged(&source, request, &staged, &target, directory).and_then(|()| {
+        #[cfg(test)]
+        run_while_staging_hook();
+
         let saved = commit_staged(&staged, &metadata).map_err(staging_error)?;
+
+        // Staging a large file takes long enough for another process to
+        // change the target meanwhile, so its version is read again last.
+        let latest =
+            std::fs::metadata(&destination).map_err(|error| StorageError::local_io(path, error))?;
+
+        verify_version(request.captured, &local_version(&latest))?;
 
         // Windows refuses to replace a file that is still open.
         drop(source);
@@ -240,6 +252,27 @@ fn check_write_access(path: &Path, destination: &Path) -> Result<(), StorageErro
         .open(destination)
         .map(drop)
         .map_err(|error| StorageError::local_io(path, error))
+}
+
+#[cfg(test)]
+thread_local! {
+    static WHILE_STAGING: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `hook` once, on this thread, during the next local save, after the
+/// edited bytes are staged and before the target is replaced, the way another
+/// process could change the target while a save writes.
+#[cfg(test)]
+pub(super) fn while_next_local_save_stages(hook: impl FnOnce() + 'static) {
+    WHILE_STAGING.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_while_staging_hook() {
+    if let Some(hook) = WHILE_STAGING.with(|slot| slot.borrow_mut().take()) {
+        hook();
+    }
 }
 
 /// Gives the staged file the permissions of the file it replaces and syncs

@@ -613,6 +613,29 @@ fn a_local_save_refuses_a_file_whose_content_changed_after_the_version_was_captu
 }
 
 #[test]
+fn a_local_save_refuses_a_file_that_changed_while_the_save_was_staging() {
+    let directory = TestDirectory::new("changed-while-staging");
+    let (path, location) = directory.file("cities.csv", CITIES);
+
+    let version = read_version(&location).expect("the version reads");
+    let edits = replace_record(&location, utf8(), 0, &["Ana", "Cusco"]);
+
+    let foreign = b"name,city\r\nSomeone,Else\r\n";
+
+    super::save::while_next_local_save_stages({
+        let path = path.clone();
+        move || std::fs::write(&path, foreign).expect("the foreign write lands")
+    });
+
+    let error = save_edited(&location, &version, &utf8(), &edits, window())
+        .expect_err("a file changed while staging must be refused");
+
+    assert!(matches!(error, StorageError::SourceChanged), "{error}");
+    assert_eq!(std::fs::read(&path).expect("the file reads"), foreign);
+    assert_eq!(directory.entry_names(), ["cities.csv"]);
+}
+
+#[test]
 fn a_local_save_refuses_a_file_of_the_same_length_with_a_newer_modification_time() {
     let directory = TestDirectory::new("changed-time");
     let (path, location) = directory.file("cities.csv", CITIES);
