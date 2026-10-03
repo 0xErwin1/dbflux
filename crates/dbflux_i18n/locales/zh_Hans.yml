@@ -1757,6 +1757,31 @@ document:
         references: 引用
         row: 行
       title: "行 %{row}"
+  delimited:
+    loading: "正在加载 %{name}…"
+    error:
+      open_failed: "无法打开 %{name}"
+      load_more_failed: "无法加载 %{name} 的更多内容"
+    warning:
+      malformed_text: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。检测到的编码可能不正确。"
+      cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
+    status:
+      delimiter: "分隔符：%{delimiter}"
+      encoding: "编码：%{encoding}"
+      records:
+        all:
+          one: "%{count} 条记录"
+          many: "%{count} 条记录"
+        of_total: "已加载 %{loaded} / %{total} 条记录"
+        partial: "已加载 %{loaded} 条记录，文件中还有更多"
+    delimiter:
+      comma: 逗号
+      tab: 制表符
+      semicolon: 分号
+      pipe: 竖线
+    footer:
+      load_more: 加载更多
+      loading_more: "正在加载…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"

@@ -252,6 +252,19 @@ pub enum DelimitedSource {
     Object(ObjectSource),
 }
 
+impl DelimitedSource {
+    /// Reads an object through `connection` from now on, for a profile that
+    /// reconnected since the source was opened. The byte ranges already read
+    /// stay valid: they belong to the object's version, not to a connection.
+    /// A local file has no connection and is left as it is.
+    pub(super) fn use_connection(&mut self, connection: Arc<dyn Connection>) {
+        match self {
+            Self::Local(_) => {}
+            Self::Object(source) => source.connection = connection,
+        }
+    }
+}
+
 impl ByteSource for DelimitedSource {
     fn byte_length(&self) -> Result<u64, SourceError> {
         match self {

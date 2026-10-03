@@ -1757,6 +1757,31 @@ document:
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
+  delimited:
+    loading: "Loading %{name}…"
+    error:
+      open_failed: "Could not open %{name}"
+      load_more_failed: "Could not load more of %{name}"
+    warning:
+      malformed_text: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The detected encoding is probably wrong."
+      cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
+    status:
+      delimiter: "Delimiter: %{delimiter}"
+      encoding: "Encoding: %{encoding}"
+      records:
+        all:
+          one: "%{count} record"
+          many: "%{count} records"
+        of_total: "%{loaded} of %{total} records loaded"
+        partial: "%{loaded} records loaded, more in the file"
+    delimiter:
+      comma: Comma
+      tab: Tab
+      semicolon: Semicolon
+      pipe: Pipe
+    footer:
+      load_more: Load more
+      loading_more: "Loading…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"

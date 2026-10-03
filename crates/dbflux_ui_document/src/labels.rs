@@ -2791,6 +2791,90 @@ pub(crate) fn schema_inspector_foreign_keys(count: usize) -> String {
     }
 }
 
+/// Notice shown in a delimited file tab while its first page is read.
+pub(crate) fn delimited_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.loading", name = file_name)
+}
+
+/// Summary of the error reported when a delimited file cannot be opened.
+pub(crate) fn delimited_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when a further page of a delimited file
+/// cannot be loaded.
+pub(crate) fn delimited_load_more_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.load_more_failed",
+        name = file_name
+    )
+}
+
+/// Warning shown when decoding a delimited file replaced malformed byte
+/// sequences, with the encoding the file was read in.
+pub(crate) fn delimited_malformed_text_warning(encoding: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.warning.malformed_text",
+        encoding = encoding
+    )
+}
+
+/// Status-line item naming the field delimiter of a delimited file.
+///
+/// The four delimiters detection chooses between have a translated name. Any
+/// other byte is shown as its character when it is printable ASCII and as a
+/// hexadecimal byte otherwise.
+pub(crate) fn delimited_delimiter_status(delimiter: u8) -> String {
+    let name = match delimiter {
+        b',' => dbflux_i18n::t!("document.delimited.delimiter.comma"),
+        b'\t' => dbflux_i18n::t!("document.delimited.delimiter.tab"),
+        b';' => dbflux_i18n::t!("document.delimited.delimiter.semicolon"),
+        b'|' => dbflux_i18n::t!("document.delimited.delimiter.pipe"),
+        byte if byte.is_ascii_graphic() => char::from(byte).to_string(),
+        byte => format!("0x{byte:02X}"),
+    };
+
+    dbflux_i18n::t!("document.delimited.status.delimiter", delimiter = name)
+}
+
+/// Status-line item naming the text encoding of a delimited file.
+pub(crate) fn delimited_encoding_status(encoding: &str) -> String {
+    dbflux_i18n::t!("document.delimited.status.encoding", encoding = encoding)
+}
+
+/// Status-line item counting the loaded records of a delimited file against
+/// what the reader knows about the whole file.
+///
+/// A total is shown only when the reader reached the end of the file. Until
+/// then the reader's count is how far it scanned, not the size of the file,
+/// so only the loaded count is shown.
+pub(crate) fn delimited_record_count_status(
+    loaded: usize,
+    record_count: dbflux_delimited::RecordCount,
+) -> String {
+    use dbflux_delimited::RecordCount;
+
+    match record_count {
+        RecordCount::Total(total) if total == loaded as u64 => {
+            if loaded == 1 {
+                dbflux_i18n::t!("document.delimited.status.records.all.one", count = loaded)
+            } else {
+                dbflux_i18n::t!("document.delimited.status.records.all.many", count = loaded)
+            }
+        }
+
+        RecordCount::Total(total) => dbflux_i18n::t!(
+            "document.delimited.status.records.of_total",
+            loaded = loaded,
+            total = total
+        ),
+
+        RecordCount::IndexedSoFar(_) => {
+            dbflux_i18n::t!("document.delimited.status.records.partial", loaded = loaded)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
@@ -7066,5 +7150,56 @@ mod tests {
 
         assert!(value.contains('4') && value.contains('2'));
         assert!(value.contains("1.0 MiB"));
+    }
+
+    #[test]
+    fn delimited_delimiter_status_names_the_delimiter() {
+        use super::delimited_delimiter_status;
+
+        assert_eq!(delimited_delimiter_status(b','), "Delimiter: Comma");
+        assert_eq!(delimited_delimiter_status(b'\t'), "Delimiter: Tab");
+        assert_eq!(delimited_delimiter_status(b';'), "Delimiter: Semicolon");
+        assert_eq!(delimited_delimiter_status(b'|'), "Delimiter: Pipe");
+        assert_eq!(delimited_delimiter_status(b'^'), "Delimiter: ^");
+        assert_eq!(delimited_delimiter_status(0x1F), "Delimiter: 0x1F");
+    }
+
+    #[test]
+    fn delimited_record_count_status_shows_a_total_only_when_it_is_known() {
+        use super::delimited_record_count_status;
+        use dbflux_delimited::RecordCount;
+
+        assert_eq!(
+            delimited_record_count_status(1, RecordCount::Total(1)),
+            "1 record"
+        );
+        assert_eq!(
+            delimited_record_count_status(0, RecordCount::Total(0)),
+            "0 records"
+        );
+        assert_eq!(
+            delimited_record_count_status(500, RecordCount::Total(1200)),
+            "500 of 1200 records loaded"
+        );
+
+        let partial = delimited_record_count_status(500, RecordCount::IndexedSoFar(900));
+        assert_eq!(partial, "500 records loaded, more in the file");
+        assert!(!partial.contains("900"));
+    }
+
+    #[test]
+    fn delimited_messages_interpolate_their_arguments() {
+        use super::{
+            delimited_encoding_status, delimited_loading_label, delimited_malformed_text_warning,
+            delimited_open_failed_message,
+        };
+
+        assert_eq!(delimited_encoding_status("UTF-8"), "Encoding: UTF-8");
+        assert!(delimited_loading_label("cities.csv").contains("cities.csv"));
+        assert_eq!(
+            delimited_open_failed_message("cities.csv"),
+            "Could not open cities.csv"
+        );
+        assert!(delimited_malformed_text_warning("UTF-8").contains("UTF-8"));
     }
 }
