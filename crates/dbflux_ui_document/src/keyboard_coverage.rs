@@ -608,19 +608,29 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
 
 /// A delimited file tab: the dialect toolbar, the table of the records
 /// loaded so far, the control that loads the next page (`]`), the reload
-/// (`f5`) and the edit controls. The pane actions list the toolbar, insert
-/// above, discard and reload: each select entry opens its list with the
-/// keyboard on it. Save is the table's save key. The rows stay in file order, so the document does not
-/// sort and a column header click has no action for a key to reach.
+/// (`f5`), the edit controls, and its dialogs. The pane actions list the
+/// toolbar, insert above, add and rename a column, discard, the cancel of a
+/// running load of the rest, and reload: each select entry opens its list
+/// with the keyboard on it. Save is the table's save key. The rows stay in
+/// file order, so the document does not sort and a column header click has
+/// no action for a key to reach. The column prompt and the offer to load the
+/// rest confirm with Enter and close with Escape, and the modal cell editor
+/// saves with its save key and closes with Escape.
 pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     name: "delimited file",
-    contexts: &[ContextId::Results, ContextId::DataTable],
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::Modal,
+        ContextId::CellEditorModal,
+    ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
         (
             "header-col-*",
             KeyboardPath::MouseOnly(
-                "a header click has no action in this document: rows stay in file order",
+                "a header click has no action in this document: rows stay in file order, \
+                 and renaming the column is in the pane actions menu",
             ),
         ),
         (
@@ -651,6 +661,36 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
             "delimited-reload",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
+        (
+            "delimited-add-column",
+            KeyboardPath::Menu("delimited-add-column"),
+        ),
+        (
+            "delimited-load-rest-cancel",
+            KeyboardPath::Menu("delimited-load-rest-cancel"),
+        ),
+        (
+            "delimited-column-name-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "delimited-column-name-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "delimited-load-rest-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "delimited-load-rest-dismiss",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "cell-editor-save",
+            KeyboardPath::Command(Command::SaveQuery),
+        ),
+        ("cell-editor-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
     ],
 };
 

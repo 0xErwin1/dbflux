@@ -187,30 +187,35 @@ impl DelimitedDocument {
                 })
             };
 
+        let can_change = !self.has_open_dialog();
+
         let mut actions = vec![
             open_select(
                 "delimited-delimiter",
                 dbflux_i18n::t!("document.delimited.toolbar.delimiter"),
                 &controls.delimiter,
-            ),
+            )
+            .enabled(can_change),
             open_select(
                 "delimited-quote",
                 dbflux_i18n::t!("document.delimited.toolbar.quote"),
                 &controls.quote,
-            ),
-            run("delimited-header", self.header_label(), Self::toggle_header),
+            )
+            .enabled(can_change),
+            run("delimited-header", self.header_label(), Self::toggle_header).enabled(can_change),
             open_select(
                 "delimited-encoding",
                 dbflux_i18n::t!("document.delimited.toolbar.encoding"),
                 &controls.encoding,
-            ),
+            )
+            .enabled(can_change),
             run(
                 "delimited-dialect-reset",
                 dbflux_i18n::t!("document.delimited.toolbar.reset"),
                 Self::reset_dialect,
             )
             .icon(AppIcon::RotateCcw)
-            .enabled(self.has_dialect_overrides()),
+            .enabled(self.has_dialect_overrides() && can_change),
         ];
 
         actions.extend(self.edit_pane_actions(this));

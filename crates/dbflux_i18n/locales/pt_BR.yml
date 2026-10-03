@@ -1774,6 +1774,18 @@ document:
       save_while_rereading: "O arquivo está sendo lido novamente, o que substitui as linhas a que estas edições pertencem. Aguarde a leitura terminar e salve novamente."
       add_row_failed: "Não foi possível adicionar uma linha a %{name}"
       no_columns: "O arquivo não tem colunas, então uma nova linha não teria campos e o arquivo salvo não a manteria."
+      edit_failed: "Não foi possível editar %{name}"
+      edit_while_read_only: "O arquivo está sendo salvo ou lido novamente, então o valor do editor não foi aplicado. Edite a célula novamente quando terminar."
+      add_column_failed: "Não foi possível adicionar uma coluna a %{name}"
+      add_column_needs_full_load: "Uma coluna só pode ser adicionada quando todos os registros do arquivo estão carregados."
+      rename_column_failed: "Não foi possível renomear uma coluna de %{name}"
+      rename_no_header: "O arquivo não tem linha de cabeçalho, então suas colunas não têm nomes para alterar. Para ler a primeira linha como nomes de coluna, ative Linha de cabeçalho na barra de ferramentas."
+      rename_no_header_record: "O arquivo não tem registros, então não há linha de cabeçalho cujos nomes possam mudar."
+      edit_rows_read_again: "O arquivo foi lido novamente da origem enquanto o editor estava aberto, após salvar ou recarregar, então suas linhas foram substituídas e o valor não foi aplicado. Edite a célula novamente."
+      edit_changes_discarded: "As alterações foram descartadas enquanto o editor estava aberto, então o valor não foi aplicado. Edite a célula novamente."
+      edit_row_removed: "A linha a que esta célula pertence foi removida enquanto o editor estava aberto, então o valor não foi aplicado."
+      column_while_read_only: "O arquivo está sendo salvo ou lido novamente, então a coluna não foi alterada. Tente novamente quando terminar."
+      save_while_loading_rest: "O restante do arquivo ainda está carregando, e salvar agora descartaria os registros que ele lê. Aguarde o carregamento terminar, ou cancele-o pelo rodapé, e então salve."
       refused:
         unsupported: "O texto %{encoding} não pode ser lido com %{character} como delimitador ou aspas. Escolha outro delimitador, outras aspas ou outra codificação."
         line_break: "Uma quebra de linha não pode ser o delimitador nem as aspas. Escolha outro caractere."
@@ -1812,12 +1824,28 @@ document:
       load_more: Carregar mais
       loading_more: "Carregando…"
       rereading: "Lendo o arquivo novamente…"
+      loading_rest: "Carregando o restante do arquivo…"
     action:
       save: Salvar
       saving: "Salvando…"
       discard: "Descartar alterações"
       insert_above: "Inserir linha acima"
       reload: "Recarregar do arquivo"
+      add_column: "Adicionar coluna"
+      rename_column: "Renomear coluna"
+      cancel: "Cancelar"
+    column:
+      add_title: "Adicionar coluna"
+      rename_title: "Renomear coluna"
+      name_placeholder: "Nome da coluna"
+      confirm_add: "Adicionar"
+      confirm_rename: "Renomear"
+      no_header_note: "Este arquivo não tem linha de cabeçalho, então o nome não é gravado no arquivo e a coluna aparece como %{name}."
+    load_rest:
+      title: "Carregar o restante do arquivo"
+      body: "Uma coluna só pode ser adicionada quando todos os registros do arquivo estão carregados, e até agora %{loaded} registros deste arquivo de %{size} foram carregados. Carregar o restante lê na memória todos os registros que faltam, o que demora em um arquivo grande. Você pode cancelar pelo rodapé, e os registros lidos até então continuam carregados."
+      confirm: "Carregar o restante"
+      cancel: "Cancelar o carregamento"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"

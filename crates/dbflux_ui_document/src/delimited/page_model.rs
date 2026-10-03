@@ -540,7 +540,7 @@ impl PageModel {
 }
 
 /// The name of a column that has none of its own.
-fn positional_name(column: usize) -> String {
+pub(super) fn positional_name(column: usize) -> String {
     format!("column_{}", column + 1)
 }
 

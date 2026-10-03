@@ -2416,6 +2416,8 @@ fn the_pane_handle_lists_the_dialect_and_edit_actions(cx: &mut TestAppContext) {
             "delimited-encoding",
             "delimited-dialect-reset",
             "delimited-insert-above",
+            "delimited-add-column",
+            "delimited-rename-column",
             "delimited-discard",
             "delimited-reload"
         ]

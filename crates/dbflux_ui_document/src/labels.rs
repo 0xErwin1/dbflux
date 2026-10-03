@@ -2867,6 +2867,49 @@ pub(crate) fn delimited_add_row_failed_message(file_name: &str) -> String {
     dbflux_i18n::t!("document.delimited.error.add_row_failed", name = file_name)
 }
 
+/// Summary of the error reported when a value from the modal cell editor of
+/// a delimited file was not applied.
+pub(crate) fn delimited_edit_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.edit_failed", name = file_name)
+}
+
+/// Summary of the error reported when a column cannot be added to a
+/// delimited file.
+pub(crate) fn delimited_add_column_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.add_column_failed",
+        name = file_name
+    )
+}
+
+/// Summary of the error reported when a column of a delimited file cannot be
+/// renamed.
+pub(crate) fn delimited_rename_column_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.rename_column_failed",
+        name = file_name
+    )
+}
+
+/// The note of the add-column prompt of a delimited file without a header
+/// row: the name is not written, and the column shows as `column_name`.
+pub(crate) fn delimited_no_header_column_note(column_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.column.no_header_note",
+        name = column_name
+    )
+}
+
+/// The body of the offer to load the rest of a delimited file of
+/// `size_bytes` bytes, of which `loaded` records are loaded.
+pub(crate) fn delimited_load_rest_body(loaded: usize, size_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.load_rest.body",
+        loaded = loaded,
+        size = crate::buckets_table::format_bytes(size_bytes)
+    )
+}
+
 /// Summary of the warning reported when a delimited file was saved and its
 /// new version could not be read.
 pub(crate) fn delimited_saved_version_unknown_message(file_name: &str) -> String {
