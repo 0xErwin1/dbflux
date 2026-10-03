@@ -41,14 +41,20 @@ pub(super) const SAMPLE_BYTES: u64 = 64 * 1024;
 
 /// How many records one page holds: a few screens of rows, so the first page
 /// of a large file is parsed and laid out without a visible wait.
-pub(super) const PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
+pub(super) const PAGE_SIZE: NonZeroUsize = match NonZeroUsize::new(500) {
+    Some(size) => size,
+    None => panic!("the page size must not be zero"),
+};
 
 /// How many bytes the reader asks from the source in one read: a page of
 /// ordinary records fits in it, so a further page of an object is one range
 /// request. Opening an object costs a `head_object` and two range requests,
 /// because the detection sample and the reader's first window both start at
 /// offset zero.
-const FETCH_WINDOW_BYTES: NonZeroU64 = NonZeroU64::new(1024 * 1024).unwrap();
+const FETCH_WINDOW_BYTES: NonZeroU64 = match NonZeroU64::new(1024 * 1024) {
+    Some(size) => size,
+    None => panic!("the fetch window must not be zero"),
+};
 
 /// How the document pages and fetches a file.
 pub(super) const READER_OPTIONS: ReaderOptions = ReaderOptions {
