@@ -14,8 +14,9 @@
 //! background executor and shows the page model in a table, which edits the
 //! loaded records by position and saves them through the storage layer. Its
 //! toolbar shows the dialect the file was read with and overrides parts of
-//! it. A second view shows the same loaded records as read-only text, raw or
-//! aligned.
+//! it. A second view shows the same loaded records as text, raw or aligned.
+//! The raw text can be edited, and an edit of it is applied to the table's
+//! pending changes.
 
 mod columns;
 mod document;
@@ -26,6 +27,7 @@ mod render;
 mod save;
 mod source;
 mod text;
+mod text_edit;
 mod text_view;
 mod toolbar;
 
@@ -40,9 +42,13 @@ mod page_model_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod text_edit_tests;
+#[cfg(test)]
 mod text_tests;
 #[cfg(test)]
 mod text_view_tests;
+#[cfg(test)]
+mod vim_tests;
 
 pub use document::{DelimitedDocument, DelimitedWarning};
 pub use page_model::{PageModel, PageModelError};

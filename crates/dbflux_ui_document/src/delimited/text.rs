@@ -402,7 +402,7 @@ fn complete_end(model: &PageModel) -> TextEnd {
 // -- Raw ---------------------------------------------------------------------
 
 /// The pending changes of an edit set, by the start of the record they name.
-struct RawPlan<'a> {
+pub(super) struct RawPlan<'a> {
     replacements: HashMap<u64, &'a [String]>,
     deletions: HashSet<u64>,
 
@@ -424,7 +424,29 @@ struct AppendedValues {
 }
 
 impl<'a> RawPlan<'a> {
-    fn new(edit_set: &'a EditSet) -> Self {
+    /// The fields the raw text shows for `record`, the header when
+    /// `is_header`: the fields it is replaced with, or its own followed by
+    /// those of the appended columns. These are the fields the text of the
+    /// record reads as, so nothing needs to read the text again for them.
+    pub(super) fn shown_fields(&self, record: &'a Record, is_header: bool) -> Cow<'a, [String]> {
+        if let Some(fields) = self.replacements.get(&record.byte_range.start) {
+            return Cow::Borrowed(fields);
+        }
+
+        let Some(appended) = &self.appended else {
+            return Cow::Borrowed(&record.fields);
+        };
+
+        let values = match appended.by_record.get(&record.byte_range.start) {
+            Some(values) => values,
+            None if is_header => &appended.header,
+            None => &appended.defaults,
+        };
+
+        Cow::Owned(record.fields.iter().chain(values).cloned().collect())
+    }
+
+    pub(super) fn new(edit_set: &'a EditSet) -> Self {
         let replacements = edit_set
             .replacements
             .iter()
@@ -724,6 +746,28 @@ fn append_to_last(builder: &mut TextBuilder, terminator: &str) {
         last.text.end = builder.text.len();
         last.lines.end = last.lines.end.max(builder.line_feeds);
     }
+}
+
+/// Checks that a save of the pending changes of `edits`, the edit buffer of
+/// the table built from `model`, would be written, as [`render_raw`] checks
+/// before it renders: the same refusals, without rendering the text.
+///
+/// # Errors
+///
+/// What [`render_raw`] returns for the same pending changes.
+pub(super) fn check_pending(
+    model: &PageModel,
+    span: &SourceSpan,
+    edits: &EditBuffer,
+    dialect: &Dialect,
+) -> Result<(), RawTextError> {
+    let edit_set = model.loaded_edit_set(span.end(), edits)?;
+
+    if !edit_set.is_empty() {
+        check_save(model, span, &edit_set, dialect)?;
+    }
+
+    Ok(())
 }
 
 /// Runs the writer over the kept bytes with `edit_set`, the loaded edit set

@@ -41,7 +41,10 @@ mod reader;
 mod source;
 mod writer;
 
-pub use reader::{Page, PagedReader, ReadError, ReaderOptions, Record, RecordCount};
+pub use reader::{
+    Page, PagedReader, ParseTextError, ReadError, ReaderOptions, Record, RecordCount, TextRecord,
+    parse_text,
+};
 #[cfg(any(unix, windows))]
 pub use source::FileSource;
 pub use source::{ByteSource, MemorySource, SourceError};

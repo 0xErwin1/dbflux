@@ -168,8 +168,9 @@ impl SaveAudit {
 }
 
 impl DelimitedDocument {
-    /// Whether the document has unsaved changes: a pending edit in the table
-    /// or a column change in the page model.
+    /// Whether the document has unsaved changes: a pending edit in the table,
+    /// a column change in the page model, or an edit of the text view's text
+    /// that was not applied yet.
     pub fn is_dirty(&self) -> bool {
         self.loaded().is_some_and(|loaded| loaded.is_dirty)
     }
@@ -220,9 +221,9 @@ impl DelimitedDocument {
     }
 
     /// Whether the rows or the columns can be changed now: they can be
-    /// edited, no dialog is open, and the table is shown. The text view is
-    /// read-only, so inserting a row, adding a column and renaming one wait
-    /// until the user is back in the table.
+    /// edited, no dialog is open, and the table is shown. Inserting a row,
+    /// adding a column and renaming one are the table's: in the text view
+    /// the user edits the text instead.
     pub(super) fn can_change_rows(&self) -> bool {
         self.can_edit()
             && !self.has_open_dialog()
@@ -236,7 +237,8 @@ impl DelimitedDocument {
         };
 
         let is_dirty = loaded.table_state.read(cx).has_pending_operations()
-            || loaded.page_model.has_column_changes();
+            || loaded.page_model.has_column_changes()
+            || self.text.edited;
 
         let Some(loaded) = self.loaded_mut() else {
             return;
@@ -631,12 +633,17 @@ impl DelimitedDocument {
     }
 
     /// Drops every pending edit, every column change and the undo history.
-    /// An open inline editor is closed without staging its value. Does
-    /// nothing while a save runs or a dialog is open.
+    /// An open inline editor is closed without staging its value. An edit of
+    /// the text view's text is dropped too, without being read, so text that
+    /// does not parse never blocks a discard, and the text is rendered again
+    /// from the clean state. Does nothing while a save runs or a dialog is
+    /// open.
     pub fn discard_changes(&mut self, cx: &mut Context<Self>) {
         if self.saving || self.has_open_dialog() {
             return;
         }
+
+        self.drop_text_edit(cx);
 
         let Some(loaded) = self.loaded_mut() else {
             return;
@@ -749,7 +756,9 @@ impl DelimitedDocument {
     /// document without changes writes nothing and reports a save that
     /// succeeded. Refused and reported while the file is read again under
     /// another dialect, and while the rest of the file is being loaded. A
-    /// value typed in an open inline editor is committed first.
+    /// value typed in an open inline editor is committed first, and an edit
+    /// of the text view's text is applied first: a text that cannot be
+    /// applied is reported and nothing is written.
     ///
     /// Every outcome is reported once:
     ///
@@ -775,6 +784,11 @@ impl DelimitedDocument {
     /// report, and the save itself completes.
     pub fn save(&mut self, cx: &mut Context<Self>) {
         if self.saving {
+            return;
+        }
+
+        if !self.apply_text(cx) {
+            self.report_save_outcome(false, cx);
             return;
         }
 
@@ -917,8 +931,9 @@ impl DelimitedDocument {
 
     /// Saves as part of an interrupted close: the tab closes only once the
     /// file holds the edits, and keeps them otherwise. A save refused while
-    /// the rest of the file loads reports a failed save, so the tab stays
-    /// open with its edits. Returns whether a save
+    /// the rest of the file loads, or because the text view holds text that
+    /// cannot be applied, reports a failed save, so the tab stays open with
+    /// its edits. Returns whether a save
     /// started, which is false only for a file that is not loaded.
     ///
     /// Asking again while a save runs is intentional: that save then reports
@@ -1041,6 +1056,34 @@ impl DelimitedDocument {
             cx.emit(DocumentEvent::RequestClose);
         }
     }
+}
+
+/// Shows the columns and rows of `page_model` in the table of `state`, with
+/// every pending edit and its undo history kept: every row keeps its index
+/// and every column its position, and a pending insert gets an empty field
+/// for each new column. Replacing the rows closes an open inline editor, so
+/// its value is committed first instead of being lost.
+pub(super) fn install_page_model(
+    state: &mut DataTableState,
+    page_model: &super::page_model::PageModel,
+    cx: &mut Context<DataTableState>,
+) {
+    let model = Arc::new(page_model.table_model());
+    let row_count = model.row_count();
+    let column_count = model.col_count();
+
+    if state.is_editing() {
+        state.stop_editing(true, cx);
+    }
+
+    let pending = state.edit_buffer().clone();
+
+    state.set_model(model, ModelSwap::KeepCursor, cx);
+
+    *state.edit_buffer_mut() = pending;
+    state.edit_buffer_mut().set_base_row_count(row_count);
+    pad_pending_inserts(state.edit_buffer_mut(), column_count);
+    cx.notify();
 }
 
 /// Gives every pending insert of `buffer` an empty field for each of the

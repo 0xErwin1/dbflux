@@ -112,6 +112,12 @@ impl DelimitedDocument {
             Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
         });
 
+        // The Vim mode of the text view's editor.
+        pane.key_context_entries = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).key_context_entries(cx))
+        });
+
         // The dialect and edit controls, which the pane actions menu
         // reaches from the keyboard.
         pane.pane_actions = Some({
