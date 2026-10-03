@@ -360,10 +360,12 @@ impl DbFluxServer {
 
         let target = Self::hint_target(&connection, table);
 
-        // The column check covers every column the post-failure hint would
-        // look up, so a checked call does not read the columns a second time.
-        let columns_checked = joins.is_some()
-            || matches!(connection.metadata().category, DatabaseCategory::Relational);
+        // Only an engine that misreads an unknown quoted identifier is checked
+        // before running. That check covers every column the post-failure hint
+        // would look up, so a checked call does not read the columns again.
+        let columns_checked = not_found::misreads_unknown_identifiers(connection.as_ref())
+            && (joins.is_some()
+                || matches!(connection.metadata().category, DatabaseCategory::Relational));
 
         let outcome = match joins {
             Some(joins) => Self::select_data_joined(
@@ -436,9 +438,11 @@ impl DbFluxServer {
     }
 
     /// Handles select_data without joins through the driver's browse path,
-    /// after the column check of `check` passes. A call whose `columns` names
-    /// a pseudo-column of the table runs as a generated SELECT instead, when
-    /// the connection can generate one, because a browse never returns it.
+    /// after the column check of `check` passes, when its references were
+    /// collected because the engine misreads unknown identifiers. A call
+    /// whose `columns` names a pseudo-column of the table runs as a generated
+    /// SELECT instead, when the connection can generate one, because a browse
+    /// never returns it.
     #[allow(clippy::too_many_arguments)]
     async fn select_data_single_source(
         check: ColumnCheck<'_>,
@@ -453,42 +457,37 @@ impl DbFluxServer {
         let connection = check.connection;
         let database = check.database;
 
-        let pseudo_columns = not_found::check_columns(check).await?;
+        let pseudo_columns = not_found::check_columns(&check).await?;
 
-        if let Some(columns) = columns
-            && Self::projects_pseudo_column(columns, &pseudo_columns)
+        let request = JoinedSelect {
+            table,
+            columns,
+            filter: semantic_filter,
+            order_by,
+            limit,
+            offset,
+            joins: &[],
+            database,
+        };
+
+        if let Some(routed) =
+            Self::route_pseudo_columns(connection, &request, &pseudo_columns).await?
         {
-            let request = JoinedSelect {
-                table,
-                columns: Some(columns),
-                filter: semantic_filter,
-                order_by,
-                limit,
-                offset,
-                joins: &[],
-                database,
-            };
-
-            if let Some((value, sql)) =
-                Self::select_data_projecting_pseudo_columns(connection, request, columns).await?
-            {
-                return Ok((value, Some(sql)));
-            }
+            return Ok(routed);
         }
 
-        let value = match connection.metadata().category {
-            DatabaseCategory::Document | DatabaseCategory::LogStream => {
-                Self::select_data_document(
-                    connection,
-                    table,
-                    database,
-                    filter,
-                    semantic_filter,
-                    limit,
-                    offset,
-                )
-                .await
-            }
+        match connection.metadata().category {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => Self::select_data_document(
+                connection,
+                table,
+                database,
+                filter,
+                semantic_filter,
+                limit,
+                offset,
+            )
+            .await
+            .map(|value| (value, None)),
             // ObjectStorage has no `select_data` support yet (bucket/object
             // listing goes through `ObjectStoreConnection`, not `select_data`).
             // It falls into the table-shaped path rather than a separate MCP
@@ -499,37 +498,113 @@ impl DbFluxServer {
             | DatabaseCategory::TimeSeries
             | DatabaseCategory::WideColumn
             | DatabaseCategory::ObjectStorage => {
-                Self::select_data_table(
-                    connection,
-                    table,
-                    columns,
-                    semantic_filter,
-                    order_by,
-                    limit,
-                    offset,
-                )
-                .await
+                Self::select_data_table_routed(&check, &request).await
             }
-        }?;
+        }
+    }
 
-        Ok((value, None))
+    /// Browses the table and keeps the columns the call selects. When the
+    /// engine fails loudly on unknown columns, nothing was looked up before
+    /// running, so a `columns` entry missing from the browse result is looked
+    /// up now: a pseudo-column of the table reruns the call as a generated
+    /// SELECT, and anything else keeps the browse error.
+    async fn select_data_table_routed(
+        check: &ColumnCheck<'_>,
+        request: &JoinedSelect<'_>,
+    ) -> Result<(serde_json::Value, Option<String>), CallFailure> {
+        let connection = check.connection;
+
+        let result = Self::browse_table_rows(
+            connection,
+            request.table,
+            request.filter,
+            request.order_by,
+            request.limit,
+            request.offset,
+        )
+        .await?;
+
+        if let Some(columns) = request.columns
+            && !not_found::misreads_unknown_identifiers(connection.as_ref())
+            && Self::misses_requested_column(&result, columns)
+        {
+            let target = Self::table_ref_for_connection(connection, request.table);
+            let lookup = ColumnCheck {
+                references: Self::projected_columns(columns, &target),
+                ..*check
+            };
+
+            let pseudo_columns = not_found::pseudo_columns(&lookup).await;
+
+            if let Some(routed) =
+                Self::route_pseudo_columns(connection, request, &pseudo_columns).await?
+            {
+                return Ok(routed);
+            }
+        }
+
+        Ok((
+            Self::serialize_selected_result(&result, request.columns)?,
+            None,
+        ))
+    }
+
+    /// Runs the call as a generated SELECT when its `columns` names one of
+    /// `pseudo_columns`. `None` keeps the browse path: no pseudo-column is
+    /// projected, or the connection cannot generate the query.
+    async fn route_pseudo_columns(
+        connection: &Arc<dyn Connection>,
+        request: &JoinedSelect<'_>,
+        pseudo_columns: &[ColumnReference],
+    ) -> Result<Option<(serde_json::Value, Option<String>)>, CallFailure> {
+        let Some(columns) = request.columns else {
+            return Ok(None);
+        };
+
+        if !Self::projects_pseudo_column(columns, pseudo_columns) {
+            return Ok(None);
+        }
+
+        let routed = Self::select_data_projecting_pseudo_columns(
+            connection,
+            JoinedSelect { ..*request },
+            columns,
+        )
+        .await?;
+
+        Ok(routed.map(|(value, sql)| (value, Some(sql))))
+    }
+
+    fn misses_requested_column(result: &QueryResult, columns: &[String]) -> bool {
+        columns
+            .iter()
+            .any(|column| !result.columns.iter().any(|meta| meta.name == *column))
     }
 
     /// Whether an entry of `columns` names one of `pseudo_columns`, the
-    /// references the column check found to be pseudo-columns.
+    /// references found to be pseudo-columns of their table.
     fn projects_pseudo_column(columns: &[String], pseudo_columns: &[ColumnReference]) -> bool {
         pseudo_columns.iter().any(|reference| {
-            let wanted = reference.column.to_lowercase();
-
             columns.iter().any(|column| {
-                not_found::is_plain_identifier(column)
-                    && not_found::column_of_table(
-                        &ColumnRef::from_qualified(column),
-                        &reference.table,
-                    )
-                    .is_some_and(|name| name.to_lowercase() == wanted)
+                not_found::column_of_table(&ColumnRef::from_qualified(column), &reference.table)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&reference.column))
             })
         })
+    }
+
+    /// The `columns` entries that name a column of `target`, unqualified or
+    /// qualified with its name.
+    fn projected_columns(columns: &[String], target: &TableRef) -> Vec<ColumnReference> {
+        columns
+            .iter()
+            .filter_map(|column| {
+                not_found::column_of_table(&ColumnRef::from_qualified(column), target)
+            })
+            .map(|column| ColumnReference {
+                table: target.clone(),
+                column,
+            })
+            .collect()
     }
 
     /// The table or collection a failed call targeted, as the not-found hint
@@ -566,30 +641,33 @@ impl DbFluxServer {
     }
 
     /// Columns of `target` a call without joins names in `where`, `order_by`
-    /// and `columns`, for the column check. Nested paths, expressions and
-    /// names qualified with another table are left out.
+    /// and `columns`, for the check before running, whatever their
+    /// characters: SQLite reads `"frist name"` or `"lower(label)"` as a
+    /// string, not as an error. Left out are nested paths, which the SQL
+    /// rendering refuses, and names qualified with another table, which SQLite
+    /// rejects as `no such column` even with its string fallback.
     fn checked_columns(
         semantic_filter: Option<&SemanticFilter>,
         order_by: Option<&[OrderByItem]>,
         columns: Option<&[String]>,
         target: &TableRef,
     ) -> Vec<ColumnReference> {
-        let projected = columns
-            .unwrap_or_default()
-            .iter()
-            .filter(|column| not_found::is_plain_identifier(column))
-            .filter_map(|column| {
-                not_found::column_of_table(&ColumnRef::from_qualified(column), target)
-            });
+        let sorted = order_by.unwrap_or_default().iter().filter_map(|item| {
+            not_found::column_of_table(&ColumnRef::from_qualified(&item.column), target)
+        });
 
-        Self::referenced_columns(semantic_filter, order_by, target, &[])
+        let named: Vec<String> = not_found::filter_columns(semantic_filter, target)
             .into_iter()
-            .chain(projected)
-            .filter(|column| not_found::is_checkable_column(column))
+            .chain(sorted)
+            .collect();
+
+        named
+            .into_iter()
             .map(|column| ColumnReference {
                 table: target.clone(),
                 column,
             })
+            .chain(Self::projected_columns(columns.unwrap_or_default(), target))
             .collect()
     }
 
@@ -638,6 +716,7 @@ impl DbFluxServer {
 
     /// Handle select_data for drivers that expose table browse semantics.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     async fn select_data_table(
         connection: &Arc<dyn Connection>,
         table: &str,
@@ -647,6 +726,22 @@ impl DbFluxServer {
         limit: u32,
         offset: u32,
     ) -> Result<serde_json::Value, CallFailure> {
+        let query_result =
+            Self::browse_table_rows(connection, table, semantic_filter, order_by, limit, offset)
+                .await?;
+
+        Ok(Self::serialize_selected_result(&query_result, columns)?)
+    }
+
+    /// Browses `table` through the driver's browse path.
+    async fn browse_table_rows(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+        semantic_filter: Option<&dbflux_core::SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<QueryResult, CallFailure> {
         let pagination = Pagination::Offset {
             limit,
             offset: offset as u64,
@@ -670,12 +765,11 @@ impl DbFluxServer {
             .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
 
         log::debug!(
-            "select_data_table: query completed, serializing {} rows",
+            "select_data_table: query completed with {} rows",
             query_result.rows.len()
         );
-        let result = Self::serialize_selected_result(&query_result, columns)?;
-        log::debug!("select_data_table: serialization complete");
-        Ok(result)
+
+        Ok(query_result)
     }
 
     async fn count_records_impl(
@@ -1056,6 +1150,7 @@ mod tests {
             supports_schemas: true,
             default_schema: Some("public".into()),
             case_sensitive_identifiers: true,
+            misreads_unknown_quoted_identifiers: false,
         }),
         query: Some(QueryCapabilities::default()),
         mutation: Some(MutationCapabilities::default()),

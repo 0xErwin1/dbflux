@@ -159,6 +159,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: true,
         default_schema: Some("dbo".to_string()),
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],

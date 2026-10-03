@@ -138,7 +138,7 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 
 `select_data` reads across tables when the call passes `joins`. It runs on drivers that declare join support and can render a structured SELECT; document, key-value and other drivers that do not declare it return an explicit error.
 
-SQL Server joins need the shared SELECT builder to render `OFFSET … FETCH` on SQL Server. That fix ships in a separate change; without it, SQL Server rejects the generated `LIMIT` clause.
+SQL Server runs joins too: the shared SELECT builder renders its row limit as `OFFSET … FETCH`. The join tests run on SQLite; there is no live join test on SQL Server.
 
 ```json
 {
@@ -663,14 +663,14 @@ See `crates/dbflux_core/src/query/column_ref.rs` for implementation.
 
 ### Not-Found Hints
 
-When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call, the server may add a hint in front of the error. The error stays a plain message, and the driver's own text is kept at the end. `select_data` also checks its columns before it runs (see [Column check in `select_data`](#column-check-in-select_data)).
+When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call, the server may add a hint in front of the error. The error stays a plain message, and the driver's own text is kept at the end. On SQLite and Turso, `select_data` checks its columns before it runs instead (see [Column check in `select_data`](#column-check-in-select_data)).
 
 | Case | Added to the error | Needs permission for |
 |------|--------------------|----------------------|
 | Table or collection is not listed in the queried database or schema | Where the name was looked up and up to three close names | `list_tables` |
 | Same, the call did not pass `database`, and the server lists several databases | The database name, and a note that the table may be in another database | `list_databases` |
-| Column in `where` or `order_by` is not a listed column of the table (`count_records` and `aggregate_data` on tables, not collections) | Up to three close column names, and every column when the table has 20 or fewer | `describe_object` |
-| Column in `columns` is not in the result (`select_data` on tables, when the column check was skipped) | The same column hints, taken from the result the call already read | none |
+| Column in `where` or `order_by` is not a listed column of the table (`count_records` and `aggregate_data` on tables, not collections, and `select_data` where it was not checked before running) | Up to three close column names, and every column when the table has 20 or fewer | `describe_object` |
+| Column in `columns` is not in the result (`select_data` on tables, when it was not checked before running and the column is not a pseudo-column) | The same column hints, taken from the result the call already read | none |
 
 ```text
 Table 'usres' is not listed in schema 'public' of database 'postgres'. It may not exist, or this connection may not have access to it.
@@ -690,7 +690,7 @@ Rules:
 
 #### Column check in `select_data`
 
-`select_data` on a relational table, and every `select_data` call with `joins`, checks the columns it names in `columns`, `where` and `order_by` before the query runs. A column the table's metadata does not list is refused, and the query is not run. The check exists because some engines do not fail on an unknown column: SQLite reads an unknown double-quoted identifier as a string, so a misspelled column in `where` returns no rows instead of an error.
+On engines that read an unknown quoted identifier as a string, `select_data` checks the columns it names in `columns`, `where` and `order_by` before the query runs, on a relational table and on every call with `joins`. A column the table's metadata does not list is refused, and the query is not run. SQLite and Turso are such engines: SQLite reads an unknown double-quoted identifier as a string, so a misspelled column in `where` returns no rows instead of an error. PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse and Redshift fail on an unknown column, so their calls run unchecked and a failure gets the not-found hint above.
 
 ```text
 Column 'emial' is not listed among the columns of table 'users'.
@@ -702,11 +702,14 @@ The query was not run.
 
 | Topic | Behavior |
 |-------|----------|
+| Engines | Drivers that declare it in their syntax metadata: SQLite and Turso. External RPC drivers never declare it |
 | Names in the refusal | The close and available columns need `describe_object`. Without it, the refusal keeps only its first line and `The query was not run.` |
-| Comparison | Ignores case, because the driver metadata does not say how the engine folds a column name. A name that differs only in case runs |
-| Skipped, the call runs as before | The driver has no column metadata for the table, the lookup fails, the metadata lists no columns, the table is qualified on a driver without schemas, or the reference is a nested path, an expression or a name qualified with another table |
-| Cost | One column lookup (`table_details`) per table the call names a column of, with no cache. A call that names no column makes no lookup, and a call that fails after the check does not look the columns up again |
-| Pseudo-columns | A name the driver declares for the table, such as SQLite's `rowid` on a rowid table, MySQL's `_rowid` or PostgreSQL's `ctid`, counts as listed and is never suggested. Without `joins`, a call whose `columns` names one runs as a generated SELECT, like a join, so the value comes back; its `where` then accepts only the operators a join accepts, and a connection that cannot generate the query keeps the browse path |
+| Comparison | ASCII letters ignore case, as SQLite folds them. Any other character must match: the Kelvin sign is not `K`, and `É` is not `é` |
+| What is checked | Every unqualified name and every name qualified with the table, whatever its characters: `frist name` and `lower(label)` are checked, because SQLite reads them as strings. Not checked: nested paths (`a.b.c`), which the SQL rendering refuses, and names qualified with another table, which SQLite rejects as `no such column` |
+| What counts as listed | Table and view names resolve with ASCII case folding. Generated columns and the hidden columns of virtual tables count as listed, and so do `rowid`, `oid` and `_rowid_` where the engine accepts them: rowid tables and FTS5 or R*Tree tables, not `WITHOUT ROWID` tables or views |
+| Skipped, the call runs as before | The driver has no column metadata for the table, the lookup fails, the metadata lists no columns, or the table is qualified on a driver without schemas |
+| Cost | On SQLite and Turso, one column lookup (`table_details`) per table the call names a column of, with no cache. On other engines, none, unless a `columns` entry is missing from the browse result: then one lookup decides whether it is a pseudo-column. A failed call looks the columns up for the hint only when it was not checked before running |
+| Pseudo-columns | A name the driver declares for the table counts as listed and is never suggested: SQLite's and Turso's `rowid`, generated and hidden columns, MySQL's `_rowid`, PostgreSQL's `ctid`, `xmin`, `cmin`, `xmax`, `cmax` and `tableoid`. Without `joins`, a call whose `columns` names one runs as a generated SELECT, like a join, so the value comes back; PostgreSQL returns `ctid` as text such as `(0,1)` and the others as integers. That SELECT accepts less than the browse path: only the `where` operators a join accepts, plain ASCII identifiers, each column once, and `asc` or `desc` as the sort direction. A connection that cannot generate the query keeps the browse path |
 
 Names match without regard to case or separators, so `userId` suggests `user_id`.
 

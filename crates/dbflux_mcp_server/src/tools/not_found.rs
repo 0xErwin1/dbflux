@@ -238,23 +238,29 @@ pub(crate) fn with_column_hints(message: String, wanted: &str, available: &[&str
     format!("{message}. {}", hints.join(" "))
 }
 
-/// Whether `text` can be checked as a column name: a plain identifier with no
-/// table qualifier left in it.
-pub(crate) fn is_checkable_column(text: &str) -> bool {
-    is_plain_identifier(text) && !text.contains('.')
+/// Whether the connection's engine reads a quoted identifier that names no
+/// column as a string literal, which is when a call is checked before it runs.
+/// An engine that fails on an unknown column gets the hint after the failure
+/// instead.
+pub(crate) fn misreads_unknown_identifiers(connection: &dyn Connection) -> bool {
+    connection
+        .metadata()
+        .syntax
+        .as_ref()
+        .is_some_and(|syntax| syntax.misreads_unknown_quoted_identifiers)
 }
 
 /// Refuses the call when it names a column its table's metadata does not
 /// list, and returns the refusal message. On success, returns the references
 /// that name a pseudo-column of their table rather than a listed column.
 ///
-/// Some engines do not fail on an unknown column: SQLite reads an unknown
-/// double-quoted identifier as a string literal, so a misspelled column in a
-/// filter returns no rows instead of an error. The check reads the column
-/// names of each referenced table once, through `table_details`, and compares
-/// names case-insensitively, because the driver metadata does not say how the
-/// engine folds a column name. A pseudo-column the driver declared for the
-/// table, such as SQLite's `rowid`, counts as listed.
+/// Callers run it only where [`misreads_unknown_identifiers`] holds: SQLite
+/// reads an unknown double-quoted identifier as a string literal, so a
+/// misspelled column in a filter returns no rows instead of an error. The
+/// check reads the column names of each referenced table once, through
+/// `table_details`, and compares names with ASCII case folding, the only
+/// folding SQLite applies. A pseudo-column the driver declared for the table,
+/// such as SQLite's `rowid`, counts as listed.
 ///
 /// It never refuses on missing evidence. A table whose scope cannot be
 /// resolved, whose lookup fails or is not supported, or whose metadata lists
@@ -263,34 +269,8 @@ pub(crate) fn is_checkable_column(text: &str) -> bool {
 /// The refusal names the closest and the available columns only when the
 /// client may call `describe_object`. Without that permission it says only
 /// that the column is not listed for the table.
-pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<Vec<ColumnReference>, String> {
-    let mut tables: Vec<TableRef> = Vec::new();
-
-    for reference in &check.references {
-        if !tables.contains(&reference.table) {
-            tables.push(reference.table.clone());
-        }
-    }
-
-    if tables.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let connection = check.connection.clone();
-    let database = check.database.map(str::to_string);
-
-    let listed: Vec<(TableRef, Option<TableColumns>)> = tokio::task::spawn_blocking(move || {
-        tables
-            .into_iter()
-            .map(|table| {
-                let columns = listed_columns(connection.as_ref(), &table, database.as_deref());
-                (table, columns)
-            })
-            .collect()
-    })
-    .await
-    .log_err_with("Column check task failed")
-    .unwrap_or_default();
+pub(crate) async fn check_columns(check: &ColumnCheck<'_>) -> Result<Vec<ColumnReference>, String> {
+    let listed = list_tables(check).await;
 
     for (table, columns) in &listed {
         let Some(columns) = columns else {
@@ -316,7 +296,55 @@ pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<Vec<ColumnRe
         }
     }
 
-    let pseudo_columns = check
+    Ok(pseudo_column_references(check, &listed))
+}
+
+/// The references of `check` that name a pseudo-column of their table,
+/// without refusing anything. Used where the engine fails loudly on an unknown
+/// column and only the pseudo-columns matter.
+pub(crate) async fn pseudo_columns(check: &ColumnCheck<'_>) -> Vec<ColumnReference> {
+    let listed = list_tables(check).await;
+
+    pseudo_column_references(check, &listed)
+}
+
+/// Reads the names each table of `check` lists, one `table_details` lookup
+/// per table.
+async fn list_tables(check: &ColumnCheck<'_>) -> Vec<(TableRef, Option<TableColumns>)> {
+    let mut tables: Vec<TableRef> = Vec::new();
+
+    for reference in &check.references {
+        if !tables.contains(&reference.table) {
+            tables.push(reference.table.clone());
+        }
+    }
+
+    if tables.is_empty() {
+        return Vec::new();
+    }
+
+    let connection = check.connection.clone();
+    let database = check.database.map(str::to_string);
+
+    tokio::task::spawn_blocking(move || {
+        tables
+            .into_iter()
+            .map(|table| {
+                let columns = listed_columns(connection.as_ref(), &table, database.as_deref());
+                (table, columns)
+            })
+            .collect()
+    })
+    .await
+    .log_err_with("Column check task failed")
+    .unwrap_or_default()
+}
+
+fn pseudo_column_references(
+    check: &ColumnCheck<'_>,
+    listed: &[(TableRef, Option<TableColumns>)],
+) -> Vec<ColumnReference> {
+    check
         .references
         .iter()
         .filter(|reference| {
@@ -328,9 +356,7 @@ pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<Vec<ColumnRe
             })
         })
         .cloned()
-        .collect();
-
-    Ok(pseudo_columns)
+        .collect()
 }
 
 /// Reads the column names of `table` for the column check. `None` means the
@@ -672,12 +698,12 @@ fn object_names(
     (schema.is_none() || !names.is_empty()).then_some(names)
 }
 
-/// A name that differs only in case counts as present, because the metadata
-/// does not say how the engine folds an identifier in this position.
-fn contains_name(names: &[String], wanted: &str) -> bool {
-    let wanted = wanted.to_lowercase();
-
-    names.iter().any(|name| name.to_lowercase() == wanted)
+/// A name that differs only in ASCII case counts as present, because the
+/// metadata does not say how the engine folds an identifier in this position.
+/// Only ASCII letters fold, as in SQLite: the Kelvin sign is not `K`, and `É`
+/// is not `é`.
+pub(crate) fn contains_name(names: &[String], wanted: &str) -> bool {
+    names.iter().any(|name| name.eq_ignore_ascii_case(wanted))
 }
 
 fn unlisted_object_message(
@@ -941,6 +967,13 @@ mod tests {
     fn a_name_that_differs_only_in_case_counts_as_present() {
         assert!(contains_name(&names(&["Users"]), "users"));
         assert!(!contains_name(&names(&["Users"]), "user"));
+    }
+
+    #[test]
+    fn only_ascii_letters_fold_when_names_are_compared() {
+        assert!(!contains_name(&names(&["key"]), "\u{212A}ey"));
+        assert!(!contains_name(&names(&["café"]), "CAFÉ"));
+        assert!(contains_name(&names(&["café"]), "CAFé"));
     }
 
     #[test]

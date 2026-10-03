@@ -72,6 +72,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -236,6 +237,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],

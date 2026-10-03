@@ -214,65 +214,52 @@ impl TursoConnection {
             .collect())
     }
 
-    /// The rowid names when the server reports `table` as an ordinary rowid
-    /// table through `PRAGMA table_list` (SQLite 3.37.0 and later; libSQL
-    /// server v0.24.33 answers it). A server that cannot answer gets none, so
-    /// the column check refuses the names as it would without this metadata.
-    fn get_pseudo_columns(&self, table: &str) -> Box<[String]> {
-        let shape = self.run(
-            "SELECT type, wr FROM pragma_table_list WHERE schema = 'main' AND name = ?",
-            vec![TursoValue::Text(table.to_string())],
-        );
-
-        match shape {
-            Ok(result) => result
-                .rows
-                .first()
-                .map(|row| rowid_pseudo_columns(row))
-                .unwrap_or_default(),
+    /// The rowid names when the server accepts them on `table`: ordinary
+    /// rowid tables and virtual tables whose module has a rowid, such as
+    /// FTS5. A `WITHOUT ROWID` table and a view refuse them. The probe names
+    /// them unquoted, so the double-quoted string fallback cannot apply, and
+    /// `LIMIT 0` returns no rows. A refused probe declares nothing.
+    fn get_pseudo_rowid_columns(&self, table: &str) -> Vec<String> {
+        match self.run_sql(&rowid_probe_sql(table)) {
+            Ok(_) => ROWID_NAMES.iter().map(|name| name.to_string()).collect(),
             Err(error) => {
-                log::debug!("[SCHEMA] Cannot read the table shape of '{table}': {error}");
-                Box::default()
+                log::debug!("[SCHEMA] '{table}' has no rowid: {error}");
+                Vec::new()
             }
         }
     }
 
-    fn get_columns(&self, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-        let exists = self.run(
-            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+    /// The stored name of the table or view `table` names. SQLite resolves
+    /// table names with ASCII case folding, which `COLLATE NOCASE` applies.
+    fn resolve_relation_name(&self, table: &str) -> Result<String, DbError> {
+        let resolved = self.run(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') \
+             AND name = ? COLLATE NOCASE",
             vec![TursoValue::Text(table.to_string())],
         )?;
-        if exists.rows.is_empty() {
-            return Err(DbError::ObjectNotFound(
-                format!("Table '{table}' not found").into(),
-            ));
-        }
 
-        // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
-        let result = self.pragma("table_info", table)?;
-        Ok(result
+        resolved
             .rows
-            .iter()
-            .filter_map(|row| {
-                let name = row.get(1).and_then(|v| value_to_string(v.clone()))?;
-                let type_name = row
-                    .get(2)
-                    .and_then(|v| value_to_string(v.clone()))
-                    .unwrap_or_default();
-                let notnull = row.get(3).and_then(value_to_i64).unwrap_or(1);
-                let pk = row.get(5).and_then(value_to_i64).unwrap_or(0);
-                let default_value = row.get(4).and_then(|v| value_to_string(v.clone()));
-                Some(ColumnInfo {
-                    name,
-                    type_name,
-                    // INTEGER PRIMARY KEY reports notnull=0 but is implicitly NOT NULL.
-                    nullable: notnull == 0 && pk == 0,
-                    is_primary_key: pk > 0,
-                    default_value,
-                    enum_values: None,
-                })
-            })
-            .collect())
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .and_then(value_to_string)
+            .ok_or_else(|| DbError::ObjectNotFound(format!("Table '{table}' not found").into()))
+    }
+
+    fn get_columns(&self, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
+        let resolved = self.resolve_relation_name(table)?;
+
+        Ok(self.read_columns(&resolved)?.0)
+    }
+
+    /// Reads the columns of a table or view through `PRAGMA table_xinfo`:
+    /// the columns `PRAGMA table_info` lists, and the names of hidden and
+    /// generated columns, which the engine also resolves.
+    fn read_columns(&self, table: &str) -> Result<(Vec<ColumnInfo>, Vec<String>), DbError> {
+        let result = self.pragma("table_xinfo", table)?;
+
+        Ok(split_xinfo_rows(&result.rows))
     }
 
     /// PRAGMA index_list columns: seq, name, unique, origin, partial.
@@ -511,18 +498,52 @@ fn value_to_string(value: Value) -> Option<String> {
 /// does not list them: <https://www.sqlite.org/lang_createtable.html#rowid>.
 const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
 
-/// The rowid names for a `pragma_table_list` row of `type` and `wr` that
-/// describes an ordinary table (`type` = `table`) with a rowid (`wr` = 0).
-fn rowid_pseudo_columns(shape: &[Value]) -> Box<[String]> {
-    match shape {
-        [kind, without_rowid, ..]
-            if value_to_string(kind.clone()).as_deref() == Some("table")
-                && value_to_i64(without_rowid) == Some(0) =>
-        {
-            ROWID_NAMES.iter().map(|name| name.to_string()).collect()
+fn rowid_probe_sql(table: &str) -> String {
+    format!(
+        "SELECT {} FROM {} LIMIT 0",
+        ROWID_NAMES.join(", "),
+        crate::dialect::quote_ident(table)
+    )
+}
+
+/// Splits `PRAGMA table_xinfo` rows (cid, name, type, notnull, dflt_value,
+/// pk, hidden) into the columns `PRAGMA table_info` lists, `hidden` 0, and
+/// the names of hidden (1) and generated (2, 3) columns:
+/// <https://www.sqlite.org/pragma.html#pragma_table_xinfo>.
+fn split_xinfo_rows(rows: &[Vec<Value>]) -> (Vec<ColumnInfo>, Vec<String>) {
+    let mut columns = Vec::new();
+    let mut unlisted = Vec::new();
+
+    for row in rows {
+        let Some(name) = row.get(1).and_then(|v| value_to_string(v.clone())) else {
+            continue;
+        };
+
+        if row.get(6).and_then(value_to_i64).unwrap_or(0) != 0 {
+            unlisted.push(name);
+            continue;
         }
-        _ => Box::default(),
+
+        let type_name = row
+            .get(2)
+            .and_then(|v| value_to_string(v.clone()))
+            .unwrap_or_default();
+        let notnull = row.get(3).and_then(value_to_i64).unwrap_or(1);
+        let pk = row.get(5).and_then(value_to_i64).unwrap_or(0);
+        let default_value = row.get(4).and_then(|v| value_to_string(v.clone()));
+
+        columns.push(ColumnInfo {
+            name,
+            type_name,
+            // INTEGER PRIMARY KEY reports notnull=0 but is implicitly NOT NULL.
+            nullable: notnull == 0 && pk == 0,
+            is_primary_key: pk > 0,
+            default_value,
+            enum_values: None,
+        });
     }
+
+    (columns, unlisted)
 }
 
 fn value_to_i64(value: &Value) -> Option<i64> {
@@ -714,11 +735,15 @@ impl Connection for TursoConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        let columns = self.get_columns(table)?;
-        let indexes = self.get_indexes(table)?;
-        let foreign_keys = self.get_foreign_keys(table)?;
-        let constraints = self.get_constraints(table)?;
-        let pseudo_columns = self.get_pseudo_columns(table);
+        let resolved = self.resolve_relation_name(table)?;
+        let (columns, unlisted_columns) = self.read_columns(&resolved)?;
+        let indexes = self.get_indexes(&resolved)?;
+        let foreign_keys = self.get_foreign_keys(&resolved)?;
+        let constraints = self.get_constraints(&resolved)?;
+        let pseudo_columns = unlisted_columns
+            .into_iter()
+            .chain(self.get_pseudo_rowid_columns(&resolved))
+            .collect();
 
         Ok(TableInfo {
             name: table.to_string(),
@@ -1479,22 +1504,33 @@ mod tests {
     }
 
     #[test]
-    fn rowid_names_are_declared_only_for_ordinary_rowid_tables() {
-        let shape =
-            |kind: &str, without_rowid: Value| vec![Value::Text(kind.into()), without_rowid];
+    fn the_rowid_probe_names_the_rowid_unquoted_and_quotes_the_table() {
+        assert_eq!(
+            rowid_probe_sql("my \"t\""),
+            "SELECT rowid, oid, _rowid_ FROM \"my \"\"t\"\"\" LIMIT 0"
+        );
+    }
 
-        assert_eq!(
-            *rowid_pseudo_columns(&shape("table", Value::Int(0))),
-            ["rowid", "oid", "_rowid_"]
-        );
-        assert_eq!(
-            *rowid_pseudo_columns(&shape("table", Value::Text("0".into()))),
-            ["rowid", "oid", "_rowid_"]
-        );
-        assert!(rowid_pseudo_columns(&shape("table", Value::Int(1))).is_empty());
-        assert!(rowid_pseudo_columns(&shape("view", Value::Int(0))).is_empty());
-        assert!(rowid_pseudo_columns(&shape("virtual", Value::Int(0))).is_empty());
-        assert!(rowid_pseudo_columns(&[]).is_empty());
+    #[test]
+    fn hidden_and_generated_xinfo_rows_are_left_out_of_the_columns() {
+        let row = |name: &str, hidden: i64| {
+            vec![
+                Value::Int(0),
+                Value::Text(name.into()),
+                Value::Text("INTEGER".into()),
+                Value::Int(0),
+                Value::Null,
+                Value::Int(0),
+                Value::Text(hidden.to_string()),
+            ]
+        };
+
+        let (columns, unlisted) =
+            split_xinfo_rows(&[row("a", 0), row("docs", 1), row("g", 2), row("s", 3)]);
+
+        let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+        assert_eq!(names, ["a"]);
+        assert_eq!(unlisted, ["docs", "g", "s"]);
     }
 
     #[test]

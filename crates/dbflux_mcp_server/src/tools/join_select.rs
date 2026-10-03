@@ -619,8 +619,9 @@ fn serialize_projected_result(
 
 impl DbFluxServer {
     /// Runs a `select_data` call that has joins and returns the result with
-    /// the SQL that produced it. The columns the call names are checked
-    /// against each table's metadata before the query runs.
+    /// the SQL that produced it. On an engine that misreads an unknown quoted
+    /// identifier, the columns the call names are checked against each
+    /// table's metadata before the query runs.
     pub(super) async fn select_data_joined(
         state: &ServerState,
         connection_id: &str,
@@ -630,14 +631,16 @@ impl DbFluxServer {
         let (query_request, references) = Self::plan_joined_select(connection, &request)?;
         let sql = query_request.sql.clone();
 
-        not_found::check_columns(ColumnCheck {
-            state,
-            connection_id,
-            connection,
-            database: request.database,
-            references,
-        })
-        .await?;
+        if not_found::misreads_unknown_identifiers(connection.as_ref()) {
+            not_found::check_columns(&ColumnCheck {
+                state,
+                connection_id,
+                connection,
+                database: request.database,
+                references,
+            })
+            .await?;
+        }
 
         let result = Self::execute_generated(connection, query_request).await?;
 

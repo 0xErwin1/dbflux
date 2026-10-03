@@ -90,6 +90,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: true,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -994,11 +995,15 @@ impl Connection for SqliteConnection {
 
         let conn = self.lock_connection()?;
 
-        let columns = self.get_columns(&conn, table)?;
-        let indexes = self.get_indexes(&conn, table)?;
-        let foreign_keys = self.get_foreign_keys(&conn, table)?;
-        let constraints = self.get_constraints(&conn, table)?;
-        let pseudo_columns = rowid_pseudo_columns(&conn, table);
+        let resolved = resolve_relation_name(&conn, table)?;
+        let (columns, unlisted_columns) = self.get_columns(&conn, &resolved)?;
+        let indexes = self.get_indexes(&conn, &resolved)?;
+        let foreign_keys = self.get_foreign_keys(&conn, &resolved)?;
+        let constraints = self.get_constraints(&conn, &resolved)?;
+        let pseudo_columns = unlisted_columns
+            .into_iter()
+            .chain(rowid_pseudo_columns(&conn, &resolved))
+            .collect();
 
         log::debug!(
             "[SCHEMA] Table {}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -1610,51 +1615,60 @@ impl SqliteConnection {
         Ok(tables)
     }
 
+    /// Reads the columns of a table or view. Returns the columns
+    /// `PRAGMA table_info` lists, which the UI shows, and the names of the
+    /// other columns the engine resolves: hidden columns of virtual tables
+    /// and generated columns.
+    ///
+    /// `PRAGMA table_xinfo` lists both, with `hidden` 0 for an ordinary
+    /// column, 1 for a hidden one and 2 or 3 for a generated one
+    /// (<https://www.sqlite.org/pragma.html#pragma_table_xinfo>).
     fn get_columns(
         &self,
         conn: &RusqliteConnection,
         table: &str,
-    ) -> Result<Vec<ColumnInfo>, DbError> {
-        // First check if the table exists
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
-                [table],
-                |_row| Ok(()),
-            )
-            .is_ok();
-
-        if !table_exists {
-            return Err(DbError::ObjectNotFound(
-                format!("Table '{}' not found", table).into(),
-            ));
-        }
-
+    ) -> Result<(Vec<ColumnInfo>, Vec<String>), DbError> {
         let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info('{}')", table))
+            .prepare(
+                "SELECT name, type, \"notnull\", dflt_value, pk, hidden \
+                 FROM pragma_table_xinfo(?1)",
+            )
             .map_err(|e| format_sqlite_query_error(&e))?;
 
-        let columns: Vec<ColumnInfo> = stmt
-            .query_map([], |row| {
-                let notnull: i32 = row.get(3).unwrap_or(1);
-                let pk: i32 = row.get(5).unwrap_or(0);
-                Ok(ColumnInfo {
-                    name: row.get(1)?,
-                    type_name: row.get::<_, String>(2).unwrap_or_default(),
+        let rows: Vec<(ColumnInfo, i64)> = stmt
+            .query_map([table], |row| {
+                let notnull: i32 = row.get(2).unwrap_or(1);
+                let pk: i32 = row.get(4).unwrap_or(0);
+                let column = ColumnInfo {
+                    name: row.get(0)?,
+                    type_name: row.get::<_, String>(1).unwrap_or_default(),
                     // SQLite reports notnull=0 for INTEGER PRIMARY KEY columns,
                     // but they are implicitly NOT NULL. Columns with pk > 0 are NOT NULL.
                     nullable: notnull == 0 && pk == 0,
                     // Any column with pk > 0 is part of a primary key (composite PKs have pk=1,2,3,...)
                     is_primary_key: pk > 0,
-                    default_value: row.get::<_, Option<String>>(4).unwrap_or(None),
+                    default_value: row.get::<_, Option<String>>(3).unwrap_or(None),
                     enum_values: None,
-                })
+                };
+
+                Ok((column, row.get::<_, i64>(5).unwrap_or(0)))
             })
             .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
-        Ok(columns)
+        let mut columns = Vec::new();
+        let mut unlisted = Vec::new();
+
+        for (column, hidden) in rows {
+            if hidden == 0 {
+                columns.push(column);
+            } else {
+                unlisted.push(column.name);
+            }
+        }
+
+        Ok((columns, unlisted))
     }
 
     fn get_indexes(
@@ -2800,29 +2814,46 @@ mod cancel_tests {
 /// does not list them: <https://www.sqlite.org/lang_createtable.html#rowid>.
 const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
 
-/// The rowid names when `table` is an ordinary rowid table in the main
-/// schema, and none for a `WITHOUT ROWID`, virtual or shadow table.
+/// The rowid names when the engine accepts them on `table`: ordinary rowid
+/// tables and the virtual tables whose module has a rowid, such as FTS5 and
+/// R*Tree. A `WITHOUT ROWID` table and a view refuse them.
 ///
-/// Reads `PRAGMA table_list` (SQLite 3.37.0 and later, which the bundled
-/// library satisfies): `type` is `table` for an ordinary table and `wr` is 1
-/// for a `WITHOUT ROWID` one. A failed lookup declares nothing, so the column
-/// check refuses the names as it would without this metadata.
-fn rowid_pseudo_columns(conn: &RusqliteConnection, table: &str) -> Box<[String]> {
-    let shape = conn.query_row(
-        "SELECT type, wr FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
-        [table],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+/// Asks the engine itself by preparing a statement that names them, unquoted
+/// so the double-quoted string fallback cannot apply. Preparing does not run
+/// anything. A refused statement declares nothing, so the column check
+/// refuses the names as it would without this metadata.
+fn rowid_pseudo_columns(conn: &RusqliteConnection, table: &str) -> Vec<String> {
+    let probe = format!(
+        "SELECT {} FROM \"{}\"",
+        ROWID_NAMES.join(", "),
+        table.replace('"', "\"\"")
     );
 
-    match shape {
-        Ok((kind, without_rowid)) if kind == "table" && without_rowid == 0 => {
-            ROWID_NAMES.iter().map(|name| name.to_string()).collect()
-        }
-        Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => Box::default(),
+    match conn.prepare(&probe) {
+        Ok(_) => ROWID_NAMES.iter().map(|name| name.to_string()).collect(),
         Err(error) => {
-            log::warn!("[SCHEMA] Cannot read the table shape of '{table}': {error}");
-            Box::default()
+            log::debug!("[SCHEMA] '{table}' has no rowid: {error}");
+            Vec::new()
         }
+    }
+}
+
+/// The stored name of the table or view `table` names. SQLite resolves table
+/// names with ASCII case folding, which `COLLATE NOCASE` applies.
+fn resolve_relation_name(conn: &RusqliteConnection, table: &str) -> Result<String, DbError> {
+    let resolved = conn.query_row(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') \
+         AND name = ?1 COLLATE NOCASE",
+        [table],
+        |row| row.get::<_, String>(0),
+    );
+
+    match resolved {
+        Ok(name) => Ok(name),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err(DbError::ObjectNotFound(
+            format!("Table '{}' not found", table).into(),
+        )),
+        Err(error) => Err(format_sqlite_query_error(&error)),
     }
 }
 
@@ -2868,6 +2899,98 @@ mod tests {
         assert_eq!(*pseudo_columns("notes"), ["rowid", "oid", "_rowid_"]);
         assert_eq!(*pseudo_columns("items"), ["rowid", "oid", "_rowid_"]);
         assert!(pseudo_columns("codes").is_empty());
+    }
+
+    fn engine_names_connection() -> super::SqliteConnection {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use std::sync::{Arc, Mutex};
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch(
+            "CREATE TABLE doubled (a INTEGER, g INTEGER GENERATED ALWAYS AS (a * 2) VIRTUAL, \
+             s INTEGER AS (a + 1) STORED);
+             CREATE VIEW doubled_view AS SELECT a FROM doubled;
+             CREATE VIRTUAL TABLE docs USING fts5(body);
+             CREATE VIRTUAL TABLE boxes USING rtree(id, x0, x1);",
+        )
+        .expect("create the tables");
+
+        SqliteConnection::for_test(Arc::new(Mutex::new(SqliteConnectionState::new(raw))))
+    }
+
+    fn column_names(details: &TableInfo) -> Vec<&str> {
+        details
+            .columns
+            .iter()
+            .flatten()
+            .map(|column| column.name.as_str())
+            .collect()
+    }
+
+    /// `PRAGMA table_xinfo` marks hidden columns 1 and generated columns 2
+    /// (virtual) or 3 (stored): <https://www.sqlite.org/pragma.html#pragma_table_xinfo>.
+    /// `columns` keeps what `PRAGMA table_info` lists, which the UI shows, and
+    /// the other names the engine resolves are pseudo-columns.
+    #[test]
+    fn generated_and_hidden_columns_are_pseudo_columns() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+
+        let doubled = connection
+            .table_details("main", None, "doubled")
+            .expect("read the table");
+        assert_eq!(column_names(&doubled), ["a"]);
+        assert_eq!(
+            *doubled.pseudo_columns,
+            ["g", "s", "rowid", "oid", "_rowid_"]
+        );
+
+        let docs = connection
+            .table_details("main", None, "docs")
+            .expect("read the FTS5 table");
+        assert_eq!(column_names(&docs), ["body"]);
+        assert_eq!(
+            *docs.pseudo_columns,
+            ["docs", "rank", "rowid", "oid", "_rowid_"]
+        );
+    }
+
+    #[test]
+    fn rowid_names_follow_what_the_engine_accepts() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+        let pseudo_columns = |table: &str| {
+            connection
+                .table_details("main", None, table)
+                .expect("read the details")
+                .pseudo_columns
+        };
+
+        assert_eq!(*pseudo_columns("boxes"), ["rowid", "oid", "_rowid_"]);
+        assert!(pseudo_columns("doubled_view").is_empty());
+    }
+
+    /// SQLite resolves table names with ASCII case folding and accepts a view
+    /// wherever a table is read.
+    #[test]
+    fn table_details_resolves_views_and_names_in_another_case() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+
+        let view = connection
+            .table_details("main", None, "doubled_view")
+            .expect("a view resolves");
+        assert_eq!(column_names(&view), ["a"]);
+
+        let other_case = connection
+            .table_details("main", None, "DOUBLED")
+            .expect("a name in another case resolves");
+        assert_eq!(column_names(&other_case), ["a"]);
+
+        assert!(connection.table_details("main", None, "nope").is_err());
     }
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
@@ -3068,6 +3191,21 @@ mod tests {
         assert_eq!(metadata.default_port, None);
         assert_eq!(metadata.uri_scheme, "sqlite");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    /// SQLite reads an unknown double-quoted identifier as a string literal
+    /// (<https://www.sqlite.org/quirks.html#dblquote>), and the bundled
+    /// library keeps that fallback on.
+    #[test]
+    fn sqlite_declares_that_it_misreads_unknown_quoted_identifiers() {
+        let driver = SqliteDriver::new();
+        let syntax = driver
+            .metadata()
+            .syntax
+            .as_ref()
+            .expect("SQLite declares its syntax");
+
+        assert!(syntax.misreads_unknown_quoted_identifiers);
     }
 
     #[test]
