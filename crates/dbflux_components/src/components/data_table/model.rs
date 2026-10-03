@@ -1048,6 +1048,36 @@ impl EditBuffer {
         idx
     }
 
+    /// Add a pending insert row at `anchor`, placed at `position` in the list
+    /// of pending inserts, clamped to its end, so that the table shows it
+    /// before the pending insert that was at `position` when both share an
+    /// anchor. The inserts from `position` on move up by one index. Undo
+    /// removes it from that index, and redo puts it back there.
+    /// Returns the index in pending_inserts.
+    pub fn add_pending_insert_at_index(
+        &mut self,
+        position: usize,
+        anchor: InsertAnchor,
+        row_data: Vec<CellValue>,
+    ) -> usize {
+        let insert_idx = position.min(self.pending_inserts.len());
+
+        self.push_undo(EditAction::AddInsert {
+            insert_idx,
+            anchor,
+            data: row_data.clone(),
+        });
+
+        self.pending_inserts.insert(
+            insert_idx,
+            PendingInsert {
+                data: row_data,
+                anchor,
+            },
+        );
+        insert_idx
+    }
+
     /// Check if a row is a pending insert (virtual row).
     #[allow(dead_code)]
     pub fn is_pending_insert(&self, row: usize) -> bool {
@@ -1566,6 +1596,134 @@ mod tests {
                     .unwrap_or_default(),
             })
             .collect()
+    }
+
+    /// The first cell of every pending insert, in index order.
+    fn insert_labels(buffer: &EditBuffer) -> Vec<String> {
+        buffer
+            .pending_inserts()
+            .iter()
+            .map(|insert| {
+                insert
+                    .data
+                    .first()
+                    .map(CellValue::edit_text)
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// A buffer of three base rows with pending inserts `a` and `b` after
+    /// row 0 and `tail` at the end.
+    fn buffer_with_inserts() -> EditBuffer {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(3);
+
+        buffer.add_pending_insert_at(InsertAnchor::After(0), vec![CellValue::text("a")]);
+        buffer.add_pending_insert_at(InsertAnchor::After(0), vec![CellValue::text("b")]);
+        buffer.add_pending_insert_at(InsertAnchor::End, vec![CellValue::text("tail")]);
+
+        buffer
+    }
+
+    #[test]
+    fn an_insert_at_an_index_is_shown_before_the_insert_it_displaces() {
+        let mut buffer = buffer_with_inserts();
+
+        let index = buffer.add_pending_insert_at_index(
+            1,
+            InsertAnchor::After(0),
+            vec![CellValue::text("new")],
+        );
+
+        assert_eq!(index, 1);
+        assert_eq!(insert_labels(&buffer), ["a", "new", "b", "tail"]);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "a", "new", "b", "base 1", "base 2", "tail"]
+        );
+    }
+
+    #[test]
+    fn an_insert_at_the_first_index_or_past_the_end_goes_first_or_last() {
+        let mut buffer = buffer_with_inserts();
+
+        buffer.add_pending_insert_at_index(
+            0,
+            InsertAnchor::After(0),
+            vec![CellValue::text("first")],
+        );
+        assert_eq!(insert_labels(&buffer), ["first", "a", "b", "tail"]);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "first", "a", "b", "base 1", "base 2", "tail"]
+        );
+
+        let index = buffer.add_pending_insert_at_index(
+            99,
+            InsertAnchor::End,
+            vec![CellValue::text("last")],
+        );
+        assert_eq!(index, 4, "clamped to the end");
+        assert_eq!(insert_labels(&buffer), ["first", "a", "b", "tail", "last"]);
+    }
+
+    #[test]
+    fn undo_and_redo_of_an_insert_at_an_index_restore_the_exact_list() {
+        let mut buffer = buffer_with_inserts();
+        let before = insert_labels(&buffer);
+
+        buffer.add_pending_insert_at_index(1, InsertAnchor::After(0), vec![CellValue::text("new")]);
+        let after = insert_labels(&buffer);
+
+        assert!(buffer.undo());
+        assert_eq!(insert_labels(&buffer), before);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "a", "b", "base 1", "base 2", "tail"]
+        );
+
+        assert!(buffer.redo());
+        assert_eq!(insert_labels(&buffer), after);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "a", "new", "b", "base 1", "base 2", "tail"]
+        );
+
+        // The earlier history still undoes by index: the next undo removes
+        // `tail`, the last insert added before.
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+        assert_eq!(insert_labels(&buffer), ["a", "b"]);
+    }
+
+    #[test]
+    fn an_insert_at_an_index_keeps_the_index_readers_right() {
+        let mut buffer = buffer_with_inserts();
+        buffer.add_pending_insert_at_index(1, InsertAnchor::After(0), vec![CellValue::text("new")]);
+
+        // Every visual row resolves to the insert it shows.
+        let shown: Vec<String> = buffer
+            .compute_visual_order()
+            .into_iter()
+            .filter_map(|source| match source {
+                VisualRowSource::Insert(index) => buffer
+                    .get_pending_insert_by_idx(index)
+                    .and_then(|cells| cells.first())
+                    .map(CellValue::edit_text),
+                VisualRowSource::Base(_) => None,
+            })
+            .collect();
+        assert_eq!(shown, ["a", "new", "b", "tail"]);
+
+        // A cell edit and a removal by index reach the insert at that index.
+        buffer.set_insert_cell(2, 0, CellValue::text("b2"));
+        buffer.remove_pending_insert_by_idx(1);
+        assert_eq!(insert_labels(&buffer), ["a", "b2", "tail"]);
+
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+        assert_eq!(insert_labels(&buffer), ["a", "new", "b", "tail"]);
     }
 
     #[test]
