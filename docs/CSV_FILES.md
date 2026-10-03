@@ -106,6 +106,34 @@ After a save, and with **Reload from file** (`F5`), DBFlux reads the file again,
 as many pages as were loaded, up to 20. A reload is refused while the file has
 unsaved changes.
 
+### Quitting with unsaved changes
+
+When you quit DBFlux, a local file with unsaved changes is saved as it quits,
+without asking, when that save is safe: the file has not changed elsewhere since
+it was opened, you can write it and its folder, it is at most 16 MiB, and the
+changes would be written as they are (raw text that does not parse, for
+example, would not). A save that still fails is reported as DBFlux quits.
+
+Every other file with unsaved changes is listed in the unsaved changes prompt
+before DBFlux quits, and so is every file in object storage, because an upload
+can fail or be cut short while the application closes. The prompt works as it
+does when you close a tab:
+
+- **Save** saves the checked files. DBFlux quits only once every save succeeded;
+  a failed save is reported and DBFlux stays open with your changes. A file you
+  left unchecked keeps its changes, and you are asked about it again.
+- **Don't save** drops the changes of the listed files and quits.
+- **Cancel** keeps DBFlux open and every change.
+
+If a query is running, its prompt comes first, and **Quit anyway** leads to this
+one. Before DBFlux quits it checks every open file again, so a file that changed
+while you answered is asked about rather than lost.
+
+Stopping DBFlux from a terminal (`Ctrl+c`, or `SIGTERM`) cannot ask: DBFlux
+tries to save every local file with unsaved changes and reports a save that
+fails, and changes to files in object storage are not uploaded and are recorded
+in the log.
+
 ## Limits
 
 - **Read-only files.** A local file without a modification time, or an object

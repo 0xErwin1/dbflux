@@ -180,13 +180,7 @@ fn save_local(path: &Path, request: &SaveRequest<'_>) -> Result<SourceVersion, S
     verify_version(request.captured, &local_version(&metadata))?;
 
     if metadata.permissions().readonly() {
-        return Err(StorageError::local_io(
-            path,
-            std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                dbflux_i18n::t!("document.delimited.error.storage.read_only_file"),
-            ),
-        ));
+        return Err(read_only_file_error(path));
     }
 
     check_write_access(path, &destination)?;
@@ -240,6 +234,52 @@ fn save_local(path: &Path, request: &SaveRequest<'_>) -> Result<SourceVersion, S
             Err(error)
         }
     }
+}
+
+/// The refusal of a save to a file whose permission bits forbid writing.
+fn read_only_file_error(path: &Path) -> StorageError {
+    StorageError::local_io(
+        path,
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            dbflux_i18n::t!("document.delimited.error.storage.read_only_file"),
+        ),
+    )
+}
+
+/// Checks that a save of the local file at `path` could replace it, the way
+/// [`save_edited`] would: the path resolves, the file's permission bits allow
+/// writing, the operating system lets this process open it for writing, and
+/// a staging file can be created in the directory the file is in. The staging file is created exactly as a save creates one and removed
+/// at once, so nothing stays behind; a removal that fails is traced.
+///
+/// Blocks on a few file system calls. A save that passes this can still fail
+/// when it writes, for example on a full disk.
+pub(super) fn check_local_save(path: &Path) -> Result<(), StorageError> {
+    let destination =
+        resolve_write_destination(path).map_err(|error| StorageError::local_io(path, error))?;
+
+    let metadata =
+        std::fs::metadata(&destination).map_err(|error| StorageError::local_io(path, error))?;
+
+    if metadata.permissions().readonly() {
+        return Err(read_only_file_error(path));
+    }
+
+    check_write_access(path, &destination)?;
+
+    let directory = parent_directory(&destination);
+    let probe = stage_path(directory);
+
+    create_staging_file(&probe).map_err(|error| StorageError::TemporaryFile {
+        target: path.display().to_string(),
+        directory: directory.to_path_buf(),
+        source: error,
+    })?;
+
+    discard_staging(&probe);
+
+    Ok(())
 }
 
 /// Refuses a save to `destination` when the operating system does not let

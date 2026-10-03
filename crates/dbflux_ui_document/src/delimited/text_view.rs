@@ -729,6 +729,36 @@ impl DelimitedDocument {
             .map_err(|error| error.to_string())
     }
 
+    /// Whether a save started now would get past the pending state: an edit
+    /// of the text applies, the page model builds an edit set, and the
+    /// writer's own check over the kept bytes passes. Runs on copies, so it
+    /// changes and reports nothing. The file's version is not read here.
+    ///
+    /// The writer is only checked against the bytes kept for the text view,
+    /// so a save can still be refused by the part of the file it reads
+    /// beyond them.
+    pub(super) fn pending_state_writes(&self, cx: &App) -> bool {
+        let Some(loaded) = self.loaded() else {
+            return false;
+        };
+
+        let mut buffer = loaded.table_state.read(cx).edit_buffer().clone();
+        let mut model = Cow::Borrowed(&loaded.page_model);
+
+        if self.text.edited {
+            let Ok(edits) = self.text_edits_now(cx) else {
+                return false;
+            };
+
+            if apply_to_pending(&edits, &mut model, &mut buffer).is_err() {
+                return false;
+            }
+        }
+
+        model.edit_set(loaded.source_length, &buffer).is_ok()
+            && check_pending(&model, &loaded.source_span, &buffer, &loaded.dialect).is_ok()
+    }
+
     /// Applies `edits` to the page model and the table of the loaded file.
     fn apply_edits_of_text(
         &mut self,
