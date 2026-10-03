@@ -914,6 +914,23 @@ fn the_extension_hint_is_the_text_after_the_last_dot() {
     assert_eq!(extension_hint(".csv"), None);
 }
 
+#[test]
+fn only_a_csv_or_tsv_extension_in_any_letter_case_opens_as_delimited() {
+    use crate::delimited::is_delimited_path;
+    use std::path::Path;
+
+    assert!(is_delimited_path(Path::new("a.csv")));
+    assert!(is_delimited_path(Path::new("B.TSV")));
+    assert!(is_delimited_path(Path::new("/home/ana/Reports.Csv")));
+    assert!(is_delimited_path(Path::new("2026/q1/cities.tsv")));
+
+    assert!(!is_delimited_path(Path::new("notes.txt")));
+    assert!(!is_delimited_path(Path::new("cities.csv.gz")));
+    assert!(!is_delimited_path(Path::new("csv")));
+    assert!(!is_delimited_path(Path::new(".csv")));
+    assert!(!is_delimited_path(Path::new("reports/csv/")));
+}
+
 /// A header click has no action here, so the registry must not name a
 /// command for it.
 #[test]

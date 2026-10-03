@@ -1054,6 +1054,53 @@ fn a_refused_object_save_is_audited_as_a_failure_and_keeps_the_edits(cx: &mut Te
     );
 }
 
+/// The keys the opener of `document` was told were saved.
+fn record_saved_keys(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Rc<RefCell<Vec<String>>> {
+    let saved_keys = Rc::new(RefCell::new(Vec::new()));
+
+    window.update(|_, cx| {
+        document.update(cx, |document, _cx| {
+            let saved_keys = saved_keys.clone();
+
+            document.set_on_object_saved(Rc::new(move |key: &str, _cx: &mut gpui::App| {
+                saved_keys.borrow_mut().push(key.to_string());
+            }));
+        });
+    });
+
+    saved_keys
+}
+
+#[gpui::test]
+fn an_object_save_tells_its_opener_once_with_the_key(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (document, _app_state, window) = open_object(cx, connection.clone());
+    let saved_keys = record_saved_keys(&document, window);
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+    save(&document, window);
+
+    assert_eq!(*saved_keys.borrow(), [KEY]);
+}
+
+#[gpui::test]
+fn a_refused_object_save_does_not_tell_its_opener(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (document, _app_state, window) = open_object(cx, connection.clone());
+    let saved_keys = record_saved_keys(&document, window);
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+    connection
+        .store
+        .fail_uploads_with("AccessDenied: no write permission");
+    save(&document, window);
+
+    assert!(saved_keys.borrow().is_empty());
+}
+
 // -- Dialect, discard and close -----------------------------------------------
 
 #[gpui::test]

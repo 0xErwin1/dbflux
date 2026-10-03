@@ -449,7 +449,8 @@ impl Workspace {
     /// Opens one object-store text object in its own editor tab, or focuses
     /// the existing tab for that `(profile_id, bucket, key)` triple. Reached
     /// from the object browser's "Open in editor" header button and its row
-    /// context menu, both drained generically in `render.rs`.
+    /// context menu, both drained generically in `render.rs`. A CSV or TSV
+    /// object opens in the delimited document instead.
     pub(in crate::ui::views::workspace) fn open_object_editor(
         &mut self,
         profile_id: uuid::Uuid,
@@ -457,6 +458,21 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A CSV or TSV object opens as a table that reads it in pages, so it
+        // is not held to the preview size limit the object editor applies.
+        if crate::ui::document::delimited::is_delimited_path(std::path::Path::new(&request.key)) {
+            self.open_delimited_file(
+                crate::ui::document::DelimitedFileKey::Object {
+                    profile_id,
+                    bucket: request.bucket,
+                    key: request.key,
+                },
+                Some(request.on_saved),
+                cx,
+            );
+            return;
+        }
+
         let has_connection = self
             .app_state
             .read(cx)
