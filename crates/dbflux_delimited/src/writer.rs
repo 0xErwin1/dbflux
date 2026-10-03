@@ -490,6 +490,46 @@ pub fn write_edited<S: ByteSource, W: Write>(
     output.sink.flush().map_err(WriteError::Sink)
 }
 
+/// Renders `fields` as one record of `dialect`, without its terminator and in
+/// the dialect's encoding, exactly as [`write_edited`] renders a replaced or
+/// inserted record (see its rendering rules). `location` names the record in
+/// a returned error.
+///
+/// # Errors
+///
+/// [`WriteError::Read`] for a dialect the reader refuses,
+/// [`WriteError::UnencodableCharacter`] and [`WriteError::UnquotableField`].
+pub fn render_record(
+    fields: &[String],
+    dialect: &Dialect,
+    location: &EditLocation,
+) -> Result<Vec<u8>, WriteError> {
+    Renderer::for_dialect(dialect)?.record(fields, location)
+}
+
+/// Renders `values` as the fields that appended columns add after the last
+/// field of a record that is otherwise copied, each led by the delimiter and
+/// in the dialect's encoding, exactly as [`write_edited`] renders them.
+/// `location` names the record or column in a returned error.
+///
+/// # Errors
+///
+/// The errors of [`render_record`].
+pub fn render_appended_fields(
+    values: &[String],
+    dialect: &Dialect,
+    location: &EditLocation,
+) -> Result<Vec<u8>, WriteError> {
+    let renderer = Renderer::for_dialect(dialect)?;
+    let mut rendered = Vec::new();
+
+    for value in values {
+        renderer.appended_field(&mut rendered, value, location)?;
+    }
+
+    Ok(rendered)
+}
+
 /// Lends a source to a reader without giving it away.
 struct Borrowed<'a, S>(&'a S);
 
@@ -789,6 +829,14 @@ struct Renderer {
 }
 
 impl Renderer {
+    /// The renderer of `dialect`, or the reader's refusal of it.
+    fn for_dialect(dialect: &Dialect) -> Result<Self, WriteError> {
+        Ok(Self {
+            layout: Layout::for_dialect(dialect)?,
+            encoding: dialect.encoding,
+        })
+    }
+
     /// Renders `fields` as one record without its terminator.
     fn record(&self, fields: &[String], location: &EditLocation) -> Result<Vec<u8>, WriteError> {
         let mut rendered = Vec::new();
