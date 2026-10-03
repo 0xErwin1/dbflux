@@ -5,10 +5,11 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { repoBlobUrl, routeForRepoPath, titleForRepoPath } from './src/data/nav';
 import { sitemapPathsFor } from './src/data/docs';
-import { CURRENT, VERSIONS } from './src/data/versions';
+import { CURRENT, VERSIONS, docsFileHref, prefixFor } from './src/data/versions';
 import { renderedLinkInputs } from './src/data/version-routing.ts';
-import { DOCS_MODE, DOCS_ORIGIN, ORIGIN } from './src/data/site';
+import { DOCS_MODE, DOCS_ORIGIN, ORIGIN, docsPath } from './src/data/site';
 import { hostRedirects } from './src/integrations/host-redirects';
+import { docImages, rewriteDocImages } from './src/lib/doc-images.ts';
 import { DEFAULT_LOCALE } from './src/i18n';
 import type { Locale } from './src/i18n';
 import { LOCALE_REGISTRY, localeForRepoPath } from './src/i18n/locale-registry.ts';
@@ -146,6 +147,18 @@ function rehypeRepoLinks() {
   };
 }
 
+/** Where `docs/images/...` sits below a version's documentation root. */
+const docImagePath = (repoPath: string) => repoPath.replace(/^docs\//, '');
+
+/**
+ * Load the `<picture>` screenshots a page embeds from its own version's copy of
+ * `docs/images/`, which `docImages` publishes. See `rewriteDocImages`.
+ */
+function rehypeDocImages() {
+  return (tree: any, file: any) =>
+    rewriteDocImages(tree, file.path ?? file.history?.[0] ?? '', docsFileHref, file.data);
+}
+
 /**
  * Hand mermaid fences to the client renderer instead of the syntax highlighter,
  * so diagrams draw as diagrams rather than as a listing of their own source.
@@ -190,6 +203,17 @@ export default defineConfig({
       filter: (page) => DOCS_MODE !== 'docs' || sitemapPaths.has(new URL(page).pathname),
     }),
     hostRedirects(),
+    // A `site` build renders no documentation, so it has no page to load these.
+    ...(DOCS_MODE === 'site'
+      ? []
+      : [
+          docImages({
+            versionsDir: fileURLToPath(new URL('./.versions/', import.meta.url)),
+            versionIds: manifest.map((entry) => entry.id),
+            outputPathFor: (repoPath, versionId) =>
+              docsPath(docImagePath(repoPath), prefixFor(versionId)),
+          }),
+        ]),
   ],
   markdown: {
     // The options are not read by the plugin. They put what its output depends
@@ -197,6 +221,7 @@ export default defineConfig({
     // cache is invalidated by — see `renderedLinkInputs`.
     rehypePlugins: [
       [rehypeRepoLinks, renderedLinkInputs(VERSIONS, DOCS_MODE, DOCS_ORIGIN)],
+      rehypeDocImages,
       rehypeMermaid,
     ],
     shikiConfig: {
