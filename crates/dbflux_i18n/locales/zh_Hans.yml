@@ -1762,8 +1762,15 @@ document:
     error:
       open_failed: "无法打开 %{name}"
       load_more_failed: "无法加载 %{name} 的更多内容"
+      reread_failed: "无法重新读取 %{name}"
+      refused:
+        unsupported: "无法以 %{character} 作为分隔符或引号读取 %{encoding} 文本。请选择其他分隔符、引号或编码。"
+        line_break: "换行符不能用作分隔符或引号。请选择其他字符。"
+        quote_equals_delimiter: "引号和分隔符都是 %{character}。请为其中一个选择不同的字符。"
     warning:
       malformed_text: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。检测到的编码可能不正确。"
+      malformed_text_chosen: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。所选编码可能不正确。"
+      detected_delimiter_unreadable: "检测到的分隔符 %{detected} 无法在 %{encoding} 文本中读取，因此文件以 %{delimiter} 读取，列可能不正确。请选择其他编码或分隔符。"
       cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
     status:
       delimiter: "分隔符：%{delimiter}"
@@ -1779,9 +1786,21 @@ document:
       tab: 制表符
       semicolon: 分号
       pipe: 竖线
+    quote:
+      double: "双引号"
+      single: "单引号"
+      none: "无引号"
+    toolbar:
+      delimiter: "分隔符"
+      quote: "引号"
+      encoding: "编码"
+      header: "标题行"
+      reset: "恢复为检测结果"
+      detected: "%{value}（检测到）"
     footer:
       load_more: 加载更多
       loading_more: "正在加载…"
+      rereading: "正在重新读取文件…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"

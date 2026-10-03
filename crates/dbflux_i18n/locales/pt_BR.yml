@@ -1762,8 +1762,15 @@ document:
     error:
       open_failed: "Não foi possível abrir %{name}"
       load_more_failed: "Não foi possível carregar mais de %{name}"
+      reread_failed: "Não foi possível ler %{name} novamente"
+      refused:
+        unsupported: "O texto %{encoding} não pode ser lido com %{character} como delimitador ou aspas. Escolha outro delimitador, outras aspas ou outra codificação."
+        line_break: "Uma quebra de linha não pode ser o delimitador nem as aspas. Escolha outro caractere."
+        quote_equals_delimiter: "As aspas e o delimitador são ambos %{character}. Escolha um caractere diferente para um deles."
     warning:
       malformed_text: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação detectada provavelmente está errada."
+      malformed_text_chosen: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação escolhida provavelmente está errada."
+      detected_delimiter_unreadable: "O delimitador detectado %{detected} não pode ser lido em texto %{encoding}, por isso o arquivo é lido com %{delimiter} e suas colunas provavelmente estão erradas. Escolha outra codificação ou outro delimitador."
       cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
     status:
       delimiter: "Delimitador: %{delimiter}"
@@ -1779,9 +1786,21 @@ document:
       tab: Tabulação
       semicolon: Ponto e vírgula
       pipe: Barra vertical
+    quote:
+      double: "Aspas duplas"
+      single: "Aspas simples"
+      none: "Sem aspas"
+    toolbar:
+      delimiter: "Delimitador"
+      quote: "Aspas"
+      encoding: "Codificação"
+      header: "Linha de cabeçalho"
+      reset: "Voltar ao detectado"
+      detected: "%{value} (detectado)"
     footer:
       load_more: Carregar mais
       loading_more: "Carregando…"
+      rereading: "Lendo o arquivo novamente…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"
