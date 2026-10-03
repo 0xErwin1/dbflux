@@ -1774,6 +1774,18 @@ document:
       save_while_rereading: "파일을 다시 읽는 중이며, 이 편집 내용이 속한 행이 바뀝니다. 읽기가 끝난 뒤 다시 저장하세요."
       add_row_failed: "%{name}에 행을 추가할 수 없습니다"
       no_columns: "파일에 열이 없어 새 행에 필드가 없으며, 저장된 파일에 남지 않습니다."
+      edit_failed: "%{name}을(를) 편집할 수 없습니다"
+      edit_while_read_only: "파일을 저장하거나 다시 읽는 중이라 편집기의 값이 적용되지 않았습니다. 작업이 끝난 뒤 셀을 다시 편집하세요."
+      add_column_failed: "%{name}에 열을 추가할 수 없습니다"
+      add_column_needs_full_load: "열은 파일의 모든 레코드를 불러온 뒤에만 추가할 수 있습니다."
+      rename_column_failed: "%{name}의 열 이름을 바꿀 수 없습니다"
+      rename_no_header: "파일에 머리글 행이 없어 열에 바꿀 이름이 없습니다. 첫 행을 열 이름으로 읽으려면 도구 모음에서 머리글 행을 켜세요."
+      rename_no_header_record: "파일에 레코드가 없어 이름을 바꿀 머리글 행이 없습니다."
+      edit_rows_read_again: "편집기가 열려 있는 동안 저장 또는 다시 불러오기로 파일을 원본에서 다시 읽어 행이 바뀌었으므로 값이 적용되지 않았습니다. 셀을 다시 편집하세요."
+      edit_changes_discarded: "편집기가 열려 있는 동안 변경 사항이 취소되어 값이 적용되지 않았습니다. 셀을 다시 편집하세요."
+      edit_row_removed: "편집기가 열려 있는 동안 이 셀이 속한 행이 제거되어 값이 적용되지 않았습니다."
+      column_while_read_only: "파일을 저장하거나 다시 읽는 중이라 열이 변경되지 않았습니다. 작업이 끝난 뒤 다시 시도하세요."
+      save_while_loading_rest: "파일의 나머지를 아직 불러오는 중이며, 지금 저장하면 읽고 있는 레코드가 버려집니다. 불러오기가 끝날 때까지 기다리거나 하단에서 취소한 뒤 저장하세요."
       refused:
         unsupported: "%{encoding} 텍스트는 %{character}을(를) 구분자나 따옴표로 사용해 읽을 수 없습니다. 다른 구분자, 따옴표 또는 인코딩을 선택하세요."
         line_break: "줄바꿈은 구분자나 따옴표가 될 수 없습니다. 다른 문자를 선택하세요."
@@ -1812,12 +1824,28 @@ document:
       load_more: 더 불러오기
       loading_more: "불러오는 중…"
       rereading: "파일을 다시 읽는 중…"
+      loading_rest: "파일의 나머지를 불러오는 중…"
     action:
       save: 저장
       saving: "저장 중…"
       discard: "변경 사항 취소"
       insert_above: "위에 행 삽입"
       reload: "파일에서 다시 불러오기"
+      add_column: "열 추가"
+      rename_column: "열 이름 바꾸기"
+      cancel: "취소"
+    column:
+      add_title: "열 추가"
+      rename_title: "열 이름 바꾸기"
+      name_placeholder: "열 이름"
+      confirm_add: "추가"
+      confirm_rename: "이름 바꾸기"
+      no_header_note: "이 파일에는 머리글 행이 없어 이름이 파일에 기록되지 않으며, 열은 %{name}(으)로 표시됩니다."
+    load_rest:
+      title: "파일의 나머지 불러오기"
+      body: "열은 파일의 모든 레코드를 불러온 뒤에만 추가할 수 있으며, 지금까지 이 %{size} 파일에서 %{loaded}개 레코드를 불러왔습니다. 나머지를 불러오면 남은 레코드를 모두 메모리로 읽으므로 큰 파일에서는 시간이 걸립니다. 하단에서 취소할 수 있으며, 그때까지 읽은 레코드는 불러온 상태로 남습니다."
+      confirm: "나머지 불러오기"
+      cancel: "불러오기 취소"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"

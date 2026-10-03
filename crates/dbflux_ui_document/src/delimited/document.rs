@@ -34,6 +34,7 @@ use dbflux_components::components::data_table::{
     DataTable, DataTableEvent, DataTableState, ModelSwap,
 };
 use dbflux_components::controls::DropdownSelectionChanged;
+use dbflux_components::modals::CellEditorModal;
 use dbflux_core::{Connection, DbError};
 use dbflux_delimited::{
     ByteSource, Dialect, DialectOverrides, Encoding, MemorySource, Page, PagedReader, ReadError,
@@ -43,6 +44,8 @@ use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
+use super::columns::{ColumnPrompt, ColumnPromptRequest, LoadRestPrompt, LoadingRest};
+use super::editing::{CellEditRequest, CellEditTarget, pad_pending_inserts};
 use super::page_model::{PageModel, PageModelError};
 use super::source::{DelimitedLocation, DelimitedSource, SourceVersion, StorageError, open_source};
 use super::toolbar::{DELIMITERS, DialectControls, QUOTES};
@@ -180,11 +183,11 @@ pub(super) struct OpenedFile {
 
 /// What a background page read hands to the foreground.
 pub(super) struct ReadPage {
-    page: Page,
+    pub(super) page: Page,
 
     /// The reader's count after the read, as [`settled_record_count`] left
     /// it.
-    record_count: RecordCount,
+    pub(super) record_count: RecordCount,
 }
 
 /// A file whose first page is loaded.
@@ -226,7 +229,7 @@ pub(super) struct LoadedFile {
     /// Counts the readers this file had. A page read carries the count of
     /// the reader it took, and its result is dropped when a reread replaced
     /// that reader meanwhile.
-    reader_epoch: u64,
+    pub(super) reader_epoch: u64,
 
     controls: DialectControls,
 
@@ -236,7 +239,7 @@ pub(super) struct LoadedFile {
     /// The reader the first page came from, kept open over the same source
     /// for the pages that follow it. `None` while a page is being read: the
     /// background read has it and hands it back with the page.
-    reader: Option<PagedReader<DelimitedSource>>,
+    pub(super) reader: Option<PagedReader<DelimitedSource>>,
 
     /// The length of the source the reader's byte ranges were read from,
     /// kept here so a save can build its edit set while a page read holds
@@ -259,6 +262,15 @@ pub(super) struct LoadedFile {
 
     /// The status line, formatted when the page model changes.
     status_items: Vec<SharedString>,
+
+    /// The read of every remaining page, while it runs. Dropping it cancels
+    /// the read between two pages.
+    pub(super) loading_rest: Option<LoadingRest>,
+
+    /// Counts the discards of the pending changes. A value from the modal
+    /// cell editor carries the count it was opened at, and is not applied
+    /// after a discard.
+    pub(super) discard_generation: u64,
 }
 
 impl LoadedFile {
@@ -275,9 +287,14 @@ impl LoadedFile {
     /// A pending insert anchored at the end moves down with the appended
     /// rows. The document anchors a row there only in a file without rows,
     /// which has no page to append.
-    fn show_page_model(&mut self, cx: &mut App) {
+    ///
+    /// The same holds after a column was appended or renamed: every row keeps
+    /// its index and every column its position, and a pending insert gets an
+    /// empty field for each new column.
+    pub(super) fn show_page_model(&mut self, cx: &mut App) {
         let model = Arc::new(self.page_model.table_model());
         let row_count = model.row_count();
+        let column_count = model.col_count();
 
         self.table_state.update(cx, |state, cx| {
             if state.is_editing() {
@@ -290,6 +307,7 @@ impl LoadedFile {
 
             *state.edit_buffer_mut() = pending;
             state.edit_buffer_mut().set_base_row_count(row_count);
+            pad_pending_inserts(state.edit_buffer_mut(), column_count);
             cx.notify();
         });
 
@@ -394,6 +412,7 @@ impl LoadedFile {
         self.source_length = reader.source_length();
         self.reader = Some(reader);
         self.reader_epoch += 1;
+        self.loading_rest = None;
         self.version = version;
         self.page_model = page_model;
 
@@ -443,6 +462,27 @@ pub struct DelimitedDocument {
     /// Set when the first page arrives, so the next render hands the keyboard
     /// to the table if the loading notice held it.
     pending_table_focus: bool,
+
+    /// The modal editor of long and multi-line cells, built on the first
+    /// render that opens it, because it needs the window.
+    pub(super) cell_editor: Option<Entity<CellEditorModal>>,
+
+    /// A cell the table asked the modal editor for, opened on the next
+    /// render.
+    pub(super) pending_cell_edit: Option<CellEditRequest>,
+
+    /// The cell the open modal editor edits.
+    pub(super) cell_edit_target: Option<CellEditTarget>,
+
+    /// A column prompt asked for, opened on the next render, because its
+    /// name field needs the window.
+    pub(super) pending_column_prompt: Option<ColumnPromptRequest>,
+
+    /// The open prompt for the name of a new or renamed column.
+    pub(super) column_prompt: Option<ColumnPrompt>,
+
+    /// The open offer to load the rest of the file before a column is added.
+    pub(super) load_rest_prompt: Option<LoadRestPrompt>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -535,6 +575,12 @@ impl DelimitedDocument {
             saving: false,
             close_after_save: false,
             pending_table_focus: false,
+            cell_editor: None,
+            pending_cell_edit: None,
+            cell_edit_target: None,
+            pending_column_prompt: None,
+            column_prompt: None,
+            load_rest_prompt: None,
             _subscriptions: Vec::new(),
         };
 
@@ -750,20 +796,29 @@ impl DelimitedDocument {
     }
 
     /// Whether the next page can be asked for now: the file has more
-    /// records, neither a page nor the whole file is being read, and no save
-    /// runs.
+    /// records, neither a page nor the whole file is being read, no save
+    /// runs, and no dialog is open.
     ///
     /// A page asked for during a reread would be read through the reader the
     /// reread replaces, and dropped, and one asked for during a save through
     /// the reader the saved file replaces.
     pub fn can_load_more(&self) -> bool {
-        self.has_more_records() && !self.is_loading_more() && !self.is_rereading() && !self.saving
+        self.has_more_records()
+            && !self.is_loading_more()
+            && !self.is_rereading()
+            && !self.saving
+            && !self.has_open_dialog()
     }
 
-    /// What the footer says while the file is read again under an override.
+    /// What the footer says while the file is read again under an override,
+    /// or while the rest of it is loaded.
     pub fn progress_item(&self) -> Option<String> {
-        self.is_rereading()
-            .then(|| dbflux_i18n::t!("document.delimited.footer.rereading"))
+        if self.is_rereading() {
+            return Some(dbflux_i18n::t!("document.delimited.footer.rereading"));
+        }
+
+        self.is_loading_rest()
+            .then(|| dbflux_i18n::t!("document.delimited.footer.loading_rest"))
     }
 
     /// Whether a further page is being read.
@@ -933,6 +988,8 @@ impl DelimitedDocument {
             table_state,
             table,
             status_items,
+            loading_rest: None,
+            discard_generation: 0,
         };
 
         loaded.refresh_warnings();
@@ -964,7 +1021,14 @@ impl DelimitedDocument {
             },
         );
 
-        let dirty_observation = cx.observe(table_state, |this, _, cx| {
+        // Undo and redo can restore an inserted row as it was before a
+        // column was appended, so its fields are padded to the columns here.
+        let dirty_observation = cx.observe(table_state, |this, table_state, cx| {
+            table_state.update(cx, |state, _cx| {
+                let column_count = state.col_count();
+                pad_pending_inserts(state.edit_buffer_mut(), column_count);
+            });
+
             this.refresh_dirty(cx);
         });
 
@@ -1265,6 +1329,12 @@ impl DelimitedDocument {
         self.commit_active_inline_edit(cx);
         let holds_changes = self.is_dirty() || self.saving;
 
+        // The dialog's outcome belongs to the rows the reread would replace.
+        if self.has_open_dialog() {
+            self.show_requested_dialect(cx);
+            return;
+        }
+
         let Some(loaded) = self.loaded_mut() else {
             return;
         };
@@ -1332,7 +1402,7 @@ impl DelimitedDocument {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let title = self.title();
 
-        if self.loaded().is_none() {
+        if self.loaded().is_none() || self.has_open_dialog() {
             return;
         }
 
@@ -1378,6 +1448,9 @@ impl DelimitedDocument {
 
         loaded.reread_generation += 1;
         loaded.reread_swap = swap;
+
+        // The reread replaces the reader the rest of the file is read with.
+        loaded.loading_rest = None;
 
         let generation = loaded.reread_generation;
 

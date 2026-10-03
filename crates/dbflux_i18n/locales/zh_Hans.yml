@@ -1774,6 +1774,18 @@ document:
       save_while_rereading: "文件正在重新读取，这会替换这些编辑所属的行。请等待读取完成后再保存。"
       add_row_failed: "无法向 %{name} 添加行"
       no_columns: "该文件没有列，新行将没有字段，保存后的文件也不会保留它。"
+      edit_failed: "无法编辑 %{name}"
+      edit_while_read_only: "文件正在保存或重新读取，因此编辑器中的值未被应用。完成后请重新编辑该单元格。"
+      add_column_failed: "无法向 %{name} 添加列"
+      add_column_needs_full_load: "只有在文件的所有记录都加载后才能添加列。"
+      rename_column_failed: "无法重命名 %{name} 的列"
+      rename_no_header: "该文件没有标题行，因此其列没有可更改的名称。要将第一行读取为列名，请在工具栏中打开“标题行”。"
+      rename_no_header_record: "该文件没有记录，因此没有可更改名称的标题行。"
+      edit_rows_read_again: "编辑器打开期间，文件在保存或重新加载后从源重新读取，其行已被替换，因此该值未被应用。请重新编辑该单元格。"
+      edit_changes_discarded: "编辑器打开期间更改已被放弃，因此该值未被应用。请重新编辑该单元格。"
+      edit_row_removed: "编辑器打开期间该单元格所属的行已被删除，因此该值未被应用。"
+      column_while_read_only: "文件正在保存或重新读取，因此列未被更改。完成后请重试。"
+      save_while_loading_rest: "文件的其余部分仍在加载，现在保存会丢弃正在读取的记录。请等待加载完成，或在底栏取消，然后再保存。"
       refused:
         unsupported: "无法以 %{character} 作为分隔符或引号读取 %{encoding} 文本。请选择其他分隔符、引号或编码。"
         line_break: "换行符不能用作分隔符或引号。请选择其他字符。"
@@ -1812,12 +1824,28 @@ document:
       load_more: 加载更多
       loading_more: "正在加载…"
       rereading: "正在重新读取文件…"
+      loading_rest: "正在加载文件的其余部分…"
     action:
       save: 保存
       saving: "正在保存…"
       discard: "放弃更改"
       insert_above: "在上方插入行"
       reload: "从文件重新加载"
+      add_column: "添加列"
+      rename_column: "重命名列"
+      cancel: "取消"
+    column:
+      add_title: "添加列"
+      rename_title: "重命名列"
+      name_placeholder: "列名"
+      confirm_add: "添加"
+      confirm_rename: "重命名"
+      no_header_note: "该文件没有标题行，因此名称不会写入文件，该列显示为 %{name}。"
+    load_rest:
+      title: "加载文件的其余部分"
+      body: "只有在文件的所有记录都加载后才能添加列，目前已加载这个 %{size} 文件中的 %{loaded} 条记录。加载其余部分会把剩余的所有记录读入内存，大文件需要一些时间。可以在底栏取消，届时已读取的记录仍保持加载。"
+      confirm: "加载其余部分"
+      cancel: "取消加载"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"

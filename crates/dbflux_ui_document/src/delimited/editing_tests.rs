@@ -35,7 +35,7 @@ use crate::keyboard_test_support::init_keyboard_runtime;
 use crate::pane::PaneActionRun;
 use crate::types::DocumentState;
 
-fn table_state(
+pub(super) fn table_state(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> Entity<DataTableState> {
@@ -50,7 +50,7 @@ fn table_state(
 
 /// Types `text` into the cell at the visual `row` and `col` through the
 /// table's inline editor and commits it, as Enter does.
-fn type_into_cell(
+pub(super) fn type_into_cell(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     row: usize,
@@ -82,7 +82,7 @@ fn type_into_cell(
 
 /// Stages `text` for a cell as an editor that commits it does. Used for the
 /// values the inline editor does not take: long or multi-line ones.
-fn stage_cell(
+pub(super) fn stage_cell(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     row: usize,
@@ -100,7 +100,11 @@ fn stage_cell(
     window.run_until_parked();
 }
 
-fn select(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext, row: usize) {
+pub(super) fn select(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+    row: usize,
+) {
     let table_state = table_state(document, window);
 
     window.update(|_, cx| {
@@ -111,21 +115,24 @@ fn select(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext, 
     window.run_until_parked();
 }
 
-fn press(window: &mut VisualTestContext, keystrokes: &str) {
+pub(super) fn press(window: &mut VisualTestContext, keystrokes: &str) {
     window.simulate_keystrokes(keystrokes);
     window.run_until_parked();
 }
 
-fn save(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) {
+pub(super) fn save(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) {
     window.update(|_, cx| document.update(cx, |document, cx| document.save(cx)));
     window.run_until_parked();
 }
 
-fn is_dirty(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -> bool {
+pub(super) fn is_dirty(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> bool {
     window.update(|_, cx| document.read(cx).is_dirty())
 }
 
-fn has_pending_operations(
+pub(super) fn has_pending_operations(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> bool {
@@ -134,12 +141,12 @@ fn has_pending_operations(
     window.update(|_, cx| table_state.read(cx).has_pending_operations())
 }
 
-fn last_toast_kind(window: &mut VisualTestContext) -> Option<ToastKind> {
+pub(super) fn last_toast_kind(window: &mut VisualTestContext) -> Option<ToastKind> {
     window.update(|_, cx| cx.global::<ToastGlobal>().host.read(cx).last_toast_kind())
 }
 
 /// Records every event the document emits from now on.
-fn record_events(
+pub(super) fn record_events(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
 ) -> (Rc<RefCell<Vec<DocumentEvent>>>, Subscription) {
@@ -156,7 +163,7 @@ fn record_events(
     (events, subscription)
 }
 
-fn save_results(events: &Rc<RefCell<Vec<DocumentEvent>>>) -> Vec<bool> {
+pub(super) fn save_results(events: &Rc<RefCell<Vec<DocumentEvent>>>) -> Vec<bool> {
     events
         .borrow()
         .iter()
@@ -167,14 +174,14 @@ fn save_results(events: &Rc<RefCell<Vec<DocumentEvent>>>) -> Vec<bool> {
         .collect()
 }
 
-fn asked_to_close(events: &Rc<RefCell<Vec<DocumentEvent>>>) -> bool {
+pub(super) fn asked_to_close(events: &Rc<RefCell<Vec<DocumentEvent>>>) -> bool {
     events
         .borrow()
         .iter()
         .any(|event| matches!(event, DocumentEvent::RequestClose))
 }
 
-fn read(path: &Path) -> Vec<u8> {
+pub(super) fn read(path: &Path) -> Vec<u8> {
     std::fs::read(path).expect("the test file is readable")
 }
 
@@ -187,7 +194,7 @@ fn inode(path: &Path) -> u64 {
     std::fs::metadata(path).expect("the test file exists").ino()
 }
 
-fn local_file(directory: &TestDirectory, name: &str, bytes: &[u8]) -> PathBuf {
+pub(super) fn local_file(directory: &TestDirectory, name: &str, bytes: &[u8]) -> PathBuf {
     directory.file(name, bytes).0
 }
 
@@ -1419,7 +1426,7 @@ fn a_save_is_refused_while_the_file_is_read_again(cx: &mut TestAppContext) {
     window.update(|_, cx| {
         document.update(cx, |document, cx| {
             assert!(document.is_dirty());
-            assert!(!document.can_save_or_discard());
+            assert!(!document.can_save());
 
             document.save(cx);
             assert!(!document.is_saving());
@@ -1460,7 +1467,7 @@ fn the_save_key_saves_an_edit_whose_row_was_deleted_and_restored(cx: &mut TestAp
 
 /// The ids of the clickable elements whose element path runs through
 /// `ancestor`.
-fn ids_under(
+pub(super) fn ids_under(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     ancestor: &str,

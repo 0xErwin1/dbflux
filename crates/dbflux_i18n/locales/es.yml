@@ -1774,6 +1774,18 @@ document:
       save_while_rereading: "El archivo se está leyendo de nuevo, lo que reemplaza las filas a las que pertenecen estos cambios. Espera a que termine de leerse y vuelve a guardar."
       add_row_failed: "No se pudo agregar una fila a %{name}"
       no_columns: "El archivo no tiene columnas, así que una fila nueva no tendría campos y el archivo guardado no la conservaría."
+      edit_failed: "No se pudo editar %{name}"
+      edit_while_read_only: "El archivo se está guardando o leyendo de nuevo, así que el valor del editor no se aplicó. Vuelve a editar la celda cuando termine."
+      add_column_failed: "No se pudo agregar una columna a %{name}"
+      add_column_needs_full_load: "Solo se puede agregar una columna cuando todos los registros del archivo están cargados."
+      rename_column_failed: "No se pudo renombrar una columna de %{name}"
+      rename_no_header: "El archivo no tiene fila de encabezado, así que sus columnas no tienen nombres que cambiar. Para leer la primera fila como nombres de columna, activa Fila de encabezado en la barra de herramientas."
+      rename_no_header_record: "El archivo no tiene registros, así que no hay una fila de encabezado cuyos nombres se puedan cambiar."
+      edit_rows_read_again: "El archivo se volvió a leer desde su origen mientras el editor estaba abierto, tras guardar o recargar, así que sus filas se reemplazaron y el valor no se aplicó. Vuelve a editar la celda."
+      edit_changes_discarded: "Los cambios se descartaron mientras el editor estaba abierto, así que el valor no se aplicó. Vuelve a editar la celda."
+      edit_row_removed: "La fila a la que pertenece esta celda se eliminó mientras el editor estaba abierto, así que el valor no se aplicó."
+      column_while_read_only: "El archivo se está guardando o leyendo de nuevo, así que la columna no cambió. Vuelve a intentarlo cuando termine."
+      save_while_loading_rest: "El resto del archivo todavía se está cargando, y guardar ahora descartaría los registros que lee. Espera a que termine de cargarse, o cancélalo desde el pie, y luego guarda."
       refused:
         unsupported: "El texto %{encoding} no se puede leer con %{character} como delimitador o comilla. Elige otro delimitador, otra comilla u otra codificación."
         line_break: "Un salto de línea no puede ser el delimitador ni la comilla. Elige otro carácter."
@@ -1812,12 +1824,28 @@ document:
       load_more: Cargar más
       loading_more: "Cargando…"
       rereading: "Leyendo el archivo de nuevo…"
+      loading_rest: "Cargando el resto del archivo…"
     action:
       save: Guardar
       saving: "Guardando…"
       discard: "Descartar cambios"
       insert_above: "Insertar fila arriba"
       reload: "Recargar desde el archivo"
+      add_column: "Agregar columna"
+      rename_column: "Renombrar columna"
+      cancel: "Cancelar"
+    column:
+      add_title: "Agregar columna"
+      rename_title: "Renombrar columna"
+      name_placeholder: "Nombre de la columna"
+      confirm_add: "Agregar"
+      confirm_rename: "Renombrar"
+      no_header_note: "Este archivo no tiene fila de encabezado, así que el nombre no se escribe en el archivo y la columna se muestra como %{name}."
+    load_rest:
+      title: "Cargar el resto del archivo"
+      body: "Solo se puede agregar una columna cuando todos los registros del archivo están cargados, y por ahora hay %{loaded} registros cargados de este archivo de %{size}. Cargar el resto lee en memoria todos los registros que faltan, lo que tarda en un archivo grande. Puedes cancelarlo desde el pie, y los registros leídos hasta entonces quedan cargados."
+      confirm: "Cargar el resto"
+      cancel: "Cancelar la carga"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analizando %{file} (%{analyzer})"
