@@ -1,9 +1,10 @@
 //! `PaneHandle` constructor for `DelimitedDocument`.
 
 use super::document::DelimitedDocument;
+use crate::dedup::DelimitedFileKey;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, PaneHandle};
+use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
@@ -130,6 +131,33 @@ impl DelimitedDocument {
         pane.pane_actions = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).pane_actions(&e))
+        });
+
+        // The workspace session reopens a local file by its path, with the
+        // dialect detected again. An object is left out: it needs the live
+        // connection of its profile, which is not there at startup, and the
+        // object editor's tabs are left out for the same reason. Dialect
+        // overrides, the view and unsaved edits are not recorded.
+        pane.session_tab_snapshot = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                let d = e.read(cx);
+
+                let DelimitedFileKey::Local { path } = d.file() else {
+                    return None;
+                };
+
+                Some(CodeSessionTabSnapshot {
+                    kind: DelimitedDocument::SESSION_TAB_KIND,
+                    id: d.id(),
+                    title: d.title(),
+                    language: dbflux_core::QueryLanguage::Sql,
+                    exec_ctx: dbflux_core::ExecutionContext::default(),
+                    file_path: Some(path.clone()),
+                    scratch_path: None,
+                    shadow_path: None,
+                })
+            })
         });
 
         pane
