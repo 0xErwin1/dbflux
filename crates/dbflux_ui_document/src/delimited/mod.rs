@@ -47,6 +47,8 @@ mod text_edit_tests;
 mod text_tests;
 #[cfg(test)]
 mod text_view_tests;
+#[cfg(test)]
+mod vim_tests;
 
 pub use document::{DelimitedDocument, DelimitedWarning};
 pub use page_model::{PageModel, PageModelError};

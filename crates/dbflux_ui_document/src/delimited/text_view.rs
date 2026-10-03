@@ -44,16 +44,22 @@
 //! the tab, as it does in the object editor, and Enter hands it back. The
 //! editors' save key saves in both cases: the document takes it before the
 //! keymap while the text is shown, because the `Results` context binds none.
+//!
+//! The editor follows the Vim mode setting as the object editor's buffer
+//! does: its binding is built with it, Vim's editing commands do nothing
+//! while the text is read-only, and with Vim mode on Escape leaves Insert
+//! mode first and hands the keyboard to the tab only from Normal mode.
 
 use std::borrow::Cow;
 
 use dbflux_components::controls::InputEvent;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::DocumentMetrics;
+use dbflux_components::vim::{VimBinding, VimHost};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::{Editor, EditorState};
+use gpui_component::input::EditorState;
 
 use super::document::DelimitedDocument;
 use super::editing::install_page_model;
@@ -98,6 +104,9 @@ pub(super) struct TextView {
     /// compared with. The editor shares its bytes.
     pub(super) rendered: SharedString,
 
+    /// Vim mode for the editor, built with it.
+    pub(super) vim: VimBinding,
+
     _subscription: Subscription,
 }
 
@@ -129,6 +138,32 @@ pub(super) struct TextViewState {
     /// Why the edited text could not be applied the last time it was tried,
     /// until the text changes.
     pub(super) apply_error: Option<String>,
+}
+
+impl VimHost for DelimitedDocument {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.text
+            .shown
+            .as_ref()
+            .and_then(|view| view.vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.text
+            .shown
+            .as_mut()
+            .and_then(|view| view.vim.for_input_mut(input))
+    }
+
+    /// The text is read-only unless the user can edit it now: motions and
+    /// yanks, no edits.
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        !self.is_text_editable()
+    }
+
+    fn vim_text_changed(&mut self, _input: EntityId, cx: &mut Context<Self>) {
+        self.follow_text_change(cx);
+    }
 }
 
 impl DelimitedDocument {
@@ -237,6 +272,19 @@ impl DelimitedDocument {
         if self.text.view == DelimitedView::Text {
             cx.notify();
         }
+    }
+
+    /// Key context entries the workspace adds while this tab owns the
+    /// keyboard: the Vim mode of the text view's editor while the text is
+    /// shown.
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(SharedString, SharedString)> {
+        self.text
+            .shown
+            .as_ref()
+            .filter(|_| self.text.view == DelimitedView::Text)
+            .and_then(|view| view.vim.key_context_entry(cx))
+            .into_iter()
+            .collect()
     }
 
     /// Whether the text view's editor holds the keyboard.
@@ -370,6 +418,7 @@ impl DelimitedDocument {
         });
 
         let wraps = layout.as_ref().is_ok_and(|layout| layout.wraps);
+        let built = self.text.shown.is_none();
 
         let input = match &mut self.text.shown {
             Some(view) => {
@@ -384,6 +433,7 @@ impl DelimitedDocument {
                         .line_number(true)
                         .soft_wrap(wraps)
                 });
+                let vim = VimBinding::new(input.clone(), window, cx);
 
                 let subscription = cx.subscribe_in(
                     &input,
@@ -405,6 +455,7 @@ impl DelimitedDocument {
                     input: input.clone(),
                     layout,
                     rendered: text.clone(),
+                    vim,
                     _subscription: subscription,
                 });
 
@@ -424,6 +475,10 @@ impl DelimitedDocument {
             let cursor = cursor.min(state.text().len());
             state.set_selected_range(cursor..cursor, cx);
         });
+
+        if built {
+            VimBinding::follow_setting(self, input.entity_id(), cx);
+        }
     }
 
     /// The text of the loaded records in the mode the text view shows, or
@@ -772,17 +827,16 @@ impl DelimitedDocument {
     }
 
     /// The text view: the editor, read-only unless the user can edit the
-    /// text now, and below it the notes of [`Self::text_notes`].
-    pub(super) fn render_text_body(&self, cx: &Context<Self>) -> AnyElement {
+    /// text now, the Vim mode indicator while Vim mode is on, and below them
+    /// the notes of [`Self::text_notes`].
+    pub(super) fn render_text_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let editable = self.is_text_editable();
 
-        let editor = self.text_input().map(|input| {
-            Editor::new(input)
-                .readonly(!editable)
-                .appearance(false)
-                .w_full()
-                .h_full()
-        });
+        let editor = self
+            .text
+            .shown
+            .as_ref()
+            .map(|view| self.render_text_editor(view, editable, cx));
 
         let notes = self.text_notes();
 
@@ -792,7 +846,7 @@ impl DelimitedDocument {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(div().flex_1().min_h_0().overflow_hidden().children(editor))
+            .children(editor)
             .when(!notes.is_empty(), |body| {
                 body.child(
                     div()
@@ -808,6 +862,34 @@ impl DelimitedDocument {
                         .children(notes),
                 )
             })
+            .into_any_element()
+    }
+
+    /// The editor with Vim's listeners on its container and the mode
+    /// indicator below it, as the object editor draws its buffer.
+    fn render_text_editor(
+        &self,
+        view: &TextView,
+        editable: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let editor = div().flex_1().min_h_0().overflow_hidden().child(
+            view.vim
+                .editor(!editable)
+                .appearance(false)
+                .w_full()
+                .h_full(),
+        );
+        let indicator = view.vim.render_indicator(cx);
+        let wrapper = view
+            .vim
+            .leader_scope(div().flex_1().min_h_0().flex().flex_col(), cx);
+
+        let input = view.vim.input_id();
+
+        VimBinding::capture_run_command(VimBinding::wire(wrapper, input, cx), input, cx)
+            .child(editor)
+            .children(indicator)
             .into_any_element()
     }
 

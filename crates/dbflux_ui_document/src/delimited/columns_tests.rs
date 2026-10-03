@@ -34,7 +34,7 @@ fn long_value() -> String {
 
 /// Starts editing the cell at `row`, `col` as Enter does and lets the
 /// document react. Returns whether the table took the request.
-fn start_cell_edit(
+pub(super) fn start_cell_edit(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     row: usize,
