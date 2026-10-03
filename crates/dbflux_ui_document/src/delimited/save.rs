@@ -249,8 +249,8 @@ fn read_only_file_error(path: &Path) -> StorageError {
 
 /// Checks that a save of the local file at `path` could replace it, the way
 /// [`save_edited`] would: the path resolves, the file's permission bits allow
-/// writing, and a staging file can be created in the directory the file is
-/// in. The staging file is created exactly as a save creates one and removed
+/// writing, the operating system lets this process open it for writing, and
+/// a staging file can be created in the directory the file is in. The staging file is created exactly as a save creates one and removed
 /// at once, so nothing stays behind; a removal that fails is traced.
 ///
 /// Blocks on a few file system calls. A save that passes this can still fail
@@ -265,6 +265,8 @@ pub(super) fn check_local_save(path: &Path) -> Result<(), StorageError> {
     if metadata.permissions().readonly() {
         return Err(read_only_file_error(path));
     }
+
+    check_write_access(path, &destination)?;
 
     let directory = parent_directory(&destination);
     let probe = stage_path(directory);

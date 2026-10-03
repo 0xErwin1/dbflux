@@ -235,6 +235,34 @@ fn a_read_only_file_needs_a_decision(cx: &mut TestAppContext) {
     assert_eq!(toast_count(window), 0, "the check reports nothing");
 }
 
+/// The save refuses a file the user may not write even when its permission
+/// bits let others write it, so the quit asks for that file too.
+#[cfg(unix)]
+#[gpui::test]
+fn a_file_the_user_cannot_write_needs_a_decision(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TestDirectory::new("quit-not-writable-by-owner");
+    let path = local_file(&directory, "cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path.clone());
+    let pane = pane(&document, window);
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o466))
+        .expect("the permissions apply");
+
+    // A privileged process can write the file, and the refusal this test
+    // asserts does not apply to it.
+    if std::fs::File::options().write(true).open(&path).is_ok() {
+        return;
+    }
+
+    assert_eq!(disposition(&pane, window), QuitDisposition::NeedsDecision);
+    assert_eq!(toast_count(window), 0, "the check reports nothing");
+}
+
 /// The save stages its bytes next to the file, so a directory the user
 /// cannot write fails it; the check asks instead, and leaves no file behind.
 #[cfg(unix)]

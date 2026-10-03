@@ -984,9 +984,9 @@ impl DelimitedDocument {
     /// A local save goes through when no save, reread or load of the rest of
     /// the file runs, the file is at most [`SHUTDOWN_SAVE_MAX_BYTES`] long,
     /// it is still the version that was opened and that version can show a
-    /// change ([`super::save::verify_version`]), its permission bits allow
-    /// writing and its directory takes a staging file
-    /// ([`super::save::check_local_save`]), an edit of the text applies, and
+    /// change ([`super::save::verify_version`]), its permission bits and the
+    /// operating system allow writing it and its directory takes a staging
+    /// file ([`super::save::check_local_save`]), an edit of the text applies, and
     /// the pending state passes the writer's check
     /// ([`Self::pending_state_writes`]). The file system checks are a few
     /// calls on the UI thread, one of which creates and removes a staging
