@@ -137,7 +137,9 @@ impl fmt::Display for OpenError {
         match self {
             Self::Storage(error) => fmt::Display::fmt(error, formatter),
             Self::Driver(error) => fmt::Display::fmt(error, formatter),
-            Self::Read(error) => fmt::Display::fmt(error, formatter),
+            Self::Read(error) => {
+                formatter.write_str(&crate::labels::delimited_read_error_cause(error))
+            }
             Self::PageModel(error) => fmt::Display::fmt(error, formatter),
         }
     }
@@ -1658,8 +1660,7 @@ fn unsaved_changes_block_reread_error(file_name: &str) -> UserFacingError {
 /// `file_name` was read, and the dialect is the user's to change.
 pub(super) fn refused_dialect_error(file_name: &str, refusal: &ReadError) -> UserFacingError {
     let summary = crate::labels::delimited_reread_failed_message(file_name);
-    let cause = crate::labels::delimited_refused_dialect_cause(refusal)
-        .unwrap_or_else(|| refusal.to_string());
+    let cause = crate::labels::delimited_read_error_cause(refusal);
 
     UserFacingError::new(ErrorKind::User, summary).with_cause(cause)
 }

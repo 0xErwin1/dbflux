@@ -2934,6 +2934,105 @@ pub(crate) fn delimited_reopen_failed_message(file_name: &str) -> String {
     dbflux_i18n::t!("document.delimited.error.reopen_failed", name = file_name)
 }
 
+/// Why the bytes of a delimited file could not be read, with `cause`, the
+/// file system's or the driver's own message.
+pub(crate) fn delimited_read_failed_cause(cause: &dyn std::fmt::Display) -> String {
+    dbflux_i18n::t!("document.delimited.error.storage.read", cause = cause)
+}
+
+/// What the user is told about a failure of the delimited reader.
+///
+/// A refused dialect is told with what the user can change. Any other
+/// failure is a translated message followed, on its own line, by the
+/// reader's own text, which carries the byte offsets.
+pub(crate) fn delimited_read_error_cause(error: &dbflux_delimited::ReadError) -> String {
+    use dbflux_delimited::ReadError;
+
+    match error {
+        ReadError::Source(source) => delimited_read_failed_cause(source),
+
+        ReadError::UnexpectedReadLength { .. } => with_technical_detail(
+            dbflux_i18n::t!("document.delimited.error.read.unexpected_length"),
+            error,
+        ),
+
+        ReadError::UnsupportedDialect { .. }
+        | ReadError::LineBreakInDialect { .. }
+        | ReadError::QuoteEqualsDelimiter { .. } => {
+            delimited_refused_dialect_cause(error).unwrap_or_else(|| error.to_string())
+        }
+    }
+}
+
+/// What the user is told about a save the delimited writer refused.
+///
+/// The message is translated and says what the user can change. The
+/// writer's own text, which names the record or the bytes involved, follows
+/// on its own line.
+pub(crate) fn delimited_write_error_cause(error: &dbflux_delimited::WriteError) -> String {
+    use dbflux_delimited::WriteError;
+
+    let message = match error {
+        WriteError::Source(source) => return delimited_read_failed_cause(source),
+
+        WriteError::Read(error) => return delimited_read_error_cause(error),
+
+        WriteError::Sink(source) => {
+            return dbflux_i18n::t!("document.delimited.error.write.sink", cause = source);
+        }
+
+        WriteError::SourceChanged { .. }
+        | WriteError::RangeOutsideSource { .. }
+        | WriteError::NotARecord { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.records_moved")
+        }
+
+        WriteError::OverlappingEdits { .. }
+        | WriteError::DuplicateEdit { .. }
+        | WriteError::ReplacedAndDeleted { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.conflicting_edits")
+        }
+
+        WriteError::UnencodableCharacter {
+            character,
+            encoding,
+            ..
+        } => dbflux_i18n::t!(
+            "document.delimited.error.write.unencodable",
+            character = format!("{character:?}"),
+            encoding = encoding
+        ),
+
+        WriteError::UnquotableField { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.unquotable")
+        }
+
+        WriteError::LeadingByteOrderMark { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.leading_byte_order_mark")
+        }
+
+        WriteError::FusedLineBreak { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.fused_line_break")
+        }
+
+        WriteError::TruncatedCodeUnit { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.truncated_code_unit")
+        }
+
+        WriteError::UnclosedQuote { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.unclosed_quote")
+        }
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// `message` followed, on its own line, by `detail`, the untranslated text
+/// of the library error it explains.
+fn with_technical_detail(message: String, detail: &dyn std::fmt::Display) -> String {
+    format!("{message}\n{detail}")
+}
+
 /// Why the reader refuses a dialect, with what the user can change. `None`
 /// for an error that is not a refusal of the dialect.
 pub(crate) fn delimited_refused_dialect_cause(
@@ -7364,5 +7463,102 @@ mod tests {
             "Could not open cities.csv"
         );
         assert!(delimited_malformed_text_warning("UTF-8", false).contains("UTF-8"));
+    }
+
+    /// The `%{name}` placeholders of a catalog value, sorted.
+    fn delimited_placeholders(text: &str) -> Vec<&str> {
+        let mut placeholders: Vec<&str> = text
+            .match_indices("%{")
+            .filter_map(|(start, _)| {
+                let end = text[start..].find('}')?;
+                Some(&text[start..=start + end])
+            })
+            .collect();
+
+        placeholders.sort_unstable();
+        placeholders
+    }
+
+    /// Every key of the delimited document's storage, reader, writer and
+    /// page errors resolves in each shipped catalog, is translated rather
+    /// than the English fallback, and keeps the English placeholders.
+    #[test]
+    fn delimited_error_keys_resolve_in_every_locale() {
+        let keys = [
+            "document.delimited.error.storage.read",
+            "document.delimited.error.storage.local_io",
+            "document.delimited.error.storage.temporary_file",
+            "document.delimited.error.storage.object_store",
+            "document.delimited.error.storage.read_only_file",
+            "document.delimited.error.read.unexpected_length",
+            "document.delimited.error.write.sink",
+            "document.delimited.error.write.records_moved",
+            "document.delimited.error.write.conflicting_edits",
+            "document.delimited.error.write.unencodable",
+            "document.delimited.error.write.unquotable",
+            "document.delimited.error.write.leading_byte_order_mark",
+            "document.delimited.error.write.fused_line_break",
+            "document.delimited.error.write.truncated_code_unit",
+            "document.delimited.error.write.unclosed_quote",
+            "document.delimited.error.page.out_of_order",
+            "document.delimited.error.page.no_header",
+            "document.delimited.error.page.column_out_of_range",
+        ];
+
+        for key in keys {
+            let english = dbflux_i18n::translate_in("en", key);
+            assert_ne!(english, key, "key {key} did not resolve in en");
+
+            for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
+                let text = dbflux_i18n::translate_in(locale, key);
+
+                assert_ne!(
+                    text,
+                    format!("{locale}.{key}"),
+                    "key {key} missing in {locale}"
+                );
+                assert_ne!(text, english, "key {key} falls back to English in {locale}");
+                assert_eq!(
+                    delimited_placeholders(&text),
+                    delimited_placeholders(&english),
+                    "key {key} has other placeholders in {locale}"
+                );
+            }
+        }
+    }
+
+    /// A refusal of the writer is told in the user's words, with the
+    /// writer's own text after it, and a refused dialect only in the user's
+    /// words.
+    #[test]
+    fn delimited_library_errors_are_translated_with_their_detail() {
+        use super::{delimited_read_error_cause, delimited_write_error_cause};
+        use dbflux_delimited::{ReadError, WriteError};
+
+        let truncated = WriteError::TruncatedCodeUnit { source_length: 7 };
+        let cause = delimited_write_error_cause(&truncated);
+
+        let (message, detail) = cause.split_once('\n').expect("a message and its detail");
+        assert_eq!(
+            message,
+            dbflux_i18n::t!("document.delimited.error.write.truncated_code_unit")
+        );
+        assert_eq!(detail, truncated.to_string());
+
+        let refused = ReadError::QuoteEqualsDelimiter { byte: b',' };
+        assert_eq!(
+            delimited_read_error_cause(&refused),
+            "The quote and the delimiter are both Comma. Choose a different character for one of them."
+        );
+
+        let unencodable = WriteError::UnencodableCharacter {
+            record: dbflux_delimited::EditLocation::Inserted(0),
+            character: 'é',
+            encoding: "Shift_JIS",
+        };
+        assert!(
+            delimited_write_error_cause(&unencodable)
+                .starts_with("A value contains 'é', which Shift_JIS cannot represent.")
+        );
     }
 }

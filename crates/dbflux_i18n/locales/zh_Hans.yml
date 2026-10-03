@@ -1799,6 +1799,28 @@ document:
         unsupported: "无法以 %{character} 作为分隔符或引号读取 %{encoding} 文本。请选择其他分隔符、引号或编码。"
         line_break: "换行符不能用作分隔符或引号。请选择其他字符。"
         quote_equals_delimiter: "引号和分隔符都是 %{character}。请为其中一个选择不同的字符。"
+      storage:
+        read: "无法读取文件：%{cause}"
+        local_io: "无法访问 %{path}：%{cause}"
+        temporary_file: "无法保存 %{target}：在 %{directory} 中写入临时文件失败：%{cause}"
+        object_store: "无法访问 %{bucket}/%{key}：%{cause}"
+        read_only_file: "该文件为只读。"
+      read:
+        unexpected_length: "文件返回的字节数与请求的不同，因此无法读取。"
+      write:
+        sink: "无法写入编辑后的文件：%{cause}"
+        records_moved: "文件已与从中加载的记录不再一致。请重新加载文件并重新编辑。"
+        conflicting_edits: "待处理的编辑以相互冲突的方式修改了同一条记录，因此未写入文件。"
+        unencodable: "某个值包含 %{character}，%{encoding} 无法表示该字符。请删除该字符或更改文件的编码。"
+        unquotable: "某个值包含分隔符或换行符、以 U+FEFF 开头，或是其记录中唯一且为空的字段，而文件没有可用于包裹它的引号字符。请修改该值或选择一个引号字符。"
+        leading_byte_order_mark: "某条记录将成为文件的第一条记录，其开头的 U+FEFF 会被当作字节顺序标记读取而丢失。请编辑该记录的第一个字段，或在它之前保留一条记录。"
+        fused_line_break: "删除这些记录会使一个空行与其前面的换行符合并，而文件没有引号字符来将其分开。请同时删除该空行，或选择一个引号字符。"
+        truncated_code_unit: "文件在一个字符的中间结束，因此无法按原样编辑。请在同一次保存中替换或删除其最后一条记录。"
+        unclosed_quote: "某条记录在一个从未闭合的引号字段内结束，因此无法在其后添加列。请先编辑该记录。"
+      page:
+        out_of_order: "该页从记录 %{found} 开始，而下一条要加载的记录是 %{expected}。"
+        no_header: "文件没有标题记录，因此其列没有名称。"
+        column_out_of_range: "索引 %{column} 处没有列。"
     warning:
       malformed_text: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。检测到的编码可能不正确。"
       malformed_text_chosen: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。所选编码可能不正确。"
