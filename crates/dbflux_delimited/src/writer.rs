@@ -945,41 +945,56 @@ impl Renderer {
 
     /// Encodes `text`, or returns the first character the encoding cannot
     /// represent.
-    ///
-    /// UTF-16 is encoded here because `encoding_rs` has no UTF-16 encoder:
-    /// its encoder for a UTF-16 encoding writes UTF-8.
     fn encode(&self, text: &str) -> Result<Vec<u8>, char> {
-        if self.encoding == UTF_8 {
-            return Ok(text.as_bytes().to_vec());
-        }
+        encode_text(text, self.encoding).map_err(|(_, character)| character)
+    }
+}
 
-        if self.encoding == UTF_16LE {
-            return Ok(text.encode_utf16().flat_map(u16::to_le_bytes).collect());
-        }
+/// Encodes `text` in `encoding`, or returns the first character the encoding
+/// cannot represent with its byte offset in `text`.
+///
+/// UTF-16 is encoded here because `encoding_rs` has no UTF-16 encoder: its
+/// encoder for a UTF-16 encoding writes UTF-8.
+pub(crate) fn encode_text(
+    text: &str,
+    encoding: &'static Encoding,
+) -> Result<Vec<u8>, (usize, char)> {
+    if encoding == UTF_8 {
+        return Ok(text.as_bytes().to_vec());
+    }
 
-        if self.encoding == UTF_16BE {
-            return Ok(text.encode_utf16().flat_map(u16::to_be_bytes).collect());
-        }
+    if encoding == UTF_16LE {
+        return Ok(text.encode_utf16().flat_map(u16::to_le_bytes).collect());
+    }
 
-        let mut encoder = self.encoding.new_encoder();
-        let mut encoded = Vec::new();
-        let mut remaining = text;
+    if encoding == UTF_16BE {
+        return Ok(text.encode_utf16().flat_map(u16::to_be_bytes).collect());
+    }
 
-        loop {
-            let needed = encoder
-                .max_buffer_length_from_utf8_without_replacement(remaining.len())
-                .unwrap_or(remaining.len());
+    let mut encoder = encoding.new_encoder();
+    let mut encoded = Vec::new();
+    let mut remaining = text;
 
-            encoded.reserve(needed.max(1));
+    loop {
+        let needed = encoder
+            .max_buffer_length_from_utf8_without_replacement(remaining.len())
+            .unwrap_or(remaining.len());
 
-            let (result, read) =
-                encoder.encode_from_utf8_to_vec_without_replacement(remaining, &mut encoded, true);
+        encoded.reserve(needed.max(1));
 
-            match result {
-                EncoderResult::InputEmpty => return Ok(encoded),
-                EncoderResult::Unmappable(character) => return Err(character),
-                EncoderResult::OutputFull => remaining = remaining.get(read..).unwrap_or_default(),
+        let (result, read) =
+            encoder.encode_from_utf8_to_vec_without_replacement(remaining, &mut encoded, true);
+
+        match result {
+            EncoderResult::InputEmpty => return Ok(encoded),
+
+            EncoderResult::Unmappable(character) => {
+                let consumed = text.len() - remaining.len() + read;
+
+                return Err((consumed.saturating_sub(character.len_utf8()), character));
             }
+
+            EncoderResult::OutputFull => remaining = remaining.get(read..).unwrap_or_default(),
         }
     }
 }

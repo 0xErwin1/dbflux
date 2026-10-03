@@ -399,6 +399,28 @@ fn split_fields(record: &[u8], layout: &Layout) -> Vec<Vec<u8>> {
     fields
 }
 
+/// Splits the bytes of exactly one record into its fields, decoded under
+/// `encoding`, and says whether decoding replaced a malformed sequence.
+fn decode_fields(
+    record: &[u8],
+    layout: &Layout,
+    encoding: &'static Encoding,
+) -> (Vec<String>, bool) {
+    let mut had_replacements = false;
+
+    let fields = split_fields(record, layout)
+        .into_iter()
+        .map(|field| {
+            let (text, replaced) = encoding.decode_without_bom_handling(&field);
+            had_replacements |= replaced;
+
+            text.into_owned()
+        })
+        .collect();
+
+    (fields, had_replacements)
+}
+
 /// Whether the bytes of exactly one record end inside a quoted field that was
 /// never closed, which only the final record of a source can do.
 pub(crate) fn ends_inside_quotes(record: &[u8], layout: &Layout) -> bool {
@@ -937,17 +959,7 @@ impl<S: ByteSource> PagedReader<S> {
         let start = cursor.offset();
         let bytes = cursor.remaining().get(..length).unwrap_or_default();
 
-        let mut had_replacements = false;
-
-        let fields = split_fields(bytes, &self.layout)
-            .into_iter()
-            .map(|field| {
-                let (text, replaced) = self.dialect.encoding.decode_without_bom_handling(&field);
-                had_replacements |= replaced;
-
-                text.into_owned()
-            })
-            .collect();
+        let (fields, had_replacements) = decode_fields(bytes, &self.layout, self.dialect.encoding);
 
         Record {
             byte_range: start..start + to_u64(length),
@@ -955,4 +967,128 @@ impl<S: ByteSource> PagedReader<S> {
             had_replacements,
         }
     }
+}
+
+/// One record of a text read by [`parse_text`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRecord {
+    /// The bytes of the record in the text, its terminator included. The
+    /// ranges of the records of a text follow each other and cover it.
+    pub text_range: Range<usize>,
+
+    /// The fields, as [`Record::fields`] holds them.
+    pub fields: Vec<String>,
+
+    /// Whether the record ends inside a quoted field that is never closed,
+    /// which only the last record of a text can do.
+    pub ends_inside_quotes: bool,
+}
+
+/// Why [`parse_text`] could not read a text.
+#[derive(Debug, thiserror::Error)]
+pub enum ParseTextError {
+    /// The reader refuses the dialect.
+    #[error(transparent)]
+    Dialect(#[from] ReadError),
+
+    /// The text holds a character the dialect's encoding cannot represent,
+    /// at byte `offset` of the text.
+    #[error(
+        "{character:?} (U+{:04X}) at byte {offset} of the text cannot be represented in {encoding}",
+        u32::from(*character)
+    )]
+    UnencodableCharacter {
+        offset: usize,
+        character: char,
+        encoding: &'static str,
+    },
+}
+
+/// Reads `text` as the records a [`PagedReader`] reads from the same text
+/// written in the encoding of `dialect`: the text is encoded and scanned with
+/// the reader's own scanner and field splitting, so the two cannot disagree
+/// about quoting or line breaks.
+///
+/// `text` is decoded text without a byte-order mark: a leading U+FEFF is part
+/// of the first field. The header is not told apart from the data: with a
+/// header, it is the first record returned. A final record without a
+/// terminator is a record, and one that ends inside a quoted field that is
+/// never closed is returned as the reader returns it and marked
+/// ([`TextRecord::ends_inside_quotes`]).
+///
+/// # Errors
+///
+/// [`ParseTextError::Dialect`] for a dialect the reader refuses, and
+/// [`ParseTextError::UnencodableCharacter`] for the first character the
+/// dialect's encoding cannot represent.
+pub fn parse_text(text: &str, dialect: &Dialect) -> Result<Vec<TextRecord>, ParseTextError> {
+    let layout = Layout::for_dialect(dialect)?;
+
+    let bytes =
+        crate::writer::encode_text(text, dialect.encoding).map_err(|(offset, character)| {
+            ParseTextError::UnencodableCharacter {
+                offset,
+                character,
+                encoding: dialect.encoding.name(),
+            }
+        })?;
+
+    let unit_size = layout.unit_size();
+
+    // A record ends after a line break or at the end of the text. Every
+    // encoding the reader accepts encodes a line break as one code unit that
+    // no other character contains, so the n-th line break of the bytes is
+    // the n-th of the text.
+    let text_breaks: Vec<usize> = text
+        .match_indices(['\n', '\r'])
+        .map(|(offset, _)| offset)
+        .collect();
+
+    let unit_breaks: Vec<usize> = (0..bytes.len())
+        .step_by(unit_size)
+        .filter(|position| {
+            matches!(
+                layout.unit_at(&bytes, *position),
+                Some(LINE_FEED | CARRIAGE_RETURN)
+            )
+        })
+        .collect();
+
+    let text_end_of = |byte_end: usize| -> usize {
+        if byte_end >= bytes.len() {
+            return text.len();
+        }
+
+        unit_breaks
+            .binary_search(&(byte_end - unit_size))
+            .ok()
+            .and_then(|index| text_breaks.get(index))
+            .map_or(text.len(), |offset| offset + 1)
+    };
+
+    let mut records = Vec::new();
+    let mut position = 0;
+    let mut text_start = 0;
+
+    while let Some(remaining) = bytes.get(position..) {
+        let Some(length) = record_length(remaining, &layout, true).filter(|length| *length > 0)
+        else {
+            break;
+        };
+
+        let record = remaining.get(..length).unwrap_or_default();
+        let text_end = text_end_of(position + length);
+        let (fields, _) = decode_fields(record, &layout, dialect.encoding);
+
+        records.push(TextRecord {
+            text_range: text_start..text_end,
+            fields,
+            ends_inside_quotes: ends_inside_quotes(record, &layout),
+        });
+
+        position += length;
+        text_start = text_end;
+    }
+
+    Ok(records)
 }
