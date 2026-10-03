@@ -331,8 +331,6 @@ impl LoadedFile {
         self.warnings = warnings;
     }
 
-    /// Whether the file is being read again under the overrides asked for
-    /// last.
     pub(super) fn is_rereading(&self) -> bool {
         self.reread_task.is_some()
     }
