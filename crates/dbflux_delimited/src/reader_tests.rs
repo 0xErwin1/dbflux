@@ -1042,3 +1042,139 @@ fn quote_equal_to_the_delimiter_is_refused() {
         "the quote and the delimiter are both ';': choose a different character for one of them"
     );
 }
+
+// -- The bytes of a page ---------------------------------------------------------
+
+/// The bytes of the leading `records` whose bytes together fit in `budget`,
+/// cut from `source`.
+fn leading_bytes(source: &[u8], records: &[Record], budget: usize) -> Vec<u8> {
+    let mut kept = Vec::new();
+
+    for record in records {
+        let bytes = &source[record.byte_range.start as usize..record.byte_range.end as usize];
+
+        if kept.len() + bytes.len() > budget {
+            break;
+        }
+
+        kept.extend_from_slice(bytes);
+    }
+
+    kept
+}
+
+#[test]
+fn a_page_read_with_its_bytes_returns_them_and_reads_nothing_more() {
+    let mixed: &[u8] = b"h1,h2\r\na,\"x\ny\"\n3,4\r5,\"q\"\"r\"\r\n\n7,8";
+    let mut with_mark = UTF_8_MARK_BYTES.to_vec();
+    with_mark.extend_from_slice(b"a,b\n\"one\r\ntwo\",3\n4,5\n");
+    let mut utf16 = vec![0xFF, 0xFE];
+    utf16.extend(utf16le("a,b\r\n\"x\ny\",2\n3,4"));
+
+    let header = |encoding| Dialect {
+        has_header: true,
+        ..dialect(encoding)
+    };
+
+    let cases: Vec<(&[u8], Dialect)> = vec![
+        (mixed, header(UTF_8)),
+        (mixed, dialect(UTF_8)),
+        (&with_mark, header(UTF_8)),
+        (&utf16, header(UTF_16LE)),
+    ];
+
+    for (bytes, dialect) in cases {
+        for window in 1..=bytes.len() as u64 + 1 {
+            for page_size in [1, 2, 3] {
+                for budget in [0, 1, 9, 17, usize::MAX] {
+                    let mut plain = open(bytes, dialect, page_size, window);
+                    let mut kept = open(bytes, dialect, page_size, window);
+
+                    let header_range = plain.header().map(|record| {
+                        record.byte_range.start as usize..record.byte_range.end as usize
+                    });
+                    assert_eq!(
+                        kept.header_bytes(),
+                        header_range.map(|range| &bytes[range]),
+                        "window {window}"
+                    );
+
+                    assert_eq!(
+                        plain.source().take_requests(),
+                        kept.source().take_requests()
+                    );
+
+                    for page_index in 0..bytes.len() + 2 {
+                        let page = plain.read_page(page_index).unwrap();
+                        let (kept_page, page_bytes) =
+                            kept.read_page_with_bytes(page_index, budget).unwrap();
+
+                        assert_eq!(kept_page, page, "window {window} page {page_index}");
+                        assert_eq!(
+                            page_bytes,
+                            leading_bytes(bytes, &page.records, budget),
+                            "window {window} page size {page_size} budget {budget} page {page_index}"
+                        );
+                        assert_eq!(
+                            plain.source().take_requests(),
+                            kept.source().take_requests(),
+                            "the bytes cost no read: window {window} page {page_index}"
+                        );
+
+                        if page.records.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_page_read_with_its_bytes_out_of_order_returns_the_same_bytes() {
+    let bytes = b"0\n11\n222\n3333\n44444\n";
+    let mut reader = open(bytes, dialect(UTF_8), 2, 3);
+
+    let (third, third_bytes) = reader.read_page_with_bytes(2, usize::MAX).unwrap();
+    let (first, first_bytes) = reader.read_page_with_bytes(0, usize::MAX).unwrap();
+
+    assert_eq!(
+        third_bytes,
+        leading_bytes(bytes, &third.records, usize::MAX)
+    );
+    assert_eq!(first_bytes, b"0\n11\n");
+    assert_eq!(first.records.len(), 2);
+}
+
+#[test]
+fn the_header_bytes_follow_an_invalidation() {
+    let header = Dialect {
+        has_header: true,
+        ..dialect(UTF_8)
+    };
+    let mut reader = PagedReader::open(
+        MemorySource::new(b"a,b\n1,2\n".to_vec()),
+        header,
+        options(10, 4),
+    )
+    .unwrap();
+
+    assert_eq!(reader.header_bytes(), Some(&b"a,b\n"[..]));
+
+    *reader.source_mut() = MemorySource::new(b"name,city\r\n1,2\n".to_vec());
+    reader.invalidate_from_offset(0).unwrap();
+
+    assert_eq!(reader.header_bytes(), Some(&b"name,city\r\n"[..]));
+
+    let headerless = PagedReader::open(
+        MemorySource::new(b"a,b\n".to_vec()),
+        dialect(UTF_8),
+        options(10, 4),
+    )
+    .unwrap();
+
+    assert_eq!(headerless.header_bytes(), None);
+}
+
+const UTF_8_MARK_BYTES: &[u8] = b"\xEF\xBB\xBF";

@@ -36,6 +36,7 @@ use super::document::{
 };
 use super::page_model::{PageModelError, positional_name};
 use super::source::DelimitedSource;
+use super::text::MAX_TEXT_BYTES;
 use crate::pane::PaneAction;
 
 /// The width of the column prompt and of the offer to load the rest.
@@ -425,6 +426,7 @@ impl DelimitedDocument {
 
         let first_page = loaded.page_model.next_page();
         let reader_epoch = loaded.reader_epoch;
+        let keep_budget = loaded.source_span.budget(MAX_TEXT_BYTES);
 
         if let Some(connection) = connection {
             reader.source_mut().use_connection(connection);
@@ -436,7 +438,8 @@ impl DelimitedDocument {
         });
 
         let task = cx.background_executor().spawn(async move {
-            let read = read_remaining_pages(&mut reader, first_page, page_size, &cancel);
+            let read =
+                read_remaining_pages(&mut reader, first_page, page_size, keep_budget, &cancel);
 
             (reader, read)
         });
@@ -498,7 +501,7 @@ impl DelimitedDocument {
         let mut failure = read.failure;
 
         for page in read.pages {
-            if let Err(error) = loaded.page_model.append_page(page.page, page.record_count) {
+            if let Err(error) = loaded.append_read(page) {
                 failure = Some(OpenError::from(error));
                 break;
             }
@@ -751,20 +754,24 @@ impl DelimitedDocument {
 }
 
 /// Reads pages from `first_page` on through `reader` until the last record,
-/// a failed read, or `cancel`, which is checked before every page. Blocks on
-/// file or network I/O.
+/// a failed read, or `cancel`, which is checked before every page, keeping
+/// for the text view the bytes of the leading records that fit in
+/// `keep_budget` bytes. Blocks on file or network I/O.
 fn read_remaining_pages(
     reader: &mut PagedReader<DelimitedSource>,
     first_page: usize,
     page_size: NonZeroUsize,
+    mut keep_budget: usize,
     cancel: &AtomicBool,
 ) -> RestRead {
     let mut pages = Vec::new();
     let mut page_index = first_page;
 
     while !cancel.load(Ordering::Relaxed) {
-        match read_page(reader, page_index, page_size) {
+        match read_page(reader, page_index, page_size, keep_budget) {
             Ok(read) => {
+                keep_budget = remaining_budget(keep_budget, &read);
+
                 let reaches_end = reaches_end(&read);
                 pages.push(read);
 
@@ -787,6 +794,20 @@ fn read_remaining_pages(
     RestRead {
         pages,
         failure: None,
+    }
+}
+
+/// What is left of `budget` after `read` kept its bytes: nothing once a
+/// record of the page was not kept, because the kept bytes cannot skip it.
+pub(super) fn remaining_budget(budget: usize, read: &ReadPage) -> usize {
+    let page_length = match (read.page.records.first(), read.page.records.last()) {
+        (Some(first), Some(last)) => last.byte_range.end - first.byte_range.start,
+        _ => return budget,
+    };
+
+    match &read.bytes {
+        Some(bytes) if bytes.len() as u64 == page_length => budget.saturating_sub(bytes.len()),
+        _ => 0,
     }
 }
 

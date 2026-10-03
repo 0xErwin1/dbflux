@@ -1846,6 +1846,16 @@ document:
       body: "열은 파일의 모든 레코드를 불러온 뒤에만 추가할 수 있으며, 지금까지 이 %{size} 파일에서 %{loaded}개 레코드를 불러왔습니다. 나머지를 불러오면 남은 레코드를 모두 메모리로 읽으므로 큰 파일에서는 시간이 걸립니다. 하단에서 취소할 수 있으며, 그때까지 읽은 레코드는 불러온 상태로 남습니다."
       confirm: "나머지 불러오기"
       cancel: "불러오기 취소"
+    view:
+      table: "표"
+      text: "텍스트"
+      raw: "원본"
+      aligned: "정렬"
+    text:
+      more_in_file: "파일에 레코드가 더 있습니다. 여기에 표시하려면 더 불러오세요."
+      capped: "텍스트에는 불러온 레코드 %{loaded}개 중 처음 %{shown}개만 표시됩니다. 표에는 모두 표시됩니다."
+      render_failed: "보류 중인 변경 사항을 텍스트로 표시할 수 없습니다: %{cause}"
+      aligned_hint: "정렬된 텍스트는 읽기용입니다. 값 안의 줄바꿈은 ↵, 탭은 ⇥로 표시되며 %{width}자보다 긴 값은 잘립니다."
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"

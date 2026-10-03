@@ -1,9 +1,10 @@
 //! Rendering of `DelimitedDocument`.
 //!
 //! Layout, top to bottom: the toolbar, the warnings of the opened file, the
-//! table of the loaded records, and a footer with the delimiter, the
+//! table of the loaded records or their text, and a footer with the delimiter, the
 //! encoding, the record count and, while the file has more records, the
-//! control that loads the next page. The toolbar holds the dialect controls,
+//! control that loads the next page. The toolbar holds the switch between
+//! the table and the text (and between raw and aligned text), the dialect controls,
 //! the control that reads the file again from its source and, for a file
 //! that can be saved in place, the controls that insert a row above the
 //! cursor, add a column, discard the changes and save them. The toolbar wraps when the tab
@@ -24,6 +25,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 use super::document::DelimitedDocument;
+use super::text_view::DelimitedView;
 use crate::chrome::document_footer;
 
 /// The width of a select of the dialect toolbar: the longest item, a value
@@ -66,10 +68,10 @@ impl DelimitedDocument {
             .into_any_element()
     }
 
-    /// The toolbar: two groups, the dialect controls (the delimiter, quote
-    /// and encoding selects, the header checkbox and the control that drops
-    /// every override) and the file actions (the reload and the edit
-    /// controls). `None` until the file is loaded. When the tab is narrow the
+    /// The toolbar: three groups, the view switch, the dialect controls
+    /// (the delimiter, quote and encoding selects, the header checkbox and
+    /// the control that drops every override) and the file actions (the
+    /// reload and the edit controls). `None` until the file is loaded. When the tab is narrow the
     /// toolbar wraps by group first, so each group stays together, and a
     /// group wraps within itself only when it is wider than the tab.
     fn render_dialect_toolbar(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -155,6 +157,7 @@ impl DelimitedDocument {
                 .py(DocumentMetrics::GAP)
                 .border_b_1()
                 .border_color(theme.border)
+                .children(self.render_view_controls(cx))
                 .child(dialect_controls)
                 .child(div().flex_1())
                 .child(file_actions)
@@ -320,6 +323,11 @@ impl DelimitedDocument {
     }
 
     fn render_loaded(&self, table: Entity<DataTable>, cx: &Context<Self>) -> AnyElement {
+        let body = match self.view() {
+            DelimitedView::Table => div().flex_1().min_h_0().child(table).into_any_element(),
+            DelimitedView::Text => self.render_text_body(cx),
+        };
+
         div()
             .flex()
             .flex_col()
@@ -327,7 +335,7 @@ impl DelimitedDocument {
             .min_h_0()
             .children(self.render_dialect_toolbar(cx))
             .children(self.render_warnings(cx))
-            .child(div().flex_1().min_h_0().child(table))
+            .child(body)
             .child(
                 document_footer(cx)
                     .id("delimited-footer")
@@ -372,6 +380,10 @@ impl Render for DelimitedDocument {
         self.open_pending_cell_editor(window, cx);
         self.open_pending_column_prompt(window, cx);
 
+        // The text view needs the window to build and refresh its editor,
+        // and a switched view takes the keyboard.
+        self.prepare_view(window, cx);
+
         let cell_editor = self
             .cell_editor
             .clone()
@@ -402,6 +414,9 @@ impl Render for DelimitedDocument {
             .id("delimited-document")
             .track_focus(self.focus_handle())
             .capture_action(cx.listener(Self::take_save_key))
+            .when(self.view() == DelimitedView::Text, |root| {
+                root.capture_key_down(cx.listener(Self::take_text_view_save_key))
+            })
             .relative()
             .flex()
             .flex_col()

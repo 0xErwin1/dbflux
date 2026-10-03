@@ -1762,3 +1762,151 @@ fn appended_value_ranges_are_checked_like_every_other_range() {
         "{error:?}"
     );
 }
+
+// -- Rendering one record ------------------------------------------------------
+
+/// Field sets that take every quoting rule: plain, the delimiter, a quote, a
+/// line break, padding, a leading U+FEFF, an empty field and the empty only
+/// field.
+fn field_sets() -> Vec<Vec<String>> {
+    vec![
+        fields(&["plain", "text"]),
+        fields(&["a,b", "say \"hi\""]),
+        fields(&["two\nlines", "cr\ronly"]),
+        fields(&[" padded", "tail "]),
+        fields(&["\u{feff}mark", ""]),
+        fields(&[""]),
+        Vec::new(),
+    ]
+}
+
+#[test]
+fn a_rendered_record_is_the_replacement_the_writer_writes() {
+    let source = b"x\r\ny\n";
+
+    for encoding in [UTF_8, UTF_16LE, UTF_16BE, WINDOWS_1252] {
+        let dialect = dialect(encoding);
+        let bytes = match encoding {
+            encoding if encoding == UTF_16LE => utf16le("x\r\ny\n"),
+            encoding if encoding == UTF_16BE => utf16be("x\r\ny\n"),
+            _ => source.to_vec(),
+        };
+        let ranges = ranges(&bytes, dialect);
+
+        for values in field_sets() {
+            // windows-1252 has no U+FEFF.
+            if encoding == WINDOWS_1252 && values.iter().any(|value| value.contains('\u{feff}')) {
+                continue;
+            }
+
+            let edits = EditSet {
+                replacements: vec![Replacement {
+                    byte_range: ranges[0].clone(),
+                    fields: values.clone(),
+                }],
+                ..EditSet::new(0)
+            };
+
+            let saved = save(&bytes, dialect, &edits);
+
+            let location = EditLocation::Existing(ranges[0].clone());
+            let rendered = super::render_record(&values, &dialect, &location).unwrap();
+
+            let terminator = match encoding {
+                encoding if encoding == UTF_16LE => utf16le("\r\n"),
+                encoding if encoding == UTF_16BE => utf16be("\r\n"),
+                _ => b"\r\n".to_vec(),
+            };
+            let tail = &bytes[ranges[1].start as usize..];
+
+            assert_eq!(
+                saved,
+                concat(&[&rendered, &terminator, tail]),
+                "{} {values:?}",
+                encoding.name()
+            );
+        }
+    }
+}
+
+#[test]
+fn rendered_appended_fields_are_the_fields_the_writer_appends() {
+    let bytes = b"a,b\n1,2\n";
+    let dialect = with_header(dialect(UTF_8));
+    let ranges = ranges(bytes, dialect);
+
+    for values in [
+        fields(&["plain", ""]),
+        fields(&["a,b", " padded"]),
+        fields(&["two\nlines", "say \"hi\""]),
+    ] {
+        let edits = EditSet {
+            appended_columns: values
+                .iter()
+                .map(|value| column("name", "", &[(ranges[0].clone(), value.as_str())]))
+                .collect(),
+            ..EditSet::new(0)
+        };
+
+        let saved = save(bytes, dialect, &edits);
+
+        let location = EditLocation::Existing(ranges[0].clone());
+        let appended = super::render_appended_fields(&values, &dialect, &location).unwrap();
+
+        let headers = super::render_appended_fields(
+            &vec!["name".to_string(); values.len()],
+            &dialect,
+            &EditLocation::AppendedColumn(0),
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved,
+            concat(&[b"a,b", &headers, b"\n1,2", &appended, b"\n"]),
+            "{values:?}"
+        );
+    }
+}
+
+#[test]
+fn rendering_refuses_what_the_writer_refuses() {
+    let location = EditLocation::Inserted(0);
+
+    let error =
+        super::render_record(&fields(&["\u{20ac}"]), &dialect(WINDOWS_1252), &location).err();
+    assert!(error.is_none(), "{error:?}");
+
+    let error =
+        super::render_record(&fields(&["\u{101}"]), &dialect(WINDOWS_1252), &location).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            WriteError::UnencodableCharacter {
+                character: '\u{101}',
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+
+    let error =
+        super::render_appended_fields(&fields(&["a,b"]), &without_quote(dialect(UTF_8)), &location)
+            .unwrap_err();
+    assert!(
+        matches!(error, WriteError::UnquotableField { .. }),
+        "{error:?}"
+    );
+
+    let line_break = Dialect {
+        delimiter: b'\n',
+        ..dialect(UTF_8)
+    };
+    let error = super::render_record(&fields(&["a"]), &line_break, &location).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            WriteError::Read(ReadError::LineBreakInDialect { .. })
+        ),
+        "{error:?}"
+    );
+}
