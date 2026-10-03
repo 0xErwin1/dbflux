@@ -683,6 +683,7 @@ impl KeyValueDocument {
             );
 
         let header = div()
+            .debug_selector(|| "kv-member-header".to_string())
             .flex()
             .flex_none()
             .items_center()
@@ -786,6 +787,8 @@ impl KeyValueDocument {
 
         div()
             .id(("kv-member-row", member_index))
+            .debug_selector(|| format!("kv-member-row-{member_index}"))
+            .w_full()
             .flex()
             .items_center()
             .h(KeyValueMetrics::MEMBER_ROW_HEIGHT)
@@ -1217,6 +1220,7 @@ impl KeyValueDocument {
             });
 
         let header = div()
+            .debug_selector(|| "kv-zset-header".to_string())
             .flex()
             .flex_none()
             .items_center()
@@ -1336,6 +1340,8 @@ impl KeyValueDocument {
 
         div()
             .id(("kv-zset-row", member_index))
+            .debug_selector(|| format!("kv-zset-row-{member_index}"))
+            .w_full()
             .flex()
             .items_center()
             .h(KeyValueMetrics::RANKED_ROW_HEIGHT)
@@ -1506,6 +1512,7 @@ impl KeyValueDocument {
 
         let column_count = columns.len();
         let header = div()
+            .debug_selector(|| "kv-stream-header".to_string())
             .flex()
             .flex_none()
             .items_center()
@@ -1629,6 +1636,8 @@ impl KeyValueDocument {
 
         div()
             .id(("kv-stream-row", entry_index))
+            .debug_selector(|| format!("kv-stream-row-{entry_index}"))
+            .w_full()
             .flex()
             .items_center()
             .h(KeyValueMetrics::RANKED_ROW_HEIGHT)
