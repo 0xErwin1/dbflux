@@ -1758,11 +1758,22 @@ document:
         row: FILA
       title: "Fila %{row}"
   delimited:
+    unsaved_summary: "Cambios sin guardar en %{name}"
     loading: "Cargando %{name}…"
     error:
       open_failed: "No se pudo abrir %{name}"
       load_more_failed: "No se pudo cargar más de %{name}"
       reread_failed: "No se pudo volver a leer %{name}"
+      save_failed: "No se pudo guardar %{name}"
+      source_changed: "El archivo cambió en otro lugar desde que se abrió, así que no se guardó nada y tus cambios se conservan. Para ver su contenido nuevo, descarta tus cambios y elige Recargar desde el archivo, y luego repítelos."
+      next_page_required: "Se agregó una fila después del último registro cargado, así que todavía no se sabe su lugar en el archivo. Carga la página siguiente y vuelve a guardar."
+      full_load_required: "Se agregó una columna antes de cargar el archivo completo. Carga todas las páginas y vuelve a guardar."
+      saved_version_unknown: "%{name} se guardó, pero no se pudo leer su nueva versión"
+      reopen_failed: "%{name} se guardó, pero no se pudo volver a abrir"
+      unsaved_changes_block_reread: "La tabla tiene cambios sin guardar, que se perderían al leer el archivo de nuevo. Guárdalos o descártalos primero."
+      save_while_rereading: "El archivo se está leyendo de nuevo, lo que reemplaza las filas a las que pertenecen estos cambios. Espera a que termine de leerse y vuelve a guardar."
+      add_row_failed: "No se pudo agregar una fila a %{name}"
+      no_columns: "El archivo no tiene columnas, así que una fila nueva no tendría campos y el archivo guardado no la conservaría."
       refused:
         unsupported: "El texto %{encoding} no se puede leer con %{character} como delimitador o comilla. Elige otro delimitador, otra comilla u otra codificación."
         line_break: "Un salto de línea no puede ser el delimitador ni la comilla. Elige otro carácter."
@@ -1801,6 +1812,12 @@ document:
       load_more: Cargar más
       loading_more: "Cargando…"
       rereading: "Leyendo el archivo de nuevo…"
+    action:
+      save: Guardar
+      saving: "Guardando…"
+      discard: "Descartar cambios"
+      insert_above: "Insertar fila arriba"
+      reload: "Recargar desde el archivo"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analizando %{file} (%{analyzer})"
