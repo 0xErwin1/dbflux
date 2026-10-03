@@ -1,11 +1,13 @@
-//! Dialect model, dialect detection, text decoding and paged record reading
-//! for delimited text files such as CSV and TSV.
+//! Dialect model, dialect detection, text decoding, paged record reading and
+//! byte-preserving writing for delimited text files such as CSV and TSV.
 //!
 //! The crate resolves how a file is laid out (delimiter, quote character, header
 //! row, text encoding) from a leading byte sample, lets a caller override any
 //! part of that result, and decodes bytes to text under the resolved encoding.
 //! [`PagedReader`] then reads the records of a [`ByteSource`] one page at a
-//! time, each with its exact byte range in the source.
+//! time, each with its exact byte range in the source. [`write_edited`] writes
+//! the source again with an [`EditSet`] applied, copying every record that was
+//! not edited byte for byte.
 //!
 //! ```
 //! use dbflux_delimited::{DialectOverrides, SampleCoverage, decode, detect_dialect};
@@ -37,16 +39,23 @@ use encoding_rs::UTF_8;
 
 mod reader;
 mod source;
+mod writer;
 
 pub use reader::{Page, PagedReader, ReadError, ReaderOptions, Record, RecordCount};
 #[cfg(any(unix, windows))]
 pub use source::FileSource;
 pub use source::{ByteSource, MemorySource, SourceError};
+pub use writer::{
+    AppendedColumn, EditLocation, EditSet, InsertPosition, Insertion, Replacement, WriteError,
+    write_edited,
+};
 
 #[cfg(test)]
 mod reader_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod writer_tests;
 
 /// Delimiters that detection chooses between, in the order that decides a tie
 /// no other rule settles.

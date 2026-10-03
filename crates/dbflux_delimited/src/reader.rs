@@ -12,8 +12,8 @@ use encoding_rs::{EUC_JP, Encoding, ISO_2022_JP, UTF_8, UTF_16BE, UTF_16LE};
 use crate::Dialect;
 use crate::source::{ByteSource, SourceError};
 
-const LINE_FEED: u16 = 0x0A;
-const CARRIAGE_RETURN: u16 = 0x0D;
+pub(crate) const LINE_FEED: u16 = 0x0A;
+pub(crate) const CARRIAGE_RETURN: u16 = 0x0D;
 
 /// How a [`PagedReader`] pages and fetches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,10 +117,10 @@ enum UnitWidth {
 /// The dialect as the scanner needs it: the unit width, and the delimiter and
 /// quote as code units.
 #[derive(Debug, Clone, Copy)]
-struct Layout {
+pub(crate) struct Layout {
     width: UnitWidth,
-    delimiter: u16,
-    quote: Option<u16>,
+    pub(crate) delimiter: u16,
+    pub(crate) quote: Option<u16>,
 }
 
 impl Layout {
@@ -175,7 +175,7 @@ impl Layout {
         })
     }
 
-    fn unit_size(&self) -> usize {
+    pub(crate) fn unit_size(&self) -> usize {
         match self.width {
             UnitWidth::Byte => 1,
             UnitWidth::Utf16LittleEndian | UnitWidth::Utf16BigEndian => 2,
@@ -184,7 +184,7 @@ impl Layout {
 
     /// Returns the code unit that starts at `position`, or `None` when fewer
     /// bytes than one unit are left.
-    fn unit_at(&self, bytes: &[u8], position: usize) -> Option<u16> {
+    pub(crate) fn unit_at(&self, bytes: &[u8], position: usize) -> Option<u16> {
         match self.width {
             UnitWidth::Byte => bytes.get(position).copied().map(u16::from),
 
@@ -197,6 +197,16 @@ impl Layout {
                 Some(&[high, low]) => Some(u16::from_be_bytes([high, low])),
                 _ => None,
             },
+        }
+    }
+
+    /// Appends the bytes of code unit `unit` to `bytes`. With one-byte units,
+    /// a unit above 0xFF has no encoding and appends nothing.
+    pub(crate) fn push_unit(&self, bytes: &mut Vec<u8>, unit: u16) {
+        match self.width {
+            UnitWidth::Byte => bytes.extend(u8::try_from(unit).ok()),
+            UnitWidth::Utf16LittleEndian => bytes.extend_from_slice(&unit.to_le_bytes()),
+            UnitWidth::Utf16BigEndian => bytes.extend_from_slice(&unit.to_be_bytes()),
         }
     }
 }
@@ -324,7 +334,11 @@ fn step(layout: &Layout, state: &mut State, unit: u16) -> Step {
 /// terminator yet, a carriage return that a line feed may still follow, or
 /// half a code unit), the result is `None` and the caller must supply more
 /// bytes. At the end of the source, whatever is left is the final record.
-fn record_length(bytes: &[u8], layout: &Layout, at_end_of_source: bool) -> Option<usize> {
+pub(crate) fn record_length(
+    bytes: &[u8],
+    layout: &Layout,
+    at_end_of_source: bool,
+) -> Option<usize> {
     let unit_size = layout.unit_size();
 
     let mut state = State::FieldStart;
@@ -385,8 +399,24 @@ fn split_fields(record: &[u8], layout: &Layout) -> Vec<Vec<u8>> {
     fields
 }
 
+/// Whether the bytes of exactly one record end inside a quoted field that was
+/// never closed, which only the final record of a source can do.
+pub(crate) fn ends_inside_quotes(record: &[u8], layout: &Layout) -> bool {
+    let unit_size = layout.unit_size();
+
+    let mut state = State::FieldStart;
+    let mut position = 0;
+
+    while let Some(unit) = layout.unit_at(record, position) {
+        step(layout, &mut state, unit);
+        position += unit_size;
+    }
+
+    state == State::Quoted
+}
+
 /// Returns the byte-order mark that `encoding` defines, or an empty slice.
-fn byte_order_mark(encoding: &'static Encoding) -> &'static [u8] {
+pub(crate) fn byte_order_mark(encoding: &'static Encoding) -> &'static [u8] {
     if encoding == UTF_8 {
         b"\xEF\xBB\xBF"
     } else if encoding == UTF_16LE {
@@ -398,7 +428,7 @@ fn byte_order_mark(encoding: &'static Encoding) -> &'static [u8] {
     }
 }
 
-fn to_u64(value: usize) -> u64 {
+pub(crate) fn to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
@@ -558,6 +588,36 @@ impl<S: ByteSource> PagedReader<S> {
 
     pub fn dialect(&self) -> &Dialect {
         &self.dialect
+    }
+
+    pub(crate) fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// The length of the source in bytes, as of opening or the last
+    /// invalidation. Every byte range this reader returns was read against a
+    /// source of this length, which is what [`crate::EditSet::new`] takes.
+    pub fn source_length(&self) -> u64 {
+        self.length
+    }
+
+    /// Calls `visit` with the source offset and the raw bytes, terminator
+    /// included, of every record in source order. The header is the first
+    /// record visited. The index and the read position are left untouched.
+    pub(crate) fn visit_raw_records<E: From<ReadError>>(
+        &self,
+        mut visit: impl FnMut(u64, &[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut cursor = Cursor::at(self.byte_order_mark_length);
+
+        while let Some(length) = self.next_record(&mut cursor)? {
+            let record = cursor.remaining().get(..length).unwrap_or_default();
+
+            visit(cursor.offset(), record)?;
+            cursor.consume(length);
+        }
+
+        Ok(())
     }
 
     pub fn source(&self) -> &S {
