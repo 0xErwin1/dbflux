@@ -514,6 +514,31 @@ fn the_save_of_a_confirmed_quit_saves_without_closing_the_tab(cx: &mut TestAppCo
     assert!(!asked_to_close(&events));
 }
 
+/// A close that asked to save is still running when the quit is confirmed.
+/// The quit's save joins it, and the tab still stays open once it lands.
+#[gpui::test]
+fn a_confirmed_quit_during_a_close_save_keeps_the_tab_open(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (document, window) = open_object(cx, connection.clone());
+    let (events, _subscription) = record_events(&document, window);
+    let pane = pane(&document, window);
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+
+    let started = window.update(|window, cx| {
+        let close_save = pane.save_for_close(window, cx);
+        let quit_save = pane.save_for_quit(window, cx);
+
+        close_save && quit_save
+    });
+    window.run_until_parked();
+
+    assert!(started);
+    assert_eq!(connection.store.bytes(), EDITED);
+    assert_eq!(save_results(&events), [true]);
+    assert!(!asked_to_close(&events));
+}
+
 #[gpui::test]
 fn the_discard_of_a_confirmed_quit_drops_the_edits_and_the_flush_writes_nothing(
     cx: &mut TestAppContext,
