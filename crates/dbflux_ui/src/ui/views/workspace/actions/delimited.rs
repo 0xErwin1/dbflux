@@ -254,6 +254,7 @@ mod tests {
         assert_eq!(toast_count(window), 1);
     }
 
+    #[cfg(unix)]
     #[gpui::test]
     fn two_spellings_of_one_file_share_a_tab(cx: &mut TestAppContext) {
         let (workspace, window) = new_workspace(cx);
