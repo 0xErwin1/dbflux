@@ -139,6 +139,22 @@ impl DelimitedDocument {
         }
     }
 
+    /// Stages the value of an open inline editor, as Enter does, and works
+    /// out the dirty state again, so a check that follows sees it.
+    pub(super) fn commit_active_inline_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(table_state) = self.loaded().map(|loaded| loaded.table_state.clone()) else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            if state.is_editing() {
+                state.stop_editing(true, cx);
+            }
+        });
+
+        self.refresh_dirty(cx);
+    }
+
     /// Makes the table editable or read-only as [`Self::can_edit`] says.
     pub(super) fn sync_table_editing(&mut self, cx: &mut Context<Self>) {
         let can_edit = self.can_edit();

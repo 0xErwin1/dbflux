@@ -1087,6 +1087,75 @@ fn a_dialect_override_is_refused_while_dirty_and_works_after_a_discard(cx: &mut 
     assert_eq!(toast_count(window), 1);
 }
 
+/// Types `text` into the inline editor of the cell at `row`, `col` and leaves
+/// the editor open, as a user does before pressing Enter.
+fn type_without_committing(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+    row: usize,
+    col: usize,
+    text: &str,
+) {
+    let table_state = table_state(document, window);
+
+    window.update(|window, cx| {
+        table_state.update(cx, |state, cx| {
+            assert!(state.start_editing(CellCoord::new(row, col), window, cx));
+
+            let input = state
+                .cell_input()
+                .cloned()
+                .expect("a short cell is edited inline");
+
+            input.update(cx, |input, cx| {
+                input.set_value(text.to_string(), window, cx)
+            });
+        });
+    });
+    window.run_until_parked();
+}
+
+/// A value still in the inline editor is a pending edit too: a dialect
+/// override or a reload commits it first, then refuses the reread instead
+/// of dropping it.
+#[gpui::test]
+fn a_reread_commits_the_open_inline_edit_and_is_refused(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("edit-reread-open-editor");
+    let path = local_file(&directory, "cities.csv", CITIES);
+
+    let (document, window) = open_local(cx, path.clone());
+
+    type_without_committing(&document, window, 0, 1, "Cusco");
+
+    set_overrides(
+        &document,
+        window,
+        DialectOverrides {
+            has_header: Some(false),
+            ..DialectOverrides::default()
+        },
+    );
+
+    assert_eq!(toast_count(window), 1);
+    assert!(is_dirty(&document, window));
+    assert_eq!(row_count(&document, window), 2);
+
+    type_without_committing(&document, window, 1, 1, "Oslo");
+
+    window.update(|_, cx| document.update(cx, |document, cx| document.reload(cx)));
+    window.run_until_parked();
+
+    assert_eq!(toast_count(window), 2);
+    assert_eq!(
+        last_toast_title(window).as_deref(),
+        Some("Could not re-read cities.csv")
+    );
+
+    save(&document, window);
+
+    assert_eq!(read(&path), b"name,city\nAna,Cusco\nBo,Oslo\n");
+}
+
 #[gpui::test]
 fn discard_drops_row_edits_column_changes_and_the_undo_history(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("edit-discard");

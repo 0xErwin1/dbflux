@@ -1255,13 +1255,16 @@ impl DelimitedDocument {
     /// without reading anything.
     ///
     /// Any other override is refused and reported while the document has
-    /// unsaved changes or a save runs, because the reread would drop them. The table is
+    /// unsaved changes or a save runs, because the reread would drop them. A
+    /// value still in the inline editor is committed first and counts. The table is
     /// read-only while a reread runs, for the same reason.
     ///
     /// An object is read through the live connection of its profile, as a
     /// further page is.
     pub fn set_dialect_overrides(&mut self, overrides: DialectOverrides, cx: &mut Context<Self>) {
         let title = self.title();
+
+        self.commit_active_inline_edit(cx);
         let holds_changes = self.is_dirty() || self.saving;
 
         let Some(loaded) = self.loaded_mut() else {
@@ -1325,7 +1328,8 @@ impl DelimitedDocument {
     ///
     /// Refused and reported while the document has unsaved changes or a
     /// save runs, because the reread drops every pending edit: the user
-    /// saves or discards them first. Replaces a reread that is running. An
+    /// saves or discards them first. A value still in the inline editor is
+    /// committed first and counts. Replaces a reread that is running. An
     /// object is read through the live connection of its profile.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let title = self.title();
@@ -1333,6 +1337,8 @@ impl DelimitedDocument {
         if self.loaded().is_none() {
             return;
         }
+
+        self.commit_active_inline_edit(cx);
 
         if self.is_dirty() || self.saving {
             report_error(unsaved_changes_block_reread_error(&title), cx);
