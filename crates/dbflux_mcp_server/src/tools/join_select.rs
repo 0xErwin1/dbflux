@@ -6,13 +6,17 @@
 //! identifiers and are quoted by the dialect, the join condition is parsed
 //! into column comparisons, and filter values are rendered as dialect
 //! literals.
+//!
+//! A call without joins takes the same path when `columns` names a
+//! pseudo-column, because the browse path reads `SELECT *`, which never
+//! returns one.
 
 use std::sync::Arc;
 
 use dbflux_core::{
     ColumnMeta, ColumnRef, Comparator, Connection, ExecutionClassification, FilterNode,
-    JoinComparison, JoinKind, JoinStep, ProjectedColumn, Projection, QueryRequest, QueryResult,
-    SemanticFilter, SortEntry, SourceTable, SqlDialect, TableRef, VisualQuerySpec,
+    JoinComparison, JoinKind, JoinStep, ProjectedColumn, Projection, QueryGenerator, QueryRequest,
+    QueryResult, SemanticFilter, SortEntry, SourceTable, SqlDialect, TableRef, VisualQuerySpec,
     VisualSortDirection, WhereOperator, classify_query_for_governance, is_plain_sql_identifier,
     join_on_conditions, parse_join_condition, semantic_filter_to_filter_node,
 };
@@ -42,6 +46,39 @@ pub(crate) struct JoinedSelect<'a> {
     pub database: Option<&'a str>,
 }
 
+/// Why a `select_data` call runs as a generated SELECT, which words its
+/// refusals.
+#[derive(Clone, Copy)]
+pub(crate) enum QueryShape {
+    Joined,
+
+    /// A call without joins whose `columns` names a pseudo-column.
+    PseudoColumns,
+}
+
+impl QueryShape {
+    fn condition(self) -> &'static str {
+        match self {
+            Self::Joined => "when joins are used",
+            Self::PseudoColumns => "when columns names a pseudo-column",
+        }
+    }
+
+    fn filter_context(self) -> &'static str {
+        match self {
+            Self::Joined => "with joins",
+            Self::PseudoColumns => "with a pseudo-column in columns",
+        }
+    }
+
+    fn query_name(self) -> &'static str {
+        match self {
+            Self::Joined => "generated join query",
+            Self::PseudoColumns => "generated query",
+        }
+    }
+}
+
 /// A table of the query: its name and the alias the generated SQL gives it.
 struct ScopedTable {
     name: String,
@@ -51,6 +88,7 @@ struct ScopedTable {
 /// The tables a column reference can name, main table first.
 struct JoinScope {
     tables: Vec<ScopedTable>,
+    shape: QueryShape,
 }
 
 impl JoinScope {
@@ -100,7 +138,7 @@ impl JoinScope {
     /// Resolves a column written as `qualifier.column` or `column`. A bare
     /// column belongs to the main table.
     fn resolve(&self, qualifier: Option<&str>, column: &str) -> Result<(String, String), String> {
-        require_plain_identifier("column", column)?;
+        require_plain_identifier("column", column, self.shape)?;
 
         let alias = match qualifier {
             Some(qualifier) => self.alias_of(qualifier)?,
@@ -123,24 +161,29 @@ impl JoinScope {
 /// identifier cannot close the dialect's quoting and cannot contain a
 /// parameter placeholder (`?`, `$1`, `@p1`), which the generator would
 /// otherwise replace with a filter value inside the identifier.
-fn require_plain_identifier(kind: &str, value: &str) -> Result<(), String> {
+fn require_plain_identifier(kind: &str, value: &str, shape: QueryShape) -> Result<(), String> {
     if is_plain_sql_identifier(value) {
         return Ok(());
     }
 
     Err(format!(
-        "{kind} '{value}' must be a plain identifier when joins are used \
-         (letters, digits and underscores, not starting with a digit)"
+        "{kind} '{value}' must be a plain identifier {} \
+         (letters, digits and underscores, not starting with a digit)",
+        shape.condition()
     ))
 }
 
-fn require_plain_table(table: &TableRef, dialect: &dyn SqlDialect) -> Result<(), String> {
+fn require_plain_table(
+    table: &TableRef,
+    dialect: &dyn SqlDialect,
+    shape: QueryShape,
+) -> Result<(), String> {
     if let Some(schema) = &table.schema {
-        require_plain_identifier("schema", schema)?;
+        require_plain_identifier("schema", schema, shape)?;
         require_schema_kept(schema, &table.name, dialect)?;
     }
 
-    require_plain_identifier("table", &table.name)
+    require_plain_identifier("table", &table.name, shape)
 }
 
 /// Refuses a schema-qualified table on a dialect that renders the table name
@@ -161,14 +204,14 @@ fn require_schema_kept(schema: &str, table: &str, dialect: &dyn SqlDialect) -> R
 /// driver code that switches databases.
 const DATABASE_NAME_FORBIDDEN: [char; 7] = ['`', '"', '\'', '[', ']', '\\', ';'];
 
-/// Checks the `database` argument of a call with joins before it reaches the
+/// Checks the `database` argument of a generated SELECT before it reaches the
 /// driver. Database names are not held to the plain-identifier rule, because
 /// engines accept names with hyphens, dots and spaces. Only characters that
 /// can break quoting are refused: quotes of every dialect, brackets,
 /// backslash, semicolon and control characters.
-pub(super) fn require_safe_database_name(database: &str) -> Result<(), String> {
+pub(super) fn require_safe_database_name(database: &str, shape: QueryShape) -> Result<(), String> {
     if database.is_empty() {
-        return Err("database must not be empty when joins are used".to_string());
+        return Err(format!("database must not be empty {}", shape.condition()));
     }
 
     match database
@@ -176,7 +219,8 @@ pub(super) fn require_safe_database_name(database: &str) -> Result<(), String> {
         .find(|character| character.is_control() || DATABASE_NAME_FORBIDDEN.contains(character))
     {
         Some(character) => Err(format!(
-            "database name contains {character:?}, which is not accepted when joins are used"
+            "database name contains {character:?}, which is not accepted {}",
+            shape.condition()
         )),
         None => Ok(()),
     }
@@ -203,11 +247,11 @@ fn join_step(
     dialect: &dyn SqlDialect,
 ) -> Result<JoinStep, String> {
     let kind = join_kind(&join.r#type)?;
-    require_plain_table(target, dialect)?;
+    require_plain_table(target, dialect, scope.shape)?;
 
     let alias = match &join.alias {
         Some(alias) => {
-            require_plain_identifier("alias", alias)?;
+            require_plain_identifier("alias", alias, scope.shape)?;
             alias.clone()
         }
         None => target.name.clone(),
@@ -265,7 +309,7 @@ fn projection(request: &JoinedSelect<'_>, scope: &JoinScope) -> Result<Projectio
 
     for (join, table) in request.joins.iter().zip(scope.tables.iter().skip(1)) {
         for column in join.columns.as_deref().unwrap_or_default() {
-            require_plain_identifier("column", column)?;
+            require_plain_identifier("column", column, scope.shape)?;
             entries.push(format!("{}.{column}", table.alias));
         }
     }
@@ -349,7 +393,7 @@ fn filter_node(
         scope.resolve(column.table.as_deref(), &column.name)
     })
     .map(Some)
-    .map_err(|error| format!("Filter error with joins: {error}"))
+    .map_err(|error| format!("Filter error {}: {error}", scope.shape.filter_context()))
 }
 
 /// Translates the call into the spec the generator renders. `join_tables`
@@ -360,11 +404,12 @@ fn build_spec(
     source: &TableRef,
     join_tables: &[TableRef],
     dialect: &dyn SqlDialect,
+    shape: QueryShape,
 ) -> Result<VisualQuerySpec, String> {
-    require_plain_table(source, dialect)?;
+    require_plain_table(source, dialect, shape)?;
 
     if request.limit == 0 {
-        return Err("limit must be at least 1 when joins are used".to_string());
+        return Err(format!("limit must be at least 1 {}", shape.condition()));
     }
 
     let mut scope = JoinScope {
@@ -372,6 +417,7 @@ fn build_spec(
             name: source.name.clone(),
             alias: source.name.clone(),
         }],
+        shape,
     };
 
     let joins = request
@@ -533,6 +579,44 @@ fn unique_column_names(columns: &[ColumnMeta]) -> Vec<String> {
     names
 }
 
+/// Serializes the result of a generated SELECT without joins under the names
+/// `columns` wrote, in that order, the way the browse path does. The names
+/// are taken by position because the projection is explicit and the engine
+/// may report another name: SQLite names a projected `rowid` after the
+/// `INTEGER PRIMARY KEY` it aliases.
+fn serialize_projected_result(
+    result: &QueryResult,
+    columns: &[String],
+) -> Result<serde_json::Value, String> {
+    if result.columns.len() != columns.len() {
+        return Err(format!(
+            "Select error: the generated query returned {} columns for the {} requested",
+            result.columns.len(),
+            columns.len()
+        ));
+    }
+
+    let rows: Vec<serde_json::Value> = result
+        .rows
+        .iter()
+        .map(|row| {
+            let object = columns
+                .iter()
+                .zip(row.iter())
+                .map(|(name, cell)| (name.clone(), value_to_json(cell)))
+                .collect::<serde_json::Map<_, _>>();
+
+            serde_json::Value::Object(object)
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "columns": columns,
+        "rows": rows,
+        "row_count": result.rows.len(),
+    }))
+}
+
 impl DbFluxServer {
     /// Runs a `select_data` call that has joins and returns the result with
     /// the SQL that produced it. The columns the call names are checked
@@ -555,6 +639,50 @@ impl DbFluxServer {
         })
         .await?;
 
+        let result = Self::execute_generated(connection, query_request).await?;
+
+        Ok((serialize_joined_result(&result), sql))
+    }
+
+    /// Runs a `select_data` call without joins as a generated SELECT, so a
+    /// pseudo-column named in `columns` comes back, and returns the result
+    /// with the SQL that produced it. The caller has already checked the
+    /// columns. `None` means the connection cannot generate the query, and the
+    /// caller keeps the browse path.
+    pub(super) async fn select_data_projecting_pseudo_columns(
+        connection: &Arc<dyn Connection>,
+        request: JoinedSelect<'_>,
+        columns: &[String],
+    ) -> Result<Option<(serde_json::Value, String)>, CallFailure> {
+        let shape = QueryShape::PseudoColumns;
+
+        let Some(generator) = connection.query_generator() else {
+            return Ok(None);
+        };
+
+        if let Some(database) = request.database {
+            require_safe_database_name(database, shape)?;
+        }
+
+        let source = Self::table_ref_for_connection(connection, request.table);
+        let spec = build_spec(&request, &source, &[], connection.dialect(), shape)?;
+
+        let Some(query_request) =
+            Self::generate_read_query(connection, generator, &spec, request.database, shape)?
+        else {
+            return Ok(None);
+        };
+
+        let sql = query_request.sql.clone();
+        let result = Self::execute_generated(connection, query_request).await?;
+
+        Ok(Some((serialize_projected_result(&result, columns)?, sql)))
+    }
+
+    async fn execute_generated(
+        connection: &Arc<dyn Connection>,
+        query_request: QueryRequest,
+    ) -> Result<QueryResult, CallFailure> {
         let conn = connection.clone();
         #[allow(clippy::result_large_err)]
         let result = tokio::task::spawn_blocking(move || conn.execute(&query_request))
@@ -562,7 +690,7 @@ impl DbFluxServer {
             .map_err(|e| format!("Blocking task failed: {}", e))?
             .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
 
-        Ok((serialize_joined_result(&result), sql))
+        Ok(result)
     }
 
     /// Checks that the driver supports joins, generates the query and checks
@@ -572,9 +700,10 @@ impl DbFluxServer {
         connection: &Arc<dyn Connection>,
         request: &JoinedSelect<'_>,
     ) -> Result<(QueryRequest, Vec<ColumnReference>), String> {
-        let metadata = connection.metadata();
+        let shape = QueryShape::Joined;
 
-        let declares_joins = metadata
+        let declares_joins = connection
+            .metadata()
             .query
             .as_ref()
             .is_some_and(|query| query.supports_joins);
@@ -591,7 +720,26 @@ impl DbFluxServer {
             .map(|join| Self::table_ref_for_connection(connection, &join.table))
             .collect();
 
-        let spec = build_spec(request, &source, &join_tables, connection.dialect())?;
+        let spec = build_spec(request, &source, &join_tables, connection.dialect(), shape)?;
+
+        let query_request =
+            Self::generate_read_query(connection, generator, &spec, request.database, shape)?
+                .ok_or_else(|| JOINS_UNSUPPORTED.to_string())?;
+
+        Ok((query_request, spec_column_references(&spec)))
+    }
+
+    /// Renders `spec` through the connection's generator and returns it only
+    /// when it classifies as a read. `None` means the generator cannot render
+    /// a SELECT.
+    fn generate_read_query(
+        connection: &Arc<dyn Connection>,
+        generator: &dyn QueryGenerator,
+        spec: &VisualQuerySpec,
+        database: Option<&str>,
+        shape: QueryShape,
+    ) -> Result<Option<QueryRequest>, String> {
+        let metadata = connection.metadata();
 
         let declares_ilike = metadata
             .query
@@ -604,17 +752,19 @@ impl DbFluxServer {
                 .as_ref()
                 .is_some_and(|filter| uses_comparator(filter, Comparator::ILike))
         {
-            return Err(
-                "$ilike is not supported with joins on this connection, because its driver does \
-                 not declare case-insensitive matching. Use $like instead"
-                    .to_string(),
-            );
+            return Err(format!(
+                "$ilike is not supported {} on this connection, because its driver does \
+                 not declare case-insensitive matching. Use $like instead",
+                shape.filter_context()
+            ));
         }
 
-        let select = generator
-            .generate_select(&spec)
+        let Some(select) = generator
+            .generate_select(spec)
             .map_err(|error| format!("Select error: {error}"))?
-            .ok_or_else(|| JOINS_UNSUPPORTED.to_string())?;
+        else {
+            return Ok(None);
+        };
 
         let query_request = select.to_query_request(connection.dialect());
 
@@ -630,17 +780,17 @@ impl DbFluxServer {
             classification,
             ExecutionClassification::Metadata | ExecutionClassification::Read
         ) {
-            return Err(
-                "Select error: the generated join query is not a read-only query and was not run"
-                    .to_string(),
-            );
+            return Err(format!(
+                "Select error: the {} is not a read-only query and was not run",
+                shape.query_name()
+            ));
         }
 
-        let query_request = query_request
-            .with_database(request.database.map(str::to_string))
-            .with_confirmed_ceiling(ExecutionClassification::Read);
-
-        Ok((query_request, spec_column_references(&spec)))
+        Ok(Some(
+            query_request
+                .with_database(database.map(str::to_string))
+                .with_confirmed_ceiling(ExecutionClassification::Read),
+        ))
     }
 }
 
@@ -689,6 +839,7 @@ mod tests {
             &TableRef::with_schema("public", "users"),
             &join_tables,
             &DefaultSqlDialect,
+            QueryShape::Joined,
         )?;
 
         dbflux_core::SqlMutationGenerator::new(&DefaultSqlDialect)
@@ -916,7 +1067,7 @@ mod tests {
     fn database_names_that_can_break_quoting_are_rejected() {
         for accepted in ["analytics", "my-db", "sales.2024", "Sales Q1"] {
             assert!(
-                require_safe_database_name(accepted).is_ok(),
+                require_safe_database_name(accepted, QueryShape::Joined).is_ok(),
                 "{accepted} is a database name"
             );
         }
@@ -925,7 +1076,7 @@ mod tests {
             "", "a`b", "a\"b", "a'b", "a[b", "a]b", "a\\b", "a;b", "a\nb", "a\0b",
         ] {
             assert!(
-                require_safe_database_name(rejected).is_err(),
+                require_safe_database_name(rejected, QueryShape::Joined).is_err(),
                 "{rejected:?} must be rejected"
             );
         }

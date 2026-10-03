@@ -130,7 +130,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 当驱动使 `select_data`、`count_records`、`aggregate_data` 或 `describe_object` 调用失败，且所查询的数据库或 schema 的元数据中没有列出该表或集合时，错误信息会说明在哪里查找了这个名称，并列出最接近的已列出名称。错误信息的措辞是 "is not listed"（未列出），因为该表可能不存在，也可能是该连接无权访问它。如果调用没有传入 `database`，而服务器列出了多个数据库，错误信息还会提示该表可能位于另一个数据库中。对于表（不包括集合），`count_records` 和 `aggregate_data` 对 `where` 或 `order_by` 中引用的列做同样的处理。提示只包含客户端有权列出的名称：表名需要 `list_tables`，列名需要 `describe_object`，数据库信息需要 `list_databases`。驱动自身的错误文本保留在末尾。只有在驱动使调用失败之后才会执行这项查找，不提供这些元数据的驱动会返回原始错误。
 
-`select_data` 则在执行之前检查列。对于关系型表，以及所有带 `joins` 的调用，`columns`、`where` 或 `order_by` 中引用的每一列都会与其所属表的列元数据进行比较（不区分大小写）。未列出的列会被拒绝，错误信息包含同样的提示，并附上 "The query was not run."，查询不会执行。驱动为该表声明的伪列（例如 rowid 表上 SQLite 的 `rowid`、MySQL 的 `_rowid` 或 PostgreSQL 的 `ctid`）视为已列出，但只有带 `joins` 的调用才能在 `columns` 中返回它们。之所以需要这项检查，是因为有些引擎遇到未知列时不会报错：SQLite 会把它当作字符串，返回零行。没有 `describe_object` 权限时，拒绝信息不会列出任何其他列名。当驱动没有该表的列元数据，或者引用是嵌套路径或表达式时，会跳过检查，调用照常执行。调用中每个被引用了列的表需要一次列元数据查询。
+`select_data` 则在执行之前检查列。对于关系型表，以及所有带 `joins` 的调用，`columns`、`where` 或 `order_by` 中引用的每一列都会与其所属表的列元数据进行比较（不区分大小写）。未列出的列会被拒绝，错误信息包含同样的提示，并附上 "The query was not run."，查询不会执行。驱动为该表声明的伪列（例如 rowid 表上 SQLite 的 `rowid`、MySQL 的 `_rowid` 或 PostgreSQL 的 `ctid`）视为已列出。不带 `joins` 的调用若在 `columns` 中引用伪列，会像 join 一样以生成的 SELECT 执行，从而返回该值，此时 `where` 只接受 join 所接受的运算符。之所以需要这项检查，是因为有些引擎遇到未知列时不会报错：SQLite 会把它当作字符串，返回零行。没有 `describe_object` 权限时，拒绝信息不会列出任何其他列名。当驱动没有该表的列元数据，或者引用是嵌套路径或表达式时，会跳过检查，调用照常执行。调用中每个被引用了列的表需要一次列元数据查询。
 
 暂缓提供的工具（在 v1 中会在请求时明确拒绝）：
 

@@ -24,7 +24,7 @@ use crate::{
     server::DbFluxServer,
     state::ServerState,
     tools::{
-        join_select::{self, JoinedSelect},
+        join_select::{self, JoinedSelect, QueryShape},
         not_found::{self, CallFailure, ColumnCheck, ColumnReference, FailedCall},
     },
 };
@@ -316,9 +316,10 @@ impl DbFluxServer {
             .await
     }
 
-    /// Returns the result and, for a call with joins, the SQL that produced
-    /// it. A call without joins goes through the driver's browse path and
-    /// has no query text to record.
+    /// Returns the result and, for a generated SELECT, the SQL that produced
+    /// it. A call with joins, or without joins but with a pseudo-column in
+    /// `columns`, runs a generated SELECT. Any other call goes through the
+    /// driver's browse path and has no query text to record.
     #[allow(clippy::too_many_arguments)]
     async fn select_data_impl(
         state: ServerState,
@@ -342,7 +343,7 @@ impl DbFluxServer {
         if joins.is_some()
             && let Some(database) = database
         {
-            join_select::require_safe_database_name(database)?;
+            join_select::require_safe_database_name(database, QueryShape::Joined)?;
         }
 
         let connection = if let Some(target_db) = database {
@@ -406,7 +407,6 @@ impl DbFluxServer {
                     offset,
                 )
                 .await
-                .map(|value| (value, None))
             }
         };
 
@@ -436,7 +436,9 @@ impl DbFluxServer {
     }
 
     /// Handles select_data without joins through the driver's browse path,
-    /// after the column check of `check` passes.
+    /// after the column check of `check` passes. A call whose `columns` names
+    /// a pseudo-column of the table runs as a generated SELECT instead, when
+    /// the connection can generate one, because a browse never returns it.
     #[allow(clippy::too_many_arguments)]
     async fn select_data_single_source(
         check: ColumnCheck<'_>,
@@ -447,13 +449,34 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-    ) -> Result<serde_json::Value, CallFailure> {
+    ) -> Result<(serde_json::Value, Option<String>), CallFailure> {
         let connection = check.connection;
         let database = check.database;
 
-        not_found::check_columns(check).await?;
+        let pseudo_columns = not_found::check_columns(check).await?;
 
-        match connection.metadata().category {
+        if let Some(columns) = columns
+            && Self::projects_pseudo_column(columns, &pseudo_columns)
+        {
+            let request = JoinedSelect {
+                table,
+                columns: Some(columns),
+                filter: semantic_filter,
+                order_by,
+                limit,
+                offset,
+                joins: &[],
+                database,
+            };
+
+            if let Some((value, sql)) =
+                Self::select_data_projecting_pseudo_columns(connection, request, columns).await?
+            {
+                return Ok((value, Some(sql)));
+            }
+        }
+
+        let value = match connection.metadata().category {
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 Self::select_data_document(
                     connection,
@@ -487,7 +510,26 @@ impl DbFluxServer {
                 )
                 .await
             }
-        }
+        }?;
+
+        Ok((value, None))
+    }
+
+    /// Whether an entry of `columns` names one of `pseudo_columns`, the
+    /// references the column check found to be pseudo-columns.
+    fn projects_pseudo_column(columns: &[String], pseudo_columns: &[ColumnReference]) -> bool {
+        pseudo_columns.iter().any(|reference| {
+            let wanted = reference.column.to_lowercase();
+
+            columns.iter().any(|column| {
+                not_found::is_plain_identifier(column)
+                    && not_found::column_of_table(
+                        &ColumnRef::from_qualified(column),
+                        &reference.table,
+                    )
+                    .is_some_and(|name| name.to_lowercase() == wanted)
+            })
+        })
     }
 
     /// The table or collection a failed call targeted, as the not-found hint
@@ -1378,5 +1420,80 @@ mod tests {
         .expect("the plain select runs against SQLite");
 
         assert_eq!(plain_sql, None, "a call without joins records no query");
+    }
+
+    /// The generated SELECT that returns a projected pseudo-column must give
+    /// the same JSON as the browse path. The same request, without
+    /// pseudo-columns, goes through both paths here and the results are
+    /// compared whole: keys, column order and value encoding.
+    #[tokio::test]
+    async fn generated_select_returns_the_browse_shape() {
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            use rusqlite::Connection as RusqliteConnection;
+            let conn = RusqliteConnection::open(&db_path).expect("open sqlite");
+            conn.execute_batch(
+                "CREATE TABLE things (id INTEGER PRIMARY KEY, label TEXT, amount REAL, note TEXT, \
+                 data BLOB);
+                 INSERT INTO things VALUES (1, 'alpha', 1.5, NULL, x'0102');
+                 INSERT INTO things VALUES (2, 'beta', -2.25, 'it''s', NULL);
+                 INSERT INTO things VALUES (3, 'gamma', 0, 'x', x'ff');",
+            )
+            .expect("seed the table");
+        }
+
+        let state = build_sqlite_state_read(&connection_id, &db_path);
+        let connection = DbFluxServer::get_or_connect(state, &connection_id)
+            .await
+            .expect("connect");
+
+        let columns = vec![
+            "note".to_string(),
+            "amount".to_string(),
+            "id".to_string(),
+            "data".to_string(),
+            "label".to_string(),
+        ];
+        let filter = parse_semantic_filter_json(&serde_json::json!({ "id": { "$gte": 1 } }))
+            .expect("the filter parses");
+        let order_by = vec![OrderByItem {
+            column: "label".to_string(),
+            direction: Some("desc".to_string()),
+        }];
+
+        let browsed = DbFluxServer::select_data_table(
+            &connection,
+            "things",
+            Some(&columns),
+            filter.as_ref(),
+            Some(&order_by),
+            2,
+            1,
+        )
+        .await
+        .expect("the browse runs");
+
+        let request = JoinedSelect {
+            table: "things",
+            columns: Some(&columns),
+            filter: filter.as_ref(),
+            order_by: Some(&order_by),
+            limit: 2,
+            offset: 1,
+            joins: &[],
+            database: None,
+        };
+
+        let (generated, _) =
+            DbFluxServer::select_data_projecting_pseudo_columns(&connection, request, &columns)
+                .await
+                .expect("the generated select runs")
+                .expect("SQLite generates the select");
+
+        assert_eq!(browsed["row_count"], serde_json::json!(2), "{browsed}");
+        assert_eq!(generated, browsed);
     }
 }

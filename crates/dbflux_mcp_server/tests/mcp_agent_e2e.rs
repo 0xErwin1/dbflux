@@ -880,7 +880,8 @@ async fn tool_error(agent: &Agent, tool: &str, arguments: Value) -> String {
 /// A relational driver for the hint tests. Queries and `describe_table` fail
 /// with a generic query error, `count_table` with a permission error. The
 /// schema lists `public.users` and `public.orders`; `users` has the columns
-/// `id` and `email`, and `orders` reports an empty column list.
+/// `id` and `email` and the pseudo-column `rowid`, and `orders` reports an
+/// empty column list. The connection has no query generator.
 struct HintDriver {
     inner: dbflux_test_support::FakeDriver,
 }
@@ -1065,7 +1066,11 @@ impl dbflux_core::Connection for HintConnection {
         table: &str,
     ) -> Result<dbflux_core::TableInfo, dbflux_core::DbError> {
         match table {
-            "users" => Ok(hint_table(table, Some(&["id", "email"]))),
+            "users" => {
+                let mut users = hint_table(table, Some(&["id", "email"]));
+                users.pseudo_columns = Box::new(["rowid".to_string()]);
+                Ok(users)
+            }
             "orders" => Ok(hint_table(table, Some(&[]))),
             _ => Err(dbflux_core::DbError::object_not_found(table)),
         }
@@ -2217,26 +2222,144 @@ async fn select_data_accepts_sqlite_rowid_on_a_rowid_table() {
     );
 }
 
-/// Without joins the rows come from a `SELECT *` browse and `columns` is
-/// applied to the result, which never carries a pseudo-column. The call passes
-/// the column check and then fails with an explicit error instead of a
-/// silent result.
 #[tokio::test]
-async fn select_data_without_joins_cannot_project_a_pseudo_column() {
+async fn select_data_without_joins_returns_a_projected_pseudo_column() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    let selected = agent
+        .call_json(
+            "select_data",
+            json!({
+                "connection_id": connection_id,
+                "table": "notes",
+                "columns": ["rowid", "label"],
+                "where": { "rowid": { "$gte": 2 } },
+                "order_by": [{ "column": "rowid", "direction": "desc" }],
+                "limit": 2
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        selected,
+        json!({
+            "columns": ["rowid", "label"],
+            "rows": [
+                { "rowid": 3, "label": "gamma" },
+                { "rowid": 2, "label": "beta" }
+            ],
+            "row_count": 2
+        })
+    );
+
+    let paged = agent
+        .call_json(
+            "select_data",
+            json!({
+                "connection_id": connection_id,
+                "table": "notes",
+                "columns": ["label", "OID"],
+                "order_by": [{ "column": "label" }],
+                "limit": 1,
+                "offset": 1
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        paged,
+        json!({
+            "columns": ["label", "OID"],
+            "rows": [{ "label": "beta", "OID": 2 }],
+            "row_count": 1
+        })
+    );
+}
+
+/// SQLite names a projected `rowid` after the `INTEGER PRIMARY KEY` it
+/// aliases. The result still uses the name the call wrote.
+#[tokio::test]
+async fn a_projected_rowid_keeps_its_requested_name_when_it_aliases_a_column() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, false).await;
+
+    let selected = agent
+        .call_json(
+            "select_data",
+            json!({
+                "connection_id": connection_id,
+                "table": "items",
+                "columns": ["_rowid_", "label"],
+                "where": { "label": "beta" }
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        selected,
+        json!({
+            "columns": ["_rowid_", "label"],
+            "rows": [{ "_rowid_": 2, "label": "beta" }],
+            "row_count": 1
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_projected_pseudo_column_records_the_generated_query() {
+    let (agent, connection_id, _directory) = start_rowid_agent().await;
+
+    agent
+        .call_json(
+            "select_data",
+            json!({ "connection_id": connection_id, "table": "notes", "columns": ["label"] }),
+        )
+        .await;
+    let browsed = latest_select_data_audit_details(&agent).await;
+    assert!(
+        browsed.get("query").is_none(),
+        "a call without a projected pseudo-column keeps the browse path: {browsed}"
+    );
+
+    agent
+        .call_json(
+            "select_data",
+            json!({ "connection_id": connection_id, "table": "notes", "columns": ["rowid"] }),
+        )
+        .await;
+    let generated = latest_select_data_audit_details(&agent).await;
+    assert!(
+        generated["query"]
+            .as_str()
+            .is_some_and(|query| query.starts_with("[FINGERPRINT:")),
+        "a projected pseudo-column records its generated query: {generated}"
+    );
+}
+
+#[tokio::test]
+async fn a_projected_pseudo_column_refuses_filters_the_generated_query_cannot_express() {
     let (agent, connection_id, _directory) = start_rowid_agent().await;
 
     let message = tool_error(
         &agent,
         "select_data",
-        json!({ "connection_id": connection_id, "table": "notes", "columns": ["rowid", "label"] }),
+        json!({
+            "connection_id": connection_id,
+            "table": "notes",
+            "columns": ["rowid", "label"],
+            "where": { "label": { "$regex": "^a" } }
+        }),
     )
     .await;
 
     assert!(
-        message.starts_with("Select error: column 'rowid' not found in result set"),
+        message.starts_with("Filter error with a pseudo-column in columns: "),
         "got: {message}"
     );
-    assert!(!message.contains(NOT_RUN), "got: {message}");
 }
 
 #[tokio::test]
@@ -2339,4 +2462,29 @@ async fn failure_hint_does_not_blame_a_declared_pseudo_column() {
 
     assert!(!message.contains("not listed"), "got: {message}");
     assert!(!message.contains("Did you mean"), "got: {message}");
+}
+
+#[tokio::test]
+async fn a_projected_pseudo_column_keeps_the_browse_path_without_a_query_generator() {
+    let (agent, connection_id) = start_hint_agent(ALLOW_ALL_ROLE, &["postgres"]).await;
+
+    let browsed = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "users", "columns": ["id"] }),
+    )
+    .await;
+
+    let projected = tool_error(
+        &agent,
+        "select_data",
+        json!({ "connection_id": connection_id, "table": "users", "columns": ["id", "rowid"] }),
+    )
+    .await;
+
+    assert!(browsed.starts_with("Select error: "), "got: {browsed}");
+    assert_eq!(
+        projected, browsed,
+        "without a generator the call takes the browse path and fails like it"
+    );
 }

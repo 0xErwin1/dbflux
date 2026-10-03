@@ -149,6 +149,12 @@ impl TableColumns {
     fn lists(&self, name: &str) -> bool {
         contains_name(&self.columns, name) || contains_name(&self.pseudo_columns, name)
     }
+
+    /// Whether `name` is a pseudo-column and not a listed column, which a
+    /// table may have under the same name.
+    fn is_pseudo_column(&self, name: &str) -> bool {
+        !contains_name(&self.columns, name) && contains_name(&self.pseudo_columns, name)
+    }
 }
 
 /// Where a name is looked up.
@@ -239,7 +245,8 @@ pub(crate) fn is_checkable_column(text: &str) -> bool {
 }
 
 /// Refuses the call when it names a column its table's metadata does not
-/// list, and returns the refusal message.
+/// list, and returns the refusal message. On success, returns the references
+/// that name a pseudo-column of their table rather than a listed column.
 ///
 /// Some engines do not fail on an unknown column: SQLite reads an unknown
 /// double-quoted identifier as a string literal, so a misspelled column in a
@@ -256,7 +263,7 @@ pub(crate) fn is_checkable_column(text: &str) -> bool {
 /// The refusal names the closest and the available columns only when the
 /// client may call `describe_object`. Without that permission it says only
 /// that the column is not listed for the table.
-pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<(), String> {
+pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<Vec<ColumnReference>, String> {
     let mut tables: Vec<TableRef> = Vec::new();
 
     for reference in &check.references {
@@ -266,7 +273,7 @@ pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<(), String> 
     }
 
     if tables.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let connection = check.connection.clone();
@@ -309,7 +316,21 @@ pub(crate) async fn check_columns(check: ColumnCheck<'_>) -> Result<(), String> 
         }
     }
 
-    Ok(())
+    let pseudo_columns = check
+        .references
+        .iter()
+        .filter(|reference| {
+            listed.iter().any(|(table, columns)| {
+                &reference.table == table
+                    && columns
+                        .as_ref()
+                        .is_some_and(|columns| columns.is_pseudo_column(&reference.column))
+            })
+        })
+        .cloned()
+        .collect();
+
+    Ok(pseudo_columns)
 }
 
 /// Reads the column names of `table` for the column check. `None` means the

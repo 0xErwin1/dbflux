@@ -706,7 +706,7 @@ The query was not run.
 | Comparison | Ignores case, because the driver metadata does not say how the engine folds a column name. A name that differs only in case runs |
 | Skipped, the call runs as before | The driver has no column metadata for the table, the lookup fails, the metadata lists no columns, the table is qualified on a driver without schemas, or the reference is a nested path, an expression or a name qualified with another table |
 | Cost | One column lookup (`table_details`) per table the call names a column of, with no cache. A call that names no column makes no lookup, and a call that fails after the check does not look the columns up again |
-| Pseudo-columns | A name the driver declares for the table, such as SQLite's `rowid` on a rowid table, MySQL's `_rowid` or PostgreSQL's `ctid`, counts as listed and is never suggested, although only a call with `joins` can return one in `columns` |
+| Pseudo-columns | A name the driver declares for the table, such as SQLite's `rowid` on a rowid table, MySQL's `_rowid` or PostgreSQL's `ctid`, counts as listed and is never suggested. Without `joins`, a call whose `columns` names one runs as a generated SELECT, like a join, so the value comes back; its `where` then accepts only the operators a join accepts, and a connection that cannot generate the query keeps the browse path |
 
 Names match without regard to case or separators, so `userId` suggests `user_id`.
 
