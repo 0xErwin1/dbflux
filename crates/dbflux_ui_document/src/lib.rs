@@ -17,6 +17,7 @@ mod data_grid_panel;
 mod data_view;
 pub mod data_view_trait;
 pub mod dedup;
+pub mod delimited;
 pub(crate) mod document_builder;
 pub mod dump_analysis;
 pub mod query_builder;
