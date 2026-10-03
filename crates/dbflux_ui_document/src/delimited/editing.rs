@@ -6,9 +6,18 @@
 //! same buffer, because the anchor of an inserted row is the document's to
 //! choose. A file has no null, so set null stages an empty field.
 //!
+//! A cell over the table's inline limit, or holding a line break, is edited
+//! in the modal cell editor the data grid uses, as plain text. Its value is
+//! staged as the inline editor stages one, and only while the rows can be
+//! edited: the table asks for no editor while they cannot, and a value saved
+//! from an editor that was open when the table became read-only is refused
+//! and reported.
+//!
 //! The document is dirty while the table holds a pending edit or the page
 //! model holds a column change. A staged edit emits no event, so the dirty
-//! state is worked out again whenever the table notifies.
+//! state is worked out again whenever the table notifies. The table's save
+//! key knows only row edits, so the document takes it first whenever it is
+//! dirty, which also saves a change that touches only the columns.
 //!
 //! A save builds the edit set from the page model and the edit buffer,
 //! writes it through the storage layer on the background executor and, once
@@ -22,11 +31,13 @@
 
 use std::sync::Arc;
 
+use dbflux_components::components::data_table::actions::SaveRow;
 use dbflux_components::components::data_table::model::{
     CellValue, EditBuffer, InsertAnchor, VisualRowSource,
 };
 use dbflux_components::components::data_table::{DataTableEvent, DataTableState, ModelSwap};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
 use dbflux_core::observability::EventSeverity;
 use dbflux_delimited::EditSet;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -43,6 +54,77 @@ use crate::dedup::DelimitedFileKey;
 use crate::handle::DocumentEvent;
 use crate::object_text::record_save_audit;
 use crate::pane::PaneAction;
+
+/// A cell the table asked the modal editor for: its position as the table
+/// shows it and the value the cell holds now, edits included.
+pub(super) struct CellEditRequest {
+    row: usize,
+    col: usize,
+    value: String,
+}
+
+/// The row of the table a cell of the modal editor belongs to, kept by its
+/// identity rather than its position, which an inserted or removed row
+/// shifts.
+#[derive(Debug, Clone, PartialEq)]
+enum CellEditRow {
+    /// A loaded record, by its index among the records.
+    Base(usize),
+
+    /// A pending insert, by its index in the edit buffer, with its anchor
+    /// and the text of its cells when the editor opened. A removed insert
+    /// shifts the indices after it, so the row is found again only while the
+    /// insert at that index is still the one the editor was opened on.
+    Insert {
+        index: usize,
+        anchor: InsertAnchor,
+        cells: Vec<String>,
+    },
+}
+
+/// The cell the open modal editor edits: the visual row it was opened at,
+/// which its save event names, the row's identity, the column, and the
+/// reader and discard counts of the rows it was opened on.
+pub(super) struct CellEditTarget {
+    opened_at: usize,
+    row: CellEditRow,
+    col: usize,
+    reader_epoch: u64,
+    discard_generation: u64,
+}
+
+/// Why a value saved from the modal cell editor was not staged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CellEditRefusal {
+    /// The file was read again, after a save or a reload, and its rows were
+    /// replaced.
+    RowsReadAgain,
+
+    /// The pending changes were discarded.
+    ChangesDiscarded,
+
+    /// A save or a reread runs, so the rows cannot be edited now.
+    ReadOnly,
+
+    /// The row the cell belongs to was removed.
+    RowRemoved,
+}
+
+impl CellEditRefusal {
+    /// What the user is told about the refusal.
+    pub(super) fn cause(self) -> String {
+        match self {
+            Self::RowsReadAgain => {
+                dbflux_i18n::t!("document.delimited.error.edit_rows_read_again")
+            }
+            Self::ChangesDiscarded => {
+                dbflux_i18n::t!("document.delimited.error.edit_changes_discarded")
+            }
+            Self::ReadOnly => dbflux_i18n::t!("document.delimited.error.edit_while_read_only"),
+            Self::RowRemoved => dbflux_i18n::t!("document.delimited.error.edit_row_removed"),
+        }
+    }
+}
 
 /// What a background save hands to the foreground.
 enum SaveResult {
@@ -112,10 +194,35 @@ impl DelimitedDocument {
             .is_some_and(|loaded| loaded.can_save_in_place())
     }
 
-    /// Whether the pending changes can be saved or discarded now: there are
-    /// some, and neither a save nor a reread runs.
-    pub(super) fn can_save_or_discard(&self) -> bool {
-        self.is_dirty() && !self.saving && !self.is_rereading()
+    /// Whether the pending changes can be saved now: there are some, and
+    /// neither a save, a reread nor the load of the rest of the file runs.
+    /// This is every state in which [`Self::save`] writes.
+    pub(super) fn can_save(&self) -> bool {
+        self.is_dirty() && !self.saving && !self.is_rereading() && !self.is_loading_rest()
+    }
+
+    /// Whether the pending changes can be discarded now: there are some,
+    /// neither a save nor a reread runs, and no dialog is open.
+    pub(super) fn can_discard(&self) -> bool {
+        self.is_dirty() && !self.saving && !self.is_rereading() && !self.has_open_dialog()
+    }
+
+    /// Whether a dialog of the document is open or asked for: the modal cell
+    /// editor, the column prompt or the offer to load the rest of the file.
+    /// What a dialog does belongs to the rows and columns as they were when
+    /// it opened, so nothing that changes them runs meanwhile.
+    pub(super) fn has_open_dialog(&self) -> bool {
+        self.cell_edit_target.is_some()
+            || self.pending_cell_edit.is_some()
+            || self.column_prompt.is_some()
+            || self.pending_column_prompt.is_some()
+            || self.load_rest_prompt.is_some()
+    }
+
+    /// Whether the rows or the columns can be changed now: they can be
+    /// edited and no dialog is open.
+    pub(super) fn can_change_rows(&self) -> bool {
+        self.can_edit() && !self.has_open_dialog()
     }
 
     /// Works out the dirty state again and tells the tab when it changed.
@@ -197,12 +304,22 @@ impl DelimitedDocument {
         self.loaded().map(|loaded| loaded.table_state.clone())
     }
 
+    /// The table, while its rows can be changed: inserted, duplicated,
+    /// deleted or cleared.
+    fn table_for_row_change(&self) -> Option<Entity<DataTableState>> {
+        if !self.can_change_rows() {
+            return None;
+        }
+
+        self.editable_table()
+    }
+
     /// The table, while a row can be added to it. A table without columns
     /// gets none: the row would have no field, which the writer renders as
     /// an empty quoted field and the saved file reads back as no record.
     /// That refusal is reported.
     fn table_taking_a_row(&self, cx: &mut Context<Self>) -> Option<Entity<DataTableState>> {
-        let table_state = self.editable_table()?;
+        let table_state = self.table_for_row_change()?;
 
         if table_state.read(cx).col_count() == 0 {
             let summary = crate::labels::delimited_add_row_failed_message(&self.title());
@@ -219,13 +336,22 @@ impl DelimitedDocument {
         Some(table_state)
     }
 
-    /// Carries out a row operation or a save the table asks for.
-    ///
-    /// A cell over the table's inline limit, or holding a line break, asks
-    /// for a modal editor with `ModalEditRequested`. The document has none
-    /// yet, so that request opens nothing and stages nothing.
+    /// Carries out a row operation or a save the table asks for, opens the
+    /// modal editor for a cell over the table's inline limit or holding a
+    /// line break, and asks for a new name for a column whose header was
+    /// right-clicked.
     pub(super) fn handle_table_event(&mut self, event: &DataTableEvent, cx: &mut Context<Self>) {
         match event {
+            DataTableEvent::ModalEditRequested {
+                row, col, value, ..
+            } => self.request_cell_editor(*row, *col, value.clone(), cx),
+
+            DataTableEvent::ContextMenuRequested {
+                col,
+                is_column_header: true,
+                ..
+            } => self.request_rename_column(*col, cx),
+
             DataTableEvent::AddRowRequested(row) => self.add_row_below(*row, cx),
             DataTableEvent::DuplicateRowRequested(row) => self.duplicate_row(*row, cx),
             DataTableEvent::DeleteRowRequested(row) => self.delete_row(*row, cx),
@@ -241,6 +367,185 @@ impl DelimitedDocument {
 
             _ => {}
         }
+    }
+
+    // -- The modal cell editor ------------------------------------------------
+
+    /// The modal cell editor, once a cell was opened in it.
+    pub fn cell_editor(&self) -> Option<&Entity<CellEditorModal>> {
+        self.cell_editor.as_ref()
+    }
+
+    /// Opens the modal editor on the cell shown at `visual_row`, `col`,
+    /// holding `value`, on the next render. Ignored while the rows cannot be
+    /// edited.
+    fn request_cell_editor(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_edit() {
+            return;
+        }
+
+        self.pending_cell_edit = Some(CellEditRequest {
+            row: visual_row,
+            col,
+            value,
+        });
+        cx.notify();
+    }
+
+    /// Opens the cell asked for since the last render in the modal editor,
+    /// in its plain-text mode: a delimited field is text. Does nothing when
+    /// the rows cannot be edited any more.
+    pub(super) fn open_pending_cell_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(request) = self.pending_cell_edit.take() else {
+            return;
+        };
+
+        if !self.can_edit() {
+            return;
+        }
+
+        let Some(loaded) = self.loaded() else {
+            return;
+        };
+
+        let row = cell_edit_row(loaded.table_state.read(cx).edit_buffer(), request.row);
+
+        let Some(row) = row else {
+            return;
+        };
+
+        let target = CellEditTarget {
+            opened_at: request.row,
+            row,
+            col: request.col,
+            reader_epoch: loaded.reader_epoch,
+            discard_generation: loaded.discard_generation,
+        };
+
+        let editor = self.cell_editor_entity(window, cx);
+        self.cell_edit_target = Some(target);
+
+        editor.update(cx, |editor, cx| {
+            editor.open(
+                request.row,
+                request.col,
+                request.value,
+                false,
+                None,
+                window,
+                cx,
+            );
+        });
+    }
+
+    /// The modal cell editor, built and subscribed to the first time.
+    fn cell_editor_entity(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<CellEditorModal> {
+        if let Some(editor) = &self.cell_editor {
+            return editor.clone();
+        }
+
+        let editor = cx.new(|cx| CellEditorModal::new(window, cx));
+
+        cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, event: &CellEditorSaveEvent, _window, cx| {
+                this.apply_cell_editor_value(event, cx);
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, _: &CellEditorClosedEvent, window, cx| {
+                this.cell_edit_target = None;
+                this.focus(window, cx);
+            },
+        )
+        .detach();
+
+        self.cell_editor = Some(editor.clone());
+        editor
+    }
+
+    /// Stages the value the modal editor saved for its cell, as the inline
+    /// editor stages one: a value equal to the record's own is no edit. The
+    /// row is found again by its identity, so a row inserted or removed
+    /// elsewhere meanwhile does not move the value to another row.
+    ///
+    /// Refused and reported, with its own reason, when the rows were read
+    /// again or the changes discarded since the editor opened, when a save or
+    /// a reread runs, or when the row is gone. Nothing is staged then.
+    fn apply_cell_editor_value(&mut self, event: &CellEditorSaveEvent, cx: &mut Context<Self>) {
+        let Some(target) = self.cell_edit_target.take() else {
+            return;
+        };
+
+        if (target.opened_at, target.col) != (event.row, event.col) {
+            return;
+        }
+
+        let visual_row = match self.resolve_cell_edit(&target, cx) {
+            Ok(visual_row) => visual_row,
+
+            Err(refusal) => {
+                let summary = crate::labels::delimited_edit_failed_message(&self.title());
+
+                report_error(
+                    UserFacingError::new(ErrorKind::User, summary).with_cause(refusal.cause()),
+                    cx,
+                );
+                return;
+            }
+        };
+
+        let Some(table_state) = self.editable_table() else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            state.stage_cell_value(visual_row, target.col, CellValue::text(&event.value));
+            cx.notify();
+        });
+    }
+
+    /// The visual row the cell of `target` is shown at now, or why its value
+    /// cannot be staged.
+    pub(super) fn resolve_cell_edit(
+        &self,
+        target: &CellEditTarget,
+        cx: &App,
+    ) -> Result<usize, CellEditRefusal> {
+        let Some(loaded) = self.loaded() else {
+            return Err(CellEditRefusal::RowsReadAgain);
+        };
+
+        if loaded.reader_epoch != target.reader_epoch {
+            return Err(CellEditRefusal::RowsReadAgain);
+        }
+
+        if loaded.discard_generation != target.discard_generation {
+            return Err(CellEditRefusal::ChangesDiscarded);
+        }
+
+        if !self.can_edit() {
+            return Err(CellEditRefusal::ReadOnly);
+        }
+
+        let buffer = loaded.table_state.read(cx).edit_buffer();
+
+        visual_row_of(buffer, &target.row).ok_or(CellEditRefusal::RowRemoved)
     }
 
     // -- Rows ----------------------------------------------------------------
@@ -285,7 +590,7 @@ impl DelimitedDocument {
     /// Adds a copy of the row shown at `visual_row` below it, with the edits
     /// staged in it.
     fn duplicate_row(&mut self, visual_row: usize, cx: &mut Context<Self>) {
-        let Some(table_state) = self.editable_table() else {
+        let Some(table_state) = self.table_for_row_change() else {
             return;
         };
 
@@ -302,7 +607,7 @@ impl DelimitedDocument {
     /// Marks the record shown at `visual_row` for deletion, or drops the row
     /// when it is a pending insert.
     fn delete_row(&mut self, visual_row: usize, cx: &mut Context<Self>) {
-        let Some(table_state) = self.editable_table() else {
+        let Some(table_state) = self.table_for_row_change() else {
             return;
         };
 
@@ -325,7 +630,7 @@ impl DelimitedDocument {
 
     /// Stages an empty field for a cell: a delimited file has no null.
     fn clear_cell(&mut self, visual_row: usize, col: usize, cx: &mut Context<Self>) {
-        let Some(table_state) = self.editable_table() else {
+        let Some(table_state) = self.table_for_row_change() else {
             return;
         };
 
@@ -337,9 +642,9 @@ impl DelimitedDocument {
 
     /// Drops every pending edit, every column change and the undo history.
     /// An open inline editor is closed without staging its value. Does
-    /// nothing while a save runs.
+    /// nothing while a save runs or a dialog is open.
     pub fn discard_changes(&mut self, cx: &mut Context<Self>) {
-        if self.saving {
+        if self.saving || self.has_open_dialog() {
             return;
         }
 
@@ -349,6 +654,7 @@ impl DelimitedDocument {
 
         let had_column_changes = loaded.page_model.has_column_changes();
         loaded.page_model.discard_column_changes();
+        loaded.discard_generation += 1;
 
         // The columns of the table follow the page model, so a column change
         // needs a new table model. Replacing the model drops the edits too.
@@ -416,8 +722,9 @@ impl DelimitedDocument {
                     Self::insert_row_above,
                 )
                 .icon(AppIcon::Plus)
-                .enabled(self.can_edit()),
+                .enabled(self.can_change_rows()),
             );
+            actions.extend(self.column_pane_actions(this));
             actions.push(
                 run(
                     "delimited-discard",
@@ -425,9 +732,11 @@ impl DelimitedDocument {
                     Self::discard_changes,
                 )
                 .icon(AppIcon::RotateCcw)
-                .enabled(self.can_save_or_discard()),
+                .enabled(self.can_discard()),
             );
         }
+
+        actions.extend(self.load_rest_pane_actions(this));
 
         actions.push(
             run(
@@ -435,7 +744,8 @@ impl DelimitedDocument {
                 dbflux_i18n::t!("document.delimited.action.reload"),
                 Self::reload,
             )
-            .icon(AppIcon::RefreshCcw),
+            .icon(AppIcon::RefreshCcw)
+            .enabled(!self.has_open_dialog()),
         );
 
         actions
@@ -448,8 +758,8 @@ impl DelimitedDocument {
     /// Ignored while a save runs: that save reports its own outcome. A
     /// document without changes writes nothing and reports a save that
     /// succeeded. Refused and reported while the file is read again under
-    /// another dialect. A value typed in an open inline editor is committed
-    /// first.
+    /// another dialect, and while the rest of the file is being loaded. A
+    /// value typed in an open inline editor is committed first.
     ///
     /// Every outcome is reported once:
     ///
@@ -496,6 +806,21 @@ impl DelimitedDocument {
         }
 
         let title = self.title();
+
+        // The records the load reads would be dropped by the reopen after
+        // the save, and the column prompt it opens would land on a file
+        // that changed under it.
+        if self.is_loading_rest() {
+            let summary = crate::labels::delimited_save_failed_message(&title);
+            let cause = dbflux_i18n::t!("document.delimited.error.save_while_loading_rest");
+
+            report_error(
+                UserFacingError::new(ErrorKind::User, summary).with_cause(cause),
+                cx,
+            );
+            self.report_save_outcome(false, cx);
+            return;
+        }
 
         // The edits belong to rows the running reread replaces, and the
         // reopen after the save would race it.
@@ -581,8 +906,29 @@ impl DelimitedDocument {
         .detach();
     }
 
+    /// The table's save key, taken before the table sees it. The table asks
+    /// for a save only when it holds a row edit, so a dirty document saves
+    /// here, which covers a change to the columns alone, and the table never
+    /// hears the key. A clean document lets the key through to the table,
+    /// which has nothing to save.
+    pub(super) fn take_save_key(
+        &mut self,
+        _: &SaveRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_dirty() {
+            return;
+        }
+
+        cx.stop_propagation();
+        self.save(cx);
+    }
+
     /// Saves as part of an interrupted close: the tab closes only once the
-    /// file holds the edits, and keeps them otherwise. Returns whether a save
+    /// file holds the edits, and keeps them otherwise. A save refused while
+    /// the rest of the file loads reports a failed save, so the tab stays
+    /// open with its edits. Returns whether a save
     /// started, which is false only for a file that is not loaded.
     ///
     /// Asking again while a save runs is intentional: that save then reports
@@ -705,6 +1051,65 @@ impl DelimitedDocument {
             cx.emit(DocumentEvent::RequestClose);
         }
     }
+}
+
+/// Gives every pending insert of `buffer` an empty field for each of the
+/// `column_count` columns it has no field for. The edit buffer drops a value
+/// typed into a field an inserted row does not have.
+pub(super) fn pad_pending_inserts(buffer: &mut EditBuffer, column_count: usize) {
+    for insert in 0..buffer.pending_inserts().len() {
+        if let Some(cells) = buffer.get_pending_insert_mut_by_idx(insert)
+            && cells.len() < column_count
+        {
+            cells.resize(column_count, CellValue::text(""));
+        }
+    }
+}
+
+/// The identity of the row shown at `visual_row`. `None` when no row is
+/// shown there.
+fn cell_edit_row(buffer: &EditBuffer, visual_row: usize) -> Option<CellEditRow> {
+    match buffer.compute_visual_order().get(visual_row).copied()? {
+        VisualRowSource::Base(row) => Some(CellEditRow::Base(row)),
+
+        VisualRowSource::Insert(index) => {
+            let insert = buffer.pending_inserts().get(index)?;
+
+            Some(CellEditRow::Insert {
+                index,
+                anchor: insert.anchor,
+                cells: insert.data.iter().map(CellValue::edit_text).collect(),
+            })
+        }
+    }
+}
+
+/// The visual row `row` is shown at now. `None` when it is gone: a record
+/// past the loaded ones, or an insert that was removed.
+fn visual_row_of(buffer: &EditBuffer, row: &CellEditRow) -> Option<usize> {
+    let source = match row {
+        CellEditRow::Base(row) => VisualRowSource::Base(*row),
+
+        CellEditRow::Insert {
+            index,
+            anchor,
+            cells,
+        } => {
+            let insert = buffer.pending_inserts().get(*index)?;
+            let current: Vec<String> = insert.data.iter().map(CellValue::edit_text).collect();
+
+            if insert.anchor != *anchor || current != *cells {
+                return None;
+            }
+
+            VisualRowSource::Insert(*index)
+        }
+    };
+
+    buffer
+        .compute_visual_order()
+        .iter()
+        .position(|shown| *shown == source)
 }
 
 /// A row of `column_count` empty fields.

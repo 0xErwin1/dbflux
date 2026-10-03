@@ -16,6 +16,7 @@
 //! toolbar shows the dialect the file was read with and overrides parts of
 //! it.
 
+mod columns;
 mod document;
 mod editing;
 mod page_model;
@@ -25,6 +26,8 @@ mod save;
 mod source;
 mod toolbar;
 
+#[cfg(test)]
+mod columns_tests;
 #[cfg(test)]
 mod document_tests;
 #[cfg(test)]

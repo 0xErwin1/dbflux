@@ -1774,6 +1774,18 @@ document:
       save_while_rereading: "The file is being read again, which replaces the rows these edits belong to. Wait until it has been read, then save."
       add_row_failed: "Could not add a row to %{name}"
       no_columns: "The file has no columns, so a new row would have no fields and the saved file would not keep it."
+      edit_failed: "Could not edit %{name}"
+      edit_while_read_only: "The file is being saved or read again, so the value from the editor was not applied. Edit the cell again once that is done."
+      add_column_failed: "Could not add a column to %{name}"
+      add_column_needs_full_load: "A column can be added only once every record of the file is loaded."
+      rename_column_failed: "Could not rename a column of %{name}"
+      rename_no_header: "The file has no header row, so its columns have no names to change. To read the first row as column names, turn on Header row in the toolbar."
+      rename_no_header_record: "The file has no records, so there is no header row whose names could change."
+      edit_rows_read_again: "The file was read again from its source while the editor was open, after a save or a reload, so its rows were replaced and the value was not applied. Edit the cell again."
+      edit_changes_discarded: "The changes were discarded while the editor was open, so the value was not applied. Edit the cell again."
+      edit_row_removed: "The row this cell belongs to was removed while the editor was open, so the value was not applied."
+      column_while_read_only: "The file is being saved or read again, so the column was not changed. Try again once that is done."
+      save_while_loading_rest: "The rest of the file is still loading, and a save now would drop the records it reads. Wait until it has loaded, or cancel it from the footer, then save."
       refused:
         unsupported: "%{encoding} text cannot be read with %{character} as its delimiter or quote. Choose another delimiter, quote or encoding."
         line_break: "A line break cannot be the delimiter or the quote. Choose another character."
@@ -1812,12 +1824,28 @@ document:
       load_more: Load more
       loading_more: "Loading…"
       rereading: "Reading the file again…"
+      loading_rest: "Loading the rest of the file…"
     action:
       save: Save
       saving: "Saving…"
       discard: "Discard changes"
       insert_above: "Insert row above"
       reload: "Reload from file"
+      add_column: "Add column"
+      rename_column: "Rename column"
+      cancel: "Cancel"
+    column:
+      add_title: "Add column"
+      rename_title: "Rename column"
+      name_placeholder: "Column name"
+      confirm_add: "Add"
+      confirm_rename: "Rename"
+      no_header_note: "This file has no header row, so the name is not written to the file and the column shows as %{name}."
+    load_rest:
+      title: "Load the rest of the file"
+      body: "A column can be added only once every record of the file is loaded, and %{loaded} records of this %{size} file are loaded so far. Loading the rest reads every remaining record into memory, which takes a while for a large file. You can cancel it from the footer, and the records read until then stay loaded."
+      confirm: "Load the rest"
+      cancel: "Cancel loading"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"
