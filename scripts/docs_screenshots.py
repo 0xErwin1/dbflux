@@ -1212,28 +1212,24 @@ def reset_work_dir(work_dir: Path) -> None:
     if work_dir.is_symlink():
         raise ScreenshotError(f"the work directory {work_dir} is a symbolic link; refusing to use it")
 
-    if work_dir.exists():
-        if not work_dir.is_dir():
-            raise ScreenshotError(f"the work directory {work_dir} is not a directory")
-
-        if any(work_dir.iterdir()) and not (work_dir / WORK_DIR_MARKER).is_file():
-            raise ScreenshotError(
-                f"the work directory {work_dir} is not empty and was not created by this script; "
-                "pass an empty or new --work-dir"
-            )
-
-        try:
-            shutil.rmtree(work_dir)
-        except OSError as error:
-            raise ScreenshotError(f"could not clear the work directory {work_dir}: {error}") from error
-
     try:
-        work_dir.mkdir(parents=True, mode=0o700)
-    except OSError as error:
-        raise ScreenshotError(f"could not create the work directory {work_dir}: {error}") from error
+        if work_dir.exists():
+            if not work_dir.is_dir():
+                raise ScreenshotError(f"the work directory {work_dir} is not a directory")
 
-    (work_dir / WORK_DIR_MARKER).write_text("Created by scripts/docs_screenshots.py; deleted on every run.\n")
-    (work_dir / "logs").mkdir()
+            if any(work_dir.iterdir()) and not (work_dir / WORK_DIR_MARKER).is_file():
+                raise ScreenshotError(
+                    f"the work directory {work_dir} is not empty and was not created by this script; "
+                    "pass an empty or new --work-dir"
+                )
+
+            shutil.rmtree(work_dir)
+
+        work_dir.mkdir(parents=True, mode=0o700)
+        (work_dir / WORK_DIR_MARKER).write_text("Created by scripts/docs_screenshots.py; deleted on every run.\n")
+        (work_dir / "logs").mkdir()
+    except OSError as error:
+        raise ScreenshotError(f"could not prepare the work directory {work_dir}: {error}") from error
 
 
 def stop_process(process: subprocess.Popen, grace_seconds: float = 20) -> None:
