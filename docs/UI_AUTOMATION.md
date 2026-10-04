@@ -286,11 +286,13 @@ A run takes a few minutes. Under software rendering DBFlux draws about one frame
 per second, so every step waits for the state it expects instead of for a fixed
 time, and repeats an input that did not take effect.
 
-The run first launches DBFlux once to dismiss the first-run dialog, turn off the
-update check, create one connection per demo database through the Connection
-Manager and select the theme in Settings. It saves that profile, and starts
-every shot in a fresh DBFlux process from a copy of it, so a shot looks the same
-whether it runs alone or with the others. The main window is resized to 1600 by
+The run first launches DBFlux to dismiss the first-run dialog, turn off the
+update check and select the theme in Settings, and saves that profile. It then
+launches DBFlux again to create one connection per demo database through the
+Connection Manager, and saves a second profile with the connections. Every shot
+starts in a fresh DBFlux process from a copy of one of the two, so a shot looks
+the same whether it runs alone or with the others. The profile without
+connections is only built for the other theme when a selected shot needs it. The main window is resized to 1600 by
 900 logical pixels at a UI scale of 2, and each image is scaled down to one
 pixel per logical pixel.
 
@@ -305,8 +307,8 @@ in `<work-dir>/logs/` and prints its path.
 
 Shots are declared in `scripts/docs_screenshots/shots.py`. A shot is one `Shot`
 entry: the documentation page, a name, and the steps that bring a freshly
-started DBFlux, with the demo connections saved and nothing connected, into the
-state to capture.
+started DBFlux, with the demo connections saved and nothing connected unless the
+shot asks otherwise, into the state to capture.
 
 ```python
 Shot(
@@ -330,6 +332,11 @@ Shot(
   after the window settles, so a click that took effect late is not repeated.
 - `crop=Region(x, y, width, height)` keeps part of the window, in logical
   pixels. `region=` captures only that part with `screenshot_region` instead.
+- `demo_connections=False` starts the shot from the profile without any saved
+  connection, as on a fresh install.
+- Xvfb starts the pointer at the center of the screen, where it can leave an
+  element in its hover state. Move it out of the way with
+  `call("pointer_move", x=..., y=...)` when that happens.
 - The demo data lives in `scripts/docs_screenshots/seed/`. It is synthetic and
   derived from fixed values, so seeding it twice gives the same rows.
 
