@@ -18,16 +18,22 @@
 //! assert!(matches!(open(&source), Err(ParquetError::NotParquet { .. })));
 //! ```
 
+mod cells;
 mod decode;
 mod error;
 mod footer;
 mod window;
 
+pub use cells::{
+    BINARY_PREVIEW_BYTES, Cell, CellKind, CellPage, ColumnDisplay, ColumnKind, cells_of,
+};
 pub use decode::{UNINDEXED_CHUNK_BUDGET, WindowRows, read_window, window_byte_ranges};
 pub use error::ParquetError;
 pub use footer::{MAX_FOOTER_BYTES, ParquetFile, TAIL_READ_BYTES, open};
 pub use window::RowWindow;
 
+#[cfg(test)]
+mod cells_tests;
 #[cfg(test)]
 mod decode_tests;
 #[cfg(test)]

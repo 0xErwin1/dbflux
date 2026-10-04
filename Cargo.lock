@@ -3361,9 +3361,11 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "bytes",
+ "chrono",
  "dbflux_byte_source",
  "parquet",
  "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
