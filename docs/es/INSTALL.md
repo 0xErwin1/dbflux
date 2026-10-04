@@ -109,6 +109,11 @@ NixOS / nix-darwin vía overlay:
 }
 ```
 
+El overlay construye todos los paquetes con el nixpkgs de tu sistema, así que el binario precompilado usa la misma glibc que tus controladores gráficos. Las salidas propias del flake usan en cambio el nixpkgs fijado en el `flake.lock` de DBFlux. Cuando la glibc de tu sistema es más nueva que esa, los controladores gráficos no cargan y DBFlux puede detenerse al iniciar. En ese caso:
+
+- Si tu flake usa `dbflux.packages.<system>.*`, cambia al overlay o agrégale `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`.
+- Con `nix run` o `nix profile install`, agrega `--override-input nixpkgs nixpkgs`. Así DBFlux se construye con el `nixpkgs` al que resuelve tu registro de flakes. En un sistema NixOS construido desde un flake, el registro del sistema lo apunta al nixpkgs del propio sistema, salvo que una entrada en tu registro de usuario, que tiene prioridad, lo apunte a otro.
+
 ## macOS
 
 DBFlux para macOS no está firmado con un certificado de desarrollador de Apple.

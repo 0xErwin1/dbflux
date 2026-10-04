@@ -27,23 +27,20 @@
       # Other systems can still use the source build.
       prebuiltSystems = builtins.attrNames releaseInfo.artifacts;
 
-      # Per-system outputs (packages, devShells, apps).
-      perSystem = flake-utils.lib.eachDefaultSystem (
-        system:
+      # Builds the DBFlux packages from a package set. The flake's own outputs
+      # pass the nixpkgs pinned in flake.lock; the overlay passes the
+      # consumer's package set. The glibc of that set is the one the prebuilt
+      # binary is patched against and the source build links with, and it must
+      # be at least as new as the glibc the system's graphics drivers
+      # (/run/opengl-driver) were built with, or they fail to load at runtime.
+      mkPackages =
+        pkgs:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ (import rust-overlay) ];
-          };
+          system = pkgs.stdenv.hostPlatform.system;
 
-          rustToolchain = pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          rustToolchain = (rust-overlay.lib.mkRustBin { } pkgs.buildPackages).fromRustupToolchainFile ./rust-toolchain.toml;
 
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-
-          # OpenSSL built with static libraries for portable binaries.
-          # The default nixpkgs openssl only ships shared objects; this override
-          # enables the static output so OPENSSL_STATIC=1 works at build time.
-          opensslStatic = pkgs.openssl.override { static = true; };
 
           # Import default.nix with crane support
           dbflux = import ./default.nix {
@@ -74,6 +71,39 @@
           # Default package: prefer the prebuilt binary when available
           # (fast install for end users), fall back to the source build.
           dbfluxDefault = if hasPrebuilt then dbfluxBin else dbfluxSource;
+        in
+        {
+          inherit
+            rustToolchain
+            dbflux
+            dbfluxSource
+            hasPrebuilt
+            dbfluxBin
+            dbfluxNightly
+            dbfluxDefault
+            ;
+        };
+
+      # Per-system outputs (packages, devShells, apps).
+      perSystem = flake-utils.lib.eachDefaultSystem (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+
+          inherit (mkPackages pkgs)
+            rustToolchain
+            dbflux
+            dbfluxSource
+            hasPrebuilt
+            dbfluxBin
+            dbfluxNightly
+            dbfluxDefault
+            ;
+
+          # OpenSSL built with static libraries for portable binaries.
+          # The default nixpkgs openssl only ships shared objects; this override
+          # enables the static output so OPENSSL_STATIC=1 works at build time.
+          opensslStatic = pkgs.openssl.override { static = true; };
         in
         {
           # Development shell
@@ -158,22 +188,29 @@
       # `pkgs.dbflux-source`  -> built from source via crane
       # `pkgs.dbflux-bin`     -> explicit prebuilt (only on prebuilt systems)
       # `pkgs.dbflux-nightly` -> rolling nightly prebuilt (only on prebuilt systems)
+      #
+      # Every package is built from the consumer's own package set, not from
+      # this flake's nixpkgs, so it uses the same glibc as the rest of the
+      # system, including the graphics drivers it loads at runtime.
+      #
+      # Which attributes exist is decided from `prev` only: deciding it from
+      # `final` would make the overlay's own attribute names depend on the
+      # fixpoint it is part of, which is an infinite recursion.
       overlays.default = final: prev:
         let
           system = prev.stdenv.hostPlatform.system;
           hasSystem = perSystem.packages ? ${system};
-          sysPkgs = perSystem.packages.${system};
+          hasPrebuilt = builtins.elem system prebuiltSystems;
+          consumerPkgs = mkPackages final;
         in
         if hasSystem then
           {
-            dbflux = sysPkgs.dbflux;
-            dbflux-source = sysPkgs.dbflux-source;
+            dbflux = consumerPkgs.dbfluxDefault;
+            dbflux-source = consumerPkgs.dbfluxSource;
           }
-          // nixpkgs.lib.optionalAttrs (sysPkgs ? dbflux-nightly) {
-            dbflux-nightly = sysPkgs.dbflux-nightly;
-          }
-          // nixpkgs.lib.optionalAttrs (sysPkgs ? dbflux-bin) {
-            dbflux-bin = sysPkgs.dbflux-bin;
+          // nixpkgs.lib.optionalAttrs hasPrebuilt {
+            dbflux-nightly = consumerPkgs.dbfluxNightly;
+            dbflux-bin = consumerPkgs.dbfluxBin;
           }
         else
           { };
