@@ -2,7 +2,18 @@
 
 문서 데이터베이스의 컬렉션은 문서마다 접을 수 있는 노드 하나로 된 트리로 열립니다. **테이블**과 **JSON**은 같은 페이지를 보여 주며, 트리 / 테이블 / JSON 전환 컨트롤이나 `t` 키로 바꿀 수 있습니다. 선택한 뷰는 페이지를 넘기거나 새로 고쳐도 해당 탭에서 유지됩니다. 테이블에서는 `_id`가 먼저 오고, 나머지 필드는 페이지가 반환한 순서를 따릅니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/collection-dark.webp">
+  <img src="../images/documents/collection-light.webp" alt="트리 뷰로 연 MongoDB 컬렉션. 문서마다 접힌 노드가 하나씩 있습니다">
+</picture>
+
 - 중첩 객체는 필드 수를, 배열은 길이를 보여 줍니다. 객체 열에서 `e`를 누르면 제자리에서 열 그룹으로 펼쳐지고, 객체나 배열에서 `Enter`를 누르면 그 안으로 들어가 내용을 행으로 나열하며 경로를 표시합니다. `Backspace`는 밖으로 나갑니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/tree-view-dark.webp">
+  <img src="../images/documents/tree-view-light.webp" alt="문서 하나를 펼친 트리 뷰. 중첩 객체의 필드 수와 배열의 길이가 보입니다">
+</picture>
+
 - 바닥글은 문서 수를 셉니다. 드라이버가 일치하는 문서 수를 추정만 할 수 있으면 추정치로 표시됩니다.
 - 지원하는 드라이버(MongoDB)는 `filter`, `project`, `sort`, `limit` 네 칸으로 된 쿼리 바를 제공합니다. 각 칸은 느슨한 JSON을 받으며 컬렉션 표본을 바탕으로 필드 경로를 자동 완성합니다. `Ctrl+Enter` 또는 **찾기**로 쿼리를 실행하고, 기록 버튼으로 이전 쿼리를 다시 실행합니다.
 - 문서 옆의 **스키마** 뷰는 컬렉션을 표본 추출해 필드 경로마다 유형 분포, 존재율, 값 요약을 나열합니다. 표본 크기를 바꿀 수 있고, 둘 이상의 유형을 담은 필드는 표시되며, 값을 클릭하면 필터에 추가됩니다.

@@ -2,7 +2,18 @@
 
 文档数据库中的集合以树形式打开，每个文档是一个可折叠的节点。**表格**和 **JSON** 显示同一页数据；可用“树 / 表格 / JSON”切换控件或按 `t` 切换。你选择的视图在该标签页中翻页和刷新后保持不变。表格先显示 `_id`，其余字段按页面返回的顺序排列。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/collection-dark.webp">
+  <img src="../images/documents/collection-light.webp" alt="以树视图打开的 MongoDB 集合，每个文档对应一个折叠的节点">
+</picture>
+
 - 嵌套对象显示其字段数，数组显示其长度。在对象列上按 `e` 会就地展开为列组；在对象或数组上按 `Enter` 会进入其中，并以行列出内容，同时显示路径；按 `Backspace` 返回上一级。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/tree-view-dark.webp">
+  <img src="../images/documents/tree-view-light.webp" alt="展开了一个文档的树视图，显示嵌套对象的字段数和数组的长度">
+</picture>
+
 - 页脚统计文档数。当驱动只能估计匹配的文档数时，该数量会标注为估计值。
 - 支持该功能的驱动（MongoDB）会提供一个包含 `filter`、`project`、`sort` 和 `limit` 四个栏位的查询栏，每个栏位接受宽松 JSON，并根据集合样本补全字段路径。按 `Ctrl+Enter` 或点击 **查找** 运行查询；历史按钮可再次运行之前的查询。
 - 位于“文档”旁边的 **结构** 视图会对集合抽样，并列出每个字段路径的类型分布、出现率和值摘要。样本大小可以调整，包含多种类型的字段会被标记，点击某个值会将其加入筛选。结构视图只显示抽样控件和字段表，不显示查询栏、文档页脚以及标题中的文档数。

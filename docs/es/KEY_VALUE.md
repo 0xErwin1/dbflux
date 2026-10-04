@@ -4,6 +4,11 @@ Una base de datos clave-valor se abre como explorador de claves: la lista de
 claves a la izquierda, el valor de la clave seleccionada a la derecha y una
 consola de comandos debajo.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/key-value/browser-dark.webp">
+  <img src="../images/key-value/browser-light.webp" alt="El explorador de claves de una base de datos Redis, con las claves agrupadas en carpetas y los campos de un hash seleccionado">
+</picture>
+
 - **Lista de claves.** Las claves se cargan por páginas; **Cargar más**
   (`Ctrl+J`) continúa el escaneo y el pie muestra "Cargadas N de total" frente
   al conteo de claves de la base de datos. **Árbol** agrupa las claves en
@@ -37,6 +42,12 @@ consola de comandos debajo.
   antigua, con una columna por campo y los grupos de consumidores al lado:
   lectores, entradas pendientes, último ID entregado y **Reclamar** para pasar
   las pendientes a otro lector.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/key-value/sorted-set-dark.webp">
+  <img src="../images/key-value/sorted-set-light.webp" alt="Un sorted set de Redis en el explorador de claves, ordenado por puntuación con una barra relativa a la puntuación máxima">
+</picture>
+
 - **Eliminación masiva.** **Acciones masivas → Eliminar claves que coinciden con
   el patrón** escanea toda la base de datos con el patrón y el tipo actuales,
   lista las primeras coincidencias con el total y pide escribir el patrón.

@@ -21,6 +21,11 @@
 - `r` 刷新 Schema；`d` 断开当前连接。
 - `m` 打开选中项的项目菜单。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">
+  <img src="../images/schema-browser/tree-light.webp" alt="PostgreSQL 连接的侧边栏 Schema 树，其中一张表展开到列、索引和约束">
+</picture>
+
 ## 外部脚本文件夹
 
 Scripts 视图可以列出位于 DBFlux 自身脚本文件夹之外的脚本，例如在多个项目之间共享的 SQL 文件仓库，而无需复制它们。在 Scripts 视图的 `+` 菜单中选择 **添加外部文件夹**，或在命令面板中运行 **添加外部脚本文件夹…**，然后选择文件夹。
@@ -52,6 +57,11 @@ Schema 采用延迟加载。连接时，DBFlux 仅获取名称等浅层元数据
 - 在表上选择 **查看关系**，会绘制该表、它引用的表以及引用它的表。
 
 关系图在单独的标签页中打开，再次打开同一关系图会切换到该标签页。加载作为后台任务（“Schema 关系图：_数据库_”）运行，可以在任务面板中取消。每个表会列出其列，并带有 `PK`、`FK` 和 `NN`（非空）标记；连线把每个外键连接到它引用的表。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/diagram-dark.webp">
+  <img src="../images/schema-browser/diagram-light.webp" alt="PostgreSQL 数据库的 Schema 关系图，包含四张表以及从每个外键连到其引用表的连线">
+</picture>
 
 | 工具栏控件 | 作用 |
 |---|---|

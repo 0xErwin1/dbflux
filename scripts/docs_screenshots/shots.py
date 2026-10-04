@@ -38,6 +38,7 @@ output image has one pixel per logical pixel.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 WAIT_MS = 30_000
@@ -275,6 +276,9 @@ def theme_steps(theme: str) -> tuple[Step, ...]:
 # The document area right of the sidebar, below the title bar.
 DOCUMENT_AREA = Region(360, 44, 1232, 818)
 
+# The activity rail and the sidebar, below the title bar.
+SIDEBAR_AREA = Region(0, 44, 360, 818)
+
 QUERY_RESULT_SQL = """SELECT c.country,
        count(*) AS orders,
        sum(o.total) AS revenue
@@ -319,6 +323,31 @@ def open_customers_table() -> tuple[Step, ...]:
         *open_sidebar_item(POSTGRES, "customers", exact=True),
         *open_sidebar_item("customers", "Ada Hayashi", exact=True),
     )
+
+
+def open_reviews_collection() -> tuple[Step, ...]:
+    """Connects the demo MongoDB connection and opens its reviews collection."""
+
+    return (
+        *open_sidebar_item(MONGODB, "shop", exact=True),
+        ensure(wait_selected("shop"), click_label("shop")),
+        # Enter loads the database's collections, then l expands it.
+        ensure(wait_for("reviews", exact=True), key("enter"), idle(), key("l")),
+        ensure(wait_selected("reviews"), click_label("reviews")),
+        ensure(wait_visible(document_tree_id("row", "0")), key("enter")),
+    )
+
+
+def document_tree_id(kind: str, *path: str) -> str:
+    """The id of a document tree `row` or `chevron`, such as `tree-row-["0", "author"]`."""
+
+    return f"tree-{kind}-{json.dumps(list(path))}"
+
+
+def expand_document_node(*path: str, child: str) -> Step:
+    """Expands the document tree node at `path` until its field `child` shows."""
+
+    return ensure(wait_visible(document_tree_id("row", *path, child)), click(document_tree_id("chevron", *path)))
 
 
 def highlight_chart_point(index: int) -> tuple[Step, ...]:
@@ -492,6 +521,56 @@ SHOTS = (
             # August: the readout drawn next to the point leaves the other
             # points visible.
             *highlight_chart_point(7),
+        ),
+    ),
+    Shot(
+        page="documents",
+        name="collection",
+        steps=open_reviews_collection(),
+    ),
+    Shot(
+        page="documents",
+        name="tree-view",
+        steps=(
+            *open_reviews_collection(),
+            expand_document_node("0", child="author"),
+            expand_document_node("0", "author", child="country"),
+            expand_document_node("0", "location", child="geo"),
+            expand_document_node("0", "location", "geo", child="type"),
+        ),
+    ),
+    Shot(
+        page="key-value",
+        name="browser",
+        steps=(
+            *open_sidebar_item(REDIS, "db 0", exact=True),
+            *open_sidebar_item("db 0", "customer:", exact=False),
+            ensure(wait_for("HASH customer:1", exact=False), click_label("customer:", exact=False)),
+            ensure(wait_for("email ada.alvarez1@example.com"), click_label("HASH customer:1", exact=False)),
+        ),
+        crop=DOCUMENT_AREA,
+    ),
+    Shot(
+        page="schema-browser",
+        name="tree",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_selected("customers"), click_label("customers")),
+            ensure(wait_for("Columns (5)", exact=True), key("l")),
+            ensure(wait_selected("Columns (5)"), click_label("Columns (5)")),
+            ensure(wait_for("id: integer PK", exact=True), key("l")),
+        ),
+        crop=SIDEBAR_AREA,
+    ),
+    Shot(
+        page="schema-browser",
+        name="diagram",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_selected("shop"), click_label("shop")),
+            ensure(wait_for("View schema diagram", exact=True), key("m")),
+            ensure(wait_visible("schema-arrange"), click_label("View schema diagram")),
+            wait_for("0 background tasks", exact=True),
         ),
     ),
     Shot(

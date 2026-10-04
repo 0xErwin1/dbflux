@@ -6,10 +6,21 @@ with the Tree / Table / JSON control or press `t`. The view you pick stays for
 the tab across pages and refreshes. The table puts `_id` first, then the fields
 in the order the page returns them.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/documents/collection-dark.webp">
+  <img src="images/documents/collection-light.webp" alt="A MongoDB collection opened in the Tree view, with one collapsed node per document">
+</picture>
+
 - A nested object shows its field count and an array its length. `e` on an
   object column expands it in place into a column group; `Enter` on an object or
   array steps into it and lists its contents as rows, with a breadcrumb;
   `Backspace` steps out.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/documents/tree-view-dark.webp">
+  <img src="images/documents/tree-view-light.webp" alt="The Tree view with one document expanded, showing nested objects with their field counts and an array with its length">
+</picture>
+
 - The footer counts documents. When the driver can only estimate how many
   documents match, the count is labelled as an estimate.
 - Drivers that support it (MongoDB) add a query bar with four slots — `filter`,
