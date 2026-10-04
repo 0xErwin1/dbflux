@@ -322,7 +322,7 @@ impl DelimitedDocument {
         vec![insert_above, add_column, discard, save]
     }
 
-    fn render_loaded(&self, table: Entity<DataTable>, cx: &Context<Self>) -> AnyElement {
+    fn render_loaded(&self, table: Entity<DataTable>, cx: &mut Context<Self>) -> AnyElement {
         let body = match self.view() {
             DelimitedView::Table => div().flex_1().min_h_0().child(table).into_any_element(),
             DelimitedView::Text => self.render_text_body(cx),

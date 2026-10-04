@@ -2861,6 +2861,15 @@ pub(crate) fn delimited_save_failed_message(file_name: &str) -> String {
     dbflux_i18n::t!("document.delimited.error.save_failed", name = file_name)
 }
 
+/// Summary of the error reported when an edit of the text of a delimited
+/// file cannot be applied to its rows.
+pub(crate) fn delimited_text_apply_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.text_apply_failed",
+        name = file_name
+    )
+}
+
 /// Summary of the error reported when a row cannot be added to a delimited
 /// file.
 pub(crate) fn delimited_add_row_failed_message(file_name: &str) -> String {
