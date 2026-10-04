@@ -22,6 +22,11 @@
 
 每个驱动都有自己的连接表单。表单是动态的：只显示该驱动真正需要的字段。以文件为基础的驱动（如 SQLite）使用文件路径表单。大多数关系型驱动也接受单个连接字符串，参见[表单模式与直接填写 URI](#表单模式与直接填写-uri)。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
+  <img src="../images/connections/driver-picker-light.webp" alt="连接管理器的驱动选择器，驱动按关系型、文档、键值、时序与对象存储分组">
+</picture>
+
 ---
 
 ## 访问标签页：DBFlux 如何连接数据库
@@ -34,6 +39,11 @@
 | **SSH 隧道** | 先通过 SSH 主机建立本地端口转发，再经由该隧道连接。 |
 | **代理** | 通过 SOCKS5 或 HTTP/HTTPS 代理转发连接。 |
 | **SSM 端口转发** | 使用 AWS Systems Manager 将端口转发到目标实例，再经由该隧道连接。需要 `aws` 构建 feature。 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/access-tab-dark.webp">
+  <img src="../images/connections/access-tab-light.webp" alt="PostgreSQL 连接的访问标签页，访问方式列表已展开，显示 Direct、SSH Tunnel、Proxy 与 SSM Port Forwarding">
+</picture>
 
 ### 点击连接后会发生什么
 

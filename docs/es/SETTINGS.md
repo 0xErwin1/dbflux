@@ -29,6 +29,11 @@ Integration](MCP_AI_INTEGRATION.md).
 
 ## General
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
+  <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
+</picture>
+
 ### Apariencia
 
 | Setting      | Opciones                 | Default |
@@ -141,6 +146,11 @@ tecla o predicado de contexto con el campo de texto, o muestra un solo contexto
 con el filtro de contexto. Un contexto que hereda de otro (el Editor hereda de
 Global) también lista los bindings heredados que no sombrea. El keymap por
 defecto completo está documentado en [Referencia de teclado](KEYBOARD.md).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/keybindings-dark.webp">
+  <img src="../images/settings/keybindings-light.webp" alt="La sección Keybindings de la ventana de Settings, con los atajos globales y un lápiz para cambiar cada uno">
+</picture>
 
 **Cambiar un atajo.** Pulsa el lápiz de un binding, o selecciónalo y pulsa
 `Enter`, y luego pulsa las teclas nuevas. Un atajo puede ser una tecla con sus

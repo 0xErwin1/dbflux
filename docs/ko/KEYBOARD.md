@@ -296,6 +296,11 @@ IME 확정을 포함한 네이티브 텍스트 편집 시 마크는 텍스트를
 
 문자 키는 검색 입력창에 입력되므로, 입력하면 목록이 필터링됩니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
+  <img src="../images/keyboard/command-palette-light.webp" alt="짧은 검색어로 필터링해 일치하는 명령과 키 바인딩을 보여 주는 명령 팔레트">
+</picture>
+
 ## 데이터 테이블
 
 결과 그리드나 테이블에 포커스가 있고 편집 중인 셀이 없을 때 적용됩니다.

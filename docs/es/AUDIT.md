@@ -112,6 +112,11 @@ El visor de audit es el único lugar para revisar todo lo que DBFlux registró:
 queries, conexiones, hooks, scripts, cambios de configuración y decisiones de
 governance de AI/MCP.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/viewer-dark.webp">
+  <img src="../images/audit/viewer-light.webp" alt="El visor de audit con eventos de conexión, de queries, de configuración y de arranque bajo su barra de filtros">
+</picture>
+
 ### Abrirlo
 
 - Teclado: **Ctrl+Shift+A** (**Cmd+Shift+A** en macOS).
@@ -196,6 +201,11 @@ con el uso salvo que se purgue; vive en el mismo `dbflux.db` que todo lo demás
 ([Data & Privacy](PRIVACY.md#auditoría-y-privacidad)).
 
 ## Ver los audit events
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/event-details-dark.webp">
+  <img src="../images/audit/event-details-light.webp" alt="Un evento de audit expandido con su acción, actor, conexión, decisión y la huella de la query">
+</picture>
 
 ### En la UI de DBFlux
 

@@ -97,6 +97,11 @@ DBFlux는 모든 중요한 작업을 SQLite에 저장된 통합 감사 트레일
 감사 뷰어는 DBFlux가 기록한 모든 것 — 쿼리, 연결, 훅, 스크립트, 구성 변경,
 AI/MCP 거버넌스 결정 — 을 검토하는 단일한 장소입니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/viewer-dark.webp">
+  <img src="../images/audit/viewer-light.webp" alt="필터 표시줄 아래에 연결, 쿼리, 구성, 시작 이벤트가 나열된 감사 뷰어">
+</picture>
+
 ### 열기
 
 - 키보드: **Ctrl+Shift+A** (macOS는 **Cmd+Shift+A**).
@@ -159,6 +164,11 @@ AI/MCP 거버넌스 결정 — 을 검토하는 단일한 장소입니다.
 개인정보](PRIVACY.md#감사-및-개인정보)).
 
 ## 감사 이벤트 보기
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/event-details-dark.webp">
+  <img src="../images/audit/event-details-light.webp" alt="작업, 행위자, 연결, 결정, 쿼리 지문이 보이도록 펼친 감사 이벤트">
+</picture>
 
 ### DBFlux UI에서
 

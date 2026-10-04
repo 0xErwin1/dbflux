@@ -574,6 +574,75 @@ SHOTS = (
         ),
     ),
     Shot(
+        page="audit",
+        name="viewer",
+        steps=(
+            *open_query_tab(),
+            run_query(FIRST_QUERY_SQL, wait_for("Ada Hayashi", exact=True)),
+            ensure(wait_for("Query executed successfully"), key("ctrl-shift-a")),
+        ),
+    ),
+    Shot(
+        page="audit",
+        name="event-details",
+        steps=(
+            *open_query_tab(),
+            run_query(FIRST_QUERY_SQL, wait_for("Ada Hayashi", exact=True)),
+            ensure(wait_for("Query executed successfully"), key("ctrl-shift-a")),
+            ensure(
+                wait_visible("audit-detail-copy-json"),
+                click_label("Query executed successfully", exact=False),
+            ),
+        ),
+    ),
+    Shot(
+        page="keyboard",
+        name="command-palette",
+        steps=(
+            # A query tab behind the palette instead of the empty start page.
+            ensure(wait_for("Query 1.sql", exact=True), key("ctrl-n")),
+            ensure(wait_visible("command-palette-container"), key("ctrl-shift-p")),
+            ensure(
+                wait_for("Previous tab"),
+                call("set_text", label="Search commands", exact=False, text="tab"),
+            ),
+        ),
+    ),
+    Shot(
+        page="connections",
+        name="driver-picker",
+        steps=(
+            open_window("ctrl-shift-n"),
+            wait_visible("cm-driver-card-postgres"),
+        ),
+    ),
+    Shot(
+        page="connections",
+        name="access-tab",
+        steps=(
+            *fill_connection_form("postgres", POSTGRES_FIELDS),
+            ensure(wait_visible("access-method-dropdown.dropdown-trigger"), click("tab-access")),
+            # The open list shows every access method at once.
+            ensure(wait_for("SSM Port Forwarding", exact=True), click("access-method-dropdown.dropdown-trigger")),
+        ),
+    ),
+    Shot(
+        page="settings",
+        name="general",
+        steps=(
+            open_window("ctrl-,"),
+            wait_visible("save-general"),
+        ),
+    ),
+    Shot(
+        page="settings",
+        name="keybindings",
+        steps=(
+            open_window("ctrl-,"),
+            ensure(wait_visible("context-Global"), click("settings-nav-keybindings")),
+        ),
+    ),
+    Shot(
         page="key-value",
         name="sorted-set",
         steps=(

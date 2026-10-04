@@ -97,6 +97,11 @@ These can be changed at runtime via `AuditService::set_*()` methods. The MCP ser
 The audit viewer is the single place to review everything DBFlux logged: queries,
 connections, hooks, scripts, config changes, and AI/MCP governance decisions.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/audit/viewer-dark.webp">
+  <img src="images/audit/viewer-light.webp" alt="The audit viewer listing connection, query, configuration and startup events below its filter bar">
+</picture>
+
 ### Open it
 
 - Keyboard: **Ctrl+Shift+A** (**Cmd+Shift+A** on macOS).
@@ -178,6 +183,11 @@ lives in the same `dbflux.db` as everything else
 ([Data & Privacy](../PRIVACY.md#audit-and-privacy)).
 
 ## Viewing Audit Events
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/audit/event-details-dark.webp">
+  <img src="images/audit/event-details-light.webp" alt="An audit event expanded to show its action, actor, connection, decision and the fingerprint of the query">
+</picture>
 
 ### In the DBFlux UI
 

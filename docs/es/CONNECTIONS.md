@@ -40,6 +40,11 @@ respaldados por archivo, como SQLite, usan un formulario de ruta de archivo. La
 mayoría de los drivers relacionales también aceptan una única cadena de
 conexión; ver [Modo formulario vs. URI directa](#modo-formulario-vs-uri-directa).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
+  <img src="../images/connections/driver-picker-light.webp" alt="El selector de drivers del Connection Manager, con los drivers agrupados en relacionales, de documentos, clave-valor, series temporales y almacenamiento de objetos">
+</picture>
+
 ---
 
 ## La pestaña Access: cómo llega DBFlux a la base de datos
@@ -54,6 +59,11 @@ conexión es Direct, SSH, Proxy o SSM, nunca una combinación.
 | **SSH Tunnel**          | Abre un port-forward local a través de un host SSH, y conecta a través de él.                                                                                                                       |
 | **Proxy**               | Enruta la conexión a través de un proxy SOCKS5 o HTTP/HTTPS.                                                                                                                                        |
 | **SSM Port Forwarding** | Usa AWS Systems Manager para hacer port-forward a una instancia y conecta a través del túnel. Requiere el build feature `aws`.                                                                      |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/access-tab-dark.webp">
+  <img src="../images/connections/access-tab-light.webp" alt="La pestaña Access de una conexión PostgreSQL con la lista Access Method abierta en Direct, SSH Tunnel, Proxy y SSM Port Forwarding">
+</picture>
 
 ### Qué ocurre cuando pulsas Connect
 
