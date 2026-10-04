@@ -110,20 +110,34 @@ impl Workspace {
     ///
     /// A file that cannot be opened any more is skipped with a log line, as a
     /// file-backed script that cannot be read is, so startup raises no toast
-    /// for a failure the user did not just cause. Unlike
-    /// [`Self::open_delimited_file`], the path is not resolved again, not
-    /// recorded in recent files and does not take the keyboard.
+    /// for a failure the user did not just cause. The path is resolved as
+    /// [`Self::open_delimited_file`] resolves it, because it is the tab's
+    /// dedup key: a session written by an earlier build or by hand can spell
+    /// one file two ways. Unlike opening, restoring does not record the file
+    /// in recent files and does not take the keyboard.
     pub(in crate::ui::views::workspace) fn restore_delimited_tab(
         &mut self,
         tab: &dbflux_storage::repositories::state::sessions::RestoredTab,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = tab.file_path.clone() else {
+        let Some(stored_path) = tab.file_path.as_ref() else {
             log::warn!(
                 "Delimited tab '{}' has no file_path in restored session — skipping",
                 tab.title
             );
             return;
+        };
+
+        let path = match std::fs::canonicalize(stored_path) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                log::warn!(
+                    "Delimited tab '{}' cannot resolve {}: {error} — skipping",
+                    tab.title,
+                    stored_path.display()
+                );
+                return;
+            }
         };
 
         if let Err(error) = std::fs::File::open(&path) {
@@ -1532,6 +1546,34 @@ mod tests {
         );
 
         assert!(tab_titles(window, &workspace).is_empty());
+        assert_eq!(toast_count(window), 0);
+    }
+
+    /// A session can hold a path spelled differently from the one opening the
+    /// file uses, written by an earlier build or by hand. Restoring resolves
+    /// it, so the file keeps one tab and a later open focuses that tab.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_restored_link_and_the_file_it_names_share_one_tab(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+
+        let link = file.directory.join("link.csv");
+        std::os::unix::fs::symlink(&file.path, &link).expect("the test link must be creatable");
+        let dotted = file.directory.join(".").join("cities.csv");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Delimited", "link.csv", Some(link), 0),
+                session_tab("Delimited", "cities.csv", Some(dotted), 1),
+            ],
+            Some(0),
+        );
+        open(window, &workspace, file.key());
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
         assert_eq!(toast_count(window), 0);
     }
 
