@@ -18,6 +18,7 @@ import {
   isDocsRepoPath,
   splitContentEntryId,
 } from '../src/i18n/locale-registry.ts';
+import { isDocImagePath } from '../src/lib/doc-images.ts';
 
 const WEB = fileURLToPath(new URL('../', import.meta.url));
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
@@ -29,8 +30,12 @@ const WANTED_REPOSITORY_PATH =
   /^(ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|TRADEMARK\.md|PRIVACY\.md|crates\/dbflux_driver_[^/]+\/README\.md|examples\/custom_driver\/README\.md)$/;
 
 const MIRRORED_ASSET = 'resources/dbflux.png';
+
+/** Binary files copied byte for byte; they are served, not rendered as pages. */
+const isAsset = (path: string) => path === MIRRORED_ASSET || isDocImagePath(path);
+
 const wantedPath = (path: string) =>
-  path === MIRRORED_ASSET || isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
+  isAsset(path) || isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
 
 const git = (args: string[]) =>
   execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -99,8 +104,11 @@ export interface MaterializedVersion {
 }
 
 /** @returns what was materialised */
-export function fetchDocs(versions: ReadonlyArray<DocsVersionRef>): MaterializedVersion[] {
-  rmSync(VERSIONS_DIR, { recursive: true, force: true });
+export function fetchDocs(
+  versions: ReadonlyArray<DocsVersionRef>,
+  outputDir: string = VERSIONS_DIR,
+): MaterializedVersion[] {
+  rmSync(outputDir, { recursive: true, force: true });
 
   const done: MaterializedVersion[] = [];
 
@@ -115,11 +123,11 @@ export function fetchDocs(versions: ReadonlyArray<DocsVersionRef>): Materialized
     }
 
     for (const path of files) {
-      const target = join(VERSIONS_DIR, id, path);
+      const target = join(outputDir, id, path);
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(
         target,
-        path === MIRRORED_ASSET
+        isAsset(path)
           ? execFileSync('git', ['show', `${ref}:${path}`], {
               cwd: REPO,
               maxBuffer: 64 * 1024 * 1024,
@@ -132,7 +140,7 @@ export function fetchDocs(versions: ReadonlyArray<DocsVersionRef>): Materialized
     const { commit, date } = buildOf(ref);
 
     const localesByPath = new Map<string, string[]>();
-    for (const file of files.filter((path) => path !== MIRRORED_ASSET)) {
+    for (const file of files.filter((path) => !isAsset(path))) {
       const source = splitContentEntryId(contentEntryId(`${id}/${file}`));
       const locales = localesByPath.get(source.path) ?? [];
       if (!locales.includes(source.locale)) locales.push(source.locale);
@@ -143,7 +151,7 @@ export function fetchDocs(versions: ReadonlyArray<DocsVersionRef>): Materialized
     done.push({ id, ref, version, commit, date, sourceFacts });
   }
 
-  writeFileSync(join(VERSIONS_DIR, 'manifest.json'), JSON.stringify(done, null, 2));
+  writeFileSync(join(outputDir, 'manifest.json'), JSON.stringify(done, null, 2));
 
   if (done.length === 0) {
     throw new Error('No documentation version could be read. Is this a full clone?');

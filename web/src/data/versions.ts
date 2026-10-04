@@ -1,6 +1,6 @@
 // Vite inlines this at build time. Reading it with `fs` instead breaks once the
 // module is bundled, because the relative path no longer points at the file.
-import { docsPath, docsUrl } from './site';
+import { docsFileUrl, docsPath, docsUrl } from './site';
 import { currentVersionId, versionPrefix } from './version-routing.ts';
 import { DEFAULT_LOCALE } from '../i18n';
 import type { Locale } from '../i18n';
@@ -115,6 +115,14 @@ export function docsHref(entryId: string, locale: Locale = DEFAULT_LOCALE): stri
   const separator = entryId.indexOf('/');
 
   return docsUrl(entryId.slice(separator + 1), prefixFor(entryId.slice(0, separator)), locale);
+}
+
+/**
+ * URL of a file under `docs/` that a version serves, such as a screenshot in
+ * `docs/images/`. Shared by every locale of that version.
+ */
+export function docsFileHref(repoPath: string, versionId: string): string {
+  return docsFileUrl(repoPath.replace(/^docs\//, ''), prefixFor(versionId));
 }
 
 /** Root of a version's documentation. */
