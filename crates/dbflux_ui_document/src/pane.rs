@@ -236,6 +236,15 @@ pub struct PaneHandle {
     /// running. `None` for documents with no persistence path.
     pub flush_for_shutdown: Option<Box<dyn Fn(&mut App) -> bool>>,
 
+    /// Commits input the document still holds in an open editor, such as a
+    /// value typed into a grid cell before Enter, so the pending changes that
+    /// a close or a shutdown reads include it.
+    ///
+    /// Returns `false` when some input could not be committed, and a close must
+    /// then keep the document open. `None` for documents that hold no such
+    /// input.
+    pub commit_pending_input: Option<Box<dyn Fn(&mut App) -> bool>>,
+
     // --- Mutations (&mut App) ---
     set_active_tab: Box<dyn Fn(bool, &mut App)>,
     set_refresh_policy: Box<dyn Fn(RefreshPolicy, &mut App)>,
@@ -407,6 +416,7 @@ impl PaneHandle {
             refresh_policy,
             flush_auto_save,
             flush_for_shutdown: None,
+            commit_pending_input: None,
             set_active_tab,
             set_refresh_policy,
             matches_dedup_key,
@@ -513,6 +523,18 @@ impl PaneHandle {
             .as_ref()
             .map(|flush| flush(cx))
             .unwrap_or(false)
+    }
+
+    /// Commits input the document still holds in an open editor.
+    ///
+    /// Called before a close decides whether to ask about pending changes, and
+    /// before a shutdown flush. Returns `false` when some input could not be
+    /// committed, so a close must keep the document open. A pane that holds no
+    /// such input returns `true` and changes nothing.
+    pub fn commit_pending_input(&self, cx: &mut App) -> bool {
+        self.commit_pending_input
+            .as_ref()
+            .is_none_or(|commit| commit(cx))
     }
 
     /// Notifies the document that it became (or stopped being) the active tab.

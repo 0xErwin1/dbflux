@@ -179,6 +179,11 @@ impl DataDocument {
             Box::new(move |_w, cx| grid.update(cx, |grid, cx| grid.apply_for_close(cx)))
         });
 
+        handle.commit_pending_input = Some({
+            let grid = entity.read(cx).data_grid.clone();
+            Box::new(move |cx| grid.update(cx, |grid, cx| grid.commit_pending_input(cx)))
+        });
+
         handle.side_panels = Some({
             let grid = entity.read(cx).data_grid.clone();
             Box::new(move |_window, cx| grid.update(cx, |grid, cx| grid.side_panels(cx)))
@@ -302,5 +307,37 @@ mod tests {
             !window.update(|window, cx| pane.apply_for_close(window, cx)),
             "a script has no staged edits to apply"
         );
+    }
+
+    /// A pane that sets no input hook keeps today's close: committing reports
+    /// success and leaves its pending changes as they were.
+    #[gpui::test]
+    fn a_pane_without_an_input_hook_commits_nothing(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<PaneHandle>>> = Rc::new(RefCell::new(None));
+        let handle = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+
+            handle.replace(Some(CodeDocument::into_pane(document.clone(), cx)));
+            Root::new(document, window, cx)
+        });
+
+        let pane = holder.borrow_mut().take().expect("the pane is built");
+
+        assert!(pane.commit_pending_input.is_none());
+        assert!(window.update(|_, cx| pane.commit_pending_input(cx)));
+        assert_eq!(window.update(|_, cx| pane.change_summary(cx)), None);
     }
 }

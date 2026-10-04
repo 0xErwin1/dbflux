@@ -543,6 +543,11 @@ impl Workspace {
         cx: &mut Context<Self>,
         ids: Vec<crate::ui::document::DocumentId>,
     ) {
+        let ids: Vec<crate::ui::document::DocumentId> = ids
+            .into_iter()
+            .filter(|doc_id| self.commit_pending_input(*doc_id, cx))
+            .collect();
+
         let needs_confirmation =
             self.documents_requiring_close_confirmation(ids.iter().copied(), cx);
 
@@ -563,6 +568,23 @@ impl Workspace {
         for doc_id in ids {
             self.close_tab(doc_id, window, cx);
         }
+    }
+
+    /// Commits the input `doc_id` still holds in an open editor, so the close
+    /// gate counts it as a pending change instead of closing over it.
+    ///
+    /// Returns `false` when the document kept input it could not commit; its
+    /// tab must then stay open.
+    fn commit_pending_input(
+        &mut self,
+        doc_id: crate::ui::document::DocumentId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.tab_manager.update(cx, |manager, cx| {
+            manager
+                .document(doc_id)
+                .is_none_or(|tab| tab.as_pane().commit_pending_input(cx))
+        })
     }
 
     /// Returns the pending-edit entries of the documents in `ids` that must be
@@ -647,7 +669,12 @@ impl Workspace {
         // before anything is written or removed. The gate lives here rather than
         // at one entry point because every close route reaches this funnel, and
         // a route that skipped it would force a Save As dialog instead of
-        // asking.
+        // asking. A value still in an open editor is committed first, so the
+        // gate sees it.
+        if !self.commit_pending_input(doc_id, cx) {
+            return false;
+        }
+
         let needs_confirmation = self.documents_requiring_close_confirmation([doc_id], cx);
 
         if !needs_confirmation.is_empty() {
@@ -1402,5 +1429,553 @@ mod tests {
                 "the scratch tab closes without a file to delete"
             );
         });
+    }
+}
+
+/// A value typed into an open grid editor and not yet committed must reach the
+/// close gate: every close route either asks about it or keeps it, and never
+/// drops it without a word.
+#[cfg(test)]
+mod pending_cell_input_close_tests {
+    // Explicit imports, not `use super::*`: the parent glob together with
+    // `#[gpui::test]` sends the macro expansion into unbounded recursion.
+    use crate::keymap::{Command, CommandDispatcher, FocusTarget};
+    use crate::ui::document::tab_bar::TAB_MENU_CLOSE;
+    use crate::ui::document::{DataDocument, DocumentId, Tab, TabBarEvent};
+    use crate::ui::views::workspace::Workspace;
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{
+        AppContext as _, Bounds, Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext,
+        VisualTestContext, point,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    fn new_workspace(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<AppStateEntity>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
+        let workspace_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+            workspace_ref.replace(Some(workspace.clone()));
+            gpui_component::Root::new(workspace, window, cx)
+        });
+
+        let workspace = holder
+            .borrow()
+            .clone()
+            .expect("workspace should be created");
+
+        // Test windows open inactive, and gpui hides focus paths of an
+        // inactive window from its focus listeners, which would keep the cell
+        // editor from ever seeing its blur.
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+
+        (workspace, app_state, window)
+    }
+
+    fn column(name: &str, kind: ColumnKind, is_primary_key: bool) -> ColumnMeta {
+        ColumnMeta {
+            name: name.to_string(),
+            type_name: "text".to_string(),
+            kind,
+            nullable: true,
+            is_primary_key,
+        }
+    }
+
+    /// One row keyed by `id`, with a text column edited inline, a JSON column
+    /// and a multi-line text column, both edited in the cell editor dialog.
+    fn orders_result() -> QueryResult {
+        QueryResult::table(
+            vec![
+                column("id", ColumnKind::Integer, true),
+                column("name", ColumnKind::Text, false),
+                column("data", ColumnKind::Unknown, false),
+                column("notes", ColumnKind::Text, false),
+            ],
+            vec![vec![
+                Value::Int(1),
+                Value::Text("alice".to_string()),
+                Value::Json("{\"a\":1}".to_string()),
+                Value::Text("first line\nsecond line".to_string()),
+            ]],
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    /// Opens an editable table tab that reads from no connection, makes it the
+    /// focused document and returns its id.
+    fn open_grid_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+    ) -> DocumentId {
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                DataDocument::new_for_test_table(
+                    orders_result(),
+                    vec!["id".to_string()],
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            })
+        });
+        let document_id = window.update(|_, cx| document.read(cx).id());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane = DataDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        document_id
+    }
+
+    /// Sends grid commands to the active document, as the keymap does.
+    fn dispatch_to_grid(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        commands: &[Command],
+    ) {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    for command in commands {
+                        manager.dispatch_active(*command, window, cx);
+                    }
+                });
+            });
+        });
+        window.run_until_parked();
+    }
+
+    /// Opens the editor on the given column of the first row and types `text`
+    /// into it, without committing it.
+    fn type_into_cell(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        column_moves: usize,
+        text: &str,
+    ) {
+        let mut commands = vec![Command::SelectFirst];
+        commands.extend(std::iter::repeat_n(Command::ColumnRight, column_moves));
+        commands.push(Command::Execute);
+        dispatch_to_grid(window, workspace, &commands);
+
+        window.simulate_input(text);
+        window.run_until_parked();
+    }
+
+    fn change_summary(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        id: DocumentId,
+    ) -> Option<String> {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .document(id)
+                .and_then(|tab| tab.change_summary(cx))
+        })
+    }
+
+    fn tab_is_open(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        id: DocumentId,
+    ) -> bool {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .document(id)
+                .is_some()
+        })
+    }
+
+    /// The number of documents the unsaved-changes prompt lists, or `None`
+    /// when it is not open.
+    fn prompt_entries(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Option<usize> {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.read(cx);
+            modal.is_visible().then(|| modal.selected_count())
+        })
+    }
+
+    fn center(bounds: Bounds<Pixels>) -> Point<Pixels> {
+        point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        )
+    }
+
+    fn rendered_bounds(window: &mut VisualTestContext, selector: String) -> Bounds<Pixels> {
+        let selector: &'static str = selector.leak();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+        window
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not rendered"))
+    }
+
+    /// The close was held for the user's decision: the tab is still open, the
+    /// prompt lists it, and the typed value is a pending change.
+    fn assert_close_asks_about_the_typed_value(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        id: DocumentId,
+        route: &str,
+    ) {
+        assert!(
+            tab_is_open(window, workspace, id),
+            "{route}: the tab must stay open while the typed value is unsaved"
+        );
+        assert_eq!(
+            prompt_entries(window, workspace),
+            Some(1),
+            "{route}: the unsaved-changes prompt must list the grid"
+        );
+        assert!(
+            change_summary(window, workspace, id).is_some(),
+            "{route}: the typed value must be a pending change"
+        );
+    }
+
+    /// Control for the fixture: Enter commits what was typed, so the value the
+    /// other tests type really sits in the cell editor.
+    #[gpui::test]
+    fn enter_commits_the_value_typed_into_the_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+
+        type_into_cell(window, &workspace, 1, "bob");
+        assert!(
+            change_summary(window, &workspace, id).is_none(),
+            "a value still in the editor is not a pending change yet"
+        );
+
+        dispatch_to_grid(window, &workspace, &[Command::Execute]);
+        assert!(
+            change_summary(window, &workspace, id).is_some(),
+            "Enter stages the typed value"
+        );
+    }
+
+    #[gpui::test]
+    fn the_close_button_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "close button");
+    }
+
+    #[gpui::test]
+    fn a_middle_click_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let tab = center(rendered_bounds(window, format!("tab-{}", id.0)));
+        window.simulate_mouse_down(tab, MouseButton::Middle, Modifiers::none());
+        window.simulate_mouse_up(tab, MouseButton::Middle, Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "middle click");
+    }
+
+    /// The right click moves focus out of the cell editor, and the frame drawn
+    /// before the menu item is chosen delivers the editor's blur.
+    #[gpui::test]
+    fn the_tab_menu_close_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let tab = center(rendered_bounds(window, format!("tab-{}", id.0)));
+        window.simulate_mouse_down(tab, MouseButton::Right, Modifiers::none());
+        window.simulate_mouse_up(tab, MouseButton::Right, Modifiers::none());
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_bar.update(cx, |bar, cx| {
+                    bar.context_menu_execute_at(TAB_MENU_CLOSE, cx)
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "tab menu close");
+    }
+
+    /// Only the tab menu commits on its way in. A plain click on the tab moves
+    /// focus out of the cell editor like any other click outside the table,
+    /// and that still cancels the edit.
+    #[gpui::test]
+    fn clicking_the_tab_still_cancels_the_typed_value(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let tab = center(rendered_bounds(window, format!("tab-{}", id.0)));
+        window.simulate_click(tab, Modifiers::none());
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        assert!(tab_is_open(window, &workspace, id));
+        assert!(
+            change_summary(window, &workspace, id).is_none(),
+            "focus leaving the cell editor drops the typed value, as before"
+        );
+    }
+
+    #[gpui::test]
+    fn the_close_tab_command_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::CloseCurrentTab, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "close tab command");
+    }
+
+    /// Close Others, Close All, Close to the Left and Close to the Right.
+    #[gpui::test]
+    fn batch_closes_ask_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let routes: [(&str, fn(DocumentId, DocumentId) -> TabBarEvent); 4] = [
+            ("close others", |_grid, other| {
+                TabBarEvent::CloseOtherTabs(other)
+            }),
+            ("close all", |_grid, _other| TabBarEvent::CloseAllTabs),
+            ("close to the left", |_grid, other| {
+                TabBarEvent::CloseTabsToLeft(other)
+            }),
+            ("close to the right", |_grid, other| {
+                TabBarEvent::CloseTabsToRight(other)
+            }),
+        ];
+
+        for (route, event) in routes {
+            let (workspace, app_state, window) = new_workspace(cx);
+
+            // The grid sits on the side of `other` that each batch closes.
+            let left_of_other = route != "close to the right";
+            let (id, other) = if left_of_other {
+                let id = open_grid_tab(window, &workspace, &app_state);
+                let other = open_grid_tab(window, &workspace, &app_state);
+                (id, other)
+            } else {
+                let other = open_grid_tab(window, &workspace, &app_state);
+                let id = open_grid_tab(window, &workspace, &app_state);
+                (id, other)
+            };
+
+            window.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace
+                        .tab_manager
+                        .update(cx, |manager, cx| manager.activate(id, cx));
+                });
+            });
+            window.run_until_parked();
+            type_into_cell(window, &workspace, 1, "bob");
+
+            let event = event(id, other);
+            window.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.tab_bar.update(cx, |_bar, cx| cx.emit(event));
+                });
+            });
+            window.run_until_parked();
+
+            assert_close_asks_about_the_typed_value(window, &workspace, id, route);
+        }
+    }
+
+    /// The cell editor dialog sits inside the document, so the tab bar stays
+    /// reachable while it holds an edited value.
+    #[gpui::test]
+    fn the_close_button_asks_about_a_value_edited_in_the_cell_editor_dialog(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 3, " and more");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "cell editor dialog");
+    }
+
+    /// A JSON value that does not parse cannot become a pending change, so the
+    /// close leaves the tab open with the value in the dialog.
+    #[gpui::test]
+    fn an_invalid_json_value_in_the_dialog_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 2, "{\"b\":");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert!(tab_is_open(window, &workspace, id));
+        assert_eq!(
+            prompt_entries(window, &workspace),
+            None,
+            "nothing could be committed, so there is nothing to ask about"
+        );
+    }
+
+    /// Cancelling the prompt keeps the tab and the typed value, now a pending
+    /// change the user can save or revert.
+    #[gpui::test]
+    fn cancelling_the_prompt_keeps_the_typed_value(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_unsaved_changes
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert!(tab_is_open(window, &workspace, id));
+        assert!(
+            change_summary(window, &workspace, id).is_some(),
+            "the typed value stays as a pending change"
+        );
+    }
+
+    /// Saving from the prompt applies the typed value, and the tab closes only
+    /// once the apply lands. This grid reads from no connection, so the apply
+    /// cannot land and the tab stays open.
+    #[gpui::test]
+    fn saving_from_the_prompt_applies_the_typed_value(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_unsaved_changes
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            tab_is_open(window, &workspace, id),
+            "an apply that did not land must not take the tab away"
+        );
+    }
+
+    /// Discarding from the prompt is the user's decision to drop the value.
+    #[gpui::test]
+    fn discarding_from_the_prompt_closes_the_tab(cx: &mut TestAppContext) {
+        use crate::ui::overlays::modals::UnsavedChangesOutcome;
+
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_unsaved_changes.update(cx, |modal, cx| {
+                    cx.emit(UnsavedChangesOutcome::DiscardAll(vec![id]));
+                    modal.close(cx);
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert!(!tab_is_open(window, &workspace, id));
+    }
+
+    /// A quit flushes every document before shutting down; the value still in
+    /// the cell editor is committed first, so a document that persists its
+    /// pending changes on shutdown persists this one too.
+    #[gpui::test]
+    fn the_shutdown_flush_commits_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.flush_pending_document_edits(cx);
+            });
+        });
+
+        assert!(
+            change_summary(window, &workspace, id).is_some(),
+            "the shutdown flush must commit the typed value"
+        );
     }
 }
