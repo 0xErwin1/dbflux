@@ -1762,8 +1762,15 @@ document:
     error:
       open_failed: "Could not open %{name}"
       load_more_failed: "Could not load more of %{name}"
+      reread_failed: "Could not re-read %{name}"
+      refused:
+        unsupported: "%{encoding} text cannot be read with %{character} as its delimiter or quote. Choose another delimiter, quote or encoding."
+        line_break: "A line break cannot be the delimiter or the quote. Choose another character."
+        quote_equals_delimiter: "The quote and the delimiter are both %{character}. Choose a different character for one of them."
     warning:
       malformed_text: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The detected encoding is probably wrong."
+      malformed_text_chosen: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The chosen encoding is probably wrong."
+      detected_delimiter_unreadable: "The detected delimiter %{detected} cannot be read in %{encoding} text, so the file is read with %{delimiter} and its columns are probably wrong. Choose another encoding or delimiter."
       cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
     status:
       delimiter: "Delimiter: %{delimiter}"
@@ -1779,9 +1786,21 @@ document:
       tab: Tab
       semicolon: Semicolon
       pipe: Pipe
+    quote:
+      double: "Double quote"
+      single: "Single quote"
+      none: "No quoting"
+    toolbar:
+      delimiter: "Delimiter"
+      quote: "Quote"
+      encoding: "Encoding"
+      header: "Header row"
+      reset: "Reset to detected"
+      detected: "%{value} (detected)"
     footer:
       load_more: Load more
       loading_more: "Loading…"
+      rereading: "Reading the file again…"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"

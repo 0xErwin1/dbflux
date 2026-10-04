@@ -1,14 +1,16 @@
 //! Rendering of `DelimitedDocument`.
 //!
-//! Layout, top to bottom: the warnings of the opened file, the table of the
-//! loaded records, and a footer with the delimiter, the encoding, the record
-//! count and, while the file has more records, the control that loads the
-//! next page. While the first page is read, and when opening failed, a
-//! centered notice takes the place of all three.
+//! Layout, top to bottom: the dialect toolbar, the warnings of the opened
+//! file, the table of the loaded records, and a footer with the delimiter,
+//! the encoding, the record count and, while the file has more records, the
+//! control that loads the next page. While the file is read again under an
+//! override the footer says so and that control takes no click. While the
+//! first page is read, and when opening failed, a centered notice takes the
+//! place of all four.
 
 use dbflux_components::components::data_table::DataTable;
 use dbflux_components::composites::EmptyState;
-use dbflux_components::controls::Button;
+use dbflux_components::controls::{Button, Checkbox, Dropdown};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::DocumentMetrics;
@@ -18,6 +20,10 @@ use gpui_component::ActiveTheme;
 
 use super::document::DelimitedDocument;
 use crate::chrome::document_footer;
+
+/// The width of a select of the dialect toolbar: the longest item, a value
+/// marked as detected, fits without being cut.
+const DIALECT_SELECT_WIDTH: Pixels = px(190.0);
 
 impl DelimitedDocument {
     fn render_notice(&self, notice: EmptyState, cx: &Context<Self>) -> AnyElement {
@@ -32,6 +38,77 @@ impl DelimitedDocument {
             .bg(cx.theme().background)
             .child(notice)
             .into_any_element()
+    }
+
+    /// The dialect toolbar: the delimiter, quote and encoding selects, the
+    /// header checkbox and the control that drops every override. `None`
+    /// until the file is loaded. The row wraps when the tab is narrow.
+    fn render_dialect_toolbar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let controls = self.dialect_controls()?;
+        let requested = self.requested_dialect()?;
+        let theme = cx.theme();
+
+        let select = |label: String, dropdown: &Entity<Dropdown>| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .child(Text::caption(label))
+                .child(div().w(DIALECT_SELECT_WIDTH).child(dropdown.clone()))
+        };
+
+        let document = cx.entity().downgrade();
+
+        let header = Checkbox::new("delimited-header")
+            .checked(requested.has_header)
+            .label(self.header_label())
+            .on_click(move |has_header, _window, cx| {
+                if let Some(document) = document.upgrade() {
+                    document.update(cx, |document, cx| {
+                        document.override_has_header(*has_header, cx);
+                    });
+                }
+            });
+
+        let reset = Button::new(
+            "delimited-dialect-reset",
+            dbflux_i18n::t!("document.delimited.toolbar.reset"),
+        )
+        .inline()
+        .icon(AppIcon::RotateCcw)
+        .disabled(!self.has_dialect_overrides())
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.reset_dialect(cx);
+        }));
+
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .flex_shrink_0()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .px(DocumentMetrics::PADDING_X)
+                .py(DocumentMetrics::GAP)
+                .border_b_1()
+                .border_color(theme.border)
+                .child(select(
+                    dbflux_i18n::t!("document.delimited.toolbar.delimiter"),
+                    &controls.delimiter,
+                ))
+                .child(select(
+                    dbflux_i18n::t!("document.delimited.toolbar.quote"),
+                    &controls.quote,
+                ))
+                .child(div().flex_shrink_0().child(header))
+                .child(select(
+                    dbflux_i18n::t!("document.delimited.toolbar.encoding"),
+                    &controls.encoding,
+                ))
+                .child(reset)
+                .into_any_element(),
+        )
     }
 
     fn render_warnings(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -61,7 +138,8 @@ impl DelimitedDocument {
     }
 
     /// The control that loads the next page. `None` once every record is
-    /// loaded. While a page is being read it says so and takes no click.
+    /// loaded. While a page is being read it says so and takes no click, and
+    /// it takes none while the file is read again under an override.
     fn render_load_more(&self, cx: &Context<Self>) -> Option<Button> {
         if !self.has_more_records() {
             return None;
@@ -86,7 +164,7 @@ impl DelimitedDocument {
                     ),
                     Button::kbd,
                 )
-                .disabled(is_loading)
+                .disabled(!self.can_load_more())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.load_more(cx);
                 })),
@@ -99,6 +177,7 @@ impl DelimitedDocument {
             .flex_col()
             .flex_1()
             .min_h_0()
+            .children(self.render_dialect_toolbar(cx))
             .children(self.render_warnings(cx))
             .child(div().flex_1().min_h_0().child(table))
             .child(
@@ -107,6 +186,10 @@ impl DelimitedDocument {
                         self.status_items()
                             .iter()
                             .map(|item| div().flex_shrink_0().child(item.clone())),
+                    )
+                    .children(
+                        self.progress_item()
+                            .map(|item| div().flex_shrink_0().child(item)),
                     )
                     .children(self.render_load_more(cx)),
             )

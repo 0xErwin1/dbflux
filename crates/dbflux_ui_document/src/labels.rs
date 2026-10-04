@@ -2811,30 +2811,108 @@ pub(crate) fn delimited_load_more_failed_message(file_name: &str) -> String {
 }
 
 /// Warning shown when decoding a delimited file replaced malformed byte
-/// sequences, with the encoding the file was read in.
-pub(crate) fn delimited_malformed_text_warning(encoding: &str) -> String {
+/// sequences, with the encoding the file was read in. `is_chosen` says
+/// whether the user picked that encoding or detection resolved it, which is
+/// the one the warning blames.
+pub(crate) fn delimited_malformed_text_warning(encoding: &str, is_chosen: bool) -> String {
+    if is_chosen {
+        dbflux_i18n::t!(
+            "document.delimited.warning.malformed_text_chosen",
+            encoding = encoding
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.delimited.warning.malformed_text",
+            encoding = encoding
+        )
+    }
+}
+
+/// Warning shown when the reader refuses the detected delimiter in the
+/// file's encoding and the file is read with another one.
+pub(crate) fn delimited_unreadable_delimiter_warning(
+    detected: u8,
+    encoding: &str,
+    in_use: u8,
+) -> String {
     dbflux_i18n::t!(
-        "document.delimited.warning.malformed_text",
-        encoding = encoding
+        "document.delimited.warning.detected_delimiter_unreadable",
+        detected = delimited_byte_name(detected),
+        encoding = encoding,
+        delimiter = delimited_byte_name(in_use)
     )
 }
 
-/// Status-line item naming the field delimiter of a delimited file.
+/// Summary of the error reported when a delimited file cannot be read again
+/// under another dialect.
+pub(crate) fn delimited_reread_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.reread_failed", name = file_name)
+}
+
+/// Why the reader refuses a dialect, with what the user can change. `None`
+/// for an error that is not a refusal of the dialect.
+pub(crate) fn delimited_refused_dialect_cause(
+    error: &dbflux_delimited::ReadError,
+) -> Option<String> {
+    use dbflux_delimited::ReadError;
+
+    match error {
+        ReadError::UnsupportedDialect { encoding, byte } => Some(dbflux_i18n::t!(
+            "document.delimited.error.refused.unsupported",
+            encoding = encoding,
+            character = delimited_byte_name(*byte)
+        )),
+
+        ReadError::LineBreakInDialect { .. } => Some(dbflux_i18n::t!(
+            "document.delimited.error.refused.line_break"
+        )),
+
+        ReadError::QuoteEqualsDelimiter { byte } => Some(dbflux_i18n::t!(
+            "document.delimited.error.refused.quote_equals_delimiter",
+            character = delimited_byte_name(*byte)
+        )),
+
+        _ => None,
+    }
+}
+
+/// The name of a delimiter or quote byte of a delimited file.
 ///
 /// The four delimiters detection chooses between have a translated name. Any
 /// other byte is shown as its character when it is printable ASCII and as a
 /// hexadecimal byte otherwise.
-pub(crate) fn delimited_delimiter_status(delimiter: u8) -> String {
-    let name = match delimiter {
+pub(crate) fn delimited_byte_name(byte: u8) -> String {
+    match byte {
         b',' => dbflux_i18n::t!("document.delimited.delimiter.comma"),
         b'\t' => dbflux_i18n::t!("document.delimited.delimiter.tab"),
         b';' => dbflux_i18n::t!("document.delimited.delimiter.semicolon"),
         b'|' => dbflux_i18n::t!("document.delimited.delimiter.pipe"),
         byte if byte.is_ascii_graphic() => char::from(byte).to_string(),
         byte => format!("0x{byte:02X}"),
-    };
+    }
+}
 
-    dbflux_i18n::t!("document.delimited.status.delimiter", delimiter = name)
+/// The name of the quote of a delimited file, or of a file without quoting.
+pub(crate) fn delimited_quote_name(quote: Option<u8>) -> String {
+    match quote {
+        Some(b'"') => dbflux_i18n::t!("document.delimited.quote.double"),
+        Some(b'\'') => dbflux_i18n::t!("document.delimited.quote.single"),
+        Some(byte) => delimited_byte_name(byte),
+        None => dbflux_i18n::t!("document.delimited.quote.none"),
+    }
+}
+
+/// `value` marked as the one dialect detection resolved.
+pub(crate) fn delimited_detected_label(value: &str) -> String {
+    dbflux_i18n::t!("document.delimited.toolbar.detected", value = value)
+}
+
+/// Status-line item naming the field delimiter of a delimited file.
+pub(crate) fn delimited_delimiter_status(delimiter: u8) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.status.delimiter",
+        delimiter = delimited_byte_name(delimiter)
+    )
 }
 
 /// Status-line item naming the text encoding of a delimited file.
@@ -7200,6 +7278,6 @@ mod tests {
             delimited_open_failed_message("cities.csv"),
             "Could not open cities.csv"
         );
-        assert!(delimited_malformed_text_warning("UTF-8").contains("UTF-8"));
+        assert!(delimited_malformed_text_warning("UTF-8", false).contains("UTF-8"));
     }
 }
