@@ -34,8 +34,8 @@ MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 �
 
 | 설정 | 옵션 | 기본값 |
 |---------|---------|---------|
-| **Theme** | Dark, Mirage, Light | Dark |
-| **Style** | Default, Compact | Default |
+| **Theme** | Follow system, Dark, Light | Dark |
+| **Density** | Default, Compact | Default |
 | **Language** | System, 그 뒤에 번역 카탈로그가 함께 제공되는 모든 언어 | System |
 
 언어 목록은 DBFlux가 함께 제공하는 번역 카탈로그에서 도출됩니다. 영어가 먼저

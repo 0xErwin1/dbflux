@@ -36,8 +36,8 @@ Integration](MCP_AI_INTEGRATION.md).
 
 | Setting | Options | Default |
 |---------|---------|---------|
-| **Theme** | Dark, Mirage, Light | Dark |
-| **Style** | Default, Compact | Default |
+| **Theme** | Follow system, Dark, Light | Dark |
+| **Density** | Default, Compact | Default |
 | **Language** | System, then every language with a shipped translation catalog | System |
 
 The language list is derived from DBFlux's shipped translation catalogs: English

@@ -110,8 +110,9 @@ del sidebar:
 El diagrama se abre en su propia pestaña, y abrir el mismo diagrama otra vez
 cambia a esa pestaña. La carga se ejecuta como una tarea en segundo plano
 ("Diagrama de esquema: _base de datos_") que puedes cancelar desde el panel
-Tasks. Cada tabla lista sus columnas con las insignias `PK`, `FK` y `NN` (not
-null), y unas líneas conectan cada clave foránea con la tabla que referencia.
+Tasks. Cada tabla lista sus columnas, con un icono de llave en las columnas de
+clave primaria y un icono de enlace en las de clave foránea, y unas líneas
+conectan cada clave foránea con la tabla que referencia.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/diagram-dark.webp">

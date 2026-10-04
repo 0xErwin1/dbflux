@@ -16,7 +16,7 @@
 
 ## 选择驱动
 
-连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、MongoDB、Redis、DynamoDB、Microsoft SQL Server 以及基于 AWS 的集成。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
+连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、Microsoft SQL Server、Amazon Redshift、ClickHouse、TursoDB、MongoDB、DynamoDB、Redis、InfluxDB、CloudWatch Logs 和 Amazon S3。选择器按类别对驱动分组：关系型、文档、键值、时间序列和日志、对象存储。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
 
 使用 `/` 筛选驱动列表，`j`/`k`（或方向键）移动，`Enter` 确认选择。
 

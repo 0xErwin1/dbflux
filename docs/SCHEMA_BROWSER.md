@@ -93,17 +93,17 @@ Relational connections whose driver reports foreign-key support (for example
 PostgreSQL, MySQL/MariaDB, SQLite, and SQL Server) can draw tables and their
 foreign keys as a diagram. Open it from the sidebar context menu:
 
-- **View Schema Diagram** on a loaded database draws every table in it, up to
+- **View schema diagram** on a loaded database draws every table in it, up to
   100. A larger database shows the notice "Showing first 100 tables — the
   schema has more."
-- **View Relationships** on a table draws that table, the tables it references,
+- **View relationships** on a table draws that table, the tables it references,
   and the tables that reference it.
 
 The diagram opens in its own tab, and opening the same diagram again switches to
 that tab. Loading runs as a background task ("Schema diagram: _database_") that
-you can cancel from the Tasks panel. Each table lists its columns with `PK`,
-`FK`, and `NN` (not null) badges, and lines connect each foreign key to the
-table it references.
+you can cancel from the Tasks panel. Each table lists its columns, with a key
+icon on primary-key columns and a link icon on foreign-key columns, and lines
+connect each foreign key to the table it references.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/schema-browser/diagram-dark.webp">
@@ -116,7 +116,7 @@ table it references.
 | **Reset** | Returns to 100% zoom and the starting position. |
 | **Arrange** | Discards the positions of tables you moved and recomputes the layout. |
 | **Fit** | Zooms and pans so every table is visible. |
-| Layout dropdown | **Left to right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View Relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also discards moved tables and fits the diagram into view. |
+| Layout dropdown | **Left to right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also discards moved tables and fits the diagram into view. |
 | **Export** | **Copy as DBML** or **Copy as SQL** copies the tables shown in the diagram to the clipboard. The SQL is `CREATE TABLE` statements plus `ALTER TABLE ... ADD CONSTRAINT` for the foreign keys. |
 | _N_ tables · _M_ relations | How many tables and foreign keys the diagram shows. |
 | **Types** / **Indexes** | Show column types (on by default) / an index list under each table (off by default). |

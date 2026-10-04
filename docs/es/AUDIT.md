@@ -151,6 +151,7 @@ Las categorías de un vistazo:
 | **Governance** | Decisiones de policy.                            |
 | **Config**     | Cambios de profile y settings.                   |
 | **System**     | Arranque, migraciones y eventos de log internos. |
+| **Object Storage** | Creación y borrado de buckets, y subidas, descargas, renombrados y borrados de objetos, carpetas nuevas, URL prefirmadas y ediciones guardadas. |
 
 ### Filtrar
 

@@ -135,6 +135,7 @@ Categories at a glance:
 | **Governance** | Policy decisions. |
 | **Config** | Profile and settings changes. |
 | **System** | Startup, migrations, and internal log events. |
+| **Object Storage** | Bucket creation and deletion, and object uploads, downloads, renames, deletions, new folders, presigned URLs, and saved edits. |
 
 ### Filter
 
