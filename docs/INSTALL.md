@@ -104,6 +104,8 @@ NixOS / nix-darwin via overlay:
 }
 ```
 
+The overlay builds every package with your system's nixpkgs, so the prebuilt binary uses the same glibc as your graphics drivers. Installing from the flake's own outputs (`nix run`, `nix profile install` or `dbflux.packages.<system>.*`) uses the nixpkgs pinned in DBFlux's `flake.lock` instead. When your system's glibc is newer than that one, the graphics drivers fail to load and DBFlux can stop at startup. Use the overlay in that case, or add `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";` to your flake.
+
 ## macOS
 
 DBFlux for macOS is not signed with an Apple developer certificate. When opening for the first time, you'll see a warning about an "unidentified developer".

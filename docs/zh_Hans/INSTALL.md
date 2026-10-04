@@ -104,6 +104,8 @@ nix profile install github:0xErwin1/dbflux/nightly#dbflux-nightly
 }
 ```
 
+overlay 使用你系统的 nixpkgs 构建所有软件包，因此预构建二进制文件与你的显卡驱动使用同一个 glibc。直接从 flake 自身的输出安装（`nix run`、`nix profile install` 或 `dbflux.packages.<system>.*`）则使用 DBFlux 的 `flake.lock` 中固定的 nixpkgs。如果你系统的 glibc 比它更新，显卡驱动将无法加载，DBFlux 可能在启动时退出。这种情况下请使用 overlay，或在你的 flake 中添加 `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`。
+
 ## macOS
 
 DBFlux 的 macOS 版本未使用 Apple 开发者证书签名。首次打开时，会看到关于“身份不明的开发者”的警告。
