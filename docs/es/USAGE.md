@@ -27,6 +27,8 @@ a tu primera query; si no, elige la página de lo que estás haciendo.
   los documentos.
 - [Archivos CSV y TSV](CSV_FILES.md) — abrir, editar y guardar archivos
   delimitados como tabla o como texto.
+- [Archivos Parquet](PARQUET_FILES.md) — leer archivos Parquet como una tabla
+  paginada de solo lectura e inspeccionar sus columnas.
 - [Gráficos](CHARTS.md) y [Dashboards](DASHBOARDS.md) — graficar resultados y
   construir dashboards.
 - [Referencia de teclado](KEYBOARD.md) — todos los atajos por defecto, incluido
