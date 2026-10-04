@@ -35,6 +35,11 @@ que los cambios sin guardar, Guardar fila y revertir funcionan igual en ambos
 modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 `i` de nuevo para volver a la cuadrícula.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/record-view-dark.webp">
+  <img src="../images/results/record-view-light.webp" alt="La vista de registro con una fila de cliente como lista de campos y valores">
+</picture>
+
 ## Menú de la cabecera de columna
 
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
@@ -87,6 +92,11 @@ El input de filtro también ofrece autocompletado consciente del schema (misma
 navegación que el builder — ver [Autocompletado consciente del
 schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/filtering-dark.webp">
+  <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
+</picture>
+
 ## Editar y CRUD
 
 En el data grid:
@@ -96,6 +106,11 @@ En el data grid:
 - `r` — renombrar / editar (según el contexto).
 - `y` — copiar la fila seleccionada.
 - `Ctrl+c` (`Cmd+c`) — copiar la(s) celda(s) seleccionada(s) al portapapeles.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
+  <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">
+</picture>
 
 ### Cuándo los resultados son editables
 

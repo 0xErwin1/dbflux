@@ -5,6 +5,11 @@
 SQL 연결에서는 [시각적 쿼리 빌더](QUERY_BUILDER.md)로 SQL을 작성하지 않고
 쿼리를 만들 수 있습니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/query-result-dark.webp">
+  <img src="../images/editor/query-result-light.webp" alt="주문을 국가별로 묶는 SQL 쿼리와 결과 그리드가 있는 쿼리 탭">
+</picture>
+
 ## 탭 저장 및 닫기
 
 새 쿼리 탭(`Ctrl+n`)은 `Ctrl+o`로 연 스크립트와 마찬가지로 스크립트 폴더에 있는 실제 파일을 기반으로 합니다. 열려 있는 편집기는 설정된 간격으로 그 파일에 자동 저장하며, `Ctrl+s`와 **다른 이름으로 저장**도 같은 대기열을 거칩니다. 자동 저장과 탭 닫기는 DBFlux 밖에서 변경된 파일을 덮어쓰지 않습니다. 편집 중인 내용은 편집기에 그대로 남고 DBFlux는 거부된 쓰기를 보고합니다. `Ctrl+s`와 **다른 이름으로 저장**은 의도적인 동작이므로 이 경우에도 파일을 씁니다.
@@ -26,9 +31,19 @@ SQL 연결에서는 [시각적 쿼리 빌더](QUERY_BUILDER.md)로 SQL을 작성
 
 문 분할은 SQL 계열 언어에서 언어를 인식합니다. 문자열, 식별자, 행/블록 주석, PostgreSQL 달러 인용 본문 안의 구분자는 문 경계로 취급하지 않습니다. 비 SQL 언어는 단일 문으로 유지됩니다. 일괄 처리 지원은 드라이버별입니다. 내장 SQL 드라이버 중에서는 PostgreSQL, MySQL/MariaDB, SQLite, Microsoft SQL Server가 지원합니다. 선택 영역은 항상 그대로 실행되며 스크립트 확인을 유발하지 않습니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/multi-statement-dark.webp">
+  <img src="../images/editor/multi-statement-light.webp" alt="세 개의 문을 스크립트로 실행해 문마다 결과 탭이 하나씩 있는 쿼리 탭">
+</picture>
+
 ## 위험 쿼리 확인
 
 DBFlux는 여러 언어에 걸친 위험한 작업을 감지합니다. SQL의 `DELETE`/`DROP`/`TRUNCATE`와 `WHERE` 없는 `DELETE`/`UPDATE`, MongoDB의 `deleteMany`/`drop`, Redis의 `FLUSHALL`/`FLUSHDB`/`KEYS`가 대상이며, 실행 전에 확인을 요청합니다. 이 동작은 설정의 영향을 받습니다. 위험 쿼리 확인은 끌 수 있고, `DELETE`/`UPDATE`에 `WHERE` 절을 요구하도록 할 수 있으며, Redis `FLUSHALL`/`FLUSHDB`는 완전히 비활성화할 수 있습니다(이 경우 해당 명령은 확인 대신 차단됩니다).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
+  <img src="../images/editor/dangerous-query-light.webp" alt="WHERE 절 없는 DELETE에 대한 위험 쿼리 확인 대화 상자">
+</picture>
 
 ## 스크립트 (Lua / Python / Bash)
 

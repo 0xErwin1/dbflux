@@ -66,7 +66,7 @@ WEBP_QUALITY = 80
 DESCRIPTOR_TIMEOUT_SECONDS = 120
 SERVICE_READY_TIMEOUT_SECONDS = 120
 WINDOW_TIMEOUT_SECONDS = 60
-SCREENSHOT_ATTEMPTS = 10
+SCREENSHOT_ATTEMPTS = 30
 SCREENSHOT_RETRY_SECONDS = 2
 KEY_ATTEMPTS = 3
 KEY_RETRY_SECONDS = 15
@@ -778,12 +778,29 @@ def find_labelled(session: McpSession, arguments: dict) -> dict:
     return matches[index]
 
 
+def find_input_holding(session: McpSession, value: str) -> str:
+    """The id of the text input whose current value is `value`."""
+
+    for element_id, node in session.elements().items():
+        if node.get("role") == "text_input" and (node.get("value") or {}).get("value") == value:
+            return element_id
+
+    raise ScreenshotError(f"no text input holds {value!r}")
+
+
 def resolve_label(session: McpSession, arguments: dict) -> dict:
-    """Replaces a `label` argument with the `id` of the element carrying that label.
+    """Replaces a `label` or `input_value` argument with the `id` of the element it names.
 
     Many elements, such as sidebar rows and editors, have ids that change from
-    run to run, while their labels do not.
+    run to run, while their labels do not. An input without a label, such as
+    the inline cell editor of the data grid, is named by the value it holds.
     """
+
+    if "input_value" in arguments:
+        resolved = {key: value for key, value in arguments.items() if key != "input_value"}
+        resolved["id"] = find_input_holding(session, arguments["input_value"])
+
+        return resolved
 
     if "label" not in arguments:
         return arguments

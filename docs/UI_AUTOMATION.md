@@ -326,7 +326,8 @@ Shot(
   runner: `open_window` and `close_window` for the Connection Manager and
   Settings, `click_label`, `wait_gone`, `wait_selected`, `wait_value` and
   `pause`. A tool step can name its element by `label` when its id changes from
-  run to run.
+  run to run, and a text input without a label, such as the data grid's inline
+  cell editor, by `input_value`, the value it holds.
 - Wrap every action whose effect matters in `ensure(check, *actions)`, which
   repeats the actions until the check passes. It checks before acting and again
   after the window settles, so a click that took effect late is not repeated.

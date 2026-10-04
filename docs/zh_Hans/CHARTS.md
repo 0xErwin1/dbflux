@@ -108,6 +108,11 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 
 有四个入口。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/chart-view-dark.webp">
+  <img src="../images/charts/chart-view-light.webp" alt="从查询打开的图表标签页，以折线图绘制每月收入">
+</picture>
+
 ### 查询编辑器中的图表按钮
 
 任何产生表格化结果的查询都可以绘制成图表。在查询编辑器工具栏中点击图表按钮（提示文本为“在图表文档中打开当前查询”），即可在图表文档中打开当前查询。
@@ -155,6 +160,11 @@ flowchart TD
 **在树中显示** 会在表格中选中该行并把键盘交给表格。在图表视图中会切换到表格；“两者”视图会保留表格上方的图表。高亮某个数据点时，结果的表格菜单在 **工具栏** 下提供同样的操作。
 
 查询编辑器结果的图表和图表标签页不记录每个点对应的行，因此不显示数据点检查器。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/point-inspector-dark.webp">
+  <img src="../images/charts/point-inspector-light.webp" alt="表格的图表视图中高亮了一个数据点，数据点检查器停靠在右侧">
+</picture>
 
 ## 限制
 

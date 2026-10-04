@@ -34,6 +34,11 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 `Up`/`Down` move between fields and `Left`/`Right` move between rows. Press
 `i` again to return to the grid.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/results/record-view-dark.webp">
+  <img src="images/results/record-view-light.webp" alt="The record view showing one customer row as a list of fields and values">
+</picture>
+
 ## Column header menu
 
 Right-click a column header for a menu scoped to that column: order ascending
@@ -82,6 +87,11 @@ joins resolved so far. Non-dotted input always keeps the raw-`WHERE` behavior.
 The filter input also offers schema-aware autocomplete (same navigation as the
 builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autocomplete)).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/results/filtering-dark.webp">
+  <img src="images/results/filtering-light.webp" alt="The customers table filtered by a WHERE condition typed in the filter bar">
+</picture>
+
 ## Editing and CRUD
 
 In the data grid:
@@ -91,6 +101,11 @@ In the data grid:
 - `r` — rename / edit (context-dependent).
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/results/editing-dark.webp">
+  <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
+</picture>
 
 ### When results are editable
 

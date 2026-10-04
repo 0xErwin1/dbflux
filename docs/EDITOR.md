@@ -9,6 +9,11 @@ instead; see [CSV and TSV Files](CSV_FILES.md).
 For SQL connections, the [Visual Query Builder](QUERY_BUILDER.md) composes
 queries without writing SQL.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/editor/query-result-dark.webp">
+  <img src="images/editor/query-result-light.webp" alt="A query tab with a SQL query that groups orders by country, and its result grid">
+</picture>
+
 ## Saving and closing tabs
 
 A new query tab (`Ctrl+n`) is backed by a real file in your scripts folder, the
@@ -51,6 +56,11 @@ Batch support is per-driver — among the built-in SQL drivers, PostgreSQL,
 MySQL/MariaDB, SQLite, and Microsoft SQL Server support it. A selection always
 runs as-is and never triggers the script confirmation.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/editor/multi-statement-dark.webp">
+  <img src="images/editor/multi-statement-light.webp" alt="A query tab that ran three statements as a script, with one result tab per statement">
+</picture>
+
 ## Dangerous-query confirmation
 
 DBFlux detects dangerous operations across languages — SQL `DELETE`/`DROP`/
@@ -60,6 +70,11 @@ This behavior is governed by settings: dangerous-query confirmation can be turne
 off, a `WHERE` clause can be required for `DELETE`/`UPDATE`, and Redis
 `FLUSHALL`/`FLUSHDB` can be disabled entirely (in which case those commands are
 blocked rather than confirmed).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/editor/dangerous-query-dark.webp">
+  <img src="images/editor/dangerous-query-light.webp" alt="The dangerous-query confirmation for a DELETE without a WHERE clause">
+</picture>
 
 ## Scripts (Lua / Python / Bash)
 

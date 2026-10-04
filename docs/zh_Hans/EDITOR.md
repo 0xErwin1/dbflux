@@ -4,6 +4,11 @@
 
 对于 SQL 连接，[可视化查询构建器](QUERY_BUILDER.md)可以在不编写 SQL 的情况下构建查询。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/query-result-dark.webp">
+  <img src="../images/editor/query-result-light.webp" alt="查询标签页中按国家/地区对订单分组的 SQL 查询及其结果网格">
+</picture>
+
 ## 保存与关闭标签页
 
 新建的查询标签页（`Ctrl+n`）由脚本文件夹中的一个真实文件支撑，与使用 `Ctrl+o` 打开的脚本相同。打开的编辑器会按配置的间隔自动保存到该文件，`Ctrl+s` 与**文件另存为**使用同一条写入队列。自动保存与关闭绝不会覆盖在 DBFlux 之外被修改过的文件：你的版本会保留在编辑器中，DBFlux 会报告写入被拒绝。`Ctrl+s` 与**文件另存为**是刻意的操作：即便如此也会按你的要求写入文件。
@@ -25,9 +30,19 @@
 
 语句分割对 SQL 系列语言是可感知语言的：字符串、标识符、单行 / 块注释以及 PostgreSQL 美元引用代码块中的分隔符不会被视为语句边界。非 SQL 语言仍按单语句处理。批量执行支持按驱动而定 — 内置 SQL 驱动中，PostgreSQL、MySQL/MariaDB、SQLite 和 Microsoft SQL Server 支持该能力。选中的文本始终按原样执行，不会触发脚本确认。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/multi-statement-dark.webp">
+  <img src="../images/editor/multi-statement-light.webp" alt="以脚本方式执行了三条语句的查询标签页，每条语句各有一个结果标签页">
+</picture>
+
 ## 危险查询确认
 
 DBFlux 会跨语言检测危险操作 — SQL 的 `DELETE`/`DROP`/`TRUNCATE` 以及不带 `WHERE` 的 `DELETE`/`UPDATE`、MongoDB 的 `deleteMany`/`drop`、Redis 的 `FLUSHALL`/`FLUSHDB`/`KEYS` — 并在执行前提示确认。该行为由设置控制：可以关闭 **确认危险查询**、可以要求 `DELETE`/`UPDATE` 必须带 `WHERE` 子句（**DELETE / UPDATE 需要 WHERE**），也可以完全禁用 Redis 的 `FLUSHALL`/`FLUSHDB`（此时这些命令会被直接阻止，而不是弹出确认）。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
+  <img src="../images/editor/dangerous-query-light.webp" alt="针对不带 WHERE 子句的 DELETE 的危险查询确认对话框">
+</picture>
 
 ## 脚本（Lua / Python / Bash）
 

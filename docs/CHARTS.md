@@ -178,6 +178,11 @@ and therefore is not deduplicated until it is saved.
 
 There are four entry points.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/charts/chart-view-dark.webp">
+  <img src="images/charts/chart-view-light.webp" alt="A chart tab opened from a query, drawing monthly revenue as a line chart">
+</picture>
+
 ### Chart button in the query editor
 
 Any query that produces tabular results can be charted. In the query editor
@@ -268,6 +273,11 @@ highlighted.
 
 Charts of query editor results and chart tabs do not keep the row behind each
 point, so they show no point inspector.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/charts/point-inspector-dark.webp">
+  <img src="images/charts/point-inspector-light.webp" alt="The chart view of a table with a highlighted point and the point inspector docked on the right">
+</picture>
 
 ## Limitations
 
