@@ -22,8 +22,8 @@ use super::{
     read_version, save_edited,
 };
 
-const BUCKET: &str = "reports";
-const KEY: &str = "2026/cities.csv";
+pub(super) const BUCKET: &str = "reports";
+pub(super) const KEY: &str = "2026/cities.csv";
 
 const CITIES: &[u8] = b"name,city\r\nAna,Lima\r\n\"Bo, Jr\",Quito\nCy,Rome";
 
@@ -109,12 +109,12 @@ fn save_object_staging_in(
 }
 
 /// A private directory that is removed when the test ends.
-struct TestDirectory {
+pub(super) struct TestDirectory {
     path: PathBuf,
 }
 
 impl TestDirectory {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let path =
             std::env::temp_dir().join(format!("dbflux-delimited-{name}-{}", uuid::Uuid::new_v4()));
 
@@ -124,7 +124,7 @@ impl TestDirectory {
     }
 
     /// Writes `bytes` to a file named `name` and returns its location.
-    fn file(&self, name: &str, bytes: &[u8]) -> (PathBuf, DelimitedLocation) {
+    pub(super) fn file(&self, name: &str, bytes: &[u8]) -> (PathBuf, DelimitedLocation) {
         let path = self.path.join(name);
         std::fs::write(&path, bytes).expect("the test file must be writable");
 
@@ -165,7 +165,7 @@ struct StoredObject {
 /// a range read that reaches past the end of the object instead of clamping
 /// it.
 #[derive(Default)]
-struct FakeObjectStore {
+pub(super) struct FakeObjectStore {
     objects: Mutex<HashMap<(String, String), StoredObject>>,
     head_calls: AtomicUsize,
     generation: AtomicUsize,
@@ -230,8 +230,17 @@ impl FakeObjectStore {
         self.uploaded_from.lock().expect("the upload log").clone()
     }
 
-    fn fail_reads_with(&self, message: &str) {
+    pub(super) fn fail_reads_with(&self, message: &str) {
         *self.read_failure.lock().expect("the read failure") = Some(message.to_string());
+    }
+
+    pub(super) fn stop_failing_reads(&self) {
+        *self.read_failure.lock().expect("the read failure") = None;
+    }
+
+    /// How many range reads the store answered.
+    pub(super) fn range_reads(&self) -> usize {
+        self.range_reads.load(Ordering::SeqCst)
     }
 
     fn fail_uploads_with(&self, message: &str) {
@@ -255,7 +264,7 @@ impl FakeObjectStore {
     }
 
     /// Reports neither an etag nor a modification time from `head_object`.
-    fn omit_identity(&self) {
+    pub(super) fn omit_identity(&self) {
         self.omit_identity.store(true, Ordering::SeqCst);
     }
 
@@ -487,12 +496,12 @@ impl ObjectStoreConnection for FakeObjectStore {
 
 /// A connection whose only working part is its object store.
 #[derive(Default)]
-struct FakeConnection {
-    store: FakeObjectStore,
+pub(super) struct FakeConnection {
+    pub(super) store: FakeObjectStore,
 }
 
 impl FakeConnection {
-    fn with_object(bytes: &[u8]) -> Arc<Self> {
+    pub(super) fn with_object(bytes: &[u8]) -> Arc<Self> {
         let connection = Self::default();
         connection.store.store(bytes, Some("text/csv"));
 

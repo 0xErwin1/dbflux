@@ -72,7 +72,8 @@ pub use dump_analysis::DumpAnalysisDocument;
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;
 
-pub use dedup::DocumentKey;
+pub use dedup::{DelimitedFileKey, DocumentKey};
+pub use delimited::DelimitedDocument;
 pub use handle::DocumentEvent;
 pub use key_value::KeyValueDocument;
 pub use object_browser::ObjectBrowserDocument;

@@ -1,6 +1,21 @@
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Where a delimited text file opened as a document lives: the identity
+/// behind [`DocumentKey::Delimited`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DelimitedFileKey {
+    /// A file on the local file system.
+    Local { path: PathBuf },
+
+    /// An object in object storage.
+    Object {
+        profile_id: Uuid,
+        bucket: String,
+        key: String,
+    },
+}
+
 /// Identity key used for document deduplication.
 ///
 /// Replaces the six `is_*` methods on `DocumentHandle` with a single
@@ -126,6 +141,11 @@ pub enum DocumentKey {
     /// code document). Deduplicated by `path` — analyzing the same file a
     /// second time focuses the existing tab.
     DumpAnalysis { path: PathBuf },
+
+    /// A delimited text file (CSV or TSV) opened as a table. Distinct from
+    /// `File` and `ObjectEditor`, which open the same path or object as text.
+    /// Deduplicated by the local `path`, or by `(profile_id, bucket, key)`.
+    Delimited(DelimitedFileKey),
 
     /// The MCP approvals queue (singleton — at most one open at a time).
     McpApprovals,
@@ -326,6 +346,63 @@ mod tests {
             key,
             DocumentKey::DumpAnalysis { path: p } if p == path
         ));
+    }
+
+    /// `DocumentKey::Delimited` must construct and round-trip through clone
+    /// and debug, and its identity is equal only for the same local path or
+    /// the same `(profile_id, bucket, key)`.
+    #[test]
+    fn delimited_key_constructs_clones_and_compares_by_location() {
+        let profile_id = Uuid::new_v4();
+
+        let local = DelimitedFileKey::Local {
+            path: PathBuf::from("/tmp/cities.csv"),
+        };
+        let object = DelimitedFileKey::Object {
+            profile_id,
+            bucket: "reports".to_string(),
+            key: "2026/cities.csv".to_string(),
+        };
+
+        let key = DocumentKey::Delimited(local.clone());
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(key, DocumentKey::Delimited(file) if file == local));
+
+        assert_eq!(local, local.clone());
+        assert_eq!(object, object.clone());
+        assert_ne!(local, object);
+
+        assert_ne!(
+            local,
+            DelimitedFileKey::Local {
+                path: PathBuf::from("/tmp/other.csv"),
+            }
+        );
+        assert_ne!(
+            object,
+            DelimitedFileKey::Object {
+                profile_id,
+                bucket: "reports".to_string(),
+                key: "2026/other.csv".to_string(),
+            }
+        );
+        assert_ne!(
+            object,
+            DelimitedFileKey::Object {
+                profile_id,
+                bucket: "archive".to_string(),
+                key: "2026/cities.csv".to_string(),
+            }
+        );
+        assert_ne!(
+            object,
+            DelimitedFileKey::Object {
+                profile_id: Uuid::new_v4(),
+                bucket: "reports".to_string(),
+                key: "2026/cities.csv".to_string(),
+            }
+        );
     }
 
     /// `DocumentKey::ObjectBrowser` must construct and round-trip through
