@@ -138,23 +138,25 @@ impl DelimitedDocument {
         // own or asks first, the save and the discard of a confirmed quit,
         // and the save the shutdown flush runs.
         pane.quit_disposition = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.read(cx).quit_disposition(cx))
+            let entity = entity.clone();
+            Box::new(move |cx| entity.read(cx).quit_disposition(cx))
         });
 
         pane.save_for_quit = Some({
-            let e = entity.clone();
-            Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_quit(cx)))
+            let entity = entity.clone();
+            Box::new(move |_window, cx| {
+                entity.update(cx, |document, cx| document.save_for_quit(cx))
+            })
         });
 
         pane.discard_for_quit = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.update(cx, |d, cx| d.discard_for_quit(cx)))
+            let entity = entity.clone();
+            Box::new(move |cx| entity.update(cx, |document, cx| document.discard_for_quit(cx)))
         });
 
         pane.flush_for_shutdown = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.update(cx, |d, cx| d.flush_for_shutdown(cx)))
+            let entity = entity.clone();
+            Box::new(move |cx| entity.update(cx, |document, cx| document.flush_for_shutdown(cx)))
         });
 
         // The Vim mode of the text view's editor.
