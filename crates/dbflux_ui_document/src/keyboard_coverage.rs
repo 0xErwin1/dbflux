@@ -717,12 +717,16 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
 /// search, Select all, Select none and Apply. In Columns, Space toggles the
 /// eye of the row under the cursor, `Shift+T` cycles the sort and `/` (or
 /// `f`) focuses the filter.
+///
+/// An object read whole is downloaded after a prompt (`Modal`): Enter
+/// downloads and Escape declines.
 pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     name: "parquet file",
     contexts: &[
         ContextId::Results,
         ContextId::DataTable,
         ContextId::Dropdown,
+        ContextId::Modal,
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
@@ -767,6 +771,15 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
             "column-profile-filter",
             KeyboardPath::Command(Command::FocusSearch),
         ),
+        (
+            "parquet-download-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "parquet-download-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
     ],
 };
 

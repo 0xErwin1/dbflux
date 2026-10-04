@@ -2063,12 +2063,20 @@ document:
       rows:
         one: "%{count} 行"
         many: "%{count} 行"
+      read_by_range: "按范围读取"
+      downloaded_whole: "已完整下载"
+    download:
+      title: "下载整个对象？"
+      body: "%{name} 的大小为 %{size}。此存储服务无法读取对象的一部分，因此 DBFlux 会完整下载一次，并从该副本读取行。"
+      body_changed: "%{name} 在下载后已更改，现在大小为 %{size}。此存储服务无法读取对象的一部分，因此重新加载会再次完整下载，并替换显示的行。"
+      confirm: "下载"
+      cancel: "取消"
+      unchanged: "%{name} 自下载以来没有更改。"
     error:
       open_failed: "无法打开 %{name}"
       load_more_failed: "无法加载 %{name} 的更多内容"
       projection_failed: "无法读取 %{name} 中所选的列"
       source_changed: "文件在打开后已更改，因此没有读取更多行。请重新加载以查看新内容。"
-      object_without_range_reads: "此存储服务无法读取对象的一部分，因此从中打开 Parquet 对象会下载整个对象。请下载该文件并在本地打开。"
       short_read: "文件返回的字节少于请求的数量。读取期间文件可能已更改。"
       not_parquet: "此文件不是 Parquet 格式。"
       footer_too_large: "Parquet 页脚为 %{size}，超过 DBFlux 读取的 %{limit}。"

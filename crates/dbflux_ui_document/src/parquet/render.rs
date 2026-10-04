@@ -14,14 +14,19 @@
 //!
 //! While the file is opened, when opening failed and when the file has no
 //! rows, a centered notice takes the place of all of it.
+//!
+//! An object that is only read whole is downloaded after a prompt over the
+//! document says how large it is. Enter downloads and Escape declines.
 
 use dbflux_components::components::data_table::DataTable;
 use dbflux_components::composites::EmptyState;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{DocumentMetrics, FontSizes};
 use dbflux_components::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -29,7 +34,71 @@ use gpui_component::ActiveTheme;
 use super::document::{ParquetDocument, ParquetPhase, ParquetView};
 use crate::chrome::{document_bar, document_footer};
 
+const DOWNLOAD_PROMPT_WIDTH: Pixels = px(440.0);
+
 impl ParquetDocument {
+    /// The open prompt before a whole download: the object's size, and
+    /// Cancel and Download.
+    fn render_download_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let message = self.download_prompt_message()?;
+
+        let prompt = self.download_prompt_mut()?;
+        prompt.focus_mut().apply_pending(window, cx);
+        let focus_handle = prompt.focus_mut().handle().clone();
+
+        let footer = div()
+            .flex()
+            .gap(DocumentMetrics::GAP)
+            .child(
+                Button::new(
+                    "parquet-download-cancel",
+                    dbflux_i18n::t!("document.parquet.download.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dismiss_download_prompt(cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "parquet-download-confirm",
+                    dbflux_i18n::t!("document.parquet.download.confirm"),
+                )
+                .primary()
+                .icon(AppIcon::Download)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_download(cx);
+                })),
+            );
+
+        let document = cx.weak_entity();
+        let confirm_target = document.clone();
+
+        Some(
+            Modal::new(dbflux_i18n::t!("document.parquet.download.title"))
+                .id("parquet-download-prompt")
+                .icon(AppIcon::Download)
+                .width(DOWNLOAD_PROMPT_WIDTH)
+                .focus_handle(&focus_handle)
+                .on_close(move |_window, cx| {
+                    document
+                        .update(cx, |this, cx| this.dismiss_download_prompt(cx))
+                        .log_err();
+                })
+                .on_confirm(move |_window, cx| {
+                    confirm_target
+                        .update(cx, |this, cx| this.confirm_download(cx))
+                        .log_err();
+                })
+                .body(Text::body(message))
+                .footer(footer)
+                .into_any_element(),
+        )
+    }
+
     fn render_notice(
         &self,
         id: &'static str,
@@ -251,6 +320,7 @@ impl Render for ParquetDocument {
         }
 
         let title = self.title();
+        let download_prompt = self.render_download_prompt(window, cx);
 
         let body = match (self.table().cloned(), self.phase()) {
             (Some(table), _) => self.render_loaded(table, cx),
@@ -260,6 +330,16 @@ impl Render for ParquetDocument {
                 EmptyState::new(AppIcon::TriangleAlert, cause.clone())
                     .title(crate::labels::parquet_open_failed_message(&title))
                     .danger(),
+                cx,
+            ),
+
+            (None, ParquetPhase::AwaitingDownload) => self.render_notice(
+                "parquet-awaiting-download",
+                EmptyState::new(
+                    AppIcon::Download,
+                    dbflux_i18n::t!("document.parquet.download.title"),
+                )
+                .title(title.clone()),
                 cx,
             ),
 
@@ -292,5 +372,6 @@ impl Render for ParquetDocument {
             .size_full()
             .bg(cx.theme().background)
             .child(body)
+            .children(download_prompt)
     }
 }

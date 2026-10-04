@@ -1014,6 +1014,9 @@ pub(super) mod tests {
     pub(in crate::ui::views::workspace::actions) struct ObjectStoreFake {
         objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
         range_reads: bool,
+        /// How many times the store sent a whole object: `get_object`, which
+        /// the trait's default range read also calls, and `download_object`.
+        full_reads: std::sync::atomic::AtomicUsize,
     }
 
     impl ObjectStoreFake {
@@ -1039,7 +1042,21 @@ pub(super) mod tests {
                         .collect(),
                 ),
                 range_reads,
+                full_reads: std::sync::atomic::AtomicUsize::new(0),
             })
+        }
+
+        /// How many times the store sent a whole object.
+        pub(in crate::ui::views::workspace::actions) fn full_reads(&self) -> usize {
+            self.full_reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// Replaces the object `key`, as another writer would.
+        pub(in crate::ui::views::workspace::actions) fn replace(&self, key: &str, bytes: &[u8]) {
+            self.objects
+                .lock()
+                .expect("the object map")
+                .insert(key.to_string(), bytes.to_vec());
         }
 
         #[allow(clippy::result_large_err)]
@@ -1098,16 +1115,27 @@ pub(super) mod tests {
         }
 
         fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, dbflux_core::DbError> {
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
             self.bytes(bucket, key)
         }
 
         fn download_object(
             &self,
-            _bucket: &str,
-            _key: &str,
-            _dest: &std::path::Path,
+            bucket: &str,
+            key: &str,
+            dest: &std::path::Path,
         ) -> Result<u64, dbflux_core::DbError> {
-            not_used()
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            let bytes = self.bytes(bucket, key)?;
+
+            std::fs::write(dest, &bytes)
+                .map_err(|error| dbflux_core::DbError::query_failed(error.to_string()))?;
+
+            Ok(bytes.len() as u64)
         }
 
         fn put_object(

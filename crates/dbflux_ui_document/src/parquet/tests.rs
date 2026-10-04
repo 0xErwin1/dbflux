@@ -996,3 +996,49 @@ fn covered_ids(window: &mut VisualTestContext) -> Vec<String> {
         .map(|id| id.to_string())
         .collect()
 }
+
+#[gpui::test]
+fn the_download_prompt_is_covered_and_escape_declines_it(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("download-prompt");
+    let path = directory.file("rows.parquet", &rows_file(3));
+
+    let (document, window) = open_local(cx, path);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.apply_reload_version(
+                crate::file_source::SourceVersion::Local {
+                    modified: None,
+                    length: 2048,
+                },
+                cx,
+            );
+        })
+    });
+    window.run_until_parked();
+
+    let message = window.update(|_, cx| document.read(cx).download_prompt_message());
+    let size = dbflux_components::components::column_facts::format_bytes(2048);
+    assert!(
+        message
+            .as_deref()
+            .is_some_and(|message| message.contains(&size)),
+        "{message:?} names {size}"
+    );
+
+    let checked = covered_ids(window);
+    for control in ["parquet-download-confirm", "parquet-download-cancel"] {
+        assert!(checked.iter().any(|id| id == control), "{checked:?}");
+    }
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+
+    assert!(window.update(|_, cx| document.read(cx).download_prompt_message().is_none()));
+    assert_eq!(
+        row_count(&document, window),
+        3,
+        "declining a reload keeps the rows"
+    );
+    assert_eq!(toast_count(window), 0);
+}
