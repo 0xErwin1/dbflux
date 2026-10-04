@@ -107,7 +107,7 @@ NixOS / nix-darwin via overlay:
 The overlay builds every package with your system's nixpkgs, so the prebuilt binary uses the same glibc as your graphics drivers. The flake's own outputs use the nixpkgs pinned in DBFlux's `flake.lock` instead. When your system's glibc is newer than that one, the graphics drivers fail to load and DBFlux can stop at startup. In that case:
 
 - If your flake uses `dbflux.packages.<system>.*`, switch to the overlay or add `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";` to it.
-- With `nix run` or `nix profile install`, add `--override-input nixpkgs nixpkgs`. It builds DBFlux with the `nixpkgs` of your flake registry, which on a NixOS system built from a flake is the system's own.
+- With `nix run` or `nix profile install`, add `--override-input nixpkgs nixpkgs`. It builds DBFlux with the `nixpkgs` your flake registry resolves. On a NixOS system built from a flake, the system registry points it at the system's own nixpkgs, unless an entry in your user registry, which takes priority, points it elsewhere.
 
 ## macOS
 
