@@ -1,0 +1,26 @@
+[package]
+name = "dbflux_parquet"
+version.workspace = true
+publish = false
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+arrow-schema.workspace = true
+bytes.workspace = true
+dbflux_byte_source.workspace = true
+parquet.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+arrow-array.workspace = true
+
+[lints]
+workspace = true
