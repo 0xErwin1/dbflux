@@ -882,6 +882,10 @@ impl ObjectStoreConnection for S3Connection {
         Ok(aggregated.into_bytes().to_vec())
     }
 
+    fn supports_range_reads(&self) -> bool {
+        true
+    }
+
     fn download_object(
         &self,
         bucket: &str,
@@ -1887,6 +1891,31 @@ mod tests {
             public_access_from_configuration(&some_on),
             PublicAccessStatus::Partial
         );
+    }
+
+    #[test]
+    fn s3_reports_range_reads() {
+        let client = Client::from_conf(
+            S3ConfigBuilder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .build(),
+        );
+
+        let connection = S3Connection {
+            client,
+            config: S3ProfileConfig {
+                region: "us-east-1".to_string(),
+                profile: None,
+                access_key_id: None,
+                endpoint: None,
+                path_style: false,
+            },
+        };
+
+        let store: &dyn ObjectStoreConnection = &connection;
+
+        assert!(store.supports_range_reads());
     }
 
     #[test]

@@ -1765,7 +1765,6 @@ document:
       load_more_failed: "Não foi possível carregar mais de %{name}"
       reread_failed: "Não foi possível ler %{name} novamente"
       save_failed: "Não foi possível salvar %{name}"
-      source_changed: "O arquivo foi alterado em outro lugar desde que foi aberto, então nada foi salvo e suas edições foram mantidas. Para ver o novo conteúdo, descarte suas edições e escolha Recarregar do arquivo, e depois refaça-as."
       next_page_required: "Uma linha foi adicionada depois do último registro carregado, então sua posição no arquivo ainda não é conhecida. Carregue a próxima página e salve novamente."
       full_load_required: "Uma coluna foi adicionada antes de o arquivo inteiro ser carregado. Carregue todas as páginas e salve novamente."
       saved_version_unknown: "%{name} foi salvo, mas não foi possível ler a nova versão"
@@ -1799,12 +1798,6 @@ document:
         unsupported: "O texto %{encoding} não pode ser lido com %{character} como delimitador ou aspas. Escolha outro delimitador, outras aspas ou outra codificação."
         line_break: "Uma quebra de linha não pode ser o delimitador nem as aspas. Escolha outro caractere."
         quote_equals_delimiter: "As aspas e o delimitador são ambos %{character}. Escolha um caractere diferente para um deles."
-      storage:
-        read: "Não foi possível ler o arquivo: %{cause}"
-        local_io: "Não foi possível acessar %{path}: %{cause}"
-        temporary_file: "Não foi possível salvar %{target}: a gravação de um arquivo temporário em %{directory} falhou: %{cause}"
-        object_store: "Não foi possível acessar %{bucket}/%{key}: %{cause}"
-        read_only_file: "O arquivo é somente leitura."
       read:
         unexpected_length: "O arquivo retornou uma quantidade de bytes diferente da solicitada, então não pôde ser lido."
       write:
@@ -1825,7 +1818,6 @@ document:
       malformed_text: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação detectada provavelmente está errada."
       malformed_text_chosen: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação escolhida provavelmente está errada."
       detected_delimiter_unreadable: "O delimitador detectado %{detected} não pode ser lido em texto %{encoding}, por isso o arquivo é lido com %{delimiter} e suas colunas provavelmente estão erradas. Escolha outra codificação ou outro delimitador."
-      cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
     status:
       delimiter: "Delimitador: %{delimiter}"
       encoding: "Codificação: %{encoding}"
@@ -1988,6 +1980,17 @@ document:
       back: Voltar
       continue: Continuar
       close: Fechar
+  file:
+    error:
+      source_changed: "O arquivo foi alterado em outro lugar desde que foi aberto, então nada foi salvo e suas edições foram mantidas. Para ver o novo conteúdo, descarte suas edições e escolha Recarregar do arquivo, e depois refaça-as."
+      storage:
+        read: "Não foi possível ler o arquivo: %{cause}"
+        local_io: "Não foi possível acessar %{path}: %{cause}"
+        temporary_file: "Não foi possível salvar %{target}: a gravação de um arquivo temporário em %{directory} falhou: %{cause}"
+        object_store: "Não foi possível acessar %{bucket}/%{key}: %{cause}"
+        read_only_file: "O arquivo é somente leitura."
+    warning:
+      cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
   governance:
     refresh: "Atualizar"
     no_pending: Nenhuma execução pendente

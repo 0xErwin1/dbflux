@@ -1,10 +1,10 @@
-//! The delimited (CSV and TSV) document, its storage layer and its page model.
+//! The delimited (CSV and TSV) document, its save path and its page model.
 //!
-//! The storage layer answers four questions and nothing else: where a
-//! delimited file lives, how its bytes are read by range, which version of it
-//! was opened, and how an edited copy replaces it. Every storage function
-//! blocks on file or network I/O and touches no GPUI state, so callers run it
-//! on the background executor and report the returned errors themselves.
+//! Where a file lives, how its bytes are read by range and which version of
+//! it was opened belong to [`crate::file_source`], which other file documents
+//! share. This module adds how an edited copy replaces the file. A save blocks
+//! on file or network I/O and touches no GPUI state, so callers run it on the
+//! background executor and report the returned errors themselves.
 //!
 //! The page model holds the records loaded so far, builds the table model
 //! from them and turns the table's pending edits into an edit set. It does no
@@ -25,7 +25,6 @@ mod page_model;
 mod pane;
 mod render;
 mod save;
-mod source;
 mod text;
 mod text_edit;
 mod text_view;
@@ -55,8 +54,4 @@ mod vim_tests;
 pub use document::{DelimitedDocument, DelimitedWarning};
 pub use page_model::{PageModel, PageModelError};
 pub use save::{SaveOutcome, save_edited};
-pub use source::{
-    DelimitedLocation, DelimitedSource, ObjectSource, SourceVersion, StorageError,
-    has_changed_since, open_source, read_version,
-};
 pub use text_view::{DelimitedView, TextMode};

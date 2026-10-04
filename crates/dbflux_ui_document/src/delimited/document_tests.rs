@@ -22,10 +22,10 @@ use super::document::{
     extension_hint, open_error_to_user_facing, open_first_page, read_first_page, readable_dialect,
     refused_dialect_error, sample_coverage, settled_record_count,
 };
-use super::source::{DelimitedLocation, open_source};
 use super::tests::{BUCKET, FakeConnection, KEY, TestDirectory};
 use super::toolbar::encoding_choices;
 use crate::dedup::{DocumentKey, FileDocumentKey};
+use crate::file_source::{FileLocation, open_source};
 use crate::keyboard_coverage::DELIMITED;
 use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
 use crate::pane::PaneActionRun;
@@ -838,7 +838,7 @@ fn a_failed_object_range_read_keeps_the_driver_error() {
         .store
         .fail_reads_with("AccessDenied: no read permission");
 
-    let location = DelimitedLocation::Object {
+    let location = FileLocation::Object {
         connection,
         bucket: BUCKET.to_string(),
         key: KEY.to_string(),
@@ -896,7 +896,7 @@ fn a_local_file_that_cannot_be_read_is_reported_as_a_storage_error() {
     let directory = TestDirectory::new("document-storage-kind");
     let (path, _) = directory.file("present.csv", CITIES);
 
-    let location = DelimitedLocation::Local {
+    let location = FileLocation::Local {
         path: path.with_file_name("absent.csv"),
     };
 
@@ -1536,7 +1536,7 @@ fn the_document_strings_resolve_in_every_locale() {
         "document.delimited.loading",
         "document.delimited.error.open_failed",
         "document.delimited.warning.malformed_text",
-        "document.delimited.warning.cannot_save_in_place",
+        "document.file.warning.cannot_save_in_place",
         "document.delimited.status.delimiter",
         "document.delimited.status.encoding",
         "document.delimited.status.records.all.one",

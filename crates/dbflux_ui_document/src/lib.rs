@@ -30,6 +30,7 @@ mod governance;
 
 pub mod export_wizard;
 pub mod file_format;
+pub mod file_source;
 mod handle;
 pub mod history_panel;
 pub mod import_wizard;

@@ -3478,6 +3478,7 @@ dependencies = [
  "chrono",
  "dbflux_app",
  "dbflux_audit",
+ "dbflux_byte_source",
  "dbflux_components",
  "dbflux_core",
  "dbflux_delimited",

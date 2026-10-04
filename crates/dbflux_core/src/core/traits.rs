@@ -989,6 +989,16 @@ pub trait ObjectStoreConnection: Send + Sync {
         Ok(body.get(start..end).map(<[u8]>::to_vec).unwrap_or_default())
     }
 
+    /// Whether `get_object_range` fetches only the requested bytes.
+    ///
+    /// A store that returns false serves `get_object_range` by downloading
+    /// the whole object on every call, which is what the default
+    /// implementation does. A driver that overrides `get_object_range` with
+    /// a ranged request returns true.
+    fn supports_range_reads(&self) -> bool {
+        false
+    }
+
     /// Stream an object's body straight to `dest` on disk, never buffering
     /// the whole object in memory. Used for Download and Open-externally —
     /// the only two transfers that move an object's bytes off the network,
@@ -2828,6 +2838,14 @@ mod tests {
         let buckets = store.list_buckets().expect("list_buckets");
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].name, "my-bucket");
+    }
+
+    #[test]
+    fn default_object_store_does_not_report_range_reads() {
+        let stub = StubObjectStore::default();
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        assert!(!store.supports_range_reads());
     }
 
     #[test]

@@ -17,9 +17,9 @@ use dbflux_delimited::{
 };
 
 use super::save::{SaveRequest, save_staging_objects_in, verify_version, write_staged};
-use super::{
-    DelimitedLocation, SaveOutcome, SourceVersion, StorageError, has_changed_since, open_source,
-    read_version, save_edited,
+use super::{SaveOutcome, save_edited};
+use crate::file_source::{
+    FileLocation, SourceVersion, StorageError, has_changed_since, open_source, read_version,
 };
 
 pub(super) const BUCKET: &str = "reports";
@@ -45,7 +45,7 @@ fn utf8() -> Dialect {
 }
 
 /// Reads every data record of `location` with the ranges the reader reports.
-fn records_of(location: &DelimitedLocation, dialect: Dialect) -> (Vec<Record>, u64) {
+fn records_of(location: &FileLocation, dialect: Dialect) -> (Vec<Record>, u64) {
     let (source, _version) = open_source(location).expect("the source opens");
 
     let options = ReaderOptions {
@@ -61,7 +61,7 @@ fn records_of(location: &DelimitedLocation, dialect: Dialect) -> (Vec<Record>, u
 
 /// An edit set that replaces the data record at `index` with `fields`.
 fn replace_record(
-    location: &DelimitedLocation,
+    location: &FileLocation,
     dialect: Dialect,
     index: usize,
     fields: &[&str],
@@ -93,7 +93,7 @@ fn saved_version(outcome: SaveOutcome) -> SourceVersion {
 /// test can see whether one was left behind.
 fn save_object_staging_in(
     staging: &TestDirectory,
-    location: &DelimitedLocation,
+    location: &FileLocation,
     captured: &SourceVersion,
     dialect: &Dialect,
     edits: &EditSet,
@@ -124,11 +124,11 @@ impl TestDirectory {
     }
 
     /// Writes `bytes` to a file named `name` and returns its location.
-    pub(super) fn file(&self, name: &str, bytes: &[u8]) -> (PathBuf, DelimitedLocation) {
+    pub(super) fn file(&self, name: &str, bytes: &[u8]) -> (PathBuf, FileLocation) {
         let path = self.path.join(name);
         std::fs::write(&path, bytes).expect("the test file must be writable");
 
-        let location = DelimitedLocation::Local { path: path.clone() };
+        let location = FileLocation::Local { path: path.clone() };
 
         (path, location)
     }
@@ -531,8 +531,8 @@ impl FakeConnection {
         Arc::new(connection)
     }
 
-    fn location(self: &Arc<Self>) -> DelimitedLocation {
-        DelimitedLocation::Object {
+    fn location(self: &Arc<Self>) -> FileLocation {
+        FileLocation::Object {
             connection: self.clone(),
             bucket: BUCKET.to_string(),
             key: KEY.to_string(),
@@ -757,7 +757,7 @@ fn a_local_save_returns_the_version_a_fresh_read_reports() {
 fn a_missing_local_file_names_its_path() {
     let directory = TestDirectory::new("missing");
     let path = directory.path.join("absent.csv");
-    let location = DelimitedLocation::Local { path: path.clone() };
+    let location = FileLocation::Local { path: path.clone() };
 
     let error = read_version(&location).expect_err("a missing file has no version");
 
@@ -874,7 +874,7 @@ fn a_local_save_through_a_symlink_writes_the_file_the_link_points_at() {
     let link = directory.path.join("link.csv");
     std::os::unix::fs::symlink(&target, &link).expect("the symlink must be creatable");
 
-    let location = DelimitedLocation::Local { path: link.clone() };
+    let location = FileLocation::Local { path: link.clone() };
     let version = read_version(&location).expect("the version reads");
     let edits = replace_record(&location, utf8(), 0, &["Ana", "Cusco"]);
 

@@ -49,8 +49,8 @@ use super::document::{
 };
 use super::page_model::PageModelError;
 use super::save::{SaveOutcome, check_local_save, save_edited, verify_version};
-use super::source::{DelimitedLocation, StorageError, read_version};
 use crate::dedup::FileDocumentKey;
+use crate::file_source::{FileLocation, StorageError, read_version};
 use crate::handle::DocumentEvent;
 use crate::object_text::record_save_audit;
 use crate::pane::{PaneAction, QuitDisposition};
@@ -1084,7 +1084,7 @@ impl DelimitedDocument {
             return false;
         }
 
-        let DelimitedLocation::Local { path } = &self.location else {
+        let FileLocation::Local { path } = &self.location else {
             return false;
         };
 
@@ -1479,11 +1479,11 @@ fn storage_save_error(file_name: &str, error: StorageError) -> UserFacingError {
 
     match error {
         StorageError::SourceChanged => UserFacingError::new(ErrorKind::User, summary)
-            .with_cause(dbflux_i18n::t!("document.delimited.error.source_changed")),
+            .with_cause(dbflux_i18n::t!("document.file.error.source_changed")),
 
         StorageError::VersionUnverifiable => UserFacingError::new(ErrorKind::User, summary)
             .with_cause(dbflux_i18n::t!(
-                "document.delimited.warning.cannot_save_in_place"
+                "document.file.warning.cannot_save_in_place"
             )),
 
         other => open_error_to_user_facing(&OpenError::Storage(other), summary),

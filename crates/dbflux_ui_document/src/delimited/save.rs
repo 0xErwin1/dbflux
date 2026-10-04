@@ -8,8 +8,8 @@ use std::sync::Arc;
 use dbflux_core::Connection;
 use dbflux_delimited::{ByteSource, Dialect, EditSet, FileSource, WriteError, write_edited};
 
-use super::source::{
-    DelimitedLocation, ObjectSource, SourceVersion, StorageError, head_object, local_version,
+use crate::file_source::{
+    FileLocation, ObjectSource, SourceVersion, StorageError, head_object, local_version,
     object_store, object_version, open_local_file, read_version,
 };
 
@@ -103,9 +103,9 @@ pub enum SaveOutcome {
 /// # After a save
 ///
 /// Every byte range read before the save is stale. The caller opens a new
-/// source with [`super::open_source`] and drops its stored ranges and edits.
+/// source with [`crate::file_source::open_source`] and drops its stored ranges and edits.
 pub fn save_edited(
-    location: &DelimitedLocation,
+    location: &FileLocation,
     captured: &SourceVersion,
     dialect: &Dialect,
     edits: &EditSet,
@@ -132,14 +132,14 @@ pub(super) struct SaveRequest<'a> {
 /// [`save_edited`] with the directory an object's temporary file is created
 /// in named by the caller. A local file is always staged next to its target.
 pub(super) fn save_staging_objects_in(
-    location: &DelimitedLocation,
+    location: &FileLocation,
     request: &SaveRequest<'_>,
     object_staging_directory: &Path,
 ) -> Result<SaveOutcome, StorageError> {
     match location {
-        DelimitedLocation::Local { path } => save_local(path, request).map(SaveOutcome::Saved),
+        FileLocation::Local { path } => save_local(path, request).map(SaveOutcome::Saved),
 
-        DelimitedLocation::Object {
+        FileLocation::Object {
             connection,
             bucket,
             key,
@@ -242,7 +242,7 @@ fn read_only_file_error(path: &Path) -> StorageError {
         path,
         std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            dbflux_i18n::t!("document.delimited.error.storage.read_only_file"),
+            dbflux_i18n::t!("document.file.error.storage.read_only_file"),
         ),
     )
 }

@@ -35,8 +35,8 @@ use super::document::{
     DelimitedDocument, OpenError, ReadPage, open_error_to_user_facing, read_page,
 };
 use super::page_model::{PageModelError, positional_name};
-use super::source::DelimitedSource;
 use super::text::MAX_TEXT_BYTES;
+use crate::file_source::LocationSource;
 use crate::pane::PaneAction;
 
 /// The width of the column prompt and of the offer to load the rest.
@@ -486,7 +486,7 @@ impl DelimitedDocument {
     fn apply_rest_outcome(
         &mut self,
         reader_epoch: u64,
-        reader: PagedReader<DelimitedSource>,
+        reader: PagedReader<LocationSource>,
         read: RestRead,
         cx: &mut Context<Self>,
     ) {
@@ -764,7 +764,7 @@ impl DelimitedDocument {
 /// for the text view the bytes of the leading records that fit in
 /// `keep_budget` bytes. Blocks on file or network I/O.
 fn read_remaining_pages(
-    reader: &mut PagedReader<DelimitedSource>,
+    reader: &mut PagedReader<LocationSource>,
     first_page: usize,
     page_size: NonZeroUsize,
     mut keep_budget: usize,
