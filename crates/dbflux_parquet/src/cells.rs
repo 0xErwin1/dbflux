@@ -22,12 +22,16 @@ use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use parquet::basic::{
     ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, TimestampType, Type as PhysicalType,
 };
-use parquet::schema::types::Type;
+use parquet::schema::types::{Type, TypePtr};
 
+use crate::nested::{is_nested, nested_cell, nested_type_name};
 use crate::{ParquetError, WindowRows};
 
 /// How many leading bytes of a binary value are shown as hex.
 pub const BINARY_PREVIEW_BYTES: usize = 16;
+
+/// How many characters of a nested value's JSON are shown.
+pub const NESTED_DISPLAY_CHARS: usize = 256;
 
 const NULL_DISPLAY: &str = "NULL";
 
@@ -107,6 +111,8 @@ pub struct CellPage {
 /// - binary values show the hex of their first [`BINARY_PREVIEW_BYTES`] bytes
 ///   and their length (`0x0a1b… (40 bytes)`), and a 16-byte UUID its
 ///   canonical hyphenated form;
+/// - lists, structs and maps are JSON, cut after [`NESTED_DISPLAY_CHARS`]
+///   characters, with every leaf following the rules above;
 /// - VARIANT, GEOMETRY, GEOGRAPHY and any type without a rule are shown as
 ///   `<unsupported: TYPE>`.
 pub fn cells_of(rows: &WindowRows) -> Result<CellPage, ParquetError> {
@@ -147,7 +153,7 @@ pub fn cells_of(rows: &WindowRows) -> Result<CellPage, ParquetError> {
             let batch_rows = page_rows.iter_mut().skip(first_row);
 
             for (row, row_cells) in batch_rows.enumerate() {
-                row_cells.push(scalar_cell(array.as_ref(), row, &plan.hints)?);
+                row_cells.push(plan.cell(array.as_ref(), row)?);
             }
         }
     }
@@ -160,37 +166,70 @@ pub fn cells_of(rows: &WindowRows) -> Result<CellPage, ParquetError> {
 
 /// What the Parquet type of a column adds to its Arrow type.
 #[derive(Debug, Clone, Default)]
-struct LeafHints {
+pub(crate) struct LeafHints {
     /// A UUID logical type: the Arrow type is a plain 16-byte binary.
     uuid: bool,
     /// An INT96 column: the Arrow type is a nanosecond timestamp, possibly
     /// tagged with a zone the INT96 value itself never had.
     int96: bool,
     /// A logical type this crate does not decode, by its Parquet name.
-    unsupported: Option<&'static str>,
+    pub(crate) unsupported: Option<&'static str>,
 }
 
 struct ColumnPlan {
     display: ColumnDisplay,
+    parquet_type: TypePtr,
     hints: LeafHints,
+    nested: bool,
 }
 
 impl ColumnPlan {
-    fn new(field: &Field, parquet_field: &Type) -> Self {
+    fn new(field: &Field, parquet_field: &TypePtr) -> Self {
         let hints = leaf_hints(parquet_field);
         let data_type = field.data_type();
 
         let display = ColumnDisplay {
             name: field.name().as_str().into(),
-            type_name: type_name(parquet_field, data_type).into(),
+            type_name: truncate_chars(type_name(parquet_field, data_type), NESTED_DISPLAY_CHARS)
+                .into(),
             kind: column_kind(data_type, &hints),
         };
 
-        Self { display, hints }
+        Self {
+            display,
+            parquet_type: TypePtr::clone(parquet_field),
+            nested: is_nested(data_type) && hints.unsupported.is_none(),
+            hints,
+        }
+    }
+
+    fn cell(&self, array: &dyn Array, row: usize) -> Result<Cell, ParquetError> {
+        if !self.nested {
+            return scalar_cell(array, row, &self.hints);
+        }
+
+        if array.is_null(row) {
+            return Ok(null_cell());
+        }
+
+        nested_cell(array, row, Some(&self.parquet_type))
     }
 }
 
-fn leaf_hints(parquet_type: &Type) -> LeafHints {
+/// `text` cut after `limit` characters and marked with an ellipsis.
+fn truncate_chars(text: String, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((cut, _)) => {
+            let mut truncated = text;
+            truncated.truncate(cut);
+            truncated.push('…');
+            truncated
+        }
+        None => text,
+    }
+}
+
+pub(crate) fn leaf_hints(parquet_type: &Type) -> LeafHints {
     let basic_info = parquet_type.get_basic_info();
     let logical_type = basic_info.logical_type_ref();
 
@@ -259,7 +298,7 @@ fn column_kind(data_type: &DataType, hints: &LeafHints) -> ColumnKind {
 
 /// The Parquet type of a column as a reader of the file would name it. INT96
 /// and legacy INTERVAL columns say what the Arrow reader makes of them.
-fn type_name(parquet_type: &Type, data_type: &DataType) -> String {
+pub(crate) fn type_name(parquet_type: &Type, data_type: &DataType) -> String {
     let Type::PrimitiveType {
         basic_info,
         physical_type,
@@ -268,7 +307,7 @@ fn type_name(parquet_type: &Type, data_type: &DataType) -> String {
         precision,
     } = parquet_type
     else {
-        return group_type_name(parquet_type, data_type);
+        return nested_type_name(Some(parquet_type), data_type);
     };
 
     if *physical_type == PhysicalType::INT96 {
@@ -361,27 +400,6 @@ fn physical_type_name(physical_type: PhysicalType, type_length: i32) -> String {
     }
 }
 
-fn group_type_name(parquet_type: &Type, data_type: &DataType) -> String {
-    let logical_name = parquet_type
-        .get_basic_info()
-        .logical_type_ref()
-        .and_then(unsupported_logical_type);
-
-    match logical_name {
-        Some(name) => format!("{name} (unsupported)"),
-        None => format!("{} (unsupported)", arrow_type_label(data_type)),
-    }
-}
-
-fn arrow_type_label(data_type: &DataType) -> &'static str {
-    match data_type {
-        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..) => "LIST",
-        DataType::Struct(_) => "STRUCT",
-        DataType::Map(..) => "MAP",
-        _ => "GROUP",
-    }
-}
-
 fn arrow_unit_name(unit: TimeUnit) -> &'static str {
     match unit {
         TimeUnit::Second => "SECONDS",
@@ -392,7 +410,11 @@ fn arrow_unit_name(unit: TimeUnit) -> &'static str {
 }
 
 /// The cell for `row` of `array`, a scalar column or a dictionary of one.
-fn scalar_cell(array: &dyn Array, row: usize, hints: &LeafHints) -> Result<Cell, ParquetError> {
+pub(crate) fn scalar_cell(
+    array: &dyn Array,
+    row: usize,
+    hints: &LeafHints,
+) -> Result<Cell, ParquetError> {
     let data_type = array.data_type();
 
     if array.is_null(row) || *data_type == DataType::Null {

@@ -7,13 +7,18 @@
 
 use std::sync::Arc;
 
+use arrow_array::Array;
+use arrow_array::builder::{
+    Float64Builder, Int32Builder, Int64Builder, ListBuilder, MapBuilder, StringBuilder,
+    TimestampMicrosecondBuilder,
+};
 use arrow_array::types::{ArrowPrimitiveType, Decimal256Type, Float16Type, Int32Type};
 use arrow_array::{
     ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Decimal256Array,
     DictionaryArray, DurationMicrosecondArray, FixedSizeBinaryArray, Float16Array, Float32Array,
     Float64Array, Int8Array, Int32Array, Int64Array, IntervalYearMonthArray, LargeStringArray,
-    RecordBatch, StringArray, StringViewArray, Time32MillisecondArray, Time32SecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    RecordBatch, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+    Time32SecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt64Array,
 };
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -27,7 +32,10 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::writer::{SerializedColumnWriter, SerializedFileWriter};
 use parquet::schema::types::Type;
 
-use crate::{Cell, CellKind, CellPage, ColumnKind, RowWindow, cells_of, open, read_window};
+use crate::{
+    Cell, CellKind, CellPage, ColumnKind, NESTED_DISPLAY_CHARS, RowWindow, cells_of, open,
+    read_window,
+};
 
 /// Writes `columns` with the Arrow writer, reads every row back through
 /// [`read_window`] and converts it.
@@ -767,4 +775,260 @@ fn values_outside_the_calendar_show_their_raw_value() {
     );
     assert_eq!(displays(&page, 1), vec!["<out of range: 86400000 MILLIS>"]);
     assert_eq!(column(&page, 0)[0].kind, CellKind::Text);
+}
+
+#[test]
+fn nested_is_truncated_json() {
+    let mut lists = ListBuilder::new(Int32Builder::new());
+    lists.values().append_slice(&[1, 2, 3]);
+    lists.append(true);
+    lists.append(true);
+    lists.append(false);
+    lists.values().append_value(4);
+    lists.values().append_null();
+    lists.append(true);
+    lists.values().append_slice(&(0..500).collect::<Vec<i32>>());
+    lists.append(true);
+
+    let structs = StructArray::from(vec![
+        (
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![
+                Some(7),
+                None,
+                Some(1),
+                Some(2),
+                Some(3),
+            ])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("b", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![
+                Some("x \"y\"\n"),
+                Some("z"),
+                None,
+                Some(""),
+                Some("w"),
+            ])) as ArrayRef,
+        ),
+    ]);
+
+    let lists = lists.finish();
+    let page = arrow_page(
+        vec![
+            Field::new("numbers", lists.data_type().clone(), true),
+            Field::new("pair", structs.data_type().clone(), true),
+        ],
+        vec![Arc::new(lists), Arc::new(structs)],
+    );
+
+    let numbers = displays(&page, 0);
+    assert_eq!(numbers[0], "[1,2,3]");
+    assert_eq!(numbers[1], "[]");
+    assert_eq!(numbers[2], "NULL");
+    assert_eq!(numbers[3], "[4,null]");
+
+    let long = &numbers[4];
+    assert_eq!(long.chars().count(), NESTED_DISPLAY_CHARS + 1);
+    assert!(long.starts_with("[0,1,2,3,"));
+    assert!(long.ends_with('…'));
+
+    assert_eq!(
+        displays(&page, 1),
+        vec![
+            r#"{"a":7,"b":"x \"y\"\n"}"#,
+            r#"{"a":null,"b":"z"}"#,
+            r#"{"a":1,"b":null}"#,
+            r#"{"a":2,"b":""}"#,
+            r#"{"a":3,"b":"w"}"#,
+        ]
+    );
+
+    assert_eq!(column(&page, 0)[0].kind, CellKind::Nested);
+    assert_eq!(column(&page, 0)[2].kind, CellKind::Null);
+    assert_eq!(&*page.columns[0].type_name, "LIST<INT32>");
+    assert_eq!(&*page.columns[1].type_name, "STRUCT<a: INT32, b: STRING>");
+    assert_eq!(page.columns[0].kind, ColumnKind::Unknown);
+    assert_eq!(page.columns[1].kind, ColumnKind::Unknown);
+}
+
+#[test]
+fn map_with_integer_keys_renders_pairs() {
+    let mut integer_keys = MapBuilder::new(None, Int32Builder::new(), StringBuilder::new());
+    integer_keys.keys().append_value(1);
+    integer_keys.values().append_value("one");
+    integer_keys.keys().append_value(2);
+    integer_keys.values().append_null();
+    integer_keys.append(true).unwrap();
+
+    let mut string_keys = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+    string_keys.keys().append_value("k");
+    string_keys.values().append_value(1);
+    string_keys.keys().append_value("q\"");
+    string_keys.values().append_value(2);
+    string_keys.append(true).unwrap();
+
+    let integer_keys = integer_keys.finish();
+    let string_keys = string_keys.finish();
+
+    let page = arrow_page(
+        vec![
+            Field::new("by_number", integer_keys.data_type().clone(), true),
+            Field::new("by_name", string_keys.data_type().clone(), true),
+        ],
+        vec![Arc::new(integer_keys), Arc::new(string_keys)],
+    );
+
+    assert_eq!(displays(&page, 0), vec![r#"[[1,"one"],[2,null]]"#]);
+    assert_eq!(displays(&page, 1), vec![r#"{"k":1,"q\"":2}"#]);
+    assert_eq!(&*page.columns[0].type_name, "MAP<INT32, STRING>");
+    assert_eq!(&*page.columns[1].type_name, "MAP<STRING, INT64>");
+    assert_eq!(column(&page, 0)[0].kind, CellKind::Nested);
+}
+
+#[test]
+fn nested_timestamp_follows_scalar_rule() {
+    let mut timestamps = ListBuilder::new(TimestampMicrosecondBuilder::new().with_timezone("UTC"));
+    timestamps.values().append_value(1_700_000_000_123_456);
+    timestamps.append(true);
+
+    let mut floats = ListBuilder::new(Float64Builder::new());
+    floats.values().append_slice(&[2.0, f64::NAN, 0.5]);
+    floats.append(true);
+
+    let details = StructArray::from(vec![
+        (
+            Arc::new(Field::new("price", DataType::Decimal128(9, 2), true)),
+            Arc::new(
+                Decimal128Array::from(vec![12_345])
+                    .with_precision_and_scale(9, 2)
+                    .unwrap(),
+            ) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("blob", DataType::Binary, true)),
+            Arc::new(BinaryArray::from(vec![b"\x0a\x1b".as_ref()])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("big", DataType::UInt64, true)),
+            Arc::new(UInt64Array::from(vec![u64::MAX])) as ArrayRef,
+        ),
+    ]);
+
+    let timestamps = timestamps.finish();
+    let floats = floats.finish();
+
+    let page = arrow_page(
+        vec![
+            Field::new("moments", timestamps.data_type().clone(), true),
+            Field::new("ratios", floats.data_type().clone(), true),
+            Field::new("details", details.data_type().clone(), true),
+        ],
+        vec![Arc::new(timestamps), Arc::new(floats), Arc::new(details)],
+    );
+
+    assert_eq!(
+        displays(&page, 0),
+        vec![r#"["2023-11-14 22:13:20.123456Z"]"#]
+    );
+    assert_eq!(displays(&page, 1), vec![r#"[2.0,"NaN",0.5]"#]);
+    assert_eq!(
+        displays(&page, 2),
+        vec![r#"{"price":"123.45","blob":"0x0a1b (2 bytes)","big":18446744073709551615}"#]
+    );
+    assert_eq!(&*page.columns[0].type_name, "LIST<TIMESTAMP(MICROS, UTC)>");
+    assert_eq!(
+        &*page.columns[2].type_name,
+        "STRUCT<price: DECIMAL(9,2), blob: BYTE_ARRAY, big: UINT64>"
+    );
+}
+
+#[test]
+fn nested_uuid_uses_the_parquet_logical_type() {
+    let identifier = optional_primitive("id", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+        .with_length(16)
+        .with_logical_type(Some(LogicalType::Uuid))
+        .build()
+        .unwrap();
+
+    let owner = Type::group_type_builder("owner")
+        .with_repetition(Repetition::OPTIONAL)
+        .with_fields(vec![Arc::new(identifier)])
+        .build()
+        .unwrap();
+
+    let page = low_level_column(owner, |column| {
+        column
+            .typed::<FixedLenByteArrayType>()
+            .write_batch(
+                &[FixedLenByteArray::from((0_u8..16).collect::<Vec<_>>())],
+                Some(&[2, 1, 0]),
+                None,
+            )
+            .unwrap();
+    });
+
+    assert_eq!(
+        displays(&page, 0),
+        vec![
+            r#"{"id":"00010203-0405-0607-0809-0a0b0c0d0e0f"}"#,
+            r#"{"id":null}"#,
+            "NULL"
+        ]
+    );
+    assert_eq!(&*page.columns[0].type_name, "STRUCT<id: UUID>");
+}
+
+#[test]
+fn variant_group_is_named_unsupported() {
+    let leaf = |name: &str| {
+        Arc::new(
+            Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
+                .with_repetition(Repetition::REQUIRED)
+                .build()
+                .unwrap(),
+        )
+    };
+
+    let variant = Type::group_type_builder("payload")
+        .with_repetition(Repetition::OPTIONAL)
+        .with_logical_type(Some(LogicalType::variant(None)))
+        .with_fields(vec![leaf("metadata"), leaf("value")])
+        .build()
+        .unwrap();
+
+    let schema = Arc::new(
+        Type::group_type_builder("schema")
+            .with_fields(vec![Arc::new(variant)])
+            .build()
+            .unwrap(),
+    );
+
+    let mut buffer = Vec::new();
+    let mut writer = SerializedFileWriter::new(
+        &mut buffer,
+        schema,
+        Arc::new(WriterProperties::builder().build()),
+    )
+    .unwrap();
+
+    let mut row_group = writer.next_row_group().unwrap();
+
+    for bytes in [vec![1_u8, 0, 0], vec![0_u8]] {
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&[ByteArray::from(bytes)], Some(&[1, 0]), None)
+            .unwrap();
+        column.close().unwrap();
+    }
+
+    row_group.close().unwrap();
+    writer.close().unwrap();
+
+    let page = page_of(buffer);
+
+    assert_eq!(displays(&page, 0), vec!["<unsupported: VARIANT>", "NULL"]);
+    assert_eq!(&*page.columns[0].type_name, "VARIANT (unsupported)");
+    assert_eq!(page.columns[0].kind, ColumnKind::Unknown);
 }
