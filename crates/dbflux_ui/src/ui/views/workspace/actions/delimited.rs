@@ -157,13 +157,16 @@ mod pending_cell_input_close_tests {
 
     impl TestFile {
         fn new() -> Self {
+            Self::with_content(b"name,city\nAna,Lima\n")
+        }
+
+        fn with_content(content: &[u8]) -> Self {
             let directory = std::env::temp_dir()
                 .join(format!("dbflux-delimited-close-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&directory).expect("the test directory must be creatable");
 
             let path = directory.join("cities.csv");
-            std::fs::write(&path, b"name,city\nAna,Lima\n")
-                .expect("the test file must be writable");
+            std::fs::write(&path, content).expect("the test file must be writable");
 
             Self { directory, path }
         }
@@ -371,6 +374,81 @@ mod pending_cell_input_close_tests {
         window.run_until_parked();
 
         assert_close_asks_about_the_typed_value(window, &workspace, &document, id, "close command");
+    }
+
+    /// A city too long for the inline editor opens in the cell editor dialog,
+    /// which leaves the tab bar reachable while it holds an edited value.
+    #[gpui::test]
+    fn the_close_button_asks_about_a_value_edited_in_the_cell_editor_dialog(
+        cx: &mut TestAppContext,
+    ) {
+        let long_city = "abcdefghij".repeat(15);
+        let content = format!("name,city\nAna,{long_city}\n");
+
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::with_content(content.as_bytes());
+        let (document, id) = open_csv_tab(window, &workspace, &file);
+
+        let table_state = window.update(|_, cx| {
+            document
+                .read(cx)
+                .table_state()
+                .expect("the file is loaded")
+                .clone()
+        });
+
+        window.update(|window, cx| {
+            table_state.update(cx, |state, cx| {
+                state.start_editing(CellCoord::new(0, 1), window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        assert!(
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .cell_editor()
+                    .is_some_and(|editor| editor.read(cx).is_visible())
+            }),
+            "the long city opens in the dialog"
+        );
+
+        window.simulate_input("X");
+        window.run_until_parked();
+        assert!(
+            !is_dirty(window, &document),
+            "the dialog's value is not staged yet"
+        );
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(
+            window,
+            &workspace,
+            &document,
+            id,
+            "cell editor dialog",
+        );
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_unsaved_changes
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read(&file.path).expect("the file reads"),
+            format!("name,city\nAna,X{long_city}\n").into_bytes(),
+            "the dialog opens with the cursor at the start of the value"
+        );
     }
 
     /// Saving from the prompt writes the typed value, so it is not lost.
