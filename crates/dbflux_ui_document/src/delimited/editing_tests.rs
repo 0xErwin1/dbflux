@@ -267,8 +267,9 @@ fn a_file_that_cannot_be_saved_in_place_opens_read_only(cx: &mut TestAppContext)
     assert!(!is_dirty(&document, window));
 }
 
-/// A cell over the inline limit asks for a modal editor, which a later unit
-/// adds. Until then the request opens nothing and stages nothing.
+/// A cell over the inline limit, or one holding a line break, asks for the
+/// modal editor instead of opening an inline one. Asking stages nothing: the
+/// file stays clean until the modal editor applies a value.
 #[gpui::test]
 fn a_long_or_multi_line_cell_asks_for_a_modal_editor_and_stages_nothing(cx: &mut TestAppContext) {
     let long = "x".repeat(150);
@@ -374,9 +375,9 @@ fn one_typed_cell_saves_only_its_record_and_reopens_clean(cx: &mut TestAppContex
     assert_eq!(cities, "Cusco");
 }
 
-/// Both edits were lost before U5a: the table compared display text, which
-/// collapses whitespace and cuts long values. The writer quotes a field that
-/// ends in a space, so a reader that trims fields keeps it.
+/// The table's display text collapses whitespace and cuts long values, so a
+/// save that compared display text would lose both edits. The writer quotes a
+/// field that ends in a space, so a reader that trims fields keeps it.
 #[gpui::test]
 fn a_whitespace_edit_and_a_tail_edit_of_a_long_value_are_saved(cx: &mut TestAppContext) {
     let long = "x".repeat(250);
