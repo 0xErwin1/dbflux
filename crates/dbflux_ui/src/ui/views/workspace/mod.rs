@@ -2181,6 +2181,10 @@ impl Workspace {
             // remaining ones from persisting their edits.
             let mut outstanding = false;
             for tab in manager.documents() {
+                // A value still in an open editor is committed first, so the
+                // flush persists it. Input that cannot be committed does not
+                // hold the shutdown up.
+                tab.as_pane().commit_pending_input(cx);
                 outstanding |= tab.as_pane().flush_for_shutdown(cx);
             }
             outstanding

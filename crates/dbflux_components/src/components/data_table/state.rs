@@ -1146,6 +1146,17 @@ impl DataTableState {
         self.close_editor(apply, true, cx);
     }
 
+    /// Commit the value typed into an open inline editor, the way Enter does,
+    /// without asking for focus back.
+    ///
+    /// For a host that is about to close the table or move focus away from it:
+    /// the value becomes a pending change its unsaved-changes check can see,
+    /// and focus stays wherever the host puts it, such as on its confirmation
+    /// dialog. An open enum dropdown holds no typed value, so it just closes.
+    pub fn commit_pending_edit(&mut self, cx: &mut Context<Self>) {
+        self.close_editor(true, false, cx);
+    }
+
     /// Stage a value typed for a cell of the row set the table already holds.
     ///
     /// A value that matches what the row already holds has to drop any staged
@@ -2014,6 +2025,98 @@ mod tests {
             !refocus,
             "focus leaving the table must not be pulled back into it"
         );
+    }
+
+    /// Focus leaving the editor, such as a click outside the table, still
+    /// cancels: the typed value is dropped, not staged.
+    #[gpui::test]
+    fn blur_drops_the_typed_value(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use crate::controls::InputEvent;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            input.update(app, |_input, cx| cx.emit(InputEvent::Blur));
+        });
+
+        let (editing_cell, is_dirty) = window.update(|_, app| {
+            let state = state.read(app);
+            (
+                state.editing_cell(),
+                state.edit_buffer().is_cell_dirty(0, 1),
+            )
+        });
+
+        assert!(editing_cell.is_none(), "blur closes the editor");
+        assert!(!is_dirty, "blur must drop the typed value, not stage it");
+    }
+
+    /// A host about to close the table commits the typed value the way Enter
+    /// does, but leaves focus where it is: its confirmation dialog must keep
+    /// the keyboard.
+    #[gpui::test]
+    fn committing_a_pending_edit_stages_it_without_a_refocus(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.commit_pending_edit(cx));
+        });
+
+        let (editing_cell, changes, refocus) = window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                (
+                    s.editing_cell(),
+                    s.edit_buffer()
+                        .row_changes(0)
+                        .into_iter()
+                        .map(|(col, value)| (col, value.display_text().to_string()))
+                        .collect::<Vec<_>>(),
+                    s.take_pending_refocus(),
+                )
+            })
+        });
+
+        assert!(editing_cell.is_none(), "committing closes the editor");
+        assert_eq!(
+            changes,
+            vec![(1usize, "carol".to_string())],
+            "the typed value must be a pending change"
+        );
+        assert!(!refocus, "committing for a close must not take focus back");
+    }
+
+    /// Without an open editor there is nothing to commit, and nothing changes.
+    #[gpui::test]
+    fn committing_without_an_open_editor_changes_nothing(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, _input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.stop_editing(false, cx);
+                s.take_pending_refocus();
+                s.commit_pending_edit(cx);
+            });
+        });
+
+        let (has_changes, refocus) = window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                (s.has_pending_operations(), s.take_pending_refocus())
+            })
+        });
+
+        assert!(!has_changes);
+        assert!(!refocus);
     }
 
     /// Window root that renders an input's focus handle next to a second

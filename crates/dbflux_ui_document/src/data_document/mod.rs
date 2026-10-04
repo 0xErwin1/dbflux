@@ -72,6 +72,29 @@ impl DataDocument {
         Self::new_with_grid(title, DataSourceKind::QueryResult, data_grid, window, cx)
     }
 
+    /// A table document showing `result`, with rows identified by
+    /// `pk_columns`, that never queries a connection. For tests outside this
+    /// crate that need an editable grid.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_test_table(
+        result: QueryResult,
+        pk_columns: Vec<String>,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let data_grid = cx
+            .new(|cx| DataGridPanel::new_for_test_table(result, pk_columns, app_state, window, cx));
+
+        Self::new_with_grid(
+            "public.orders".to_string(),
+            DataSourceKind::Table,
+            data_grid,
+            window,
+            cx,
+        )
+    }
+
     /// Shared construction logic: builds a `ViewHandle` from the grid, wraps it
     /// in `ResultPanel`, and wires subscriptions.
     fn new_with_grid(
