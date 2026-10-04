@@ -1,0 +1,20 @@
+[package]
+name = "dbflux_delimited"
+version.workspace = true
+publish = false
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+chardetng.workspace = true
+encoding_rs.workspace = true
+
+[lints]
+workspace = true
