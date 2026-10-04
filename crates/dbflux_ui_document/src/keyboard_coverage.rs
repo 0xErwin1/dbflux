@@ -710,9 +710,20 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
 /// control that loads the next window (`]`) and the reload (`f5`). The rows
 /// stay in file order, so the document does not sort and a column header
 /// click has no action for a key to reach.
+///
+/// `t` switches between Data and Columns. In Data, `f` opens the column
+/// picker with the keyboard on its list (`Dropdown`): Space toggles the
+/// highlighted column, Enter applies, Escape discards and Tab reaches the
+/// search, Select all, Select none and Apply. In Columns, Space toggles the
+/// eye of the row under the cursor, `Shift+T` cycles the sort and `/` (or
+/// `f`) focuses the filter.
 pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     name: "parquet file",
-    contexts: &[ContextId::Results, ContextId::DataTable],
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::Dropdown,
+    ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
         (
@@ -728,6 +739,33 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
         (
             "parquet-reload",
             KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "segmented-parquet-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "column-projection-trigger",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "column-projection-row-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        ("column-projection-select-all", KeyboardPath::TabStop),
+        ("column-projection-select-none", KeyboardPath::TabStop),
+        ("column-projection-apply", KeyboardPath::TabStop),
+        (
+            "column-profile-eye-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
         ),
     ],
 };

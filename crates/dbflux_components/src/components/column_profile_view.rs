@@ -15,9 +15,9 @@ use dbflux_core::keymap_types::{Command, ContextId};
 use dbflux_core::{ColumnBadge, ColumnProfile, ColumnProjection, ProfileSource, TableProfile};
 use gpui::prelude::*;
 use gpui::{
-    Entity, EventEmitter, FocusHandle, FontWeight, Hsla, IntoElement, ParentElement, Pixels,
-    Render, Role, ScrollHandle, ScrollStrategy, SharedString, Styled, Subscription, Toggled,
-    UniformListScrollHandle, Window, div, px, uniform_list,
+    Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, IntoElement, ParentElement,
+    Pixels, Render, Role, ScrollHandle, ScrollStrategy, SharedString, Styled, Subscription,
+    Toggled, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::Scrollbar;
@@ -339,6 +339,13 @@ impl ColumnProfileView {
         cx.notify();
     }
 
+    /// Moves keyboard focus to the filter field.
+    pub fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.filter.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+        cx.notify();
+    }
+
     /// Adds the column at `index` to the Data projection or drops it, and
     /// emits the new projection. Returns false, emitting nothing, when the
     /// toggle would leave the projection without columns.
@@ -426,7 +433,9 @@ impl ColumnProfileView {
     }
 
     /// Keys of the column rows: the `Dropdown` keys move the cursor and
-    /// Space toggles the eye of the row under it. Other keys propagate.
+    /// Space toggles the eye of the row under it. The `Dropdown` context's
+    /// `s` (`SaveQuery`) stops here, so a host that saves on it does not save
+    /// from the rows. Other keys propagate.
     fn handle_run_command(
         &mut self,
         action: &RunCommand,
@@ -444,6 +453,7 @@ impl ColumnProfileView {
                     self.toggle_column(index, cx);
                 }
             }
+            Some(Command::SaveQuery) => {}
             _ => cx.propagate(),
         }
     }

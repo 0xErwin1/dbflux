@@ -167,6 +167,11 @@ impl ColumnProjectionPicker {
         &self.applied
     }
 
+    /// The trigger's "N of M columns" text for the applied projection.
+    pub fn trigger_label(&self) -> &SharedString {
+        &self.trigger_label
+    }
+
     /// The selection being edited, while the popover is open.
     pub fn draft(&self) -> Option<&ColumnProjection> {
         self.draft.as_ref()
@@ -459,7 +464,9 @@ impl ColumnProjectionPicker {
     /// Keys of the open popover. In the column list the `Dropdown` keys
     /// move, toggle (Space), apply (Enter) and discard (Escape); from any
     /// control Escape discards and Tab cycles through the controls. Keys it
-    /// has no use for propagate.
+    /// has no use for propagate, except the `Dropdown` context's `s`
+    /// (`SaveQuery`), which stops in the list: a host that saves on it would
+    /// otherwise save while a column is being chosen.
     fn handle_run_command(
         &mut self,
         action: &RunCommand,
@@ -481,6 +488,7 @@ impl ColumnProjectionPicker {
             Some(Command::Cancel) => self.discard(window, cx),
             Some(Command::CycleFocusForward) => self.cycle_focus(true, window, cx),
             Some(Command::CycleFocusBackward) => self.cycle_focus(false, window, cx),
+            Some(Command::SaveQuery) if in_list => {}
             _ => cx.propagate(),
         }
     }

@@ -2053,9 +2053,20 @@ document:
           many: "%{count} rows"
         of_total: "%{loaded} of %{total} rows loaded"
       columns: "%{shown} of %{total} columns shown"
+    view:
+      data: "Data"
+      columns: "Columns"
+    summary:
+      columns:
+        one: "%{count} column"
+        many: "%{count} columns"
+      rows:
+        one: "%{count} row"
+        many: "%{count} rows"
     error:
       open_failed: "Could not open %{name}"
       load_more_failed: "Could not load more of %{name}"
+      projection_failed: "Could not read the chosen columns of %{name}"
       source_changed: "The file changed since it was opened, so no more rows were read. Reload it to see its new content."
       object_without_range_reads: "This storage service cannot read part of an object, so opening a Parquet object from it would download all of it. Download the file and open it locally instead."
       short_read: "The file returned fewer bytes than requested. It may have changed while it was being read."

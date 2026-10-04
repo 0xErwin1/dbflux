@@ -2053,9 +2053,20 @@ document:
           many: "%{count} 行"
         of_total: "已加载 %{loaded} / %{total} 行"
       columns: "显示 %{shown} / %{total} 列"
+    view:
+      data: "数据"
+      columns: "列"
+    summary:
+      columns:
+        one: "%{count} 列"
+        many: "%{count} 列"
+      rows:
+        one: "%{count} 行"
+        many: "%{count} 行"
     error:
       open_failed: "无法打开 %{name}"
       load_more_failed: "无法加载 %{name} 的更多内容"
+      projection_failed: "无法读取 %{name} 中所选的列"
       source_changed: "文件在打开后已更改，因此没有读取更多行。请重新加载以查看新内容。"
       object_without_range_reads: "此存储服务无法读取对象的一部分，因此从中打开 Parquet 对象会下载整个对象。请下载该文件并在本地打开。"
       short_read: "文件返回的字节少于请求的数量。读取期间文件可能已更改。"
