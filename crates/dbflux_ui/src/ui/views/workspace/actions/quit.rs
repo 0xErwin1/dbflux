@@ -34,6 +34,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.commit_pending_inputs_before_quit(&discard, cx);
+
         let entries = self.documents_requiring_quit_confirmation(&discard, cx);
 
         if entries.is_empty() {
@@ -53,6 +55,24 @@ impl Workspace {
         cx.notify();
 
         true
+    }
+
+    /// Commits the input each document still holds in an open editor, such
+    /// as a value typed into a cell before Enter, leaving out `discard`, so
+    /// the quit check counts it as a pending change. As in the shutdown
+    /// flush, input that cannot be committed does not hold the quit up.
+    fn commit_pending_inputs_before_quit(
+        &mut self,
+        discard: &[DocumentId],
+        cx: &mut Context<Self>,
+    ) {
+        self.tab_manager.update(cx, |manager, cx| {
+            for tab in manager.documents() {
+                if !discard.contains(&tab.id()) {
+                    tab.as_pane().commit_pending_input(cx);
+                }
+            }
+        });
     }
 
     /// The documents whose pending changes need the user's decision before a

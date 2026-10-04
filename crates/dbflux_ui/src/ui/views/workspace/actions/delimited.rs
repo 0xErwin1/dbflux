@@ -565,6 +565,7 @@ mod tests {
     use crate::ui::overlays::modals::UnsavedChangesOutcome;
     use crate::ui::views::workspace::{QuitConfirmed, Workspace};
     use dbflux_components::components::data_table::model::CellValue;
+    use dbflux_components::components::data_table::selection::CellCoord;
     use dbflux_ui_base::AppStateEntity;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::cell::RefCell;
@@ -1707,6 +1708,38 @@ mod tests {
         window.update(|_, cx| document.read(cx).is_dirty())
     }
 
+    /// Types "Cusco" into the inline editor of the first record's city and
+    /// leaves the editor open, without pressing Enter.
+    fn type_first_city_without_enter(
+        window: &mut VisualTestContext,
+        document: &Entity<DelimitedDocument>,
+    ) {
+        window.update(|window, cx| {
+            let table_state = document
+                .read(cx)
+                .table_state()
+                .expect("the file is loaded")
+                .clone();
+
+            table_state.update(cx, |state, cx| {
+                assert!(state.start_editing(CellCoord::new(0, 1), window, cx));
+
+                let input = state
+                    .cell_input()
+                    .cloned()
+                    .expect("a short cell is edited inline");
+
+                input.update(cx, |input, cx| input.set_value("Cusco", window, cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            !is_dirty(window, document),
+            "the value is not committed yet"
+        );
+    }
+
     fn request_quit(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
         let allowed = window.update(|window, cx| {
             workspace.update(cx, |workspace, cx| workspace.request_quit(window, cx))
@@ -1949,6 +1982,54 @@ mod tests {
             ["cities.csv"],
             "the tab stays"
         );
+    }
+
+    /// A value still in the inline editor is committed before the quit reads
+    /// what each document needs, so an object asks about it instead of the
+    /// quit going on and dropping it.
+    #[gpui::test]
+    fn a_value_typed_into_an_object_cell_asks_before_the_quit(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[("2026/cities.csv", CITIES)]);
+        let quit_confirmed = count_quit_confirmed(window, &workspace);
+        let document = open_object_document(window, &workspace, store.clone());
+
+        type_first_city_without_enter(window, &document);
+
+        assert!(!request_quit(window, &workspace));
+        assert!(unsaved_prompt_visible(window, &workspace));
+        assert!(is_dirty(window, &document));
+        assert_eq!(quit_confirmed.get(), 0);
+
+        choose_save(window, &workspace);
+
+        assert_eq!(
+            store.bytes(BUCKET, "2026/cities.csv").ok().as_deref(),
+            Some(EDITED)
+        );
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    /// A local file that saves safely is saved on quit with the value still
+    /// in the inline editor, without asking.
+    #[gpui::test]
+    fn a_value_typed_into_a_local_cell_is_saved_on_quit(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.csv");
+        let document = open_local_document(window, &workspace, file.path.clone());
+
+        type_first_city_without_enter(window, &document);
+
+        assert!(request_quit(window, &workspace));
+        assert!(!unsaved_prompt_visible(window, &workspace));
+        assert!(
+            is_dirty(window, &document),
+            "the quit check committed the value"
+        );
+
+        flush_documents(window, &workspace);
+
+        assert_eq!(std::fs::read(&file.path).expect("the file reads"), EDITED);
     }
 
     /// A local file too large for the shutdown's flush budget asks, and
