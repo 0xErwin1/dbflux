@@ -18,6 +18,12 @@
 //! arrives. The latest override wins. A reread that a later override
 //! replaced, and a page read through the reader a reread replaced, are
 //! dropped when they come back.
+//!
+//! The table is editable by row position once the file is loaded, unless
+//! the file cannot be saved in place. Editing and saving live in
+//! `editing.rs`: the document is dirty while the table holds a pending edit
+//! or the page model a column change, and a save writes the edits through the
+//! storage layer on the background executor and opens the saved file again.
 
 use std::fmt;
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -65,6 +71,11 @@ const FETCH_WINDOW_BYTES: NonZeroU64 = match NonZeroU64::new(1024 * 1024) {
     Some(size) => size,
     None => panic!("the fetch window must not be zero"),
 };
+
+/// How many pages a save or a reload reads again: the pages loaded before
+/// it, up to this many. With the default page size that is 10,000 records,
+/// so a fully loaded large file is not read whole again after every save.
+pub(super) const MAX_PAGES_READ_AGAIN: usize = 20;
 
 /// How the document pages and fetches a file.
 pub(super) const READER_OPTIONS: ReaderOptions = ReaderOptions {
@@ -162,9 +173,9 @@ pub(super) struct OpenedFile {
     /// when the reader refuses that one or the file was read again under an
     /// override.
     pub(super) dialect: Dialect,
-    version: SourceVersion,
-    reader: PagedReader<DelimitedSource>,
-    page_model: PageModel,
+    pub(super) version: SourceVersion,
+    pub(super) reader: PagedReader<DelimitedSource>,
+    pub(super) page_model: PageModel,
 }
 
 /// What a background page read hands to the foreground.
@@ -177,14 +188,14 @@ pub(super) struct ReadPage {
 }
 
 /// A file whose first page is loaded.
-struct LoadedFile {
+pub(super) struct LoadedFile {
     /// The dialect detection resolved when the file was opened. Every
     /// override is applied on top of it, never on top of another override.
     detected: Dialect,
 
     /// The dialect the loaded records were read with: `overrides` applied to
     /// `detected`.
-    dialect: Dialect,
+    pub(super) dialect: Dialect,
 
     /// The overrides in effect.
     overrides: DialectOverrides,
@@ -198,9 +209,14 @@ struct LoadedFile {
     fallback: Option<Dialect>,
 
     /// The reread that is running. Storing it is what cancels it: a later
-    /// override replaces it, and a reread that has not started reading by
-    /// then never reads.
+    /// override or reload replaces it, and a reread that has not started
+    /// reading by then never reads. `Some` exactly while a reread runs.
     reread_task: Option<Task<()>>,
+
+    /// How the table keeps its cursor when the running reread lands: it
+    /// returns to the first row after an override, whose rows are new, and
+    /// stays where it was after a reload.
+    reread_swap: ModelSwap,
 
     /// Counts the overrides asked for. A reread carries the count it was
     /// started at, and its result is dropped when a later override was asked
@@ -215,20 +231,30 @@ struct LoadedFile {
     controls: DialectControls,
 
     /// The version of the file the reader's byte ranges belong to.
-    version: SourceVersion,
+    pub(super) version: SourceVersion,
 
     /// The reader the first page came from, kept open over the same source
     /// for the pages that follow it. `None` while a page is being read: the
     /// background read has it and hands it back with the page.
     reader: Option<PagedReader<DelimitedSource>>,
 
-    page_model: PageModel,
+    /// The length of the source the reader's byte ranges were read from,
+    /// kept here so a save can build its edit set while a page read holds
+    /// the reader.
+    pub(super) source_length: u64,
+
+    pub(super) page_model: PageModel,
+
+    /// Whether the document had unsaved changes when this was last worked
+    /// out, so a change of it is told to the tab once.
+    pub(super) is_dirty: bool,
+
     warnings: Vec<DelimitedWarning>,
 
     /// The text of each warning, formatted when the file is loaded.
     warning_items: Vec<SharedString>,
 
-    table_state: Entity<DataTableState>,
+    pub(super) table_state: Entity<DataTableState>,
     table: Entity<DataTable>,
 
     /// The status line, formatted when the page model changes.
@@ -240,14 +266,31 @@ impl LoadedFile {
     /// gets the rows, and the status line and the warnings are formatted
     /// again.
     ///
-    /// The table keeps its column widths, its scroll position, the keyboard
-    /// and the selected cell, because the rows already shown keep their
-    /// indices. It drops pending edits, of which a read-only table has none.
+    /// The table keeps its column widths, its scroll position, the keyboard,
+    /// the selected cell and every pending edit with its undo history,
+    /// because the rows already shown keep their indices. Replacing the
+    /// rows closes an open inline editor, so its value is committed first
+    /// instead of being lost.
+    ///
+    /// A pending insert anchored at the end moves down with the appended
+    /// rows. The document anchors a row there only in a file without rows,
+    /// which has no page to append.
     fn show_page_model(&mut self, cx: &mut App) {
         let model = Arc::new(self.page_model.table_model());
+        let row_count = model.row_count();
 
         self.table_state.update(cx, |state, cx| {
+            if state.is_editing() {
+                state.stop_editing(true, cx);
+            }
+
+            let pending = state.edit_buffer().clone();
+
             state.set_model(model, ModelSwap::KeepCursor, cx);
+
+            *state.edit_buffer_mut() = pending;
+            state.edit_buffer_mut().set_base_row_count(row_count);
+            cx.notify();
         });
 
         self.status_items = status_items(&self.dialect, &self.page_model);
@@ -288,8 +331,18 @@ impl LoadedFile {
         self.warnings = warnings;
     }
 
+    pub(super) fn is_rereading(&self) -> bool {
+        self.reread_task.is_some()
+    }
+
+    /// Whether a save of this file can verify that nobody else changed it.
+    /// A file that cannot is never saved, so its table is never editable.
+    pub(super) fn can_save_in_place(&self) -> bool {
+        self.version.detects_same_length_change()
+    }
+
     /// The dialect the controls show: the one asked for last.
-    fn requested_dialect(&self) -> Dialect {
+    pub(super) fn requested_dialect(&self) -> Dialect {
         self.requested_overrides.apply(self.detected)
     }
 
@@ -306,19 +359,41 @@ impl LoadedFile {
     /// is dropped by the epoch it carries. The table returns to its first
     /// row, because the rows it showed are gone.
     fn show_reread(&mut self, reread: OpenedFile, cx: &mut App) {
+        self.overrides = self.requested_overrides;
+        self.reread_task = None;
+
+        self.replace_reading(reread, self.reread_swap, cx);
+    }
+
+    /// Replaces the reader, the records and the table rows with the first
+    /// page of the file as it was read again after a save, with the dialect
+    /// that was in effect.
+    ///
+    /// The table drops every pending edit and the undo history, which the
+    /// saved file holds now. It keeps the selected cell where the first page
+    /// still has one, because the user stays in the file they just saved. A
+    /// page read that held the old reader is dropped by the epoch it carries.
+    pub(super) fn show_saved(&mut self, saved: OpenedFile, cx: &mut App) {
+        self.replace_reading(saved, ModelSwap::KeepCursor, cx);
+    }
+
+    /// Puts the reader, the dialect, the version and the page model of
+    /// `opened` in place and shows its rows. The dialect is always the one
+    /// the reader and the rows were read with. The overrides stay as the
+    /// caller set them.
+    fn replace_reading(&mut self, opened: OpenedFile, swap: ModelSwap, cx: &mut App) {
         let OpenedFile {
             detected: _,
             dialect,
             version,
             reader,
             page_model,
-        } = reread;
+        } = opened;
 
         self.dialect = dialect;
-        self.overrides = self.requested_overrides;
+        self.source_length = reader.source_length();
         self.reader = Some(reader);
         self.reader_epoch += 1;
-        self.reread_task = None;
         self.version = version;
         self.page_model = page_model;
 
@@ -328,12 +403,12 @@ impl LoadedFile {
         let model = Arc::new(self.page_model.table_model());
 
         self.table_state.update(cx, |state, cx| {
-            state.set_model(model, ModelSwap::ResetCursor, cx);
+            state.set_model(model, swap, cx);
         });
     }
 }
 
-enum DelimitedPhase {
+pub(super) enum DelimitedPhase {
     Loading,
     Failed(String),
     Loaded(Box<LoadedFile>),
@@ -345,17 +420,25 @@ pub struct DelimitedDocument {
     focus_handle: FocusHandle,
     is_active_tab: bool,
     file: DelimitedFileKey,
-    location: DelimitedLocation,
+    pub(super) location: DelimitedLocation,
 
     /// The application state the live connection of an object's profile is
-    /// resolved from for every page. `None` for a local file, which has no
+    /// resolved from for every page and every save, and whose audit log
+    /// records an object's saves. `None` for a local file, which has no
     /// connection.
-    app_state: Option<Entity<AppStateEntity>>,
+    pub(super) app_state: Option<Entity<AppStateEntity>>,
 
     /// The page and window sizes every reader of this file is opened with.
-    reader_options: ReaderOptions,
+    pub(super) reader_options: ReaderOptions,
 
-    phase: DelimitedPhase,
+    pub(super) phase: DelimitedPhase,
+
+    /// Whether a save is running. A save asked for meanwhile is ignored.
+    pub(super) saving: bool,
+
+    /// Set when a save was started by the interrupted-close flow, so a save
+    /// that lands also asks the workspace to close the tab.
+    pub(super) close_after_save: bool,
 
     /// Set when the first page arrives, so the next render hands the keyboard
     /// to the table if the loading notice held it.
@@ -449,6 +532,8 @@ impl DelimitedDocument {
             app_state,
             reader_options,
             phase: DelimitedPhase::Loading,
+            saving: false,
+            close_after_save: false,
             pending_table_focus: false,
             _subscriptions: Vec::new(),
         };
@@ -479,7 +564,13 @@ impl DelimitedDocument {
         }
     }
 
+    /// Unsaved changes win over every other state: the dirty dot is what
+    /// routes a tab close through the workspace's unsaved-changes dialog.
     pub fn state(&self) -> DocumentState {
+        if self.is_dirty() {
+            return DocumentState::Modified;
+        }
+
         match &self.phase {
             DelimitedPhase::Loading => DocumentState::Loading,
             DelimitedPhase::Failed(_) => DocumentState::Error,
@@ -500,10 +591,11 @@ impl DelimitedDocument {
         }
     }
 
-    /// Always `None`: the table is read-only, so the document has no unsaved
-    /// changes.
+    /// The summary of the tab's dirty-dot tooltip and the unsaved-changes
+    /// dialog, while the document has unsaved changes.
     pub fn change_summary(&self) -> Option<String> {
-        None
+        self.is_dirty()
+            .then(|| crate::labels::delimited_unsaved_summary(&self.title()))
     }
 
     pub fn refresh_policy(&self) -> dbflux_core::RefreshPolicy {
@@ -527,9 +619,12 @@ impl DelimitedDocument {
         dbflux_app::keymap::ContextId::Results
     }
 
-    /// Table navigation runs inside the embedded `DataTable` through its own
-    /// key context. The one command of the document is the next page, which
-    /// a loaded file answers by loading one.
+    /// Table navigation and editing run inside the embedded `DataTable`
+    /// through its own key context, and its save key reaches the document as
+    /// a save request of the table. The commands of the document are the
+    /// next page, which a loaded file answers by loading one, the reload
+    /// (`RefreshSchema`), and the save commands that reach the tab from
+    /// elsewhere.
     pub fn dispatch_command(
         &mut self,
         command: dbflux_app::keymap::Command,
@@ -539,6 +634,20 @@ impl DelimitedDocument {
         match command {
             dbflux_app::keymap::Command::ResultsNextPage if self.loaded().is_some() => {
                 self.load_more(cx);
+                true
+            }
+
+            dbflux_app::keymap::Command::RefreshSchema if self.loaded().is_some() => {
+                self.reload(cx);
+                true
+            }
+
+            dbflux_app::keymap::Command::SaveQuery
+            | dbflux_app::keymap::Command::SaveFileAs
+            | dbflux_app::keymap::Command::SaveRow
+                if self.loaded().is_some() =>
+            {
+                self.save(cx);
                 true
             }
 
@@ -557,14 +666,6 @@ impl DelimitedDocument {
                 self.focus_handle.focus(window, cx);
             }
         }
-    }
-
-    /// Saves as part of an interrupted close. Returns whether a save started.
-    ///
-    /// The table is read-only, so there is never anything to write and no
-    /// save starts.
-    pub fn save_for_close(&mut self, _cx: &mut Context<Self>) -> bool {
-        false
     }
 
     /// The dialect the loaded records were read with, once the file is
@@ -588,8 +689,7 @@ impl DelimitedDocument {
 
     /// Whether the file is being read again under an override.
     pub fn is_rereading(&self) -> bool {
-        self.loaded()
-            .is_some_and(|loaded| loaded.requested_overrides != loaded.overrides)
+        self.loaded().is_some_and(LoadedFile::is_rereading)
     }
 
     /// Whether any part of the detected dialect is overridden.
@@ -650,12 +750,14 @@ impl DelimitedDocument {
     }
 
     /// Whether the next page can be asked for now: the file has more
-    /// records, and neither a page nor the whole file is being read.
+    /// records, neither a page nor the whole file is being read, and no save
+    /// runs.
     ///
     /// A page asked for during a reread would be read through the reader the
-    /// reread replaces, and dropped.
+    /// reread replaces, and dropped, and one asked for during a save through
+    /// the reader the saved file replaces.
     pub fn can_load_more(&self) -> bool {
-        self.has_more_records() && !self.is_loading_more() && !self.is_rereading()
+        self.has_more_records() && !self.is_loading_more() && !self.is_rereading() && !self.saving
     }
 
     /// What the footer says while the file is read again under an override.
@@ -698,14 +800,14 @@ impl DelimitedDocument {
         std::mem::take(&mut self.pending_table_focus)
     }
 
-    fn loaded(&self) -> Option<&LoadedFile> {
+    pub(super) fn loaded(&self) -> Option<&LoadedFile> {
         match &self.phase {
             DelimitedPhase::Loaded(loaded) => Some(loaded),
             DelimitedPhase::Loading | DelimitedPhase::Failed(_) => None,
         }
     }
 
-    fn loaded_mut(&mut self) -> Option<&mut LoadedFile> {
+    pub(super) fn loaded_mut(&mut self) -> Option<&mut LoadedFile> {
         match &mut self.phase {
             DelimitedPhase::Loaded(loaded) => Some(loaded),
             DelimitedPhase::Loading | DelimitedPhase::Failed(_) => None,
@@ -758,6 +860,7 @@ impl DelimitedDocument {
             Ok(opened) => {
                 self.phase = DelimitedPhase::Loaded(Box::new(self.build_loaded(opened, cx)));
                 self.pending_table_focus = true;
+                self.sync_table_editing(cx);
             }
 
             Err(error) => {
@@ -797,31 +900,17 @@ impl DelimitedDocument {
         let model = Arc::new(page_model.table_model());
         let table_state = cx.new(|cx| DataTableState::new(model, cx));
 
-        // The rows are the file's records in file order, so the document does
-        // not sort them. A header click sets the sort indicator before it
-        // reports the change, and the indicator is cleared again here.
-        let sort_subscription = cx.subscribe(
-            &table_state,
-            |_this, table_state, event: &DataTableEvent, cx| {
-                if matches!(event, DataTableEvent::SortChanged(Some(_))) {
-                    table_state.update(cx, |state, cx| {
-                        state.clear_sort_without_emit();
-                        cx.notify();
-                    });
-                }
-            },
-        );
-
         let controls = DialectControls::new(&detected, cx);
         controls.show(&dialect, cx);
 
-        let mut subscriptions = vec![sort_subscription];
+        let mut subscriptions = Self::subscribe_to_table(&table_state, cx);
         subscriptions.extend(Self::subscribe_to_dialect_controls(&controls, cx));
         self._subscriptions = subscriptions;
 
         let table = cx.new(|cx| DataTable::new("delimited-table", table_state.clone(), cx));
 
         let status_items = status_items(&dialect, &page_model);
+        let source_length = reader.source_length();
 
         let mut loaded = LoadedFile {
             detected,
@@ -830,12 +919,15 @@ impl DelimitedDocument {
             requested_overrides: overrides,
             fallback,
             reread_task: None,
+            reread_swap: ModelSwap::ResetCursor,
             reread_generation: 0,
             reader_epoch: 0,
             controls,
             version,
             reader: Some(reader),
+            source_length,
             page_model,
+            is_dirty: false,
             warnings: Vec::new(),
             warning_items: Vec::new(),
             table_state,
@@ -845,6 +937,38 @@ impl DelimitedDocument {
 
         loaded.refresh_warnings();
         loaded
+    }
+
+    /// Follows the table: the rows are the file's records in file order, so
+    /// the document does not sort them. A header click sets the sort
+    /// indicator before it reports the change, and the indicator is cleared
+    /// again here. Row operations and save requests are the document's to
+    /// carry out. A staged cell edit emits no event, only a notification, so
+    /// the dirty state is worked out again on every change of the table.
+    fn subscribe_to_table(
+        table_state: &Entity<DataTableState>,
+        cx: &mut Context<Self>,
+    ) -> Vec<Subscription> {
+        let table_subscription = cx.subscribe(
+            table_state,
+            |this, table_state, event: &DataTableEvent, cx| {
+                if matches!(event, DataTableEvent::SortChanged(Some(_))) {
+                    table_state.update(cx, |state, cx| {
+                        state.clear_sort_without_emit();
+                        cx.notify();
+                    });
+                    return;
+                }
+
+                this.handle_table_event(event, cx);
+            },
+        );
+
+        let dirty_observation = cx.observe(table_state, |this, _, cx| {
+            this.refresh_dirty(cx);
+        });
+
+        vec![table_subscription, dirty_observation]
     }
 
     /// Turns a selection in the delimiter, quote or encoding select into an
@@ -954,7 +1078,7 @@ impl DelimitedDocument {
     ///
     /// A profile that is not connected is reported here under `summary`, and
     /// the caller reads nothing.
-    fn use_live_connection(
+    pub(super) fn use_live_connection(
         &mut self,
         summary: String,
         cx: &mut Context<Self>,
@@ -1128,10 +1252,18 @@ impl DelimitedDocument {
     /// Overrides that are already the ones in effect cancel a running reread
     /// without reading anything.
     ///
+    /// Any other override is refused and reported while the document has
+    /// unsaved changes or a save runs, because the reread would drop them. A
+    /// value still in the inline editor is committed first and counts. The table is
+    /// read-only while a reread runs, for the same reason.
+    ///
     /// An object is read through the live connection of its profile, as a
     /// further page is.
     pub fn set_dialect_overrides(&mut self, overrides: DialectOverrides, cx: &mut Context<Self>) {
         let title = self.title();
+
+        self.commit_active_inline_edit(cx);
+        let holds_changes = self.is_dirty() || self.saving;
 
         let Some(loaded) = self.loaded_mut() else {
             return;
@@ -1143,12 +1275,21 @@ impl DelimitedDocument {
             return;
         }
 
+        // Reading the file again drops every pending edit, so the user
+        // saves or discards them first.
+        if holds_changes {
+            report_error(unsaved_changes_block_reread_error(&title), cx);
+            self.show_requested_dialect(cx);
+            return;
+        }
+
         if requested == loaded.overrides {
             loaded.requested_overrides = requested;
             loaded.reread_generation += 1;
             loaded.reread_task = None;
             loaded.show_requested_dialect(cx);
 
+            self.sync_table_editing(cx);
             cx.notify();
             return;
         }
@@ -1168,6 +1309,66 @@ impl DelimitedDocument {
             return;
         }
 
+        let Some(loaded) = self.loaded_mut() else {
+            return;
+        };
+
+        loaded.requested_overrides = requested;
+        loaded.show_requested_dialect(cx);
+
+        self.start_reread(dialect, 1, ModelSwap::ResetCursor, cx);
+    }
+
+    /// Reads the file again from its source, as many pages as are loaded
+    /// (up to [`MAX_PAGES_READ_AGAIN`]), with the dialect the controls show,
+    /// and keeps the active cell where the pages read again still have it.
+    /// This is how a file changed elsewhere is seen again.
+    ///
+    /// Refused and reported while the document has unsaved changes or a
+    /// save runs, because the reread drops every pending edit: the user
+    /// saves or discards them first. A value still in the inline editor is
+    /// committed first and counts. Replaces a reread that is running. An
+    /// object is read through the live connection of its profile.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        let title = self.title();
+
+        if self.loaded().is_none() {
+            return;
+        }
+
+        self.commit_active_inline_edit(cx);
+
+        if self.is_dirty() || self.saving {
+            report_error(unsaved_changes_block_reread_error(&title), cx);
+            return;
+        }
+
+        let summary = crate::labels::delimited_reread_failed_message(&title);
+
+        if self.use_live_connection(summary, cx).is_err() {
+            return;
+        }
+
+        let Some(loaded) = self.loaded() else {
+            return;
+        };
+
+        let dialect = loaded.requested_dialect();
+        let pages = pages_to_read_again(&loaded.page_model);
+
+        self.start_reread(dialect, pages, ModelSwap::KeepCursor, cx);
+    }
+
+    /// Starts reading the file again with `dialect`, `pages` pages from its
+    /// first, on the background executor. The table shows the result with
+    /// `swap` when it lands. A reread that is running is replaced.
+    fn start_reread(
+        &mut self,
+        dialect: Dialect,
+        pages: usize,
+        swap: ModelSwap,
+        cx: &mut Context<Self>,
+    ) {
         let location = self.location.clone();
         let reader_options = self.reader_options;
 
@@ -1175,9 +1376,8 @@ impl DelimitedDocument {
             return;
         };
 
-        loaded.requested_overrides = requested;
         loaded.reread_generation += 1;
-        loaded.show_requested_dialect(cx);
+        loaded.reread_swap = swap;
 
         let generation = loaded.reread_generation;
 
@@ -1188,7 +1388,7 @@ impl DelimitedDocument {
         let reread_task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { reread_first_page(&location, dialect, reader_options) })
+                .spawn(async move { reread_pages(&location, dialect, reader_options, pages) })
                 .await;
 
             cx.update(|cx| {
@@ -1205,6 +1405,7 @@ impl DelimitedDocument {
             loaded.reread_task = Some(reread_task);
         }
 
+        self.sync_table_editing(cx);
         cx.notify();
     }
 
@@ -1255,12 +1456,13 @@ impl DelimitedDocument {
             }
         }
 
+        self.sync_table_editing(cx);
         cx.notify();
     }
 }
 
 /// The profile of an object is not connected, which was reported.
-struct ConnectionUnavailable;
+pub(super) struct ConnectionUnavailable;
 
 /// `overrides` with every field that names the value of `detected` cleared,
 /// so that only a real difference from detection counts as an override.
@@ -1285,6 +1487,16 @@ fn overrides_on(overrides: DialectOverrides, detected: &Dialect) -> DialectOverr
 /// so opening it over no bytes answers without touching the file.
 fn dialect_refusal(dialect: Dialect, reader_options: ReaderOptions) -> Option<ReadError> {
     PagedReader::open(MemorySource::new(Vec::new()), dialect, reader_options).err()
+}
+
+/// The user-facing error of an override asked for while the file named
+/// `file_name` has unsaved changes. Reading the file again drops every
+/// pending edit, so the user saves or discards them first.
+fn unsaved_changes_block_reread_error(file_name: &str) -> UserFacingError {
+    let summary = crate::labels::delimited_reread_failed_message(file_name);
+    let cause = dbflux_i18n::t!("document.delimited.error.unsaved_changes_block_reread");
+
+    UserFacingError::new(ErrorKind::User, summary).with_cause(cause)
 }
 
 /// The user-facing error of a dialect the reader refuses: the file named
@@ -1404,19 +1616,42 @@ pub(super) fn readable_dialect(
         .ok_or(refusal)
 }
 
-/// Opens the file at `location` again and reads its first page with
-/// `dialect`. Blocks on file or network I/O.
+/// Opens the file at `location` again and reads its first `pages` pages
+/// with `dialect`, through the reads [`DelimitedDocument::load_more`] makes,
+/// stopping early when the file has no more records. At least the first
+/// page is read. Blocks on file or network I/O.
 ///
 /// The source is a new one, with the version the file has now. The reader
 /// that is in use keeps its own source, so a failure here costs nothing.
-fn reread_first_page(
+pub(super) fn reread_pages(
     location: &DelimitedLocation,
     dialect: Dialect,
     reader_options: ReaderOptions,
+    pages: usize,
 ) -> Result<OpenedFile, OpenError> {
     let (source, version) = open_source(location)?;
 
-    read_first_page(source, version, dialect, reader_options)
+    let mut opened = read_first_page(source, version, dialect, reader_options)?;
+
+    for page_index in 1..pages {
+        if opened.page_model.is_fully_loaded() {
+            break;
+        }
+
+        let read = read_page(&mut opened.reader, page_index, reader_options.page_size)?;
+        opened
+            .page_model
+            .append_page(read.page, read.record_count)?;
+    }
+
+    Ok(opened)
+}
+
+/// How many pages a save or a reload reads again for a file of which
+/// `page_model` is loaded: as many as are loaded, from one up to
+/// [`MAX_PAGES_READ_AGAIN`].
+pub(super) fn pages_to_read_again(page_model: &PageModel) -> usize {
+    page_model.next_page().clamp(1, MAX_PAGES_READ_AGAIN)
 }
 
 /// Opens a reader over `source` with `dialect` and reads the first page.

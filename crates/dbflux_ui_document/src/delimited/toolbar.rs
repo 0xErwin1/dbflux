@@ -157,7 +157,8 @@ impl DelimitedDocument {
     /// The dialect controls of a loaded file, as entries of the pane actions
     /// menu: each select entry opens its list with the keyboard on it, the
     /// header entry switches the flag, and the reset entry is enabled while
-    /// there is an override to drop. Empty until the file is loaded.
+    /// there is an override to drop. The edit controls follow them. Empty
+    /// until the file is loaded.
     pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<PaneAction> {
         let Some(controls) = self.dialect_controls() else {
             return Vec::new();
@@ -186,7 +187,7 @@ impl DelimitedDocument {
                 })
             };
 
-        vec![
+        let mut actions = vec![
             open_select(
                 "delimited-delimiter",
                 dbflux_i18n::t!("document.delimited.toolbar.delimiter"),
@@ -210,6 +211,9 @@ impl DelimitedDocument {
             )
             .icon(AppIcon::RotateCcw)
             .enabled(self.has_dialect_overrides()),
-        ]
+        ];
+
+        actions.extend(self.edit_pane_actions(this));
+        actions
     }
 }
