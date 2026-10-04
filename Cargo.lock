@@ -2913,6 +2913,7 @@ version = "0.9.0-dev.0"
 dependencies = [
  "chardetng",
  "encoding_rs",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
