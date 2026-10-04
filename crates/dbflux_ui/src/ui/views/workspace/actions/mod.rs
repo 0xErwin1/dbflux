@@ -124,6 +124,7 @@ mod dump_analysis;
 mod metrics;
 mod migrate;
 mod query;
+mod quit;
 mod schema_diff;
 mod scripts;
 mod settings;

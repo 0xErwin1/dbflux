@@ -40,6 +40,8 @@ mod editing_tests;
 #[cfg(test)]
 mod page_model_tests;
 #[cfg(test)]
+mod quit_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod text_edit_tests;

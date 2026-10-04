@@ -125,7 +125,11 @@ fn notes(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext) -
     window.update(|_, cx| document.read(cx).text_notes().len())
 }
 
-fn show(document: &Entity<DelimitedDocument>, window: &mut VisualTestContext, view: DelimitedView) {
+pub(super) fn show(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+    view: DelimitedView,
+) {
     window.update(|_, cx| document.update(cx, |document, cx| document.show_view(view, cx)));
     window.run_until_parked();
 }
@@ -842,7 +846,7 @@ fn the_text_view_opens_at_the_byte_of_the_active_row_in_bare_cr_text(cx: &mut Te
 
 /// Replaces the text view's text with what `edit` makes of it, as typing
 /// does: the editor tells the document that its text changed.
-fn edit_text(
+pub(super) fn edit_text(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     edit: impl FnOnce(&str) -> String,
@@ -867,7 +871,7 @@ fn edit_text(
 }
 
 /// Replaces the first `from` of the text view's text with `to`.
-fn replace_in_text(
+pub(super) fn replace_in_text(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
     from: &str,

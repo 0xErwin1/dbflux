@@ -477,6 +477,18 @@ pub struct DelimitedDocument {
     /// that lands also asks the workspace to close the tab.
     pub(super) close_after_save: bool,
 
+    /// Set once the shutdown flush started its save, so the flush polling
+    /// the document starts it once and a refused save is not retried.
+    pub(super) shutdown_save_started: bool,
+
+    /// Set when the user quit without saving the pending changes, so the
+    /// shutdown flush does not write them.
+    pub(super) discarded_for_quit: bool,
+
+    /// The object, as `bucket/key`, whose pending changes the shutdown flush
+    /// left unsaved, recorded once. Empty for a local file.
+    pub(super) dropped_at_shutdown: Vec<String>,
+
     /// Told the object's key after each save that replaced the object, so
     /// the object browser that opened it refreshes its view of that object.
     /// `None` for a local file and for an object opened without one.
@@ -603,6 +615,9 @@ impl DelimitedDocument {
             phase: DelimitedPhase::Loading,
             saving: false,
             close_after_save: false,
+            shutdown_save_started: false,
+            discarded_for_quit: false,
+            dropped_at_shutdown: Vec::new(),
             on_object_saved: None,
             pending_table_focus: false,
             cell_editor: None,
