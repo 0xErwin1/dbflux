@@ -112,6 +112,13 @@ impl DelimitedDocument {
             Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
         });
 
+        // A value still in the cell editor, committed before a close or a
+        // shutdown reads the pending changes.
+        pane.commit_pending_input = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.update(cx, |d, cx| d.commit_pending_input(cx)))
+        });
+
         // The dialect and edit controls, which the pane actions menu
         // reaches from the keyboard.
         pane.pane_actions = Some({

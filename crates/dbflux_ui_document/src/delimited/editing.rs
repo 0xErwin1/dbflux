@@ -139,6 +139,20 @@ impl DelimitedDocument {
         }
     }
 
+    /// Commits the value typed into an open inline editor, as Enter does but
+    /// without taking focus back, so a tab close or a shutdown sees it as a
+    /// pending change. Always returns `true`: an inline value always stages.
+    pub fn commit_pending_input(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(table_state) = self.loaded().map(|loaded| loaded.table_state.clone()) else {
+            return true;
+        };
+
+        table_state.update(cx, |state, cx| state.commit_pending_edit(cx));
+        self.refresh_dirty(cx);
+
+        true
+    }
+
     /// Stages the value of an open inline editor, as Enter does, and works
     /// out the dirty state again, so a check that follows sees it.
     pub(super) fn commit_active_inline_edit(&mut self, cx: &mut Context<Self>) {
