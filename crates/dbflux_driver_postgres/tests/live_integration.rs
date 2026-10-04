@@ -2203,7 +2203,18 @@ fn postgres_query_safety_refusal_preserves_existing_cancel_signal() -> Result<()
             "the bounded metric refusal erased an existing cancellation"
         );
 
-        connection.execute(&QueryRequest::new("SELECT 1"))?;
+        // The server applies the cancel request sent above asynchronously, so it
+        // can still land on the next statement. One request cancels at most one
+        // statement, which makes a second attempt deterministic.
+        let probe = QueryRequest::new("SELECT 1");
+        match connection.execute(&probe) {
+            Err(DbError::Cancelled) => {
+                connection.execute(&probe)?;
+            }
+            result => {
+                result?;
+            }
+        }
         Ok(())
     })
 }
