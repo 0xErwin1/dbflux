@@ -92,7 +92,7 @@ SELECT
         WHEN i > 270 THEN 'shipped'
         ELSE 'delivered'
     END,
-    timestamptz '2025-01-02 08:30:00+00' + (i * interval '29 hours 13 minutes')
+    timestamptz '2025-01-02 08:30:00+00' + (i * interval '29 hours')
 FROM generate_series(1, 300) AS i;
 
 INSERT INTO order_items (order_id, line, product_id, quantity, unit_price)
@@ -122,7 +122,7 @@ SELECT
     sum(total) AS revenue,
     round(avg(total), 2) AS average_order
 FROM orders
-WHERE status IN ('delivered', 'shipped')
+WHERE status NOT IN ('cancelled', 'refunded')
 GROUP BY 1
 ORDER BY 1;
 

@@ -481,8 +481,17 @@ SHOTS = (
             *open_sidebar_item(POSTGRES, "customers", exact=True),
             *open_sidebar_item("monthly_revenue", "average_order numeric", exact=True),
             ensure(wait_visible("axis-pill-x"), click("seg-ctl-item-result-view-Chart")),
+            # Y starts with every numeric column. A click on a column of the
+            # picker toggles it and closes the picker, so it opens once per
+            # column, leaving revenue alone.
+            ensure(wait_visible("y-pick-1"), click("axis-pill-y")),
+            ensure(wait_for("revenue +1", exact=True), click("y-pick-1")),
+            ensure(wait_visible("y-pick-3"), click("axis-pill-y")),
+            ensure(wait_gone(r"^chart-legend-series-1$"), click("y-pick-3")),
             call("pointer_move", **AWAY_FROM_CHART),
-            *highlight_chart_point(4),
+            # August: the readout drawn next to the point leaves the other
+            # points visible.
+            *highlight_chart_point(7),
         ),
     ),
     Shot(
