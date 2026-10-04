@@ -181,6 +181,15 @@ components:
     json_key_placeholder: JSON key (optional)
   file_picker:
     browse: "Browse…"
+  column_projection:
+    trigger: "%{selected} of %{total} columns"
+    search_placeholder: "Search columns"
+    select_all: "Select all"
+    select_none: "Select none"
+    selected_count: "%{selected} of %{total} selected"
+    apply: "Apply"
+    no_match: "No columns match the search"
+    hint: "Space toggles · Enter applies · Esc discards"
 composites:
   rail:
     add: "Add"
