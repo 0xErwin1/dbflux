@@ -161,6 +161,11 @@ query") 액션으로 만든 차트 문서는 아직 저장된 ID에 연결되지
 
 네 가지 진입점이 있습니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/chart-view-dark.webp">
+  <img src="../images/charts/chart-view-light.webp" alt="쿼리에서 연 차트 탭. 월별 매출을 선 차트로 그립니다">
+</picture>
+
 ### 쿼리 편집기의 차트 버튼
 
 표 형태의 결과를 만드는 모든 쿼리는 차트로 나타낼 수 있습니다. 쿼리 편집기 도구 모음에서 차트 버튼(도구 설명: "현재 쿼리를 차트 문서에서 열기")을 클릭하면 현재 쿼리가 차트 문서로 열립니다.

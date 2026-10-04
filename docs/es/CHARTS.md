@@ -186,6 +186,11 @@ a un ID guardado y, por tanto, no se deduplica hasta que se guarda.
 
 Hay cuatro puntos de entrada.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/chart-view-dark.webp">
+  <img src="../images/charts/chart-view-light.webp" alt="Una pestaña de chart abierta desde una query, que dibuja los ingresos mensuales como gráfico de líneas">
+</picture>
+
 ### Botón de gráfico en el editor de queries
 
 Cualquier query que produzca resultados tabulares se puede graficar. En la
@@ -281,6 +286,11 @@ herramientas** mientras hay un punto resaltado.
 
 Los gráficos de resultados del editor de queries y las pestañas de gráfico no
 guardan la fila de cada punto, así que no muestran el inspector de puntos.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/point-inspector-dark.webp">
+  <img src="../images/charts/point-inspector-light.webp" alt="La vista de chart de una tabla con un punto resaltado y el inspector de puntos acoplado a la derecha">
+</picture>
 
 ## Limitaciones
 

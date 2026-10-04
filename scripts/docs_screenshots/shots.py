@@ -19,7 +19,9 @@ one of the runner's own steps:
   every action whose effect matters is wrapped in one.
 
 A tool step may name its element by `label` instead of `id`; the runner looks
-the id up with `find_elements` right before the call.
+the id up with `find_elements` right before the call. A text input without a
+label, such as the inline cell editor, can be named by `input_value`, the value
+it holds.
 
 Every shot starts from the same state: DBFlux just launched with the demo
 connections saved, nothing connected and no tab open. A shot that sets
@@ -284,6 +286,76 @@ ORDER BY revenue DESC;"""
 
 FIRST_QUERY_SQL = "SELECT id, name, country FROM customers ORDER BY id LIMIT 20;"
 
+MULTI_STATEMENT_SQL = """SELECT status, count(*) AS orders
+FROM orders
+GROUP BY status
+ORDER BY orders DESC;
+
+SELECT count(*) AS customers FROM customers;
+
+SELECT name, price FROM products ORDER BY price DESC LIMIT 5;"""
+
+# A foreign key from orders makes this DELETE fail even if it ran, so the
+# demo data cannot change.
+DANGEROUS_SQL = "DELETE FROM customers;"
+
+CHART_SQL = "SELECT month, revenue FROM monthly_revenue ORDER BY month;"
+
+WHERE_INPUT = "e.g. id > 10 AND name LIKE '%test%'"
+
+# Grid cells are named `cell-<row * 10000 + column>`, counting from zero.
+CARLA_BECKER_COUNTRY = "cell-20003"
+SIXTH_ROW_ID = "cell-50000"
+
+# A point in the status bar, away from the chart, so the pointer does not
+# replace the point highlighted from the keyboard.
+AWAY_FROM_CHART = {"x": 1000, "y": 880}
+
+
+def open_customers_table() -> tuple[Step, ...]:
+    """Connects the demo PostgreSQL connection and opens its customers table."""
+
+    return (
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        *open_sidebar_item("customers", "Ada Hayashi", exact=True),
+    )
+
+
+def highlight_chart_point(index: int) -> tuple[Step, ...]:
+    """Highlights point `index` of the focused series from the keyboard.
+
+    One key per step, each checked through the point inspector, so a dropped
+    or late key cannot move the highlight past the point.
+    """
+
+    steps = [ensure(wait_visible("inspector-action-show-in-tree-row-0"), key("g"))]
+    steps += [
+        ensure(wait_visible(f"inspector-action-show-in-tree-row-{point}"), key("l")) for point in range(1, index + 1)
+    ]
+
+    return tuple(steps)
+
+
+def open_query_tab() -> tuple[Step, ...]:
+    """Connects the demo PostgreSQL connection and opens a new query tab on it."""
+
+    return (
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        ensure(wait_for("Enter SQL here"), key("ctrl-n")),
+    )
+
+
+def run_query(sql: str, check: Step) -> Step:
+    """Types `sql` into the query tab and runs it until `check` passes."""
+
+    return ensure(
+        check,
+        call("focus_element", label="Enter SQL here", exact=False),
+        call("set_text", label="Enter SQL here", exact=False, text=sql),
+        key("ctrl-enter"),
+    )
+
+
 SHOTS = (
     Shot(
         page="getting-started",
@@ -332,6 +404,85 @@ SHOTS = (
                 call("set_text", label="Enter SQL here", exact=False, text=QUERY_RESULT_SQL),
                 key("ctrl-enter"),
             ),
+        ),
+    ),
+    Shot(
+        page="editor",
+        name="multi-statement",
+        steps=(
+            *open_query_tab(),
+            run_query(MULTI_STATEMENT_SQL, wait_visible("script-confirm-run-btn")),
+            ensure(wait_for("Result 3"), click("script-confirm-run-btn")),
+        ),
+    ),
+    Shot(
+        page="editor",
+        name="dangerous-query",
+        steps=(
+            *open_query_tab(),
+            run_query(DANGEROUS_SQL, wait_visible("dangerous-confirm-btn")),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="record-view",
+        steps=(
+            *open_customers_table(),
+            ensure(wait_for("name text Ada Hayashi", exact=True), click("record-mode-toggle")),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="filtering",
+        steps=(
+            *open_customers_table(),
+            ensure(
+                wait_for("Tania Alvarez", exact=True),
+                call("focus_element", label=WHERE_INPUT),
+                call("set_text", label=WHERE_INPUT, text="country = 'Japan'"),
+                key("enter"),
+            ),
+            wait_gone(f"^{SIXTH_ROW_ID}$"),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="editing",
+        steps=(
+            *open_customers_table(),
+            # The edit stays pending: nothing is saved to the demo database.
+            ensure(
+                wait_for("Portugal", exact=True),
+                call("double_click_element", id=CARLA_BECKER_COUNTRY, optional=True),
+                idle(),
+                call("focus_element", input_value="Brazil"),
+                call("set_text", input_value="Brazil", text="Portugal"),
+                key("enter"),
+            ),
+        ),
+    ),
+    Shot(
+        page="charts",
+        name="chart-view",
+        steps=(
+            *open_query_tab(),
+            ensure(
+                wait_for("Untitled chart", exact=True),
+                call("focus_element", label="Enter SQL here", exact=False),
+                call("set_text", label="Enter SQL here", exact=False, text=CHART_SQL),
+                click("toolbar-chart-btn"),
+            ),
+        ),
+    ),
+    Shot(
+        page="charts",
+        name="point-inspector",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            *open_sidebar_item("monthly_revenue", "average_order numeric", exact=True),
+            ensure(wait_visible("axis-pill-x"), click("seg-ctl-item-result-view-Chart")),
+            call("pointer_move", **AWAY_FROM_CHART),
+            *highlight_chart_point(4),
         ),
     ),
     Shot(

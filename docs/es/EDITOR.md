@@ -10,6 +10,11 @@ placeholder. Un archivo `.csv` o `.tsv` se abre como tabla; ver
 Para conexiones SQL, el [Constructor visual de queries](QUERY_BUILDER.md)
 compone queries sin escribir SQL.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/query-result-dark.webp">
+  <img src="../images/editor/query-result-light.webp" alt="Una pestaña de query con una consulta SQL que agrupa los pedidos por país, y su grilla de resultados">
+</picture>
+
 ## Guardar y cerrar pestañas
 
 Una pestaña de query nueva (`Ctrl+n`) queda respaldada por un archivo real en tu
@@ -57,6 +62,11 @@ de batch es por driver — entre los drivers SQL integrados, PostgreSQL,
 MySQL/MariaDB, SQLite y Microsoft SQL Server lo soportan. Una selección siempre
 se ejecuta tal cual y nunca dispara la confirmación de script.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/multi-statement-dark.webp">
+  <img src="../images/editor/multi-statement-light.webp" alt="Una pestaña de query que ejecutó tres sentencias como script, con una pestaña de resultado por sentencia">
+</picture>
+
 ## Confirmación de queries peligrosas
 
 DBFlux detecta operaciones peligrosas entre lenguajes — `DELETE`/`DROP`/
@@ -67,6 +77,11 @@ queries peligrosas se puede desactivar, se puede requerir una cláusula `WHERE`
 para `DELETE`/`UPDATE`, y `FLUSHALL`/`FLUSHDB` de Redis se puede deshabilitar
 por completo (en cuyo caso esos comandos quedan bloqueados en lugar de
 confirmados).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
+  <img src="../images/editor/dangerous-query-light.webp" alt="La confirmación de query peligrosa para un DELETE sin cláusula WHERE">
+</picture>
 
 ## Scripts (Lua / Python / Bash)
 

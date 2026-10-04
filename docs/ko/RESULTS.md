@@ -25,6 +25,11 @@
 
 `i`를 누르거나 결과 상태 표시줄의 Grid / Record 토글을 사용하면 활성 행이 결과 영역을 채우는 이름/값 목록으로 표시됩니다. 헤더에는 결과에서 해당 행의 위치가 표시됩니다. 필드는 그리드 셀과 정확히 같은 방식으로 편집되므로, 저장하지 않은 변경 사항, 행 저장, 되돌리기는 두 레이아웃에서 똑같이 동작합니다. `Up`/`Down`은 필드 사이를, `Left`/`Right`는 행 사이를 이동합니다. `i`를 다시 누르면 그리드로 돌아갑니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/record-view-dark.webp">
+  <img src="../images/results/record-view-light.webp" alt="고객 행 하나를 필드와 값 목록으로 보여 주는 레코드 뷰">
+</picture>
+
 ## 열 헤더 메뉴
 
 열 헤더를 마우스 오른쪽 버튼으로 클릭하면 해당 열에 한정된 메뉴가 열립니다. 오름차순 또는 내림차순 정렬, 정렬 지우기, 모든 필터 연산자를 하나의 평면 목록에서 제공합니다. 헤더를 왼쪽 클릭하면 여전히 정렬이 순환됩니다.
@@ -44,6 +49,11 @@
 
 필터 입력 필드에서도 스키마 인식 자동 완성을 사용할 수 있습니다(빌더와 같은 탐색 — [Schema-aware autocomplete](QUERY_BUILDER.md#스키마-인식-자동-완성) 참조).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/filtering-dark.webp">
+  <img src="../images/results/filtering-light.webp" alt="필터 표시줄에 입력한 WHERE 조건으로 필터링된 customers 테이블">
+</picture>
+
 ## 편집과 CRUD
 
 데이터 그리드에서:
@@ -53,6 +63,11 @@
 - `r` — 이름 바꾸기 / 편집 (상황에 따라 다름).
 - `y` — 선택한 행을 복사합니다.
 - `Ctrl+c` (`Cmd+c`) — 선택한 셀을 클립보드로 복사합니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
+  <img src="../images/results/editing-light.webp" alt="저장하지 않은 편집 셀 하나와 활성화된 Save, Revert 버튼이 있는 customers 테이블">
+</picture>
 
 ### 결과를 편집할 수 있는 경우
 

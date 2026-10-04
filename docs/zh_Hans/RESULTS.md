@@ -28,6 +28,11 @@
 因此未保存的更改、保存行和还原在两种布局下行为一致；`Up`/`Down` 在字段间移动，
 `Left`/`Right` 在行间移动。再按一次 `i` 返回网格。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/record-view-dark.webp">
+  <img src="../images/results/record-view-light.webp" alt="记录视图以字段与值列表的形式显示一行客户数据">
+</picture>
+
 ## 列标题菜单
 
 右键点击列标题可打开仅针对该列的菜单：升序或降序排序、清除排序，以及全部筛选运算符，
@@ -58,6 +63,11 @@ JSON、XML 或纯文本显示值（根据内容检测，且仅在确实能解析
 
 筛选输入框同样提供 Schema 感知自动补全（导航方式与构建器相同，参见[Schema 感知自动补全](QUERY_BUILDER.md#schema-感知自动补全)）。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/filtering-dark.webp">
+  <img src="../images/results/filtering-light.webp" alt="在筛选栏中输入 WHERE 条件后筛选出的 customers 表">
+</picture>
+
 ## 编辑与增删改查
 
 在数据网格中：
@@ -67,6 +77,11 @@ JSON、XML 或纯文本显示值（根据内容检测，且仅在确实能解析
 - `r` — 重命名 / 编辑（随上下文而定）。
 - `y` — 复制选中的行。
 - `Ctrl+c`（`Cmd+c`）— 把选中的单元格复制到剪贴板。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
+  <img src="../images/results/editing-light.webp" alt="customers 表中有一个已编辑但尚未保存的单元格，Save 与 Revert 按钮处于可用状态">
+</picture>
 
 ### 结果何时可编辑
 
