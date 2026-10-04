@@ -1846,6 +1846,16 @@ document:
       body: "A column can be added only once every record of the file is loaded, and %{loaded} records of this %{size} file are loaded so far. Loading the rest reads every remaining record into memory, which takes a while for a large file. You can cancel it from the footer, and the records read until then stay loaded."
       confirm: "Load the rest"
       cancel: "Cancel loading"
+    view:
+      table: "Table"
+      text: "Text"
+      raw: "Raw"
+      aligned: "Aligned"
+    text:
+      more_in_file: "More records follow in the file. Load more to show them here."
+      capped: "The text shows the first %{shown} of the %{loaded} loaded records. The table shows all of them."
+      render_failed: "The pending changes cannot be shown as text: %{cause}"
+      aligned_hint: "Aligned text is for reading: a line break inside a value shows as ↵, a tab as ⇥, and a value longer than %{width} characters is cut."
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"

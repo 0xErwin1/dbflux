@@ -220,9 +220,13 @@ impl DelimitedDocument {
     }
 
     /// Whether the rows or the columns can be changed now: they can be
-    /// edited and no dialog is open.
+    /// edited, no dialog is open, and the table is shown. The text view is
+    /// read-only, so inserting a row, adding a column and renaming one wait
+    /// until the user is back in the table.
     pub(super) fn can_change_rows(&self) -> bool {
-        self.can_edit() && !self.has_open_dialog()
+        self.can_edit()
+            && !self.has_open_dialog()
+            && self.view() == super::text_view::DelimitedView::Table
     }
 
     /// Works out the dirty state again and tells the tab when it changed.

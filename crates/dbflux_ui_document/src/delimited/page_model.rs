@@ -371,6 +371,30 @@ impl PageModel {
         source_length: u64,
         edits: &EditBuffer,
     ) -> Result<EditSet, PageModelError> {
+        self.build_edit_set(source_length, edits, false)
+    }
+
+    /// [`PageModel::edit_set`] for the loaded part of the file only, as if
+    /// the file ended after the last loaded record: a row inserted after that
+    /// record goes at the end instead of being refused with
+    /// [`PageModelError::NextPageRequired`]. This is what the text view
+    /// shows. It is never saved, because the file does not end there.
+    pub(super) fn loaded_edit_set(
+        &self,
+        source_length: u64,
+        edits: &EditBuffer,
+    ) -> Result<EditSet, PageModelError> {
+        self.build_edit_set(source_length, edits, true)
+    }
+
+    /// The edit set of [`PageModel::edit_set`]. With `ends_after_loaded`, a
+    /// row inserted after the last loaded record goes at the end.
+    fn build_edit_set(
+        &self,
+        source_length: u64,
+        edits: &EditBuffer,
+        ends_after_loaded: bool,
+    ) -> Result<EditSet, PageModelError> {
         if !self.appended_columns.is_empty() && !self.is_fully_loaded() {
             return Err(PageModelError::FullLoadRequired);
         }
@@ -435,7 +459,7 @@ impl PageModel {
 
             let position = match following_record {
                 Some(record) => InsertPosition::Before(record.byte_range.clone()),
-                None if self.is_fully_loaded() => InsertPosition::End,
+                None if self.is_fully_loaded() || ends_after_loaded => InsertPosition::End,
                 None => return Err(PageModelError::NextPageRequired),
             };
 

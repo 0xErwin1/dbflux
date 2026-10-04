@@ -47,7 +47,7 @@ pub use source::FileSource;
 pub use source::{ByteSource, MemorySource, SourceError};
 pub use writer::{
     AppendedColumn, EditLocation, EditSet, InsertPosition, Insertion, Replacement, WriteError,
-    write_edited,
+    render_appended_fields, render_record, write_edited,
 };
 
 #[cfg(test)]

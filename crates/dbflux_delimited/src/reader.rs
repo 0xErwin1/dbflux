@@ -127,7 +127,7 @@ impl Layout {
     /// Resolves how to scan a file of `dialect`. Refuses a dialect whose
     /// delimiter or quote is a line break, whose quote is its delimiter, or
     /// whose delimiter or quote byte could be part of a multi-byte character.
-    fn for_dialect(dialect: &Dialect) -> Result<Self, ReadError> {
+    pub(crate) fn for_dialect(dialect: &Dialect) -> Result<Self, ReadError> {
         let encoding = dialect.encoding;
         let special_bytes = [Some(dialect.delimiter), dialect.quote];
 
@@ -484,6 +484,28 @@ impl Cursor {
     }
 }
 
+/// The bytes of a page's leading records, kept while they fit in a budget.
+struct KeptBytes {
+    budget: usize,
+    bytes: Vec<u8>,
+
+    /// Set once a record did not fit: no later record is kept, so the bytes
+    /// never skip one.
+    full: bool,
+}
+
+impl KeptBytes {
+    /// Keeps `record`, the bytes of the next record, when it fits.
+    fn offer(&mut self, record: &[u8]) {
+        if self.full || self.bytes.len().saturating_add(record.len()) > self.budget {
+            self.full = true;
+            return;
+        }
+
+        self.bytes.extend_from_slice(record);
+    }
+}
+
 /// Reads a delimited source one page of records at a time.
 ///
 /// The reader keeps one byte offset per page it has scanned, not one per
@@ -507,6 +529,9 @@ pub struct PagedReader<S> {
 
     byte_order_mark_length: u64,
     header: Option<Record>,
+
+    /// The source bytes of `header`, terminator included.
+    header_bytes: Option<Vec<u8>>,
 
     /// `page_starts[n]` is the source offset of the first record of page `n`.
     /// Never empty: entry 0 is where the data starts, after the byte-order
@@ -554,6 +579,7 @@ impl<S: ByteSource> PagedReader<S> {
             length: 0,
             byte_order_mark_length: 0,
             header: None,
+            header_bytes: None,
             page_starts: vec![0],
             indexed_records: 0,
             total_records: None,
@@ -569,6 +595,12 @@ impl<S: ByteSource> PagedReader<S> {
     /// empty. It is never part of a page.
     pub fn header(&self) -> Option<&Record> {
         self.header.as_ref()
+    }
+
+    /// The source bytes of the header record, terminator included, when there
+    /// is one. They were fetched to read the header, so this reads nothing.
+    pub fn header_bytes(&self) -> Option<&[u8]> {
+        self.header_bytes.as_deref()
     }
 
     /// The number of data records, exact once a scan has reached the end of
@@ -641,13 +673,39 @@ impl<S: ByteSource> PagedReader<S> {
     /// past the end of the source has no records, and finding that out
     /// settles the total [`PagedReader::record_count`].
     pub fn read_page(&mut self, page: usize) -> Result<Page, ReadError> {
+        self.read_page_keeping(page, 0).map(|(page, _)| page)
+    }
+
+    /// Reads data page `page` as [`PagedReader::read_page`] does, and returns
+    /// with it the source bytes, terminators included, of the page's leading
+    /// records whose bytes together fit in `budget` bytes: the bytes from the
+    /// start of its first record to the end of the last one kept. They are
+    /// taken from the bytes the read fetched anyway, so this reads exactly
+    /// what [`PagedReader::read_page`] reads. Empty for a page without
+    /// records, and when its first record alone is longer than `budget`.
+    pub fn read_page_with_bytes(
+        &mut self,
+        page: usize,
+        budget: usize,
+    ) -> Result<(Page, Vec<u8>), ReadError> {
+        self.read_page_keeping(page, budget)
+    }
+
+    fn read_page_keeping(
+        &mut self,
+        page: usize,
+        budget: usize,
+    ) -> Result<(Page, Vec<u8>), ReadError> {
         let first_record = self.first_record_of(page);
 
         if page >= self.page_starts.len() && self.total_records.is_some() {
-            return Ok(Page {
-                first_record,
-                records: Vec::new(),
-            });
+            return Ok((
+                Page {
+                    first_record,
+                    records: Vec::new(),
+                },
+                Vec::new(),
+            ));
         }
 
         let nearest = self.page_starts.len().saturating_sub(1).min(page);
@@ -664,21 +722,30 @@ impl<S: ByteSource> PagedReader<S> {
                 break;
             }
 
-            self.scan_page(skipped, &mut cursor, false)?;
+            self.scan_page(skipped, &mut cursor, None)?;
         }
 
+        let mut kept = KeptBytes {
+            budget,
+            bytes: Vec::new(),
+            full: budget == 0,
+        };
+
         let records = if page < self.page_starts.len() {
-            self.scan_page(page, &mut cursor, true)?
+            self.scan_page(page, &mut cursor, Some(&mut kept))?
         } else {
             Vec::new()
         };
 
         self.cursor = cursor;
 
-        Ok(Page {
-            first_record,
-            records,
-        })
+        Ok((
+            Page {
+                first_record,
+                records,
+            },
+            kept.bytes,
+        ))
     }
 
     /// Forgets everything indexed after byte `offset` of the source, and
@@ -756,11 +823,19 @@ impl<S: ByteSource> PagedReader<S> {
 
         self.byte_order_mark_length = cursor.offset();
         self.header = None;
+        self.header_bytes = None;
 
         if self.dialect.has_header
             && let Some(length) = self.next_record(&mut cursor)?
         {
             self.header = Some(self.build_record(&cursor, length));
+            self.header_bytes = Some(
+                cursor
+                    .remaining()
+                    .get(..length)
+                    .unwrap_or_default()
+                    .to_vec(),
+            );
             cursor.consume(length);
         }
 
@@ -780,12 +855,13 @@ impl<S: ByteSource> PagedReader<S> {
 
     /// Scans the records of `page` from `cursor`, which must be at the page's
     /// start, and records what the scan learned in the index. The records are
-    /// built only when `build` is set, and skipped over otherwise.
+    /// built, and the leading ones' bytes kept in `kept`, only when `kept` is
+    /// given, and skipped over otherwise.
     fn scan_page(
         &mut self,
         page: usize,
         cursor: &mut Cursor,
-        build: bool,
+        mut kept: Option<&mut KeptBytes>,
     ) -> Result<Vec<Record>, ReadError> {
         let mut records = Vec::new();
         let mut scanned: u64 = 0;
@@ -795,8 +871,9 @@ impl<S: ByteSource> PagedReader<S> {
                 break;
             };
 
-            if build {
+            if let Some(kept) = kept.as_deref_mut() {
                 records.push(self.build_record(cursor, length));
+                kept.offer(cursor.remaining().get(..length).unwrap_or_default());
             }
 
             cursor.consume(length);

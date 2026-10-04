@@ -52,6 +52,9 @@ The crate has no dependency on `dbflux_core` or on any UI crate.
   - The source is read in windows of a configurable size. A record that does not end within the
     fetched bytes is continued with further reads, each double the previous one, and is never
     returned before its end is settled.
+  - `read_page_with_bytes` reads a page as `read_page` does and also returns the source bytes of
+    its leading records that fit in a byte budget, and `header_bytes` returns the header's. Both come
+    from the bytes the read fetched anyway, so they cost no extra read.
   - `invalidate_from_offset` and `invalidate_from_page` discard the index after a byte offset or a
     page start and read the source's length again. Offset zero and page zero also read the
     byte-order mark and the header again.
@@ -77,6 +80,9 @@ The crate has no dependency on `dbflux_core` or on any UI crate.
     field of its record. A quote inside a quoted field is doubled.
   - Rendered text is encoded in the dialect's encoding, UTF-16 LE and BE included. A character the
     encoding cannot represent is an error that names the record and the character.
+  - `render_record` and `render_appended_fields` render one record, or the fields appended columns
+    add to a copied record, by these same rules, for a caller that shows pending edits without
+    writing them.
   - An inserted record takes the terminator of the record it is placed before, or of the last
     record when inserted at the end, then the first terminator of the file, then a line feed.
   - These are refused before the first byte is written and leave the sink untouched: a source

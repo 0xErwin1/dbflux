@@ -171,7 +171,7 @@ fn shown_first_column(
 }
 
 /// Clicks the middle of the element drawn with `id`.
-fn click(window: &mut VisualTestContext, id: &str) {
+pub(super) fn click(window: &mut VisualTestContext, id: &str) {
     let capture = FrameCapture::observe(window);
     let frame = capture.frame(window);
 
@@ -1478,4 +1478,33 @@ fn the_toolbar_groups_the_dialect_controls_and_the_file_actions(cx: &mut TestApp
         save.top() - reload.top() < reload.size.height * 1.5,
         "the file actions stay on one line at 590 px: {reload:?} {save:?}"
     );
+}
+
+#[test]
+fn the_load_of_the_rest_keeps_bytes_only_while_every_record_of_a_page_was_kept() {
+    use super::columns::remaining_budget;
+    use super::document::ReadPage;
+    use dbflux_delimited::{Page, Record, RecordCount};
+
+    let record = |start: u64, end: u64| Record {
+        byte_range: start..end,
+        fields: Vec::new(),
+        had_replacements: false,
+    };
+    let read = |records: Vec<Record>, bytes: Option<Vec<u8>>| ReadPage {
+        page: Page {
+            first_record: 0,
+            records,
+        },
+        record_count: RecordCount::IndexedSoFar(0),
+        bytes,
+    };
+
+    let two = || vec![record(10, 14), record(14, 20)];
+
+    assert_eq!(remaining_budget(100, &read(two(), Some(vec![0; 10]))), 90);
+    assert_eq!(remaining_budget(100, &read(two(), Some(vec![0; 4]))), 0);
+    assert_eq!(remaining_budget(100, &read(two(), None)), 0);
+    assert_eq!(remaining_budget(100, &read(Vec::new(), None)), 100);
+    assert_eq!(remaining_budget(5, &read(two(), Some(vec![0; 10]))), 0);
 }
