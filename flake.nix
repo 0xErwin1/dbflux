@@ -74,10 +74,24 @@
           # Default package: prefer the prebuilt binary when available
           # (fast install for end users), fall back to the source build.
           dbfluxDefault = if hasPrebuilt then dbfluxBin else dbfluxSource;
+
+          # Tools for scripts/docs_screenshots.py: a headless X server, window
+          # resizing and WebP encoding. The script renders with Mesa's software
+          # Vulkan driver (lavapipe). Its ICD file is exported under a name of
+          # its own instead of VK_ICD_FILENAMES, so everything else run from the
+          # dev shell keeps the hardware driver.
+          docsScreenshotTools = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.xvfb
+            pkgs.xdotool
+            pkgs.libwebp
+          ];
+          docsScreenshotEnv = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            DBFLUX_DOCS_VULKAN_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
+          };
         in
         {
           # Development shell
-          devShells.default = pkgs.mkShell {
+          devShells.default = pkgs.mkShell ({
             nativeBuildInputs = dbflux.nativeBuildInputs ++ dbflux.automationNativeBuildInputs ++ [
               rustToolchain
               pkgs.rust-analyzer
@@ -88,7 +102,7 @@
               pkgs.cargo-nextest
               # Detects unused dependency declarations (DEP-2 regression guard).
               pkgs.cargo-machete
-            ];
+            ] ++ docsScreenshotTools;
 
             # The UI-automation MCP server (vendor/gpui-mcp) is a workspace member,
             # so `cargo check --workspace` needs its capture libraries too.
@@ -109,7 +123,7 @@
               echo "Run 'nix build' to build the default package"
               echo "Run 'nix flake check' to run all checks"
             '';
-          };
+          } // docsScreenshotEnv);
 
           # Packages:
           #   .default         -> prebuilt when available, source otherwise
