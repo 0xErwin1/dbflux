@@ -171,7 +171,7 @@ pub(crate) struct LeafHints {
     uuid: bool,
     /// An INT96 column: the Arrow type is a nanosecond timestamp, possibly
     /// tagged with a zone the INT96 value itself never had.
-    int96: bool,
+    pub(crate) int96: bool,
     /// A logical type this crate does not decode, by its Parquet name.
     pub(crate) unsupported: Option<&'static str>,
 }
@@ -190,8 +190,7 @@ impl ColumnPlan {
 
         let display = ColumnDisplay {
             name: field.name().as_str().into(),
-            type_name: truncate_chars(type_name(parquet_field, data_type), NESTED_DISPLAY_CHARS)
-                .into(),
+            type_name: column_type_name(parquet_field, data_type),
             kind: column_kind(data_type, &hints),
         };
 
@@ -214,6 +213,11 @@ impl ColumnPlan {
 
         nested_cell(array, row, Some(&self.parquet_type))
     }
+}
+
+/// The type name a column header shows, cut like a nested value.
+pub(crate) fn column_type_name(parquet_type: &Type, data_type: &DataType) -> Arc<str> {
+    truncate_chars(type_name(parquet_type, data_type), NESTED_DISPLAY_CHARS).into()
 }
 
 /// `text` cut after `limit` characters and marked with an ellipsis.

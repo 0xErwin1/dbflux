@@ -11,7 +11,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
-use parquet::schema::types::TypePtr;
+use parquet::schema::types::{SchemaDescriptor, TypePtr};
 
 use crate::footer::read_exact;
 use crate::window::{RowGroupSlice, row_group_slices};
@@ -93,8 +93,53 @@ pub fn window_byte_ranges(
     Ok(plan
         .row_groups
         .into_iter()
-        .flat_map(|row_group| coalesce(row_group.ranges))
+        .flat_map(|row_group| coalesce(row_group.ranges()))
         .collect())
+}
+
+/// What [`read_window`] would read for the same arguments, row group by row
+/// group, with each range attributed to the top-level column it belongs to.
+pub(crate) struct WindowReadPlan {
+    /// The selected top-level columns, in file schema order, each once.
+    pub(crate) columns: Vec<usize>,
+    /// One entry per row group the window touches.
+    pub(crate) row_groups: Vec<Vec<RootRange>>,
+}
+
+/// A range the decoder asks for, before coalescing, and the top-level column
+/// whose leaf chunk holds it.
+pub(crate) struct RootRange {
+    pub(crate) root: usize,
+    pub(crate) range: Range<u64>,
+}
+
+pub(crate) fn window_read_plan(
+    file: &ParquetFile,
+    window: RowWindow,
+    columns: &[usize],
+) -> Result<WindowReadPlan, ParquetError> {
+    let plan = plan_window(file, window, columns)?;
+
+    Ok(WindowReadPlan {
+        columns: plan.columns,
+        row_groups: plan
+            .row_groups
+            .into_iter()
+            .map(|row_group| row_group.ranges)
+            .collect(),
+    })
+}
+
+/// Merges ranges the way [`read_window`] does before it reads them.
+pub(crate) fn coalesced_ranges(ranges: &[RootRange]) -> Vec<Range<u64>> {
+    coalesce(ranges.iter().map(|range| range.range.clone()).collect())
+}
+
+/// The top-level field of every leaf column, by leaf index.
+pub(crate) fn leaf_roots(schema_descriptor: &SchemaDescriptor) -> Vec<usize> {
+    (0..schema_descriptor.num_columns())
+        .map(|leaf| schema_descriptor.get_column_root_idx(leaf))
+        .collect()
 }
 
 pub(crate) fn read_window_with_budget<S: ByteSource + ?Sized>(
@@ -179,6 +224,7 @@ fn decode_row_group<S: ByteSource + ?Sized>(
 
 struct WindowPlan {
     window: RowWindow,
+    columns: Vec<usize>,
     schema: SchemaRef,
     parquet_fields: Vec<TypePtr>,
     mask: ProjectionMask,
@@ -188,8 +234,17 @@ struct WindowPlan {
 struct PlannedRowGroup {
     slice: RowGroupSlice,
     /// The ranges the decoder asks for, before coalescing.
-    ranges: Vec<Range<u64>>,
+    ranges: Vec<RootRange>,
     has_offset_index: bool,
+}
+
+impl PlannedRowGroup {
+    fn ranges(&self) -> Vec<Range<u64>> {
+        self.ranges
+            .iter()
+            .map(|range| range.range.clone())
+            .collect()
+    }
 }
 
 /// Validates `columns` and works out, without reading, which row groups the
@@ -246,6 +301,7 @@ fn plan_window(
     let mask = ProjectionMask::roots(schema_descriptor, ordered_columns.iter().copied());
 
     let (window, slices) = row_group_slices(metadata, window)?;
+    let roots = leaf_roots(schema_descriptor);
 
     let mut row_groups = Vec::with_capacity(slices.len());
 
@@ -261,6 +317,15 @@ fn plan_window(
 
             let chunk = chunk_range(column)?;
 
+            let root = *roots.get(leaf).ok_or_else(|| {
+                ParquetError::malformed(format!(
+                    "row group {} has more column chunks than the schema has columns",
+                    slice.row_group
+                ))
+            })?;
+
+            let mut leaf_ranges = Vec::new();
+
             match offset_index.and_then(|index| index.get(leaf)) {
                 Some(column_offsets) => {
                     let page_locations = column_offsets.page_locations();
@@ -274,15 +339,21 @@ fn plan_window(
                         })?;
 
                         if first_page_offset != chunk.start {
-                            ranges.push(chunk.start..first_page_offset);
+                            leaf_ranges.push(chunk.start..first_page_offset);
                         }
                     }
 
-                    ranges.extend(slice.selection.scan_ranges(page_locations));
+                    leaf_ranges.extend(slice.selection.scan_ranges(page_locations));
                 }
 
-                None => ranges.push(chunk),
+                None => leaf_ranges.push(chunk),
             }
+
+            ranges.extend(
+                leaf_ranges
+                    .into_iter()
+                    .map(|range| RootRange { root, range }),
+            );
         }
 
         row_groups.push(PlannedRowGroup {
@@ -294,6 +365,7 @@ fn plan_window(
 
     Ok(WindowPlan {
         window,
+        columns: ordered_columns,
         schema,
         parquet_fields,
         mask,
