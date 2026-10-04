@@ -4,6 +4,11 @@
 실행부터 첫 쿼리까지 안내하는 [시작하기](GETTING_STARTED.md)부터 읽으세요.
 그렇지 않다면 하려는 작업에 맞는 페이지를 고르세요.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/usage/main-window-dark.webp">
+  <img src="../images/usage/main-window-light.webp" alt="PostgreSQL 테이블이 열려 있는 메인 창">
+</picture>
+
 - [시작하기](GETTING_STARTED.md) — 첫 실행, 연결 만들기, 첫 쿼리 실행.
 - [데이터베이스 연결](CONNECTIONS.md) — 연결 관리자, 드라이버, SSH 터널, 프록시,
   AWS SSO, 값 소스.

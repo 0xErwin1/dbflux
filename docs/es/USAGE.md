@@ -4,6 +4,11 @@ La guía de uso está dividida en una página por tarea. Si eres nuevo en DBFlux
 empieza por [Primeros pasos](GETTING_STARTED.md), que te lleva del primer inicio
 a tu primera query; si no, elige la página de lo que estás haciendo.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/usage/main-window-dark.webp">
+  <img src="../images/usage/main-window-light.webp" alt="La ventana principal con una tabla de PostgreSQL abierta">
+</picture>
+
 - [Primeros pasos](GETTING_STARTED.md) — primer inicio, creación de una
   conexión y tu primera query.
 - [Conectar a una base de datos](CONNECTIONS.md) — el Connection Manager, los

@@ -14,6 +14,11 @@ is listed in the [Keyboard Reference](KEYBOARD.md).
 On startup DBFlux restores your previous session (open tabs). On a fresh
 install there is nothing to restore, so focus defaults to the sidebar.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/getting-started/first-launch-dark.webp">
+  <img src="images/getting-started/first-launch-light.webp" alt="The DBFlux main window on a fresh install, with an empty sidebar and no connections">
+</picture>
+
 ## Create a connection
 
 Press `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS) to open the Connection Manager,
@@ -22,11 +27,21 @@ appears in the sidebar. [Connecting](CONNECTIONS.md) covers the other ways to
 open the Connection Manager, the driver picker, the Access tab (SSH, proxy,
 managed access), and what happens when a connection fails.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/getting-started/connection-manager-dark.webp">
+  <img src="images/getting-started/connection-manager-light.webp" alt="The Connection Manager with the PostgreSQL form filled in for a local database">
+</picture>
+
 ## Run your first query
 
 Open a new query tab with `Ctrl+n` (`Cmd+n` on macOS), type a query in the
 language of the active connection, and press `Ctrl+Enter` (`Cmd+Enter`) to run
 it. The result renders in a result tab inside the document.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/getting-started/first-query-dark.webp">
+  <img src="images/getting-started/first-query-light.webp" alt="A query tab on a PostgreSQL connection with a SELECT query and its result below it">
+</picture>
 
 ## Next steps
 
