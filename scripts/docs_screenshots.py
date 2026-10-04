@@ -8,9 +8,10 @@ MCP server (`gpui-mcp`) and writes one WebP per shot and theme to
 
 The shots are declared in `scripts/docs_screenshots/shots.py`. A setup run
 creates the demo connections through the Connection Manager and picks the
-theme in Settings, and the resulting DBFlux profile is saved. Every shot then
-runs in a fresh DBFlux process started from a copy of that profile, so a shot
-looks the same whether it runs alone (`--only`) or with the others.
+theme in Settings, and the resulting DBFlux profile is saved, along with one
+without the connections when a shot needs it. Every shot then runs in a fresh
+DBFlux process started from a copy of its profile, so a shot looks the same
+whether it runs alone (`--only`) or with the others.
 
 Run it from the Nix dev shell, which provides Xvfb, the Vulkan driver, xdotool
 and cwebp:
@@ -1034,26 +1035,51 @@ def start_instance(environment: Environment, label: str) -> DBFluxInstance:
     return instance
 
 
-def prepare_profiles(environment: Environment, themes: tuple[str, ...]) -> None:
-    """Creates the demo connections, then saves one profile per theme."""
+def profile_name(theme: str, demo_connections: bool) -> str:
+    return theme if demo_connections else f"{theme}-empty"
 
-    for index, theme in enumerate(themes):
-        if index > 0:
-            environment.restore_profile(themes[0])
 
-        instance = start_instance(environment, f"setup-{theme}")
+def prepare_profile(environment: Environment, name: str, base: str | None, steps) -> None:
+    """Runs `steps` in a DBFlux started from the profile `base` and saves the result as `name`.
 
-        try:
-            if index == 0:
-                log("creating the demo connections")
-                run_steps(instance, shot_list.FIRST_RUN_STEPS, environment.placeholders())
+    Without `base` DBFlux starts from the profile left in the work directory.
+    """
 
-            log(f"selecting the {theme} theme")
-            run_steps(instance, shot_list.theme_steps(theme), environment.placeholders())
-        finally:
-            instance.stop()
+    if base is not None:
+        environment.restore_profile(base)
 
-        environment.save_profile(theme)
+    instance = start_instance(environment, f"setup-{name}")
+
+    try:
+        run_steps(instance, steps, environment.placeholders())
+    finally:
+        instance.stop()
+
+    environment.save_profile(name)
+
+
+def prepare_profiles(environment: Environment, themes: tuple[str, ...], *, without_connections: bool) -> None:
+    """Saves one profile per theme with the demo connections.
+
+    With `without_connections` it also saves one per theme without them, for
+    the shots that set `demo_connections=False`.
+    """
+
+    first_theme = themes[0]
+    first_empty = profile_name(first_theme, False)
+
+    log(f"dismissing the first-run dialog and selecting the {first_theme} theme")
+    prepare_profile(environment, first_empty, None, (*shot_list.FIRST_RUN_STEPS, *shot_list.theme_steps(first_theme)))
+
+    log("creating the demo connections")
+    prepare_profile(environment, first_theme, first_empty, shot_list.DEMO_CONNECTION_STEPS)
+
+    for theme in themes[1:]:
+        log(f"selecting the {theme} theme")
+        prepare_profile(environment, theme, first_theme, shot_list.theme_steps(theme))
+
+        if without_connections:
+            prepare_profile(environment, profile_name(theme, False), first_empty, shot_list.theme_steps(theme))
 
 
 def take_shot(
@@ -1072,7 +1098,7 @@ def take_shot(
     steps reached can be inspected.
     """
 
-    environment.restore_profile(theme)
+    environment.restore_profile(profile_name(theme, shot.demo_connections))
     instance = start_instance(environment, f"{shot.page}-{shot.name}-{theme}")
     succeeded = False
 
@@ -1114,7 +1140,9 @@ def run(arguments: argparse.Namespace) -> int:
         if not arguments.keep_running:
             cleanup.callback(stop_process, xvfb)
 
-        prepare_profiles(environment, themes)
+        prepare_profiles(
+            environment, themes, without_connections=any(not shot.demo_connections for shot in selected)
+        )
         runs = [(theme, shot) for theme in themes for shot in selected]
         produced = []
 

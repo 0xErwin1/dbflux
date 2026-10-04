@@ -2,6 +2,11 @@
 
 使用指南按任务拆分为多个页面。如果你刚开始使用 DBFlux，请从[快速开始](GETTING_STARTED.md)读起，它会带你从首次启动走到第一个查询；否则请直接选择与当前任务对应的页面。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/usage/main-window-dark.webp">
+  <img src="../images/usage/main-window-light.webp" alt="打开了一张 PostgreSQL 表的主窗口">
+</picture>
+
 - [快速开始](GETTING_STARTED.md) — 首次启动、创建连接并执行第一个查询。
 - [连接到数据库](CONNECTIONS.md) — 连接管理器、驱动、SSH 隧道、代理、AWS SSO 与取值来源。
 - [浏览 Schema](SCHEMA_BROWSER.md) — 侧边栏、Schema 树、例程与 Schema 关系图。

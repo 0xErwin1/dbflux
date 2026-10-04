@@ -22,9 +22,10 @@ A tool step may name its element by `label` instead of `id`; the runner looks
 the id up with `find_elements` right before the call.
 
 Every shot starts from the same state: DBFlux just launched with the demo
-connections saved, nothing connected and no tab open. A shot is captured in
-the light and the dark theme, and written to
-`docs/images/<page>/<name>-<theme>.webp`.
+connections saved, nothing connected and no tab open. A shot that sets
+`demo_connections=False` starts without any saved connection instead, as on a
+fresh install. A shot is captured in the light and the dark theme, and written
+to `docs/images/<page>/<name>-<theme>.webp`.
 
 Strings in step arguments may use `{postgres_port}`, `{mongodb_port}`,
 `{redis_port}` and `{sqlite_path}`, which the runner fills in.
@@ -71,6 +72,8 @@ class Shot:
     region: Region | None = None
     # Crop the captured image afterwards, relative to the captured area.
     crop: Region | None = None
+    # Start from a profile with the demo connections saved.
+    demo_connections: bool = True
 
 
 # -- Step helpers -------------------------------------------------------------
@@ -173,8 +176,8 @@ def open_sidebar_item(label: str, loaded: str, *, exact: bool = False) -> tuple[
     )
 
 
-def create_connection(driver: str, fields: dict[str, str]) -> tuple[Step, ...]:
-    """Creates a connection through the Connection Manager and saves it."""
+def fill_connection_form(driver: str, fields: dict[str, str]) -> tuple[Step, ...]:
+    """Opens the Connection Manager, picks `driver` and fills its form, leaving the window open."""
 
     steps = [
         open_window("ctrl-shift-n"),
@@ -184,12 +187,18 @@ def create_connection(driver: str, fields: dict[str, str]) -> tuple[Step, ...]:
         ensure(wait_value(f"cm-field-{field_id}", value), set_text(f"cm-field-{field_id}", value))
         for field_id, value in fields.items()
     ]
-    steps += [
-        close_window("ctrl-s"),
-        wait_for(fields["name"], exact=True),
-    ]
 
     return tuple(steps)
+
+
+def create_connection(driver: str, fields: dict[str, str]) -> tuple[Step, ...]:
+    """Creates a connection through the Connection Manager and saves it."""
+
+    return (
+        *fill_connection_form(driver, fields),
+        close_window("ctrl-s"),
+        wait_for(fields["name"], exact=True),
+    )
 
 
 # -- Runner hooks -------------------------------------------------------------
@@ -210,6 +219,14 @@ MONGODB = "Reviews (MongoDB)"
 REDIS = "Cache (Redis)"
 SQLITE = "Inventory (SQLite)"
 
+POSTGRES_FIELDS = {
+    "name": POSTGRES,
+    "host": "127.0.0.1",
+    "port": "{postgres_port}",
+    "database": "shop",
+    "user": "postgres",
+}
+
 # Run once, in the first DBFlux launch of a run.
 FIRST_RUN_STEPS = (
     # The first-run welcome dialog. Turning off the update check keeps the
@@ -218,10 +235,11 @@ FIRST_RUN_STEPS = (
     ensure(wait_checked("welcome-check-for-updates", False), click("welcome-check-for-updates")),
     ensure(wait_checked("welcome-show-whats-new", False), click("welcome-show-whats-new")),
     ensure(wait_gone(r"^welcome-dialog$"), key("enter")),
-    *create_connection(
-        "postgres",
-        {"name": POSTGRES, "host": "127.0.0.1", "port": "{postgres_port}", "database": "shop", "user": "postgres"},
-    ),
+)
+
+# Run once, after the first-run steps, in a later launch.
+DEMO_CONNECTION_STEPS = (
+    *create_connection("postgres", POSTGRES_FIELDS),
     *create_connection(
         "mongodb",
         {"name": MONGODB, "host": "127.0.0.1", "port": "{mongodb_port}", "database": "shop"},
@@ -264,7 +282,36 @@ WHERE o.status IN ('delivered', 'shipped')
 GROUP BY c.country
 ORDER BY revenue DESC;"""
 
+FIRST_QUERY_SQL = "SELECT id, name, country FROM customers ORDER BY id LIMIT 20;"
+
 SHOTS = (
+    Shot(
+        page="getting-started",
+        name="first-launch",
+        # The pointer starts at the center of the screen, over a row of the
+        # start list, which would show it hovered.
+        steps=(call("pointer_move", x=1200, y=760),),
+        demo_connections=False,
+    ),
+    Shot(
+        page="getting-started",
+        name="connection-manager",
+        steps=fill_connection_form("postgres", POSTGRES_FIELDS),
+    ),
+    Shot(
+        page="getting-started",
+        name="first-query",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_for("Enter SQL here"), key("ctrl-n")),
+            ensure(
+                wait_for("Ada Hayashi", exact=True),
+                call("focus_element", label="Enter SQL here", exact=False),
+                call("set_text", label="Enter SQL here", exact=False, text=FIRST_QUERY_SQL),
+                key("ctrl-enter"),
+            ),
+        ),
+    ),
     Shot(
         page="usage",
         name="main-window",

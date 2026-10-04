@@ -8,13 +8,28 @@ DBFlux 以键盘操作为先。几乎所有操作都同时提供鼠标入口和�
 
 启动时，DBFlux 会恢复上一次的会话（打开的标签页）。全新安装时没有可恢复的内容，因此焦点默认落在侧边栏。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/first-launch-dark.webp">
+  <img src="../images/getting-started/first-launch-light.webp" alt="全新安装后的 DBFlux 主窗口，侧边栏为空，没有任何连接">
+</picture>
+
 ## 创建连接
 
 按 `Ctrl+Shift+N`（macOS 上为 `Cmd+Shift+N`）打开连接管理器，选择驱动，填写其表单并连接。随后该连接的 Schema 会出现在侧边栏中。[连接到数据库](CONNECTIONS.md)介绍了打开连接管理器的其他方式、驱动选择器、访问标签页（SSH、代理、托管访问），以及连接失败时会发生什么。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/connection-manager-dark.webp">
+  <img src="../images/getting-started/connection-manager-light.webp" alt="连接管理器中已为本地数据库填写好的 PostgreSQL 表单">
+</picture>
+
 ## 执行第一个查询
 
 使用 `Ctrl+n`（macOS 上为 `Cmd+n`）新建查询标签页，用当前活动连接的查询语言输入查询，然后按 `Ctrl+Enter`（`Cmd+Enter`）执行。结果会渲染在文档内的结果标签页中。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/first-query-dark.webp">
+  <img src="../images/getting-started/first-query-light.webp" alt="PostgreSQL 连接上的查询标签页，包含一条 SELECT 查询及其下方的结果">
+</picture>
 
 ## 下一步
 

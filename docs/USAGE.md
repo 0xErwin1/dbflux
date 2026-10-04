@@ -4,6 +4,11 @@ The usage guide is split into one page per task. If you are new to DBFlux,
 start with [Getting Started](GETTING_STARTED.md), which takes you from first
 launch to your first query; otherwise pick the page for what you are doing.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/usage/main-window-dark.webp">
+  <img src="images/usage/main-window-light.webp" alt="The main window with a PostgreSQL table open">
+</picture>
+
 - [Getting Started](GETTING_STARTED.md) — first launch, creating a connection,
   and your first query.
 - [Connecting](CONNECTIONS.md) — the Connection Manager, drivers, SSH tunnels,
