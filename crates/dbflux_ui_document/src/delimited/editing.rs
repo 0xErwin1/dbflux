@@ -247,17 +247,35 @@ impl DelimitedDocument {
     }
 
     /// Commits the value typed into an open inline editor, as Enter does but
-    /// without taking focus back, so a tab close or a shutdown sees it as a
-    /// pending change. Always returns `true`: an inline value always stages.
+    /// without taking focus back, and an edited value in the cell editor
+    /// dialog, as its Save does, so a tab close or a shutdown sees them as
+    /// pending changes.
+    ///
+    /// Returns `false` when the dialog's value could not be staged, because
+    /// the rows were read again or the changes discarded since it opened,
+    /// which is reported: the close then keeps the tab open.
     pub fn commit_pending_input(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(table_state) = self.loaded().map(|loaded| loaded.table_state.clone()) else {
             return true;
         };
 
+        let dialog_edit = self
+            .cell_editor
+            .clone()
+            .and_then(|editor| {
+                editor
+                    .update(cx, |editor, cx| editor.take_unsaved_edit(cx))
+                    .ok()
+            })
+            .flatten();
+
+        let dialog_committed =
+            dialog_edit.is_none_or(|edit| self.apply_cell_editor_value(&edit, cx));
+
         table_state.update(cx, |state, cx| state.commit_pending_edit(cx));
         self.refresh_dirty(cx);
 
-        true
+        dialog_committed
     }
 
     /// Stages the value of an open inline editor, as Enter does, and works
@@ -487,13 +505,18 @@ impl DelimitedDocument {
     /// Refused and reported, with its own reason, when the rows were read
     /// again or the changes discarded since the editor opened, when a save or
     /// a reread runs, or when the row is gone. Nothing is staged then.
-    fn apply_cell_editor_value(&mut self, event: &CellEditorSaveEvent, cx: &mut Context<Self>) {
+    /// Returns whether the value was staged.
+    fn apply_cell_editor_value(
+        &mut self,
+        event: &CellEditorSaveEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(target) = self.cell_edit_target.take() else {
-            return;
+            return false;
         };
 
         if (target.opened_at, target.col) != (event.row, event.col) {
-            return;
+            return false;
         }
 
         let visual_row = match self.resolve_cell_edit(&target, cx) {
@@ -506,18 +529,20 @@ impl DelimitedDocument {
                     UserFacingError::new(ErrorKind::User, summary).with_cause(refusal.cause()),
                     cx,
                 );
-                return;
+                return false;
             }
         };
 
         let Some(table_state) = self.editable_table() else {
-            return;
+            return false;
         };
 
         table_state.update(cx, |state, cx| {
             state.stage_cell_value(visual_row, target.col, CellValue::text(&event.value));
             cx.notify();
         });
+
+        true
     }
 
     /// The visual row the cell of `target` is shown at now, or why its value
