@@ -887,6 +887,51 @@ fn postgres_cancel_query() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_idle_cancel_does_not_cancel_the_next_query() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.cancel_active()?;
+        connection.cancel_handle().cancel()?;
+
+        let result = connection.execute(&QueryRequest::new("SELECT pg_sleep(0.5)"));
+        assert!(
+            result.is_ok(),
+            "an idle cancel must not reach the next statement: {result:?}"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_cancel_active_cancels_a_running_query() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let connection = &*connection;
+
+        let query_result = std::thread::scope(|scope| {
+            let running_query =
+                scope.spawn(|| connection.execute(&QueryRequest::new("SELECT pg_sleep(10)")));
+
+            std::thread::sleep(Duration::from_millis(300));
+            connection.cancel_active()?;
+
+            Ok::<_, DbError>(running_query.join().expect("query thread panicked"))
+        })?;
+
+        assert!(
+            matches!(query_result, Err(DbError::Cancelled)),
+            "the running query must be cancelled: {query_result:?}"
+        );
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Code generators
 // ---------------------------------------------------------------------------
@@ -2203,18 +2248,7 @@ fn postgres_query_safety_refusal_preserves_existing_cancel_signal() -> Result<()
             "the bounded metric refusal erased an existing cancellation"
         );
 
-        // The server applies the cancel request sent above asynchronously, so it
-        // can still land on the next statement. One request cancels at most one
-        // statement, which makes a second attempt deterministic.
-        let probe = QueryRequest::new("SELECT 1");
-        match connection.execute(&probe) {
-            Err(DbError::Cancelled) => {
-                connection.execute(&probe)?;
-            }
-            result => {
-                result?;
-            }
-        }
+        connection.execute(&QueryRequest::new("SELECT 1"))?;
         Ok(())
     })
 }
