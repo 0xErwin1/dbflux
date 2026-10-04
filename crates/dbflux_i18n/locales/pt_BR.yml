@@ -1799,6 +1799,28 @@ document:
         unsupported: "O texto %{encoding} não pode ser lido com %{character} como delimitador ou aspas. Escolha outro delimitador, outras aspas ou outra codificação."
         line_break: "Uma quebra de linha não pode ser o delimitador nem as aspas. Escolha outro caractere."
         quote_equals_delimiter: "As aspas e o delimitador são ambos %{character}. Escolha um caractere diferente para um deles."
+      storage:
+        read: "Não foi possível ler o arquivo: %{cause}"
+        local_io: "Não foi possível acessar %{path}: %{cause}"
+        temporary_file: "Não foi possível salvar %{target}: a gravação de um arquivo temporário em %{directory} falhou: %{cause}"
+        object_store: "Não foi possível acessar %{bucket}/%{key}: %{cause}"
+        read_only_file: "O arquivo é somente leitura."
+      read:
+        unexpected_length: "O arquivo retornou uma quantidade de bytes diferente da solicitada, então não pôde ser lido."
+      write:
+        sink: "Não foi possível gravar o arquivo editado: %{cause}"
+        records_moved: "O arquivo não corresponde mais aos registros carregados dele. Recarregue o arquivo e edite-o novamente."
+        conflicting_edits: "As edições pendentes alteram o mesmo registro de formas conflitantes, então o arquivo não foi gravado."
+        unencodable: "Um valor contém %{character}, que %{encoding} não consegue representar. Remova o caractere ou mude a codificação do arquivo."
+        unquotable: "Um valor contém o delimitador ou uma quebra de linha, começa com U+FEFF, ou é o único campo do seu registro e está vazio, e o arquivo não tem um caractere de aspas para envolvê-lo. Mude o valor ou escolha um caractere de aspas."
+        leading_byte_order_mark: "Um registro passaria a ser o primeiro do arquivo, e seu U+FEFF inicial seria então lido como marca de ordem de bytes e perdido. Edite o primeiro campo desse registro ou mantenha um registro antes dele."
+        fused_line_break: "Remover estes registros juntaria uma linha vazia à quebra de linha anterior, e o arquivo não tem um caractere de aspas para mantê-la separada. Exclua também essa linha vazia ou escolha um caractere de aspas."
+        truncated_code_unit: "O arquivo termina no meio de um caractere, então não pode ser editado como está. Substitua ou exclua seu último registro no mesmo salvamento."
+        unclosed_quote: "Um registro termina dentro de um campo entre aspas que nunca é fechado, então não é possível adicionar uma coluna depois dele. Edite esse registro primeiro."
+      page:
+        out_of_order: "A página começa no registro %{found}, e o próximo registro a carregar é o %{expected}."
+        no_header: "O arquivo não tem registro de cabeçalho, então suas colunas não têm nome."
+        column_out_of_range: "Não há nenhuma coluna no índice %{column}."
     warning:
       malformed_text: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação detectada provavelmente está errada."
       malformed_text_chosen: "Alguns bytes não são texto %{encoding} válido e aparecem como \uFFFD. A codificação escolhida provavelmente está errada."

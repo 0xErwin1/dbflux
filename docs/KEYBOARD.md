@@ -692,6 +692,21 @@ opens with **Save** focused, so `Enter` saves. `Tab` and `Shift+Tab` move
 between **Save**, **Cancel** and **Discard** without leaving the dialog, `Enter`
 or `Space` presses the focused button, and `Escape` cancels.
 
+## CSV and TSV files
+
+A CSV or TSV tab takes the [Data table](#data-table) keys in its table, and
+these. See [CSV and TSV Files](CSV_FILES.md).
+
+| Keys | Action |
+|------|--------|
+| `t` | Switch between the table and the text |
+| `Shift+t` | Switch the text between Raw and Aligned |
+| `Escape` / `Enter` | Take the keyboard out of the text / put it back |
+| `]` | Load the next 500 records |
+| `F5` | Read the file again from its source |
+| `Ctrl+s` / `Cmd+s` | Save, from the table or from the text |
+| `m` (or `Shift+F10`) | Pane actions: the dialect controls, Insert row above, Add column, Rename column, Discard changes, Reload from file, and Cancel loading while the rest of the file loads |
+
 ## Audit viewer
 
 | Keys | Action |

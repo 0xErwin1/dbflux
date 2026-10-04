@@ -3,7 +3,8 @@
 Open a new query tab with `Ctrl+n` (`Cmd+n` on macOS), or open a script file with
 `Ctrl+o`. The editor's query language (SQL, MongoDB query syntax, Redis commands,
 etc.) is determined by the active connection's driver, which also drives syntax
-highlighting and the placeholder text.
+highlighting and the placeholder text. A `.csv` or `.tsv` file opens as a table
+instead; see [CSV and TSV Files](CSV_FILES.md).
 
 For SQL connections, the [Visual Query Builder](QUERY_BUILDER.md) composes
 queries without writing SQL.

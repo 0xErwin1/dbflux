@@ -1799,6 +1799,28 @@ document:
         unsupported: "El texto %{encoding} no se puede leer con %{character} como delimitador o comilla. Elige otro delimitador, otra comilla u otra codificación."
         line_break: "Un salto de línea no puede ser el delimitador ni la comilla. Elige otro carácter."
         quote_equals_delimiter: "La comilla y el delimitador son ambos %{character}. Elige un carácter distinto para uno de los dos."
+      storage:
+        read: "No se pudo leer el archivo: %{cause}"
+        local_io: "No se pudo acceder a %{path}: %{cause}"
+        temporary_file: "No se pudo guardar %{target}: falló la escritura de un archivo temporal en %{directory}: %{cause}"
+        object_store: "No se pudo acceder a %{bucket}/%{key}: %{cause}"
+        read_only_file: "El archivo es de solo lectura."
+      read:
+        unexpected_length: "El archivo devolvió una cantidad de bytes distinta de la pedida, así que no se pudo leer."
+      write:
+        sink: "No se pudo escribir el archivo editado: %{cause}"
+        records_moved: "El archivo ya no coincide con los registros que se cargaron de él. Recarga el archivo y vuelve a editarlo."
+        conflicting_edits: "Los cambios pendientes modifican el mismo registro de formas que se contradicen, así que no se escribió el archivo."
+        unencodable: "Un valor contiene %{character}, que %{encoding} no puede representar. Quita el carácter o cambia la codificación del archivo."
+        unquotable: "Un valor contiene el delimitador o un salto de línea, empieza con U+FEFF, o es el único campo de su registro y está vacío, y el archivo no tiene un carácter de comilla para encerrarlo. Cambia el valor o elige un carácter de comilla."
+        leading_byte_order_mark: "Un registro pasaría a ser el primero del archivo, y su U+FEFF inicial se leería entonces como marca de orden de bytes y se perdería. Edita el primer campo de ese registro o conserva un registro antes de él."
+        fused_line_break: "Quitar estos registros uniría una línea vacía al salto de línea anterior, y el archivo no tiene un carácter de comilla para mantenerla separada. Borra también esa línea vacía o elige un carácter de comilla."
+        truncated_code_unit: "El archivo termina en medio de un carácter, así que no se puede editar tal como está. Reemplaza o borra su último registro en el mismo guardado."
+        unclosed_quote: "Un registro termina dentro de un campo entre comillas que nunca se cierra, así que no se puede agregar una columna después de él. Edita primero ese registro."
+      page:
+        out_of_order: "La página empieza en el registro %{found}, y el siguiente registro a cargar es el %{expected}."
+        no_header: "El archivo no tiene registro de encabezado, así que sus columnas no tienen nombre."
+        column_out_of_range: "No hay ninguna columna en el índice %{column}."
     warning:
       malformed_text: "Algunos bytes no son texto %{encoding} válido y se muestran como \uFFFD. Es probable que la codificación detectada sea incorrecta."
       malformed_text_chosen: "Algunos bytes no son texto %{encoding} válido y se muestran como \uFFFD. Es probable que la codificación elegida sea incorrecta."

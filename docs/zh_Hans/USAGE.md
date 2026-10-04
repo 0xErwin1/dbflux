@@ -10,6 +10,7 @@
 - [处理结果](RESULTS.md) — 数据网格、记录视图、筛选、编辑与导出。
 - [键值视图](KEY_VALUE.md) — 键、值、过期时间与命令控制台。
 - [文档集合](DOCUMENTS.md) — 文档的表格、树与 JSON 视图。
+- [CSV 和 TSV 文件](CSV_FILES.md) — 以表格或文本形式打开、编辑和保存分隔符文件。
 - [图表](CHARTS.md)与[仪表盘](DASHBOARDS.md) — 为结果绘制图表并构建仪表盘。
 - [键盘快捷键](KEYBOARD.md) — 全部默认键位，包括 Vim 模式。
 - [设置](SETTINGS.md) — 每个设置项与连接 Hooks。

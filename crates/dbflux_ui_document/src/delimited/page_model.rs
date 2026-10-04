@@ -51,25 +51,28 @@ pub enum PageModelError {
 impl fmt::Display for PageModelError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PageOutOfOrder { expected, found } => write!(
-                formatter,
-                "the page starts at record {found}, and the next record to load is {expected}"
-            ),
+            Self::PageOutOfOrder { expected, found } => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.page.out_of_order",
+                found = found,
+                expected = expected
+            )),
 
-            Self::NextPageRequired => formatter.write_str(
-                "a row was inserted after the last loaded record: load the next page first",
-            ),
+            Self::NextPageRequired => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.next_page_required"
+            )),
 
             Self::NoHeader => {
-                formatter.write_str("the file has no header record, so its columns have no names")
+                formatter.write_str(&dbflux_i18n::t!("document.delimited.error.page.no_header"))
             }
 
-            Self::ColumnOutOfRange { column } => {
-                write!(formatter, "there is no column at index {column}")
-            }
+            Self::ColumnOutOfRange { column } => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.page.column_out_of_range",
+                column = column
+            )),
 
-            Self::FullLoadRequired => formatter
-                .write_str("a column can be added only after every record of the file is loaded"),
+            Self::FullLoadRequired => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.add_column_needs_full_load"
+            )),
         }
     }
 }

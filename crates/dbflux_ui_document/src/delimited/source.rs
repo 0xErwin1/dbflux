@@ -141,37 +141,49 @@ impl StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SourceChanged => formatter.write_str(
-                "the file changed since it was opened, so nothing was saved: reload it and apply the edits again",
-            ),
-
-            Self::VersionUnverifiable => formatter.write_str(
-                "the file reports no modification time or content tag, so a change made to it elsewhere since it was opened could not be detected: nothing was saved",
-            ),
-
-            Self::Read(source) => write!(formatter, "could not read the file: {source}"),
-
-            Self::Write(source) => fmt::Display::fmt(source, formatter),
-
-            Self::LocalIo { path, source } => {
-                write!(formatter, "could not access {}: {source}", path.display())
+            Self::SourceChanged => {
+                formatter.write_str(&dbflux_i18n::t!("document.delimited.error.source_changed"))
             }
+
+            Self::VersionUnverifiable => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.warning.cannot_save_in_place"
+            )),
+
+            Self::Read(source) => {
+                formatter.write_str(&crate::labels::delimited_read_failed_cause(source))
+            }
+
+            Self::Write(source) => {
+                formatter.write_str(&crate::labels::delimited_write_error_cause(source))
+            }
+
+            Self::LocalIo { path, source } => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.storage.local_io",
+                path = path.display(),
+                cause = source
+            )),
 
             Self::TemporaryFile {
                 target,
                 directory,
                 source,
-            } => write!(
-                formatter,
-                "could not save {target}: writing a temporary file in {} failed: {source}",
-                directory.display()
-            ),
+            } => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.storage.temporary_file",
+                target = target,
+                directory = directory.display(),
+                cause = source
+            )),
 
             Self::ObjectStore {
                 bucket,
                 key,
                 source,
-            } => write!(formatter, "could not access {bucket}/{key}: {source}"),
+            } => formatter.write_str(&dbflux_i18n::t!(
+                "document.delimited.error.storage.object_store",
+                bucket = bucket,
+                key = key,
+                cause = source
+            )),
         }
     }
 }
