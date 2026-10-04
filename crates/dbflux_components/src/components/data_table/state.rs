@@ -7,6 +7,7 @@ use gpui::{
     ScrollStrategy, Size, Subscription, UniformListScrollHandle, Window, px,
 };
 
+use super::annotation::HeaderAnnotation;
 use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
@@ -130,6 +131,10 @@ pub struct DataTableState {
     /// Document extras (column groups, presence bars, stepping into nested
     /// values). `None` for relational grids.
     document: Option<super::document::DocumentPresentation>,
+
+    /// Facts drawn under each column header, indexed like the model's
+    /// columns. Empty, or all `None`, keeps the header one line tall.
+    header_annotations: Vec<Option<HeaderAnnotation>>,
 }
 
 impl DataTableState {
@@ -173,6 +178,7 @@ impl DataTableState {
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
             document: None,
+            header_annotations: Vec::new(),
         }
     }
 
@@ -198,13 +204,38 @@ impl DataTableState {
         self.document.as_ref()
     }
 
+    // --- Header annotations ---
+
+    /// Sets the facts drawn under each column header, indexed like the
+    /// model's columns. A column with `None`, or past the end of the vector,
+    /// shows no second line; with no annotation at all the header keeps its
+    /// one-line height. A document grid ignores them.
+    pub fn set_header_annotations(
+        &mut self,
+        annotations: Vec<Option<HeaderAnnotation>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.header_annotations != annotations {
+            self.header_annotations = annotations;
+            cx.notify();
+        }
+    }
+
+    pub fn header_annotation(&self, col: usize) -> Option<&HeaderAnnotation> {
+        self.header_annotations.get(col).and_then(Option::as_ref)
+    }
+
+    pub fn has_header_annotations(&self) -> bool {
+        self.header_annotations.iter().any(Option::is_some)
+    }
+
     /// Height of the whole header, a column-group row included.
     pub fn header_height(&self) -> Pixels {
-        self.document
-            .as_ref()
-            .map_or(super::theme::HEADER_HEIGHT, |document| {
-                document.header_height()
-            })
+        match &self.document {
+            Some(document) => document.header_height(),
+            None if self.has_header_annotations() => super::theme::ANNOTATED_HEADER_HEIGHT,
+            None => super::theme::HEADER_HEIGHT,
+        }
     }
 
     /// Whether the base cell at `coord` holds a nested document or array,
@@ -299,10 +330,17 @@ impl DataTableState {
     /// rows that were just installed.
     pub fn set_model(&mut self, model: Arc<TableModel>, swap: ModelSwap, cx: &mut Context<Self>) {
         let previous_widths = self.column_widths_by_title();
+        let previous_titles: Vec<Arc<str>> = self
+            .model
+            .columns
+            .iter()
+            .map(|column| column.title.clone())
+            .collect();
 
         self.close_editor(false, false, cx);
         self.model = model;
         self.reload_column_widths(previous_widths);
+        self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
 
@@ -330,6 +368,53 @@ impl DataTableState {
                 .push_back(*width);
         }
         widths
+    }
+
+    /// Keeps each column's annotation when the new model holds the same
+    /// columns, matched by title so a reordered column keeps its own facts.
+    /// A different column set drops them all: facts carried over by a
+    /// matching title could describe another column, and the host sets the
+    /// annotations of the new columns anyway.
+    fn reload_header_annotations(&mut self, previous_titles: &[Arc<str>]) {
+        if self.header_annotations.is_empty() {
+            return;
+        }
+
+        let mut previous_sorted = previous_titles.to_vec();
+        let mut current_sorted: Vec<Arc<str>> = self
+            .model
+            .columns
+            .iter()
+            .map(|column| column.title.clone())
+            .collect();
+        previous_sorted.sort();
+        current_sorted.sort();
+
+        if previous_sorted != current_sorted {
+            self.header_annotations.clear();
+            return;
+        }
+
+        let mut by_title: HashMap<Arc<str>, VecDeque<Option<HeaderAnnotation>>> = HashMap::new();
+
+        for (index, title) in previous_titles.iter().enumerate() {
+            by_title
+                .entry(title.clone())
+                .or_default()
+                .push_back(self.header_annotations.get(index).cloned().flatten());
+        }
+
+        self.header_annotations = self
+            .model
+            .columns
+            .iter()
+            .map(|column| {
+                by_title
+                    .get_mut(&column.title)
+                    .and_then(VecDeque::pop_front)
+                    .flatten()
+            })
+            .collect();
     }
 
     fn reload_column_widths(&mut self, mut previous: HashMap<Arc<str>, VecDeque<f32>>) {
@@ -2611,6 +2696,83 @@ mod tests {
                 "a column the previous model did not have falls back to the heuristic"
             );
         });
+    }
+
+    fn annotation(text: &str) -> Option<super::HeaderAnnotation> {
+        Some(super::HeaderAnnotation::new(text.to_string()).trailing("0% null"))
+    }
+
+    fn annotations(
+        cx: &mut gpui::TestAppContext,
+        state: &gpui::Entity<super::DataTableState>,
+    ) -> Vec<Option<super::HeaderAnnotation>> {
+        cx.update(|cx| {
+            let state = state.read(cx);
+            (0..state.col_count())
+                .map(|col| state.header_annotation(col).cloned())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn header_annotations_survive_set_model_by_title(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name", "email"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), None, annotation("2.3×")], cx);
+                s.set_model(
+                    model_of(&["id", "name", "email"], 3),
+                    ModelSwap::ResetCursor,
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            annotations(cx, &state),
+            vec![annotation("41×"), None, annotation("2.3×")],
+            "another page of the same columns keeps the annotations"
+        );
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_model(
+                    model_of(&["email", "id", "name"], 3),
+                    ModelSwap::KeepCursor,
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            annotations(cx, &state),
+            vec![annotation("2.3×"), annotation("41×"), None],
+            "a reordered column keeps its own annotation, not the one of its old index"
+        );
+        assert!(cx.update(|cx| state.read(cx).has_header_annotations()));
+    }
+
+    #[gpui::test]
+    fn header_annotations_clear_when_columns_change(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name", "email"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), annotation("9.7×"), None], cx);
+                s.set_model(model_of(&["id", "name"], 1), ModelSwap::ResetCursor, cx);
+            });
+        });
+
+        assert_eq!(annotations(cx, &state), vec![None, None]);
+
+        let (has_annotations, header_height) = cx.update(|cx| {
+            let state = state.read(cx);
+            (state.has_header_annotations(), state.header_height())
+        });
+        assert!(
+            !has_annotations,
+            "a different column set drops every annotation, kept titles included"
+        );
+        assert_eq!(header_height, super::super::theme::HEADER_HEIGHT);
     }
 
     use super::{CELL_PADDING_X, GridMetrics, MAX_AUTO_COLUMN_WIDTH, MONO_ADVANCE_EM};
