@@ -1180,7 +1180,7 @@ impl PostgresDriver {
                 client: Arc::new(Mutex::new(client)),
                 ssh_tunnel: None,
                 cancel_token,
-                active_query: RwLock::new(None),
+                active_query: Arc::new(RwLock::new(None)),
                 cancelled: Arc::new(AtomicBool::new(false)),
             }));
         }
@@ -1209,7 +1209,7 @@ impl PostgresDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -1247,7 +1247,7 @@ impl PostgresDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -1325,7 +1325,7 @@ impl PostgresDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: Some(tunnel),
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -1365,11 +1365,12 @@ pub struct PostgresConnection {
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
     cancel_token: PgCancelToken,
-    active_query: RwLock<Option<Uuid>>,
+    active_query: Arc<RwLock<Option<Uuid>>>,
     cancelled: Arc<AtomicBool>,
 }
 
 struct PostgresCancelHandle {
+    active_query: Arc<RwLock<Option<Uuid>>>,
     cancel_token: PgCancelToken,
     cancelled: Arc<AtomicBool>,
 }
@@ -1377,6 +1378,11 @@ struct PostgresCancelHandle {
 impl QueryCancelHandle for PostgresCancelHandle {
     fn cancel(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
+
+        if !has_active_query(&self.active_query)? {
+            log::debug!("[CANCEL] No query is running, no cancel request sent");
+            return Ok(());
+        }
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
@@ -1390,6 +1396,20 @@ impl QueryCancelHandle for PostgresCancelHandle {
     fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
+}
+
+/// Reports whether `execute` is currently running a cancellable query.
+///
+/// PostgreSQL applies a cancel request to whatever statement is executing
+/// when it arrives, so a cancel is only sent while the marker is set. Other
+/// calls that hold the client mutex, such as `ping` or schema loads, never
+/// set it and are therefore never cancelled.
+fn has_active_query(active_query: &RwLock<Option<Uuid>>) -> Result<bool, DbError> {
+    let active = active_query
+        .read()
+        .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+    Ok(active.is_some())
 }
 
 fn postgres_code_generators() -> Vec<CodeGeneratorInfo> {
@@ -1690,6 +1710,22 @@ impl Connection for PostgresConnection {
 
         self.cancelled.store(false, Ordering::SeqCst);
 
+        let start = Instant::now();
+        let query_id = Uuid::new_v4();
+
+        let mut client = match self.client.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("[CLEANUP] Recovering from poisoned mutex during cleanup");
+                poison_err.into_inner()
+            }
+        };
+
+        // Declared after `client` so it drops first: the marker must be cleared
+        // before the connection is released, or a cancel arriving in between
+        // would land on the next statement run on this connection.
+        let active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
+
         if let Some(source) = req
             .execution_context
             .as_ref()
@@ -1697,15 +1733,9 @@ impl Connection for PostgresConnection {
         {
             match source {
                 ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
-                    let mut client = self.client.lock().map_err(|_| {
-                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
-                    })?;
                     return crate::instance_catalog::dispatch_metric_series(&mut client, metric_id);
                 }
                 ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
-                    let mut client = self.client.lock().map_err(|_| {
-                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
-                    })?;
                     return crate::instance_catalog::dispatch_inspector_snapshot(
                         &mut client,
                         metric_id,
@@ -1715,24 +1745,12 @@ impl Connection for PostgresConnection {
             }
         }
 
-        let start = Instant::now();
-        let query_id = Uuid::new_v4();
-        let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
-
         let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!(
             "[QUERY] Executing (id={}): {}",
             query_id,
             sql_preview.replace('\n', " ")
         );
-
-        let mut client = match self.client.lock() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("[CLEANUP] Recovering from poisoned mutex during cleanup");
-                poison_err.into_inner()
-            }
-        };
 
         // A multi-statement batch cannot use the extended (prepared) protocol,
         // which rejects more than one command per statement (SQLSTATE 42601).
@@ -1789,6 +1807,7 @@ impl Connection for PostgresConnection {
             (columns, rows)
         };
 
+        drop(active_query_guard);
         drop(client);
 
         let query_time = start.elapsed();
@@ -1847,25 +1866,12 @@ impl Connection for PostgresConnection {
     fn cancel_active(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
 
-        let active = self
-            .active_query
-            .read()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        if !has_active_query(&self.active_query)? {
+            log::debug!("[CANCEL] No query is running, no cancel request sent");
+            return Ok(());
+        }
 
-        let query_id = match *active {
-            Some(id) => id,
-            None => {
-                log::debug!("[CANCEL] No active query to cancel");
-                return Ok(());
-            }
-        };
-
-        drop(active);
-
-        log::info!(
-            "[CANCEL] Sending cancel request for active query {}",
-            query_id
-        );
+        log::info!("[CANCEL] Sending cancel request for the running query");
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
@@ -1878,6 +1884,7 @@ impl Connection for PostgresConnection {
 
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(PostgresCancelHandle {
+            active_query: self.active_query.clone(),
             cancel_token: self.cancel_token.clone(),
             cancelled: self.cancelled.clone(),
         })
@@ -6165,6 +6172,34 @@ mod tests {
     };
     use postgres::types::{FromSql, Kind, Type};
     use std::str::FromStr;
+    use std::sync::RwLock;
+    use uuid::Uuid;
+
+    #[test]
+    fn has_active_query_reports_false_when_nothing_is_running() {
+        let marker = RwLock::new(None);
+
+        assert!(!super::has_active_query(&marker).expect("read marker"));
+    }
+
+    #[test]
+    fn has_active_query_reports_true_while_a_query_is_marked() {
+        let marker = RwLock::new(Some(Uuid::new_v4()));
+
+        assert!(super::has_active_query(&marker).expect("read marker"));
+    }
+
+    #[test]
+    fn active_query_guard_marks_the_query_and_clears_it_on_drop() {
+        let marker = RwLock::new(None);
+        let query_id = Uuid::new_v4();
+
+        let guard = super::ActiveQueryGuard::activate(&marker, query_id).expect("activate");
+        assert_eq!(*marker.read().expect("read marker"), Some(query_id));
+
+        drop(guard);
+        assert_eq!(*marker.read().expect("read marker"), None);
+    }
 
     fn sparsevec_payload(dimension: i32, indices: &[i32], values: &[f32]) -> Vec<u8> {
         assert_eq!(indices.len(), values.len());
