@@ -60,7 +60,7 @@ con estos campos:
 | `Governance`    | `governance`     | Resultados de evaluación de policy                                                                                 |
 | `Config`        | `config`         | Cambios de profile, modificaciones de settings                                                                     |
 | `System`        | `system`         | Arranque de la aplicación, panics, migraciones                                                                     |
-| `ObjectStorage` | `object_storage` | Eventos de CRUD/mutación de object storage (upload, delete, presign, rename, create bucket/folder, save-back edit) |
+| `ObjectStorage` | `object_storage` | Eventos de CRUD/mutación de object storage (upload, download, delete, presign, rename, create bucket/folder, save-back edit) |
 
 ### Tipos de actor
 

@@ -54,7 +54,7 @@ DBFlux는 모든 중요한 작업을 SQLite에 저장된 통합 감사 트레일
 | `Governance` | `governance` | 정책 평가 결과 |
 | `Config` | `config` | 프로필 변경, 설정 수정 |
 | `System` | `system` | 애플리케이션 시작, 패닉, 마이그레이션 |
-| `ObjectStorage` | `object_storage` | 개체 스토리지 CRUD/변경 이벤트 (업로드, 삭제, presign, 이름 바꾸기, 버킷/폴더 만들기, 저장 후 편집) |
+| `ObjectStorage` | `object_storage` | 개체 스토리지 CRUD/변경 이벤트 (업로드, 다운로드, 삭제, presign, 이름 바꾸기, 버킷/폴더 만들기, 저장 후 편집) |
 
 ### 행위자 타입
 

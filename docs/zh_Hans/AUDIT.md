@@ -54,7 +54,7 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 | `Governance` | `governance` | 策略求值结果 |
 | `Config` | `config` | 配置文件变更、设置修改 |
 | `System` | `system` | 应用启动、panic、迁移 |
-| `ObjectStorage` | `object_storage` | 对象存储的增删改与变更事件（上传、删除、预签名、重命名、创建桶 / 文件夹、回写编辑） |
+| `ObjectStorage` | `object_storage` | 对象存储的增删改与变更事件（上传、下载、删除、预签名、重命名、创建桶 / 文件夹、回写编辑） |
 
 ### 执行者类型
 
