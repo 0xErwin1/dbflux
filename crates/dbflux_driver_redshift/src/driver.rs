@@ -628,7 +628,7 @@ impl RedshiftDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -660,7 +660,7 @@ impl RedshiftDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -698,7 +698,7 @@ impl RedshiftDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: Some(tunnel),
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
