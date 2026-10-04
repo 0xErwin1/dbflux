@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials};
-use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
@@ -599,6 +599,22 @@ fn encryption_from_rules(rules: &[ServerSideEncryptionRule]) -> Option<BucketEnc
     }
 }
 
+/// Whether a `GetObject` failure means the requested byte range starts at or
+/// past the end of the object. The HTTP status is checked alongside the S3
+/// error code because S3-compatible endpoints do not all send the same code.
+fn is_range_not_satisfiable<E>(error: &SdkError<E>) -> bool
+where
+    E: ProvideErrorMetadata,
+{
+    if error.code() == Some("InvalidRange") {
+        return true;
+    }
+
+    error
+        .raw_response()
+        .is_some_and(|response| response.status().as_u16() == 416)
+}
+
 /// Encryption to report when `GetBucketEncryption` fails: a bucket without a
 /// configuration has no default encryption, and any other failure
 /// (`AccessDenied`, `NotImplemented`, network) leaves it unknown.
@@ -811,6 +827,53 @@ impl ObjectStoreConnection for S3Connection {
                     ErrorTarget::Object { bucket, key },
                 ))
             })?;
+
+        let aggregated = runtime.block_on(output.body.collect()).map_err(|error| {
+            DbError::query_failed(format!("Failed to read S3 object body: {error}"))
+        })?;
+
+        Ok(aggregated.into_bytes().to_vec())
+    }
+
+    /// Ranged `GetObject`: only the requested window crosses the network.
+    ///
+    /// S3 clamps a range that runs past the end on its own, but rejects one
+    /// that starts at or past the end with `InvalidRange` (HTTP 416). That
+    /// rejection is mapped to an empty vector, which keeps the trait's
+    /// clamping contract without a `HeadObject` call per read.
+    fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: std::ops::Range<u64>,
+    ) -> Result<Vec<u8>, DbError> {
+        if range.start >= range.end {
+            return Ok(Vec::new());
+        }
+
+        let runtime = runtime();
+        let last_byte = range.end - 1;
+
+        let request = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .range(format!("bytes={}-{last_byte}", range.start));
+
+        let output = match runtime.block_on(request.send()) {
+            Ok(output) => output,
+            Err(error) if is_range_not_satisfiable(&error) => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(classify_query_error(
+                    S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Object { bucket, key },
+                    ),
+                ));
+            }
+        };
 
         let aggregated = runtime.block_on(output.body.collect()).map_err(|error| {
             DbError::query_failed(format!("Failed to read S3 object body: {error}"))
