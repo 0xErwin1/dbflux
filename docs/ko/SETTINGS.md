@@ -25,6 +25,11 @@ MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 �
 ---
 ## 일반
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
+  <img src="../images/settings/general-light.webp" alt="모양, 편집기, 시작 설정이 보이는 설정 창의 일반 섹션">
+</picture>
+
 ### 모양
 
 | 설정 | 옵션 | 기본값 |
@@ -130,6 +135,11 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 표시할 수 있습니다. 다른 컨텍스트를 상속하는 컨텍스트(편집기는 전역을 상속)는
 자신이 가리지 않는 상속 바인딩도 함께 나열합니다. 전체 기본 키맵은
 [키보드 참조](KEYBOARD.md)에 문서화되어 있습니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/keybindings-dark.webp">
+  <img src="../images/settings/keybindings-light.webp" alt="전역 단축키와 각 단축키를 바꾸는 연필 버튼이 나열된 설정 창의 키 바인딩 섹션">
+</picture>
 
 **단축키 변경.** 바인딩의 연필을 누르거나, 바인딩을 선택하고 `Enter`를 누른 뒤
 새 키를 누르세요. 단축키는 수정 키를 포함한 키 하나이거나 `g g`, `Ctrl+K Ctrl+S`

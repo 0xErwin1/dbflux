@@ -404,6 +404,11 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 
 字母键会输入到搜索框中，因此输入即可筛选列表。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
+  <img src="../images/keyboard/command-palette-light.webp" alt="按简短关键词筛选后的命令面板，列出匹配的命令及其快捷键">
+</picture>
+
 ## 数据表格
 
 结果网格或表格拥有焦点且没有正在编辑的单元格时生效。

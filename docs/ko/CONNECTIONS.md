@@ -35,6 +35,11 @@ MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft SQL Server, AWS 기반
 사용합니다. 대부분의 관계형 드라이버는 단일 연결 문자열도 받습니다.
 [폼 모드 vs. 직접 URI](#폼-모드-vs-직접-uri)를 참고하세요.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
+  <img src="../images/connections/driver-picker-light.webp" alt="관계형, 문서, 키-값, 시계열, 오브젝트 스토리지로 드라이버를 묶어 보여 주는 연결 관리자의 드라이버 선택기">
+</picture>
+
 ---
 
 ## 액세스 탭: DBFlux가 데이터베이스에 도달하는 방법
@@ -49,6 +54,11 @@ Proxy, SSM 중 하나이며, 조합은 불가능합니다.
 | **SSH Tunnel** | SSH 호스트를 통해 로컬 포트 포워딩을 열고 그 경유로 연결합니다. |
 | **Proxy** | SOCKS5 또는 HTTP/HTTPS 프록시를 통해 연결을 라우팅합니다. |
 | **SSM Port Forwarding** | AWS Systems Manager를 사용해 인스턴스로 포트 포워딩한 뒤 터널을 통해 연결합니다. `aws` 빌드 기능이 필요합니다. |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/access-tab-dark.webp">
+  <img src="../images/connections/access-tab-light.webp" alt="Direct, SSH Tunnel, Proxy, SSM Port Forwarding이 보이도록 Access Method 목록을 연 PostgreSQL 연결의 액세스 탭">
+</picture>
 
 ### Connect를 눌렀을 때 일어나는 일
 

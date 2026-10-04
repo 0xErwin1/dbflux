@@ -96,6 +96,11 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 
 审计查看器是查看 DBFlux 所记录全部内容的唯一入口：查询、连接、Hook、脚本、配置变更，以及 AI / MCP 治理决策。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/viewer-dark.webp">
+  <img src="../images/audit/viewer-light.webp" alt="审计查看器在筛选栏下方列出连接、查询、配置与启动事件">
+</picture>
+
 ### 打开方式
 
 - 键盘：**Ctrl+Shift+A**（macOS 上为 **Cmd+Shift+A**）。
@@ -143,6 +148,11 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 配置后，旧事件可按保留计划清理（参见[设置 → 审计](SETTINGS.md#审计)）。除此之外，审计日志会随使用不断增长；它与其他所有数据一同存放在同一个 `dbflux.db` 中（参见[数据与隐私](PRIVACY.md#审计与隐私)）。
 
 ## 查看审计事件
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/event-details-dark.webp">
+  <img src="../images/audit/event-details-light.webp" alt="展开的审计事件，显示其操作、执行者、连接、决定以及查询指纹">
+</picture>
 
 ### 在 DBFlux 界面中
 

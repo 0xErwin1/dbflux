@@ -571,6 +571,11 @@ Mientras el popover está abierto se queda con el teclado: los paneles de atrás
 
 Las letras quedan para el campo de búsqueda, así que escribir filtra la lista.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
+  <img src="../images/keyboard/command-palette-light.webp" alt="La command palette filtrada por una búsqueda corta, con los comandos que coinciden y sus atajos">
+</picture>
+
 ## Tabla de datos
 
 Estas teclas se aplican mientras una grilla de resultados o una tabla tiene el

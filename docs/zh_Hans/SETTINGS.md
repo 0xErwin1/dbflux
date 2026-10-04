@@ -23,6 +23,11 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 
 ## 常规
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
+  <img src="../images/settings/general-light.webp" alt="设置窗口的常规部分，显示外观、编辑器与启动设置">
+</picture>
+
 ### 外观
 
 | 设置项 | 选项 | 默认值 |
@@ -95,6 +100,11 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 ## 键盘快捷键
 
 本设置项按上下文分组列出当前生效的键位映射。可用文本框按命令、按键或上下文谓词筛选，或用上下文筛选只显示一个上下文。继承自其他上下文的上下文（编辑器继承自全局）还会列出它未覆盖的继承绑定。完整的默认键位映射记录在[键盘快捷键](KEYBOARD.md)。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/keybindings-dark.webp">
+  <img src="../images/settings/keybindings-light.webp" alt="设置窗口的键盘快捷键部分，列出全局快捷键，每项都带有用于修改的铅笔按钮">
+</picture>
 
 **修改快捷键。** 点击某个绑定的铅笔，或选中它后按 `Enter`，然后按下新的按键。快捷键可以是一个带修饰键的按键，也可以是最多四个按键组成的序列，例如 `g g` 或 `Ctrl+K Ctrl+S`：依次按下它们，停顿一秒后录制即会保存。`Esc` 取消。录制时，**移除快捷键**会让该绑定不再有按键。设置窗口自身使用的按键（如 `Ctrl+S` 或 `Tab`）也可以录制。单独的 `Esc` 因用于取消而无法录制。
 

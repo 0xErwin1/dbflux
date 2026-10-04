@@ -38,6 +38,11 @@ the fields that driver actually needs. File-backed drivers such as SQLite use a
 file-path form. Most relational drivers also accept a single connection string;
 see [Form mode vs. direct URI](#form-mode-vs-direct-uri).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/connections/driver-picker-dark.webp">
+  <img src="images/connections/driver-picker-light.webp" alt="The Connection Manager driver picker, with drivers grouped as relational, document, key-value, time series and object storage">
+</picture>
+
 ---
 
 ## The Access tab: how DBFlux reaches the database
@@ -52,6 +57,11 @@ connection is either Direct, or SSH, or Proxy, or SSM, never a combination.
 | **SSH Tunnel** | Open a local port-forward through an SSH host, then connect through it. |
 | **Proxy** | Route the connection through a SOCKS5 or HTTP/HTTPS proxy. |
 | **SSM Port Forwarding** | Use AWS Systems Manager to port-forward to an instance, then connect through the tunnel. Requires the `aws` build feature. |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/connections/access-tab-dark.webp">
+  <img src="images/connections/access-tab-light.webp" alt="The Access tab of a PostgreSQL connection with the Access Method list open on Direct, SSH Tunnel, Proxy and SSM Port Forwarding">
+</picture>
 
 ### What happens when you press Connect
 

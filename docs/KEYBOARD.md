@@ -543,6 +543,11 @@ While the popover is open it keeps the keyboard: the panels behind it see none o
 
 Letters are left to the search field, so typing filters the list.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/keyboard/command-palette-dark.webp">
+  <img src="images/keyboard/command-palette-light.webp" alt="The command palette filtered by a short query, listing matching commands with their key bindings">
+</picture>
+
 ## Data table
 
 These keys apply while a result grid or table has focus and no cell is being

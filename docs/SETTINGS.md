@@ -27,6 +27,11 @@ Integration](MCP_AI_INTEGRATION.md).
 
 ## General
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/settings/general-dark.webp">
+  <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the appearance, editor and startup settings">
+</picture>
+
 ### Appearance
 
 | Setting | Options | Default |
@@ -136,6 +141,11 @@ key or context predicate with the text field, or show one context with the
 context filter. A context that inherits from another (the Editor inherits from
 Global) also lists the inherited bindings it does not shadow. The full default
 keymap is documented in [Keyboard Reference](KEYBOARD.md).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/settings/keybindings-dark.webp">
+  <img src="images/settings/keybindings-light.webp" alt="The Keybindings section of the Settings window, listing the global shortcuts with a pencil to change each one">
+</picture>
 
 **Changing a shortcut.** Press the pencil on a binding, or select it and press
 `Enter`, then press the new keys. A shortcut can be one key with its modifiers
