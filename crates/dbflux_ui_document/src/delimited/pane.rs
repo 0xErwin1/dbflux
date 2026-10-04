@@ -1,9 +1,10 @@
 //! `PaneHandle` constructor for `DelimitedDocument`.
 
 use super::document::DelimitedDocument;
+use crate::dedup::DelimitedFileKey;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, PaneHandle};
+use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
@@ -17,119 +18,160 @@ impl DelimitedDocument {
             DocumentKind::Delimited,
             // render
             {
-                let e = entity.clone();
-                Box::new(move |_w, _cx| e.clone().into_any_element())
+                let entity = entity.clone();
+                Box::new(move |_window, _cx| entity.clone().into_any_element())
             },
             // focus
             {
-                let e = entity.clone();
-                Box::new(move |w, cx| e.update(cx, |d, cx| d.focus(w, cx)))
+                let entity = entity.clone();
+                Box::new(move |window, cx| {
+                    entity.update(cx, |document, cx| document.focus(window, cx))
+                })
             },
             // dispatch_command
             {
-                let e = entity.clone();
-                Box::new(move |cmd, w, cx| e.update(cx, |d, cx| d.dispatch_command(cmd, w, cx)))
+                let entity = entity.clone();
+                Box::new(move |command, window, cx| {
+                    entity.update(cx, |document, cx| {
+                        document.dispatch_command(command, window, cx)
+                    })
+                })
             },
             // meta_snapshot
             {
-                let e = entity.clone();
+                let entity = entity.clone();
                 Box::new(move |cx| {
-                    let d = e.read(cx);
+                    let document = entity.read(cx);
                     DocumentMetaSnapshot {
                         id,
                         kind: DocumentKind::Delimited,
-                        title: d.title(),
+                        title: document.title(),
                         icon: DocumentIcon::Table,
-                        state: d.state(),
+                        state: document.state(),
                         closable: true,
-                        connection_id: d.connection_id(),
+                        connection_id: document.connection_id(),
                     }
                 })
             },
             // tab_title
             {
-                let e = entity.clone();
-                Box::new(move |cx| e.read(cx).title())
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).title())
             },
             // can_close
             {
-                let e = entity.clone();
-                Box::new(move |cx| e.read(cx).can_close())
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).can_close())
             },
             // connection_id — the profile of an object, `None` for a local file
             {
-                let e = entity.clone();
-                Box::new(move |cx| e.read(cx).connection_id())
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).connection_id())
             },
             // active_context
             {
-                let e = entity.clone();
-                Box::new(move |cx| e.read(cx).active_context())
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).active_context())
             },
             // change_summary — `Some` while there are unsaved changes
             {
-                let e = entity.clone();
-                Box::new(move |cx| e.read(cx).change_summary())
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).change_summary())
             },
             // refresh_policy
             {
-                let e = entity.clone();
-                Box::new(move |cx| e.read(cx).refresh_policy())
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).refresh_policy())
             },
             // flush_auto_save — no auto-save
             Box::new(|_cx| {}),
             // set_active_tab
             {
-                let e = entity.clone();
-                Box::new(move |active, cx| e.update(cx, |d, _cx| d.set_active_tab(active)))
+                let entity = entity.clone();
+                Box::new(move |active, cx| {
+                    entity.update(cx, |document, _cx| document.set_active_tab(active))
+                })
             },
             // set_refresh_policy
             {
-                let e = entity.clone();
-                Box::new(move |policy, cx| e.update(cx, |d, cx| d.set_refresh_policy(policy, cx)))
+                let entity = entity.clone();
+                Box::new(move |policy, cx| {
+                    entity.update(cx, |document, cx| document.set_refresh_policy(policy, cx))
+                })
             },
             // matches_dedup_key — one tab per local path or per
             // (profile, bucket, key)
             {
-                let e = entity.clone();
+                let entity = entity.clone();
                 Box::new(move |key, cx| match key {
-                    DocumentKey::Delimited(file) => e.read(cx).file() == file,
+                    DocumentKey::Delimited(file) => entity.read(cx).file() == file,
                     _ => false,
                 })
             },
             // subscribe — DelimitedDocument emits DocumentEvent directly
             {
-                let e = entity.clone();
-                Box::new(move |cx, cb: BoxedDocEventCallback| {
-                    cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
+                let entity = entity.clone();
+                Box::new(move |cx, callback: BoxedDocEventCallback| {
+                    cx.subscribe(&entity, move |_, event: &DocumentEvent, cx| {
+                        callback(event, cx)
+                    })
                 })
             },
         );
 
         // The interrupted-close save: the tab closes once the save lands.
         pane.save_for_close = Some({
-            let e = entity.clone();
-            Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
+            let entity = entity.clone();
+            Box::new(move |_window, cx| {
+                entity.update(cx, |document, cx| document.save_for_close(cx))
+            })
         });
 
         // A value still in the cell editor, committed before a close or a
         // shutdown reads the pending changes.
         pane.commit_pending_input = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.update(cx, |d, cx| d.commit_pending_input(cx)))
+            let entity = entity.clone();
+            Box::new(move |cx| entity.update(cx, |document, cx| document.commit_pending_input(cx)))
         });
 
         // The Vim mode of the text view's editor.
         pane.key_context_entries = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.read(cx).key_context_entries(cx))
+            let entity = entity.clone();
+            Box::new(move |cx| entity.read(cx).key_context_entries(cx))
         });
 
         // The dialect and edit controls, which the pane actions menu
         // reaches from the keyboard.
         pane.pane_actions = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.read(cx).pane_actions(&e))
+            let entity = entity.clone();
+            Box::new(move |cx| entity.read(cx).pane_actions(&entity))
+        });
+
+        // The workspace session reopens a local file by its path, with the
+        // dialect detected again. An object is left out: it needs the live
+        // connection of its profile, which is not there at startup, and the
+        // object editor's tabs are left out for the same reason. Dialect
+        // overrides, the view and unsaved edits are not recorded.
+        pane.session_tab_snapshot = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| {
+                let document = entity.read(cx);
+
+                let DelimitedFileKey::Local { path } = document.file() else {
+                    return None;
+                };
+
+                Some(CodeSessionTabSnapshot {
+                    kind: DelimitedDocument::SESSION_TAB_KIND,
+                    id: document.id(),
+                    title: document.title(),
+                    language: dbflux_core::QueryLanguage::Sql,
+                    exec_ctx: dbflux_core::ExecutionContext::default(),
+                    file_path: Some(path.clone()),
+                    scratch_path: None,
+                    shadow_path: None,
+                })
+            })
         });
 
         pane

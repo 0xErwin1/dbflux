@@ -60,6 +60,7 @@ use super::toolbar::{DELIMITERS, DialectControls, QUOTES};
 use crate::dedup::DelimitedFileKey;
 use crate::handle::DocumentEvent;
 use crate::object_text::db_error_to_user_facing;
+use crate::pane::ObjectSavedCallback;
 use crate::types::{DocumentId, DocumentState};
 
 /// How many leading bytes dialect detection looks at: enough records for the
@@ -474,6 +475,11 @@ pub struct DelimitedDocument {
     /// that lands also asks the workspace to close the tab.
     pub(super) close_after_save: bool,
 
+    /// Told the object's key after each save that replaced the object, so
+    /// the object browser that opened it refreshes its view of that object.
+    /// `None` for a local file and for an object opened without one.
+    pub(super) on_object_saved: Option<ObjectSavedCallback>,
+
     /// Set when the first page arrives, so the next render hands the keyboard
     /// to the table if the loading notice held it.
     pending_table_focus: bool,
@@ -508,6 +514,9 @@ pub struct DelimitedDocument {
 impl EventEmitter<DocumentEvent> for DelimitedDocument {}
 
 impl DelimitedDocument {
+    /// The `tab_kind` a local file is recorded under in the workspace session.
+    pub const SESSION_TAB_KIND: &'static str = "Delimited";
+
     /// Opens the local file at `path`.
     pub fn open_local(path: PathBuf, cx: &mut Context<Self>) -> Self {
         Self::open_local_with(path, READER_OPTIONS, cx)
@@ -592,6 +601,7 @@ impl DelimitedDocument {
             phase: DelimitedPhase::Loading,
             saving: false,
             close_after_save: false,
+            on_object_saved: None,
             pending_table_focus: false,
             cell_editor: None,
             pending_cell_edit: None,
@@ -609,6 +619,12 @@ impl DelimitedDocument {
 
     pub fn id(&self) -> DocumentId {
         self.id
+    }
+
+    /// Sets what is told the object's key after each save that replaces the
+    /// object. Only an object's saves call it.
+    pub fn set_on_object_saved(&mut self, on_saved: ObjectSavedCallback) {
+        self.on_object_saved = Some(on_saved);
     }
 
     /// The identity this file is deduplicated by.
@@ -1660,6 +1676,15 @@ pub(super) fn extension_hint(file_name: &str) -> Option<&str> {
     Path::new(file_name)
         .extension()
         .and_then(|extension| extension.to_str())
+}
+
+/// Whether the file or object at `path` opens in this document: its name
+/// ends in `.csv` or `.tsv`, in any letter case. An object key is passed as a
+/// path, so its `/`-separated last component is the name.
+pub fn is_delimited_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("csv") || extension.eq_ignore_ascii_case("tsv")
+    })
 }
 
 /// Whether a sample of `sample_length` bytes read from the start of a source

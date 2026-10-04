@@ -1110,7 +1110,9 @@ impl Workspace {
                     this.new_query_tab_with_content(query.clone(), window, cx);
                 }
                 SidebarEvent::OpenScript { path } => {
-                    if dbflux_core::is_openable_script(path) {
+                    if dbflux_core::is_openable_script(path)
+                        || crate::ui::document::delimited::is_delimited_path(path)
+                    {
                         this.open_script_from_path(path.clone(), cx);
                     } else {
                         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");

@@ -267,8 +267,9 @@ fn a_file_that_cannot_be_saved_in_place_opens_read_only(cx: &mut TestAppContext)
     assert!(!is_dirty(&document, window));
 }
 
-/// A cell over the inline limit asks for a modal editor, which a later unit
-/// adds. Until then the request opens nothing and stages nothing.
+/// A cell over the inline limit, or one holding a line break, asks for the
+/// modal editor instead of opening an inline one. Asking stages nothing: the
+/// file stays clean until the modal editor applies a value.
 #[gpui::test]
 fn a_long_or_multi_line_cell_asks_for_a_modal_editor_and_stages_nothing(cx: &mut TestAppContext) {
     let long = "x".repeat(150);
@@ -374,9 +375,9 @@ fn one_typed_cell_saves_only_its_record_and_reopens_clean(cx: &mut TestAppContex
     assert_eq!(cities, "Cusco");
 }
 
-/// Both edits were lost before U5a: the table compared display text, which
-/// collapses whitespace and cuts long values. The writer quotes a field that
-/// ends in a space, so a reader that trims fields keeps it.
+/// The table's display text collapses whitespace and cuts long values, so a
+/// save that compared display text would lose both edits. The writer quotes a
+/// field that ends in a space, so a reader that trims fields keeps it.
 #[gpui::test]
 fn a_whitespace_edit_and_a_tail_edit_of_a_long_value_are_saved(cx: &mut TestAppContext) {
     let long = "x".repeat(250);
@@ -1052,6 +1053,53 @@ fn a_refused_object_save_is_audited_as_a_failure_and_keeps_the_edits(cx: &mut Te
         save_audit_events(&app_state, window, "object_edit_save_failed").len(),
         1
     );
+}
+
+/// The keys the opener of `document` was told were saved.
+fn record_saved_keys(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> Rc<RefCell<Vec<String>>> {
+    let saved_keys = Rc::new(RefCell::new(Vec::new()));
+
+    window.update(|_, cx| {
+        document.update(cx, |document, _cx| {
+            let saved_keys = saved_keys.clone();
+
+            document.set_on_object_saved(Rc::new(move |key: &str, _cx: &mut gpui::App| {
+                saved_keys.borrow_mut().push(key.to_string());
+            }));
+        });
+    });
+
+    saved_keys
+}
+
+#[gpui::test]
+fn an_object_save_tells_its_opener_once_with_the_key(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (document, _app_state, window) = open_object(cx, connection.clone());
+    let saved_keys = record_saved_keys(&document, window);
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+    save(&document, window);
+
+    assert_eq!(*saved_keys.borrow(), [KEY]);
+}
+
+#[gpui::test]
+fn a_refused_object_save_does_not_tell_its_opener(cx: &mut TestAppContext) {
+    let connection = FakeConnection::with_object(CITIES);
+    let (document, _app_state, window) = open_object(cx, connection.clone());
+    let saved_keys = record_saved_keys(&document, window);
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+    connection
+        .store
+        .fail_uploads_with("AccessDenied: no write permission");
+    save(&document, window);
+
+    assert!(saved_keys.borrow().is_empty());
 }
 
 // -- Dialect, discard and close -----------------------------------------------

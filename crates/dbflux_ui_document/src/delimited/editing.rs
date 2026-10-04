@@ -826,14 +826,28 @@ impl DelimitedDocument {
             return;
         }
 
+        let Some(edit_set) = self.prepare_save(cx) else {
+            return;
+        };
+
+        self.start_save(edit_set, cx);
+    }
+
+    /// Runs every check a save needs before it writes: applies the text view's
+    /// edit, commits the inline editor, refuses while the rest of the file
+    /// loads or a reread runs, builds the edit set and resolves the live
+    /// connection. Returns the edit set to write, or `None` once the outcome
+    /// has been reported: a clean document reports a success, every refusal a
+    /// failure.
+    fn prepare_save(&mut self, cx: &mut Context<Self>) -> Option<EditSet> {
         if !self.apply_text(cx) {
             self.report_save_outcome(false, cx);
-            return;
+            return None;
         }
 
         let Some(table_state) = self.loaded().map(|loaded| loaded.table_state.clone()) else {
             self.report_save_outcome(false, cx);
-            return;
+            return None;
         };
 
         table_state.update(cx, |state, cx| {
@@ -845,7 +859,7 @@ impl DelimitedDocument {
 
         if !self.is_dirty() {
             self.report_save_outcome(true, cx);
-            return;
+            return None;
         }
 
         let title = self.title();
@@ -862,7 +876,7 @@ impl DelimitedDocument {
                 cx,
             );
             self.report_save_outcome(false, cx);
-            return;
+            return None;
         }
 
         // The edits belong to rows the running reread replaces, and the
@@ -876,12 +890,12 @@ impl DelimitedDocument {
                 cx,
             );
             self.report_save_outcome(false, cx);
-            return;
+            return None;
         }
 
         let Some(edit_set) = self.edit_set(cx) else {
             self.report_save_outcome(false, cx);
-            return;
+            return None;
         };
 
         let edit_set = match edit_set {
@@ -890,7 +904,7 @@ impl DelimitedDocument {
             Err(error) => {
                 report_error(page_model_save_error(&title, &error), cx);
                 self.report_save_outcome(false, cx);
-                return;
+                return None;
             }
         };
 
@@ -898,9 +912,17 @@ impl DelimitedDocument {
 
         if self.use_live_connection(summary, cx).is_err() {
             self.report_save_outcome(false, cx);
-            return;
+            return None;
         }
 
+        Some(edit_set)
+    }
+
+    /// Captures what the save reads from the loaded file, marks the document
+    /// as saving, and writes `edit_set` and reads the file again in the
+    /// background. The result is recorded in the audit log when the save is
+    /// audited, and applied to the document if it is still open.
+    fn start_save(&mut self, edit_set: EditSet, cx: &mut Context<Self>) {
         let Some(loaded) = self.loaded() else {
             self.report_save_outcome(false, cx);
             return;
@@ -1047,6 +1069,7 @@ impl DelimitedDocument {
                 }
 
                 self.show_saved_file(*reopened, cx);
+                self.notify_object_saved(cx);
                 true
             }
         };
@@ -1078,6 +1101,18 @@ impl DelimitedDocument {
 
                 self.phase = DelimitedPhase::Failed(cause);
             }
+        }
+    }
+
+    /// Tells the opener of an object that a save replaced it. A local file
+    /// has no opener to tell.
+    fn notify_object_saved(&self, cx: &mut App) {
+        let DelimitedFileKey::Object { key, .. } = self.file() else {
+            return;
+        };
+
+        if let Some(on_saved) = self.on_object_saved.clone() {
+            on_saved(key, cx);
         }
     }
 

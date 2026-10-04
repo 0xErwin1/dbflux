@@ -396,6 +396,68 @@ fn edited_middle<'a>(
     dialect: &Dialect,
     before: &'a [Cow<'a, [String]>],
 ) -> Result<Option<EditedRecords<'a>>, TextEditError> {
+    let bounds = middle_bounds(layout, rendered, edited);
+
+    let Some(middle) = edited.get(bounds.middle_start..bounds.new_middle_end) else {
+        return Ok(None);
+    };
+
+    let parsed = parse_text(middle, dialect)
+        .map_err(|error| parse_error(edited, bounds.middle_start, error))?;
+
+    let suffix = rendered.get(bounds.old_middle_end..).unwrap_or_default();
+
+    let reads_on_its_own = match parsed.last() {
+        _ if bounds.kept_end == 0 => true,
+
+        Some(last) => {
+            let text = middle.get(last.text_range.clone()).unwrap_or_default();
+
+            !last.ends_inside_quotes
+                && (text.ends_with('\n') || (text.ends_with('\r') && !suffix.starts_with('\n')))
+        }
+
+        None => {
+            let prefix = rendered.get(..bounds.middle_start).unwrap_or_default();
+            !(prefix.ends_with('\r') && suffix.starts_with('\n'))
+        }
+    };
+
+    if !reads_on_its_own {
+        return Ok(None);
+    }
+
+    Ok(Some(EditedRecords {
+        records: join_records(layout, before, &bounds, parsed),
+        kept_start: bounds.kept_start,
+        kept_end: bounds.kept_end,
+    }))
+}
+
+/// How [`edited_middle`] splits the rendered and the edited text: the
+/// rendered records kept at the start and at the end, and the bytes between
+/// them in each text.
+struct MiddleBounds {
+    /// How many rendered records at the start are kept.
+    kept_start: usize,
+
+    /// How many rendered records at the end are kept.
+    kept_end: usize,
+
+    /// The first byte of the part between, the same in both texts.
+    middle_start: usize,
+
+    /// The end of the part between in the rendered text.
+    old_middle_end: usize,
+
+    /// The end of the part between in the edited text.
+    new_middle_end: usize,
+}
+
+/// The records of `layout` that [`edited_middle`] keeps at the start and at
+/// the end of `edited`, found from the bytes `rendered` and `edited` start
+/// and end with, and the part of each text between them.
+fn middle_bounds(layout: &TextLayout, rendered: &str, edited: &str) -> MiddleBounds {
     let records = &layout.records;
 
     let common_prefix = rendered
@@ -439,34 +501,26 @@ fn edited_middle<'a>(
         .map_or(rendered.len(), |record| record.text.start);
     let new_middle_end = edited.len() - (rendered.len() - old_middle_end);
 
-    let Some(middle) = edited.get(middle_start..new_middle_end) else {
-        return Ok(None);
-    };
-
-    let parsed =
-        parse_text(middle, dialect).map_err(|error| parse_error(edited, middle_start, error))?;
-
-    let suffix = rendered.get(old_middle_end..).unwrap_or_default();
-
-    let reads_on_its_own = match parsed.last() {
-        _ if kept_end == 0 => true,
-
-        Some(last) => {
-            let text = middle.get(last.text_range.clone()).unwrap_or_default();
-
-            !last.ends_inside_quotes
-                && (text.ends_with('\n') || (text.ends_with('\r') && !suffix.starts_with('\n')))
-        }
-
-        None => {
-            let prefix = rendered.get(..middle_start).unwrap_or_default();
-            !(prefix.ends_with('\r') && suffix.starts_with('\n'))
-        }
-    };
-
-    if !reads_on_its_own {
-        return Ok(None);
+    MiddleBounds {
+        kept_start,
+        kept_end,
+        middle_start,
+        old_middle_end,
+        new_middle_end,
     }
+}
+
+/// The records of the edited text in order: the kept rendered records at
+/// the start, with the fields `before` holds, then `parsed`, the records of
+/// the part between, then the kept rendered records at the end, moved by
+/// how much the part between grew or shrank.
+fn join_records<'a>(
+    layout: &TextLayout,
+    before: &'a [Cow<'a, [String]>],
+    bounds: &MiddleBounds,
+    parsed: Vec<dbflux_delimited::TextRecord>,
+) -> Vec<EditedRecord<'a>> {
+    let records = &layout.records;
 
     let kept = |index: usize, shift: isize| {
         let record = records.get(index)?;
@@ -482,14 +536,16 @@ fn edited_middle<'a>(
         })
     };
 
-    let shift = isize::try_from(new_middle_end).unwrap_or(isize::MAX)
-        - isize::try_from(old_middle_end).unwrap_or(isize::MAX);
+    let shift = isize::try_from(bounds.new_middle_end).unwrap_or(isize::MAX)
+        - isize::try_from(bounds.old_middle_end).unwrap_or(isize::MAX);
 
-    let mut all = Vec::with_capacity(kept_start + parsed.len() + kept_end);
+    let mut all = Vec::with_capacity(bounds.kept_start + parsed.len() + bounds.kept_end);
 
-    for index in 0..kept_start {
+    for index in 0..bounds.kept_start {
         all.extend(kept(index, 0));
     }
+
+    let middle_start = bounds.middle_start;
 
     all.extend(parsed.into_iter().map(|record| EditedRecord {
         fields: Cow::Owned(record.fields),
@@ -497,15 +553,11 @@ fn edited_middle<'a>(
         ends_inside_quotes: record.ends_inside_quotes,
     }));
 
-    for index in records.len() - kept_end..records.len() {
+    for index in records.len() - bounds.kept_end..records.len() {
         all.extend(kept(index, shift));
     }
 
-    Ok(Some(EditedRecords {
-        records: all,
-        kept_start,
-        kept_end,
-    }))
+    all
 }
 
 /// The error of a text the reader cannot read: `text` from byte `start` of
