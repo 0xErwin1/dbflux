@@ -22,6 +22,11 @@
 - `r`은 스키마를 새로고침하고, `d`는 활성 연결을 끊습니다.
 - `m`은 선택한 항목의 상황에 맞는 메뉴를 엽니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">
+  <img src="../images/schema-browser/tree-light.webp" alt="PostgreSQL 연결의 사이드바 스키마 트리. 테이블 하나가 열, 인덱스, 제약 조건까지 펼쳐져 있습니다">
+</picture>
+
 ## 외부 스크립트 폴더
 
 Scripts 보기에서는 여러 프로젝트가 공유하는 SQL 파일 저장소처럼 DBFlux 자체 스크립트 폴더 밖에 있는 스크립트를 복사하지 않고 나열할 수 있습니다. Scripts 보기의 `+` 메뉴에서 **외부 폴더 추가**를 선택하거나 명령 팔레트에서 **외부 스크립트 폴더 추가…**를 실행한 뒤 폴더를 고릅니다.
@@ -63,6 +68,11 @@ SQLite, SQL Server)은 테이블과 외래 키를 다이어그램으로 그릴 �
 실행되며 작업 패널에서 취소할 수 있습니다. 각 테이블은 `PK`, `FK`, `NN`(not
 null) 배지와 함께 열을 나열하고, 선은 각 외래 키를 그 키가 참조하는 테이블에
 연결합니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/diagram-dark.webp">
+  <img src="../images/schema-browser/diagram-light.webp" alt="PostgreSQL 데이터베이스의 스키마 다이어그램. 테이블 네 개와 각 외래 키에서 참조하는 테이블로 이어지는 선이 보입니다">
+</picture>
 
 | 도구 모음 컨트롤 | 동작 |
 |---|---|

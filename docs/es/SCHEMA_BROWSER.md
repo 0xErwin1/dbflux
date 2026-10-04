@@ -30,6 +30,11 @@ pantalla contrae el sidebar.
 - `r` refresca el schema; `d` desconecta la conexión activa.
 - `m` abre el menú contextual del elemento seleccionado.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">
+  <img src="../images/schema-browser/tree-light.webp" alt="El árbol del schema en el sidebar para una conexión PostgreSQL, con una tabla expandida hasta sus columnas, índices y restricciones">
+</picture>
+
 ## Carpetas externas de scripts
 
 La vista Scripts puede listar scripts que están fuera de la carpeta de scripts
@@ -107,6 +112,11 @@ cambia a esa pestaña. La carga se ejecuta como una tarea en segundo plano
 ("Diagrama de esquema: _base de datos_") que puedes cancelar desde el panel
 Tasks. Cada tabla lista sus columnas con las insignias `PK`, `FK` y `NN` (not
 null), y unas líneas conectan cada clave foránea con la tabla que referencia.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/diagram-dark.webp">
+  <img src="../images/schema-browser/diagram-light.webp" alt="El diagrama de esquema de una base de datos PostgreSQL, con cuatro tablas y líneas desde cada clave foránea hasta la tabla a la que referencia">
+</picture>
 
 | Control de la toolbar | Qué hace |
 |---|---|

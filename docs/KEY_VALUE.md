@@ -3,6 +3,11 @@
 A key-value database opens as a key browser: the key list on the left, the
 value of the selected key on the right, and a command console underneath.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/key-value/browser-dark.webp">
+  <img src="images/key-value/browser-light.webp" alt="The key browser of a Redis database, with keys grouped into folders and the fields of a selected hash">
+</picture>
+
 - **Key list.** Keys load a page at a time; **Load more** (`Ctrl+J`) continues
   the scan and the footer reads "Loaded N of total" against the database's key
   count. **Tree** groups keys into folders by the connection's namespace
@@ -31,6 +36,12 @@ value of the selected key on the right, and a command console underneath.
   newest or oldest first, with one column per field and the consumer groups
   beside them: readers, pending entries, last delivered ID, and **Claim** to
   move pending entries to another reader.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/key-value/sorted-set-dark.webp">
+  <img src="images/key-value/sorted-set-light.webp" alt="A Redis sorted set in the key browser, ranked by score with a bar relative to the top score">
+</picture>
+
 - **Bulk delete.** **Bulk actions → Delete keys matching the pattern** scans the
   whole database for the current pattern and type, lists the first matches with
   the total, and asks you to type the pattern back. **Export keys first** saves

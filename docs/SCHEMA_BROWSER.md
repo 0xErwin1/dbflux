@@ -26,6 +26,11 @@ from the rail collapses the sidebar.
 - `r` refreshes the schema; `d` disconnects the active connection.
 - `m` opens the context menu for the selected item.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/schema-browser/tree-dark.webp">
+  <img src="images/schema-browser/tree-light.webp" alt="The sidebar schema tree of a PostgreSQL connection, with a table expanded to its columns, indexes and constraints">
+</picture>
+
 ## External scripts folders
 
 The Scripts view can list scripts that live outside DBFlux's own scripts
@@ -99,6 +104,11 @@ that tab. Loading runs as a background task ("Schema diagram: _database_") that
 you can cancel from the Tasks panel. Each table lists its columns with `PK`,
 `FK`, and `NN` (not null) badges, and lines connect each foreign key to the
 table it references.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/schema-browser/diagram-dark.webp">
+  <img src="images/schema-browser/diagram-light.webp" alt="The schema diagram of a PostgreSQL database, with four tables and lines from each foreign key to the table it references">
+</picture>
 
 | Toolbar control | What it does |
 |---|---|

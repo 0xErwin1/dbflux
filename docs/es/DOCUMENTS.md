@@ -7,10 +7,21 @@ que elijas se mantiene en la pestaña entre páginas y actualizaciones. La tabla
 muestra primero `_id` y después los campos en el orden en que los devuelve la
 página.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/collection-dark.webp">
+  <img src="../images/documents/collection-light.webp" alt="Una colección de MongoDB abierta en la vista Árbol, con un nodo plegado por documento">
+</picture>
+
 - Un objeto anidado muestra su número de campos y un arreglo su longitud. `e`
   sobre una columna de objeto la expande en su lugar en un grupo de columnas;
   `Enter` sobre un objeto o arreglo entra en él y lista su contenido como filas,
   con una ruta de navegación; `Backspace` sale.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/tree-view-dark.webp">
+  <img src="../images/documents/tree-view-light.webp" alt="La vista Árbol con un documento expandido, que muestra objetos anidados con su número de campos y un array con su longitud">
+</picture>
+
 - El pie cuenta documentos. Cuando el driver solo puede estimar cuántos
   documentos coinciden, el conteo se marca como estimado.
 - Los drivers que lo soportan (MongoDB) añaden una barra de consulta con cuatro
