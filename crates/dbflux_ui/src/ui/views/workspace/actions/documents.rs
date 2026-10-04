@@ -1,11 +1,45 @@
 use super::*;
+use crate::ui::document::file_format::{FileDocumentFormat, file_document_format};
 use crate::ui::document::pane::CloseDisposition;
+use crate::ui::document::{FileDocumentKey, ObjectSavedCallback};
 use crate::ui::labels::{
     NoActiveConnectionKind, documents_default_title, documents_no_active_connection_message,
 };
 use dbflux_ui_base::app_state_entity::rescan_script_root_in_background;
 
 impl Workspace {
+    /// Opens a data file or object in the document for its format, or focuses
+    /// the tab that already shows it. This is the one place that maps a
+    /// [`FileDocumentFormat`] to a document; callers check
+    /// [`file_document_format`] first and route here.
+    ///
+    /// `on_object_saved` is told an object's key after each save that
+    /// replaces it.
+    pub(in crate::ui::views::workspace) fn open_file_document(
+        &mut self,
+        file: FileDocumentKey,
+        on_object_saved: Option<ObjectSavedCallback>,
+        cx: &mut Context<Self>,
+    ) {
+        let name = match &file {
+            FileDocumentKey::Local { path } => path.as_path(),
+            FileDocumentKey::Object { key, .. } => std::path::Path::new(key),
+        };
+
+        match file_document_format(name) {
+            Some(FileDocumentFormat::Delimited) => {
+                self.open_delimited_file(file, on_object_saved, cx);
+            }
+
+            None => {
+                log::warn!(
+                    "Not opening {:?} as a file document: its format is not recognized",
+                    name
+                );
+            }
+        }
+    }
+
     /// Opens a table in a new DataDocument tab, or focuses the existing one.
     pub(in crate::ui::views::workspace) fn open_table_document(
         &mut self,
@@ -458,11 +492,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A CSV or TSV object opens as a table that reads it in pages, so it
+        // A data file object opens as a table that reads it in pages, so it
         // is not held to the preview size limit the object editor applies.
-        if crate::ui::document::delimited::is_delimited_path(std::path::Path::new(&request.key)) {
-            self.open_delimited_file(
-                crate::ui::document::DelimitedFileKey::Object {
+        let opens_as_file_document =
+            file_document_format(std::path::Path::new(&request.key)).is_some();
+
+        if opens_as_file_document {
+            self.open_file_document(
+                FileDocumentKey::Object {
                     profile_id,
                     bucket: request.bucket,
                     key: request.key,

@@ -50,7 +50,7 @@ use super::document::{
 use super::page_model::PageModelError;
 use super::save::{SaveOutcome, check_local_save, save_edited, verify_version};
 use super::source::{DelimitedLocation, StorageError, read_version};
-use crate::dedup::DelimitedFileKey;
+use crate::dedup::FileDocumentKey;
 use crate::handle::DocumentEvent;
 use crate::object_text::record_save_audit;
 use crate::pane::{PaneAction, QuitDisposition};
@@ -1061,7 +1061,7 @@ impl DelimitedDocument {
             return QuitDisposition::Clean;
         }
 
-        let local_save_goes_through = matches!(self.file(), DelimitedFileKey::Local { .. })
+        let local_save_goes_through = matches!(self.file(), FileDocumentKey::Local { .. })
             && self.local_save_goes_through_now(cx);
 
         if local_save_goes_through {
@@ -1142,9 +1142,9 @@ impl DelimitedDocument {
             let pending = self.is_dirty() && !self.saving && !self.discarded_for_quit;
 
             match self.file() {
-                DelimitedFileKey::Local { .. } if pending => self.start_save(false, cx),
+                FileDocumentKey::Local { .. } if pending => self.start_save(false, cx),
 
-                DelimitedFileKey::Object { bucket, key, .. } if pending => {
+                FileDocumentKey::Object { bucket, key, .. } if pending => {
                     let object = format!("{bucket}/{key}");
 
                     log::warn!(
@@ -1173,7 +1173,7 @@ impl DelimitedDocument {
 
     /// Where an object's save is audited. `None` for a local file.
     fn save_audit(&self, cx: &App) -> Option<SaveAudit> {
-        let DelimitedFileKey::Object {
+        let FileDocumentKey::Object {
             profile_id,
             bucket,
             key,
@@ -1266,7 +1266,7 @@ impl DelimitedDocument {
     /// Tells the opener of an object that a save replaced it. A local file
     /// has no opener to tell.
     fn notify_object_saved(&self, cx: &mut App) {
-        let DelimitedFileKey::Object { key, .. } = self.file() else {
+        let FileDocumentKey::Object { key, .. } = self.file() else {
             return;
         };
 

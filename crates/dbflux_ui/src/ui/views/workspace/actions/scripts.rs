@@ -1,5 +1,6 @@
 use super::*;
-use crate::ui::document::DelimitedFileKey;
+use crate::ui::document::FileDocumentKey;
+use crate::ui::document::file_format::{file_document_extensions, file_document_format};
 use crate::ui::labels::{
     documents_default_title, scripts_filter_all_files_label, scripts_filter_delimited_label,
     scripts_filter_javascript_mongodb_label, scripts_filter_redis_label, scripts_filter_sql_label,
@@ -27,7 +28,7 @@ impl Workspace {
                 .add_filter(&sql_filter_label, &["sql"])
                 .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
                 .add_filter(&redis_filter_label, &["redis", "red"])
-                .add_filter(&delimited_filter_label, &["csv", "tsv"])
+                .add_filter(&delimited_filter_label, file_document_extensions())
                 .add_filter(&all_files_filter_label, &["*"])
                 .pick_file()
                 .await;
@@ -61,8 +62,8 @@ impl Workspace {
     /// delimited document. Every other file opens in the code editor, or
     /// focuses the tab that already shows it.
     pub fn open_script_from_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        if crate::ui::document::delimited::is_delimited_path(&path) {
-            self.open_delimited_file(DelimitedFileKey::Local { path }, None, cx);
+        if file_document_format(&path).is_some() {
+            self.open_file_document(FileDocumentKey::Local { path }, None, cx);
             return;
         }
 

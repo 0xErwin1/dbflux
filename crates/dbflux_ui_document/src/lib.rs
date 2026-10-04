@@ -29,6 +29,7 @@ mod syntax_runs;
 mod governance;
 
 pub mod export_wizard;
+pub mod file_format;
 mod handle;
 pub mod history_panel;
 pub mod import_wizard;
@@ -72,7 +73,7 @@ pub use dump_analysis::DumpAnalysisDocument;
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;
 
-pub use dedup::{DelimitedFileKey, DocumentKey};
+pub use dedup::{DocumentKey, FileDocumentKey};
 pub use delimited::DelimitedDocument;
 pub use handle::DocumentEvent;
 pub use key_value::KeyValueDocument;

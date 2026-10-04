@@ -57,7 +57,7 @@ use super::source::{DelimitedLocation, DelimitedSource, SourceVersion, StorageEr
 use super::text::{MAX_TEXT_BYTES, SourceSpan};
 use super::text_view::TextViewState;
 use super::toolbar::{DELIMITERS, DialectControls, QUOTES};
-use crate::dedup::DelimitedFileKey;
+use crate::dedup::FileDocumentKey;
 use crate::handle::DocumentEvent;
 use crate::object_text::db_error_to_user_facing;
 use crate::pane::ObjectSavedCallback;
@@ -456,7 +456,7 @@ pub struct DelimitedDocument {
     id: DocumentId,
     focus_handle: FocusHandle,
     is_active_tab: bool,
-    file: DelimitedFileKey,
+    file: FileDocumentKey,
     pub(super) location: DelimitedLocation,
 
     /// The application state the live connection of an object's profile is
@@ -543,7 +543,7 @@ impl DelimitedDocument {
         reader_options: ReaderOptions,
         cx: &mut Context<Self>,
     ) -> Self {
-        let file = DelimitedFileKey::Local { path: path.clone() };
+        let file = FileDocumentKey::Local { path: path.clone() };
         let location = DelimitedLocation::Local { path };
 
         Self::open(file, location, None, reader_options, cx)
@@ -583,7 +583,7 @@ impl DelimitedDocument {
         reader_options: ReaderOptions,
         cx: &mut Context<Self>,
     ) -> Self {
-        let file = DelimitedFileKey::Object {
+        let file = FileDocumentKey::Object {
             profile_id,
             bucket: bucket.clone(),
             key: key.clone(),
@@ -598,7 +598,7 @@ impl DelimitedDocument {
     }
 
     fn open(
-        file: DelimitedFileKey,
+        file: FileDocumentKey,
         location: DelimitedLocation,
         app_state: Option<Entity<AppStateEntity>>,
         reader_options: ReaderOptions,
@@ -645,7 +645,7 @@ impl DelimitedDocument {
     }
 
     /// The identity this file is deduplicated by.
-    pub fn file(&self) -> &DelimitedFileKey {
+    pub fn file(&self) -> &FileDocumentKey {
         &self.file
     }
 
@@ -653,12 +653,12 @@ impl DelimitedDocument {
     /// key.
     pub fn title(&self) -> String {
         match &self.file {
-            DelimitedFileKey::Local { path } => path
+            FileDocumentKey::Local { path } => path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string()),
 
-            DelimitedFileKey::Object { key, .. } => object_leaf(key).to_string(),
+            FileDocumentKey::Object { key, .. } => object_leaf(key).to_string(),
         }
     }
 
@@ -684,8 +684,8 @@ impl DelimitedDocument {
     /// file.
     pub fn connection_id(&self) -> Option<uuid::Uuid> {
         match &self.file {
-            DelimitedFileKey::Local { .. } => None,
-            DelimitedFileKey::Object { profile_id, .. } => Some(*profile_id),
+            FileDocumentKey::Local { .. } => None,
+            FileDocumentKey::Object { profile_id, .. } => Some(*profile_id),
         }
     }
 
@@ -964,8 +964,8 @@ impl DelimitedDocument {
     /// The extension of the file name, which hints at the delimiter.
     fn extension(&self) -> Option<String> {
         let file_name = match &self.file {
-            DelimitedFileKey::Local { path } => path.file_name()?.to_string_lossy().into_owned(),
-            DelimitedFileKey::Object { key, .. } => object_leaf(key).to_string(),
+            FileDocumentKey::Local { path } => path.file_name()?.to_string_lossy().into_owned(),
+            FileDocumentKey::Object { key, .. } => object_leaf(key).to_string(),
         };
 
         extension_hint(&file_name).map(str::to_string)
@@ -1247,7 +1247,7 @@ impl DelimitedDocument {
         summary: String,
         cx: &mut Context<Self>,
     ) -> Result<Option<Arc<dyn Connection>>, ConnectionUnavailable> {
-        let DelimitedFileKey::Object { profile_id, .. } = &self.file else {
+        let FileDocumentKey::Object { profile_id, .. } = &self.file else {
             return Ok(None);
         };
 
@@ -1692,15 +1692,6 @@ pub(super) fn extension_hint(file_name: &str) -> Option<&str> {
     Path::new(file_name)
         .extension()
         .and_then(|extension| extension.to_str())
-}
-
-/// Whether the file or object at `path` opens in this document: its name
-/// ends in `.csv` or `.tsv`, in any letter case. An object key is passed as a
-/// path, so its `/`-separated last component is the name.
-pub fn is_delimited_path(path: &Path) -> bool {
-    path.extension().is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("csv") || extension.eq_ignore_ascii_case("tsv")
-    })
 }
 
 /// Whether a sample of `sample_length` bytes read from the start of a source
