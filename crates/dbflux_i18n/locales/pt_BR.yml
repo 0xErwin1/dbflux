@@ -190,6 +190,39 @@ components:
     apply: "Aplicar"
     no_match: "Nenhuma coluna corresponde à busca"
     hint: "Espaço alterna a seleção · Enter aplica · Esc descarta"
+  column_profile:
+    filter_placeholder: "Filtrar colunas"
+    sort:
+      table_order: "Ordem: da tabela"
+      size: "Ordem: tamanho"
+      name: "Ordem: nome"
+    source:
+      file_footer: "Tamanhos do rodapé do arquivo"
+    header:
+      column: "Coluna"
+      codec: "Codec"
+      on_disk: "Em disco"
+      ratio: "Taxa"
+      share: "Parte da tabela"
+      distinct: "Distintos"
+      nulls: "Nulos"
+      distribution: "Distribuição"
+    footer:
+      counts: "%{total} colunas · %{shown} exibidas em Dados"
+      hint: "Alterne uma coluna para adicioná-la à projeção de Dados ou removê-la"
+    loading: "Lendo estatísticas das colunas…"
+    empty: "Esta tabela não tem colunas"
+    no_match: "Nenhuma coluna corresponde ao filtro"
+    error_title: "Não foi possível ler as estatísticas das colunas"
+    badge:
+      sort_key: "Chave de ordenação"
+      partition_key: "Chave de partição"
+  read_estimate:
+    lead: "Vai ler"
+    row_groups: "%{touched} de %{total} grupos de linhas"
+    more:
+      one: "+%{count} a mais"
+      many: "+%{count} a mais"
 composites:
   rail:
     add: "Adicionar"

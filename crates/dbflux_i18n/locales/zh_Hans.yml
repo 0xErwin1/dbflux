@@ -190,6 +190,39 @@ components:
     apply: "应用"
     no_match: "没有与搜索匹配的列"
     hint: "空格切换 · Enter 应用 · Esc 放弃"
+  column_profile:
+    filter_placeholder: "筛选列"
+    sort:
+      table_order: "排序：表顺序"
+      size: "排序：大小"
+      name: "排序：名称"
+    source:
+      file_footer: "大小来自文件尾部"
+    header:
+      column: "列"
+      codec: "编码"
+      on_disk: "磁盘占用"
+      ratio: "压缩比"
+      share: "占表比例"
+      distinct: "不同值"
+      nulls: "空值"
+      distribution: "分布"
+    footer:
+      counts: "%{total} 列 · 数据中显示 %{shown} 列"
+      hint: "切换某列即可将其加入或移出数据投影"
+    loading: "正在读取列统计信息…"
+    empty: "此表没有列"
+    no_match: "没有与筛选匹配的列"
+    error_title: "无法读取列统计信息"
+    badge:
+      sort_key: "排序键"
+      partition_key: "分区键"
+  read_estimate:
+    lead: "将读取"
+    row_groups: "%{total} 个行组中的 %{touched} 个"
+    more:
+      one: "另外 %{count} 个"
+      many: "另外 %{count} 个"
 composites:
   rail:
     add: "添加"

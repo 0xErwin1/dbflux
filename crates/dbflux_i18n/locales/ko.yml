@@ -190,6 +190,39 @@ components:
     apply: "적용"
     no_match: "검색과 일치하는 열이 없습니다"
     hint: "Space 전환 · Enter 적용 · Esc 취소"
+  column_profile:
+    filter_placeholder: "열 필터"
+    sort:
+      table_order: "정렬: 테이블 순서"
+      size: "정렬: 크기"
+      name: "정렬: 이름"
+    source:
+      file_footer: "파일 푸터의 크기"
+    header:
+      column: "열"
+      codec: "코덱"
+      on_disk: "디스크 크기"
+      ratio: "압축률"
+      share: "테이블 비율"
+      distinct: "고유값"
+      nulls: "NULL"
+      distribution: "분포"
+    footer:
+      counts: "%{total}개 열 · 데이터에 %{shown}개 표시"
+      hint: "열을 전환해 데이터 프로젝션에 추가하거나 제거합니다"
+    loading: "열 통계를 읽는 중…"
+    empty: "이 테이블에는 열이 없습니다"
+    no_match: "필터와 일치하는 열이 없습니다"
+    error_title: "열 통계를 읽을 수 없습니다"
+    badge:
+      sort_key: "정렬 키"
+      partition_key: "파티션 키"
+  read_estimate:
+    lead: "읽을 양"
+    row_groups: "행 그룹 %{total}개 중 %{touched}개"
+    more:
+      one: "외 %{count}개"
+      many: "외 %{count}개"
 composites:
   rail:
     add: "추가"
