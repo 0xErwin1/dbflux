@@ -16,10 +16,11 @@ use dbflux_core::{ColumnBadge, ColumnProfile, ColumnProjection, ProfileSource, T
 use gpui::prelude::*;
 use gpui::{
     Entity, EventEmitter, FocusHandle, FontWeight, IntoElement, ParentElement, Pixels, Render,
-    Role, ScrollStrategy, SharedString, Styled, Subscription, Toggled, UniformListScrollHandle,
-    Window, div, px, uniform_list,
+    Role, ScrollHandle, ScrollStrategy, SharedString, Styled, Subscription, Toggled,
+    UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::Scrollbar;
 
 use crate::actions::RunCommand;
 use crate::components::column_facts::{
@@ -55,6 +56,28 @@ const RATIO_WIDTH: Pixels = px(70.0);
 const SHARE_WIDTH: Pixels = px(150.0);
 const DISTINCT_WIDTH: Pixels = px(104.0);
 const NULLS_WIDTH: Pixels = px(64.0);
+
+/// The narrowest the distribution column gets before the table scrolls
+/// sideways.
+const DISTRIBUTION_MIN_WIDTH: Pixels = px(200.0);
+
+/// The narrowest the table gets: every fixed column plus the narrowest
+/// distribution. A narrower panel scrolls the header and rows sideways
+/// together.
+fn table_min_width() -> Pixels {
+    EYE_WIDTH
+        + NAME_WIDTH
+        + CODEC_WIDTH
+        + ON_DISK_WIDTH
+        + RATIO_WIDTH
+        + SHARE_WIDTH
+        + DISTINCT_WIDTH
+        + NULLS_WIDTH
+        + DISTRIBUTION_MIN_WIDTH
+}
+
+/// Height of the horizontal scrollbar strip over the bottom of the rows.
+const SCROLLBAR_HEIGHT: Pixels = px(12.0); // guardrail-allow: matches the data table scrollbar width
 
 /// Share bar: 6 px tall, its label 30 px wide.
 const SHARE_BAR_HEIGHT: Pixels = px(6.0); // guardrail-allow: share bar height from the artboard
@@ -176,6 +199,7 @@ pub struct ColumnProfileView {
     cursor: Option<usize>,
     table_focus: FocusHandle,
     table_scroll: UniformListScrollHandle,
+    table_hscroll: ScrollHandle,
     sort_label: SharedString,
     source_label: SharedString,
     footer_counts: SharedString,
@@ -209,6 +233,7 @@ impl ColumnProfileView {
             cursor: None,
             table_focus: cx.focus_handle(),
             table_scroll: UniformListScrollHandle::new(),
+            table_hscroll: ScrollHandle::new(),
             sort_label: ColumnSort::default().label().into(),
             source_label: SharedString::default(),
             footer_counts: SharedString::default(),
@@ -481,8 +506,9 @@ impl ColumnProfileView {
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        let cell = |width: Option<Pixels>, label: String, right: bool| {
+        let cell = |selector: &'static str, width: Option<Pixels>, label: String, right: bool| {
             div()
+                .debug_selector(move || selector.to_string())
                 .px(GridMetrics::CELL_PADDING_X)
                 .when_some(width, |cell, width| cell.w(width).flex_shrink_0())
                 .when(width.is_none(), |cell| cell.flex_1().min_w_0())
@@ -500,14 +526,54 @@ impl ColumnProfileView {
             .text_size(GridMetrics::TYPE_FONT)
             .text_color(theme.muted_foreground)
             .child(div().w(EYE_WIDTH).flex_shrink_0())
-            .child(cell(Some(NAME_WIDTH), header_label("column"), false))
-            .child(cell(Some(CODEC_WIDTH), header_label("codec"), false))
-            .child(cell(Some(ON_DISK_WIDTH), header_label("on_disk"), true))
-            .child(cell(Some(RATIO_WIDTH), header_label("ratio"), true))
-            .child(cell(Some(SHARE_WIDTH), header_label("share"), false))
-            .child(cell(Some(DISTINCT_WIDTH), header_label("distinct"), true))
-            .child(cell(Some(NULLS_WIDTH), header_label("nulls"), true))
-            .child(cell(None, header_label("distribution"), false))
+            .child(cell(
+                "column-profile-header-column",
+                Some(NAME_WIDTH),
+                header_label("column"),
+                false,
+            ))
+            .child(cell(
+                "column-profile-header-codec",
+                Some(CODEC_WIDTH),
+                header_label("codec"),
+                false,
+            ))
+            .child(cell(
+                "column-profile-header-on_disk",
+                Some(ON_DISK_WIDTH),
+                header_label("on_disk"),
+                true,
+            ))
+            .child(cell(
+                "column-profile-header-ratio",
+                Some(RATIO_WIDTH),
+                header_label("ratio"),
+                true,
+            ))
+            .child(cell(
+                "column-profile-header-share",
+                Some(SHARE_WIDTH),
+                header_label("share"),
+                false,
+            ))
+            .child(cell(
+                "column-profile-header-distinct",
+                Some(DISTINCT_WIDTH),
+                header_label("distinct"),
+                true,
+            ))
+            .child(cell(
+                "column-profile-header-nulls",
+                Some(NULLS_WIDTH),
+                header_label("nulls"),
+                true,
+            ))
+            .child(cell(
+                "column-profile-header-distribution",
+                None,
+                header_label("distribution"),
+                false,
+            ))
     }
 
     fn render_rows(
@@ -557,6 +623,7 @@ impl ColumnProfileView {
                     );
 
                 let name_cell = div()
+                    .debug_selector(move || format!("column-profile-name-{index}"))
                     .flex()
                     .flex_col()
                     .flex_shrink_0()
@@ -636,8 +703,13 @@ impl ColumnProfileView {
                 Some(
                     div()
                         .id(("column-profile-row", index))
+                        .debug_selector(move || format!("column-profile-row-{index}"))
                         .flex()
                         .items_center()
+                        // The list lays each row out on its own, so without a
+                        // full width a row sizes to its text and drifts from
+                        // the header and the scrollable width.
+                        .w_full()
                         .h(ROW_HEIGHT)
                         .border_b_1()
                         .border_color(border)
@@ -662,6 +734,9 @@ impl ColumnProfileView {
                         .child(fixed(NULLS_WIDTH, row.nulls.clone(), secondary_text, true))
                         .child(
                             div()
+                                .debug_selector(move || {
+                                    format!("column-profile-distribution-{index}")
+                                })
                                 .flex_1()
                                 .min_w_0()
                                 .px(GridMetrics::CELL_PADDING_X)
@@ -692,27 +767,59 @@ impl ColumnProfileView {
                 .child(dbflux_i18n::t!("components.column_profile.no_match"))
                 .into_any_element()
         } else {
-            uniform_list(
+            let mut list = uniform_list(
                 "column-profile-rows",
                 self.visible.len(),
                 cx.processor(Self::render_rows),
             )
             .track_scroll(&self.table_scroll)
-            .flex_1()
-            .into_any_element()
+            .flex_1();
+
+            // Keeps a sideways wheel from scrolling the rows vertically; the
+            // horizontal scroller around them takes it instead.
+            list.style().restrict_scroll_to_axis = Some(true);
+            list.into_any_element()
         };
+
+        // Header and rows share one horizontal scroller so they stay aligned;
+        // the rows keep their own vertical, virtualized scroll inside it.
+        let scroller = div()
+            .id("column-profile-hscroll")
+            .size_full()
+            .overflow_x_scroll()
+            .restrict_scroll_to_axis()
+            .track_scroll(&self.table_hscroll)
+            .child(
+                div()
+                    .debug_selector(|| "column-profile-content".to_string())
+                    .flex()
+                    .flex_col()
+                    .h_full()
+                    .w_full()
+                    .min_w(table_min_width())
+                    .child(self.render_header(cx))
+                    .child(rows),
+            );
 
         div()
             .id("column-profile-table")
+            .debug_selector(|| "column-profile-table".to_string())
             .key_context(ContextId::Dropdown.as_gpui_context())
             .track_focus(&self.table_focus)
             .on_action(cx.listener(Self::handle_run_command))
-            .flex()
-            .flex_col()
+            .relative()
             .flex_1()
             .min_h_0()
-            .child(self.render_header(cx))
-            .child(rows)
+            .child(scroller)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(SCROLLBAR_HEIGHT)
+                    .child(Scrollbar::horizontal(&self.table_hscroll)),
+            )
             .into_any_element()
     }
 
@@ -1141,5 +1248,171 @@ mod tests {
                 assert_ne!(text, english, "{locale} misses {key}");
             }
         }
+    }
+
+    #[gpui::test]
+    fn a_narrow_columns_view_scrolls_to_the_last_column(cx: &mut TestAppContext) {
+        let (_owner, window) = setup(Some(four_columns()), cx);
+        window.simulate_resize(gpui::size(gpui::px(585.0), gpui::px(600.0)));
+        window.run_until_parked();
+
+        let table = window
+            .debug_bounds("column-profile-table")
+            .expect("the table renders");
+        let before = window
+            .debug_bounds("column-profile-header-distribution")
+            .expect("the distribution header renders");
+        assert!(
+            before.right() > table.right(),
+            "the fixture must overflow: header ends at {:?}, table at {:?}",
+            before.right(),
+            table.right()
+        );
+
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: table.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(-2000.0), gpui::px(0.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+
+        let header = window
+            .debug_bounds("column-profile-header-distribution")
+            .expect("the distribution header renders");
+        assert!(
+            header.left() < before.left(),
+            "a sideways scroll moves the columns: {:?} then {:?}",
+            before.left(),
+            header.left()
+        );
+        assert!(
+            header.right() <= table.right() + gpui::px(0.5) && header.left() >= table.left(),
+            "the last column is in view: header {header:?}, table {table:?}"
+        );
+
+        let cell = window
+            .debug_bounds("column-profile-distribution-0")
+            .expect("the first row's distribution renders");
+        assert_eq!(
+            header.left(),
+            cell.left(),
+            "header and rows scroll together"
+        );
+
+        let name_header = window
+            .debug_bounds("column-profile-header-column")
+            .expect("the name header renders");
+        let name_cell = window
+            .debug_bounds("column-profile-name-0")
+            .expect("the first row's name renders");
+        assert_eq!(name_header.left(), name_cell.left());
+    }
+
+    #[gpui::test]
+    fn a_full_sideways_scroll_shows_the_end_of_every_row(cx: &mut TestAppContext) {
+        let long_range = ColumnProfile {
+            range: Some(ValueRange {
+                min: "2019-01-01T00:00:00.000000 Europe/Amsterdam".into(),
+                max: "2024-12-31T23:59:59.999999 Europe/Amsterdam".into(),
+                exact: true,
+            }),
+            ..known("created_at", "TIMESTAMP(MICROS)", 8192)
+        };
+        let profile = table(vec![long_range, known("zone_id", "INT64", 4096)]);
+        let (_owner, window) = setup(Some(Arc::new(profile)), cx);
+        window.simulate_resize(gpui::size(gpui::px(585.0), gpui::px(600.0)));
+        window.run_until_parked();
+
+        let table = window
+            .debug_bounds("column-profile-table")
+            .expect("the table renders");
+
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: table.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(-5000.0), gpui::px(0.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+
+        let content = window
+            .debug_bounds("column-profile-content")
+            .expect("the scrolled content renders");
+        let header = window
+            .debug_bounds("column-profile-header-distribution")
+            .expect("the distribution header renders");
+        assert!(
+            header.right() <= table.right() + gpui::px(1.0),
+            "the header's last column ends in view: header {header:?}, table {table:?}"
+        );
+
+        let rows = [
+            (0, "column-profile-row-0", "column-profile-distribution-0"),
+            (1, "column-profile-row-1", "column-profile-distribution-1"),
+        ];
+
+        for (index, row_selector, cell_selector) in rows {
+            let row = window.debug_bounds(row_selector).expect("the row renders");
+            let cell = window
+                .debug_bounds(cell_selector)
+                .expect("the row's distribution renders");
+
+            assert!(
+                (row.size.width - content.size.width).abs() <= gpui::px(1.0),
+                "row {index} is as wide as the scrolled content: row {:?}, content {:?}",
+                row.size.width,
+                content.size.width
+            );
+            assert!(
+                cell.right() <= table.right() + gpui::px(1.0),
+                "row {index} ends in view: cell {cell:?}, table {table:?}"
+            );
+            assert!(
+                (cell.right() - header.right()).abs() <= gpui::px(1.0),
+                "row {index} ends with the header: cell {cell:?}, header {header:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn a_vertical_wheel_scrolls_rows_not_columns(cx: &mut TestAppContext) {
+        let columns = (0..80)
+            .map(|index| known(&format!("col_{index:03}"), "INT64", 1024))
+            .collect();
+        let (_owner, window) = setup(Some(Arc::new(table(columns))), cx);
+        window.simulate_resize(gpui::size(gpui::px(585.0), gpui::px(600.0)));
+        window.run_until_parked();
+
+        assert!(
+            window.debug_bounds("column-profile-name-79").is_none(),
+            "rows out of view are not rendered"
+        );
+
+        let table = window
+            .debug_bounds("column-profile-table")
+            .expect("the table renders");
+        let header_before = window
+            .debug_bounds("column-profile-header-column")
+            .expect("the name header renders");
+        let first_before = window
+            .debug_bounds("column-profile-name-0")
+            .expect("the first row renders");
+
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: table.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-200.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+
+        let header_after = window
+            .debug_bounds("column-profile-header-column")
+            .expect("the name header renders");
+        assert_eq!(header_before, header_after, "the header stays put");
+
+        let first_after = window.debug_bounds("column-profile-name-0");
+        assert!(
+            first_after.is_none_or(|bounds| bounds.top() < first_before.top()),
+            "the rows scroll up"
+        );
     }
 }
