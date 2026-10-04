@@ -104,7 +104,10 @@ overlay를 통한 NixOS / nix-darwin:
 }
 ```
 
-overlay는 시스템의 nixpkgs로 모든 패키지를 빌드하므로, 사전 빌드된 바이너리가 그래픽 드라이버와 같은 glibc를 사용합니다. flake 자체의 출력(`nix run`, `nix profile install` 또는 `dbflux.packages.<system>.*`)으로 설치하면 대신 DBFlux의 `flake.lock`에 고정된 nixpkgs를 사용합니다. 시스템의 glibc가 그보다 새로우면 그래픽 드라이버가 로드되지 않아 DBFlux가 시작 시 종료될 수 있습니다. 이 경우 overlay를 사용하거나 flake에 `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`를 추가하세요.
+overlay는 시스템의 nixpkgs로 모든 패키지를 빌드하므로, 사전 빌드된 바이너리가 그래픽 드라이버와 같은 glibc를 사용합니다. flake 자체의 출력은 대신 DBFlux의 `flake.lock`에 고정된 nixpkgs를 사용합니다. 시스템의 glibc가 그보다 새로우면 그래픽 드라이버가 로드되지 않아 DBFlux가 시작 시 종료될 수 있습니다. 이 경우:
+
+- flake에서 `dbflux.packages.<system>.*`를 사용한다면 overlay로 바꾸거나 `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`를 추가하세요.
+- `nix run` 또는 `nix profile install`을 사용한다면 `--override-input nixpkgs nixpkgs`를 추가하세요. flake 레지스트리의 `nixpkgs`로 DBFlux를 빌드하며, flake로 빌드된 NixOS 시스템에서는 그것이 시스템 자체의 nixpkgs입니다.
 
 ## macOS
 
