@@ -23,6 +23,7 @@ dbflux_storage.workspace = true
 dbflux_export.workspace = true
 dbflux_byte_source.workspace = true
 dbflux_delimited.workspace = true
+dbflux_parquet.workspace = true
 dbflux_i18n.workspace = true
 dbflux_transfer.workspace = true
 dbflux_schema_viz.workspace = true
@@ -59,3 +60,6 @@ dbflux_driver_mongodb = { workspace = true }
 dbflux_test_support = { workspace = true }
 flate2.workspace = true
 rmp-serde.workspace = true
+parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true

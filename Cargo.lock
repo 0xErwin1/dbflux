@@ -3512,6 +3512,8 @@ dependencies = [
 name = "dbflux_ui"
 version = "0.9.0-dev.0"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "chrono",
  "dbflux_app",
  "dbflux_components",
@@ -3531,6 +3533,7 @@ dependencies = [
  "libc",
  "log",
  "open",
+ "parquet",
  "rfd",
  "serde_json",
  "uuid",
@@ -3566,6 +3569,8 @@ name = "dbflux_ui_document"
 version = "0.9.0-dev.0"
 dependencies = [
  "anyhow",
+ "arrow-array",
+ "arrow-schema",
  "chrono",
  "dbflux_app",
  "dbflux_audit",
@@ -3578,6 +3583,7 @@ dependencies = [
  "dbflux_export",
  "dbflux_i18n",
  "dbflux_mcp",
+ "dbflux_parquet",
  "dbflux_policy",
  "dbflux_schema_viz",
  "dbflux_storage",
@@ -3591,6 +3597,7 @@ dependencies = [
  "image",
  "log",
  "lsp-types",
+ "parquet",
  "petgraph",
  "rfd",
  "rmp-serde",

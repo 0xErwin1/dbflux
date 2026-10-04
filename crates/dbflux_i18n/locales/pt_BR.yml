@@ -2033,6 +2033,40 @@ document:
         read_only_file: "O arquivo é somente leitura."
     warning:
       cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
+  parquet:
+    loading: "Carregando %{name}…"
+    empty:
+      title: "%{name} não tem linhas"
+      description: "O arquivo tem um esquema, mas nenhuma linha para mostrar."
+    action:
+      reload: "Recarregar do arquivo"
+    footer:
+      load_more: "Carregar mais"
+      loading_more: "Carregando…"
+      source_changed: "O arquivo mudou desde que foi aberto. Recarregue-o para ver o novo conteúdo."
+    header:
+      nulls: "%{percent} nulos"
+    status:
+      rows:
+        all:
+          one: "%{count} linha"
+          many: "%{count} linhas"
+        of_total: "%{loaded} de %{total} linhas carregadas"
+      columns: "%{shown} de %{total} colunas exibidas"
+    error:
+      open_failed: "Não foi possível abrir %{name}"
+      load_more_failed: "Não foi possível carregar mais de %{name}"
+      source_changed: "O arquivo mudou desde que foi aberto, então nenhuma linha a mais foi lida. Recarregue-o para ver o novo conteúdo."
+      object_without_range_reads: "Este serviço de armazenamento não consegue ler parte de um objeto, então abrir um objeto Parquet dele baixaria o objeto inteiro. Baixe o arquivo e abra-o localmente."
+      short_read: "O arquivo retornou menos bytes do que o pedido. Ele pode ter mudado enquanto era lido."
+      not_parquet: "O arquivo não está no formato Parquet."
+      footer_too_large: "O rodapé do Parquet tem %{size}, mais do que os %{limit} que o DBFlux lê."
+      unsupported_codec: "A coluna %{column} está compactada com %{codec}, que o DBFlux não consegue ler."
+      encrypted: "O arquivo Parquet está criptografado, e o DBFlux não consegue lê-lo."
+      malformed: "O arquivo não é um Parquet válido."
+      unindexed_chunk_too_large: "A coluna %{column} não tem índice de páginas, então mostrar qualquer uma de suas linhas exige ler o bloco inteiro de %{size}, mais do que o limite de %{limit}."
+      no_columns_selected: "Nenhuma coluna foi escolhida para leitura."
+      column_out_of_range: "A coluna %{index} não existe. O arquivo tem %{count} colunas."
   governance:
     refresh: "Atualizar"
     no_pending: Nenhuma execução pendente
@@ -3545,6 +3579,7 @@ scripts:
       javascript_mongodb: JavaScript (MongoDB)
       redis: Redis
       delimited: Arquivos CSV / TSV
+      parquet: "Arquivos Parquet"
       all_files: Todos os arquivos
   error:
     read_file_failed: "Falha ao ler o arquivo %{path}: %{error}"

@@ -31,6 +31,12 @@ impl Workspace {
                 self.open_delimited_file(file, on_object_saved, cx);
             }
 
+            // Read-only: an object is never replaced, so nothing is told of
+            // a save.
+            Some(FileDocumentFormat::Parquet) => {
+                self.open_parquet_file(file, cx);
+            }
+
             None => {
                 log::warn!(
                     "Not opening {:?} as a file document: its format is not recognized",

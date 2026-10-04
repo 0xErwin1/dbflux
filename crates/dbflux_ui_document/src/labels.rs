@@ -2940,6 +2940,118 @@ pub(crate) fn file_read_failed_cause(cause: &dyn std::fmt::Display) -> String {
     dbflux_i18n::t!("document.file.error.storage.read", cause = cause)
 }
 
+/// Notice shown while a Parquet file is opened.
+pub(crate) fn parquet_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.loading", name = file_name)
+}
+
+/// Summary of the error reported when a Parquet file cannot be opened.
+pub(crate) fn parquet_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when a further window of a Parquet file
+/// cannot be read.
+pub(crate) fn parquet_load_more_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.error.load_more_failed", name = file_name)
+}
+
+/// Title of the notice shown for a Parquet file without rows.
+pub(crate) fn parquet_empty_title(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.empty.title", name = file_name)
+}
+
+/// The rows of a Parquet file loaded so far against its total.
+pub(crate) fn parquet_row_count_status(loaded: u64, total: u64) -> String {
+    if loaded >= total {
+        if total == 1 {
+            dbflux_i18n::t!("document.parquet.status.rows.all.one", count = total)
+        } else {
+            dbflux_i18n::t!("document.parquet.status.rows.all.many", count = total)
+        }
+    } else {
+        dbflux_i18n::t!(
+            "document.parquet.status.rows.of_total",
+            loaded = loaded,
+            total = total
+        )
+    }
+}
+
+/// The columns of a Parquet file shown against all of its columns.
+pub(crate) fn parquet_column_count_status(shown: usize, total: usize) -> String {
+    dbflux_i18n::t!(
+        "document.parquet.status.columns",
+        shown = shown,
+        total = total
+    )
+}
+
+/// What the user is told about a failure of the Parquet reader.
+///
+/// Every failure has its own translated message, naming the codec, the
+/// column and the sizes involved. A file that is not Parquet or does not
+/// decode is followed, on its own line, by the reader's own text.
+pub(crate) fn parquet_error_cause(error: &dbflux_parquet::ParquetError) -> String {
+    use dbflux_components::components::column_facts::format_bytes;
+    use dbflux_parquet::ParquetError;
+
+    match error {
+        ParquetError::Source(source) => file_read_failed_cause(source),
+
+        ParquetError::ShortRead { .. } => {
+            dbflux_i18n::t!("document.parquet.error.short_read")
+        }
+
+        ParquetError::NotParquet { reason } => with_technical_detail(
+            dbflux_i18n::t!("document.parquet.error.not_parquet"),
+            reason,
+        ),
+
+        ParquetError::FooterTooLarge { length, limit } => dbflux_i18n::t!(
+            "document.parquet.error.footer_too_large",
+            size = format_bytes(*length),
+            limit = format_bytes(*limit)
+        ),
+
+        ParquetError::UnsupportedCodec { codec, column } => dbflux_i18n::t!(
+            "document.parquet.error.unsupported_codec",
+            column = column,
+            codec = codec
+        ),
+
+        ParquetError::Encrypted => dbflux_i18n::t!("document.parquet.error.encrypted"),
+
+        ParquetError::Malformed { message } => {
+            with_technical_detail(dbflux_i18n::t!("document.parquet.error.malformed"), message)
+        }
+
+        ParquetError::UnindexedChunkTooLarge {
+            column,
+            size,
+            limit,
+        } => dbflux_i18n::t!(
+            "document.parquet.error.unindexed_chunk_too_large",
+            column = column,
+            size = format_bytes(*size),
+            limit = format_bytes(*limit)
+        ),
+
+        ParquetError::NoColumnsSelected => {
+            dbflux_i18n::t!("document.parquet.error.no_columns_selected")
+        }
+
+        ParquetError::ColumnOutOfRange {
+            index,
+            column_count,
+        } => dbflux_i18n::t!(
+            "document.parquet.error.column_out_of_range",
+            index = index,
+            count = column_count
+        ),
+    }
+}
+
 /// What the user is told about a failure of the delimited reader.
 ///
 /// A refused dialect is told with what the user can change. Any other
@@ -7518,6 +7630,73 @@ mod tests {
             "document.file.error.storage.read_only_file",
             "document.file.warning.cannot_save_in_place",
         ]);
+    }
+
+    /// Every key of the Parquet document is translated in each shipped
+    /// catalog.
+    #[test]
+    fn parquet_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.parquet.loading",
+            "document.parquet.empty.title",
+            "document.parquet.empty.description",
+            "document.parquet.action.reload",
+            "document.parquet.footer.load_more",
+            "document.parquet.footer.loading_more",
+            "document.parquet.footer.source_changed",
+            "document.parquet.header.nulls",
+            "document.parquet.status.rows.all.one",
+            "document.parquet.status.rows.all.many",
+            "document.parquet.status.rows.of_total",
+            "document.parquet.status.columns",
+            "document.parquet.error.open_failed",
+            "document.parquet.error.load_more_failed",
+            "document.parquet.error.source_changed",
+            "document.parquet.error.object_without_range_reads",
+            "document.parquet.error.short_read",
+            "document.parquet.error.not_parquet",
+            "document.parquet.error.footer_too_large",
+            "document.parquet.error.unsupported_codec",
+            "document.parquet.error.encrypted",
+            "document.parquet.error.malformed",
+            "document.parquet.error.unindexed_chunk_too_large",
+            "document.parquet.error.no_columns_selected",
+            "document.parquet.error.column_out_of_range",
+            "scripts.dialog.filter.parquet",
+        ]);
+    }
+
+    #[test]
+    fn parquet_error_causes_name_the_codec_and_the_column() {
+        use dbflux_parquet::ParquetError;
+
+        let codec = super::parquet_error_cause(&ParquetError::UnsupportedCodec {
+            codec: "BROTLI".to_string(),
+            column: "payload".to_string(),
+        });
+        assert!(codec.contains("BROTLI"), "{codec}");
+        assert!(codec.contains("payload"), "{codec}");
+
+        let unindexed = super::parquet_error_cause(&ParquetError::UnindexedChunkTooLarge {
+            column: "events".to_string(),
+            size: 100 * 1024 * 1024,
+            limit: 64 * 1024 * 1024,
+        });
+        assert!(unindexed.contains("events"), "{unindexed}");
+        assert!(unindexed.contains("100 MiB"), "{unindexed}");
+        assert!(unindexed.contains("64 MiB"), "{unindexed}");
+    }
+
+    #[test]
+    fn parquet_row_count_status_shows_the_total() {
+        use super::parquet_row_count_status;
+
+        assert_eq!(parquet_row_count_status(1, 1), "1 row");
+        assert_eq!(parquet_row_count_status(1200, 1200), "1200 rows");
+        assert_eq!(
+            parquet_row_count_status(500, 1200),
+            "500 of 1200 rows loaded"
+        );
     }
 
     /// Every key of the delimited document's reader, writer and page errors

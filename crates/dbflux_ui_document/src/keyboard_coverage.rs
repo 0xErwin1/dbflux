@@ -706,6 +706,32 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// A Parquet file tab: the read-only table of the rows loaded so far, the
+/// control that loads the next window (`]`) and the reload (`f5`). The rows
+/// stay in file order, so the document does not sort and a column header
+/// click has no action for a key to reach.
+pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
+    name: "parquet file",
+    contexts: &[ContextId::Results, ContextId::DataTable],
+    entries: &[
+        ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "header-col-*",
+            KeyboardPath::MouseOnly(
+                "a header click has no action in this document: rows stay in file order",
+            ),
+        ),
+        (
+            "parquet-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "parquet-reload",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+    ],
+};
+
 /// The audit viewer: its toolbar ring (`f`), filters, event rows and their
 /// expanded details, and the row menu (`m`).
 pub(crate) const AUDIT: SurfaceRegistry = SurfaceRegistry {

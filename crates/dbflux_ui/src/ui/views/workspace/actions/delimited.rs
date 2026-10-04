@@ -553,8 +553,10 @@ mod pending_cell_input_close_tests {
     }
 }
 
+/// Shared with the Parquet entry-point tests, which open files and objects
+/// through the same workspace.
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
     use crate::ui::document::{
@@ -570,7 +572,9 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
 
-    fn new_workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
+    pub(in crate::ui::views::workspace::actions) fn new_workspace(
+        cx: &mut TestAppContext,
+    ) -> (Entity<Workspace>, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
 
@@ -639,7 +643,9 @@ mod tests {
         window.run_until_parked();
     }
 
-    fn toast_count(window: &mut VisualTestContext) -> usize {
+    pub(in crate::ui::views::workspace::actions) fn toast_count(
+        window: &mut VisualTestContext,
+    ) -> usize {
         window.update(|_, cx| {
             cx.global::<dbflux_ui_base::toast::ToastGlobal>()
                 .host
@@ -648,7 +654,10 @@ mod tests {
         })
     }
 
-    fn tab_titles(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Vec<String> {
+    pub(in crate::ui::views::workspace::actions) fn tab_titles(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Vec<String> {
         window.update(|_, cx| {
             workspace
                 .read(cx)
@@ -756,7 +765,11 @@ mod tests {
 
     /// Opens `path` the way recent files, the command palette, the scripts
     /// sidebar, the settings window, IPC and the file dialog do.
-    fn open_path(window: &mut VisualTestContext, workspace: &Entity<Workspace>, path: PathBuf) {
+    pub(in crate::ui::views::workspace::actions) fn open_path(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        path: PathBuf,
+    ) {
         window.update(|_, cx| {
             workspace.update(cx, |workspace, cx| {
                 workspace.open_script_from_path(path, cx);
@@ -765,7 +778,7 @@ mod tests {
         window.run_until_parked();
     }
 
-    fn tab_kinds(
+    pub(in crate::ui::views::workspace::actions) fn tab_kinds(
         window: &mut VisualTestContext,
         workspace: &Entity<Workspace>,
     ) -> Vec<DocumentKind> {
@@ -781,7 +794,7 @@ mod tests {
         })
     }
 
-    fn tab_states(
+    pub(in crate::ui::views::workspace::actions) fn tab_states(
         window: &mut VisualTestContext,
         workspace: &Entity<Workspace>,
     ) -> Vec<DocumentState> {
@@ -797,7 +810,10 @@ mod tests {
         })
     }
 
-    fn close_every_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+    pub(in crate::ui::views::workspace::actions) fn close_every_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) {
         window.update(|_, cx| {
             let tab_manager = workspace.read(cx).tab_manager.clone();
             let ids: Vec<_> = tab_manager
@@ -816,7 +832,10 @@ mod tests {
         window.run_until_parked();
     }
 
-    fn recent_paths(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Vec<PathBuf> {
+    pub(in crate::ui::views::workspace::actions) fn recent_paths(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Vec<PathBuf> {
         window.update(|_, cx| {
             workspace
                 .read(cx)
@@ -989,15 +1008,29 @@ mod tests {
 
     // -- Objects ---------------------------------------------------------------
 
-    const BUCKET: &str = "reports";
+    pub(in crate::ui::views::workspace::actions) const BUCKET: &str = "reports";
 
     /// A connection whose only working part is an in-memory object store.
-    struct ObjectStoreFake {
+    pub(in crate::ui::views::workspace::actions) struct ObjectStoreFake {
         objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+        range_reads: bool,
     }
 
     impl ObjectStoreFake {
-        fn with_objects(objects: &[(&str, &[u8])]) -> std::sync::Arc<Self> {
+        pub(in crate::ui::views::workspace::actions) fn with_objects(
+            objects: &[(&str, &[u8])],
+        ) -> std::sync::Arc<Self> {
+            Self::build(objects, false)
+        }
+
+        /// A store that declares ranged reads, as S3 does.
+        pub(in crate::ui::views::workspace::actions) fn with_ranged_objects(
+            objects: &[(&str, &[u8])],
+        ) -> std::sync::Arc<Self> {
+            Self::build(objects, true)
+        }
+
+        fn build(objects: &[(&str, &[u8])], range_reads: bool) -> std::sync::Arc<Self> {
             std::sync::Arc::new(Self {
                 objects: std::sync::Mutex::new(
                     objects
@@ -1005,6 +1038,7 @@ mod tests {
                         .map(|(key, bytes)| (key.to_string(), bytes.to_vec()))
                         .collect(),
                 ),
+                range_reads,
             })
         }
 
@@ -1171,6 +1205,10 @@ mod tests {
         fn delete_bucket(&self, _bucket: &str) -> Result<(), dbflux_core::DbError> {
             not_used()
         }
+
+        fn supports_range_reads(&self) -> bool {
+            self.range_reads
+        }
     }
 
     struct ObjectConnection {
@@ -1235,7 +1273,7 @@ mod tests {
 
     /// Connects one profile of the workspace's app state to `store`, and
     /// sets the preview size limit to 0 bytes, so every object is over it.
-    fn connect_object_store(
+    pub(in crate::ui::views::workspace::actions) fn connect_object_store(
         window: &mut VisualTestContext,
         workspace: &Entity<Workspace>,
         store: std::sync::Arc<ObjectStoreFake>,

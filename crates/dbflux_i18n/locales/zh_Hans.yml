@@ -2033,6 +2033,40 @@ document:
         read_only_file: "该文件为只读。"
     warning:
       cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
+  parquet:
+    loading: "正在加载 %{name}…"
+    empty:
+      title: "%{name} 没有行"
+      description: "此文件有架构，但没有可显示的行。"
+    action:
+      reload: "从文件重新加载"
+    footer:
+      load_more: "加载更多"
+      loading_more: "正在加载…"
+      source_changed: "文件在打开后已更改。请重新加载以查看新内容。"
+    header:
+      nulls: "%{percent} 为空"
+    status:
+      rows:
+        all:
+          one: "%{count} 行"
+          many: "%{count} 行"
+        of_total: "已加载 %{loaded} / %{total} 行"
+      columns: "显示 %{shown} / %{total} 列"
+    error:
+      open_failed: "无法打开 %{name}"
+      load_more_failed: "无法加载 %{name} 的更多内容"
+      source_changed: "文件在打开后已更改，因此没有读取更多行。请重新加载以查看新内容。"
+      object_without_range_reads: "此存储服务无法读取对象的一部分，因此从中打开 Parquet 对象会下载整个对象。请下载该文件并在本地打开。"
+      short_read: "文件返回的字节少于请求的数量。读取期间文件可能已更改。"
+      not_parquet: "此文件不是 Parquet 格式。"
+      footer_too_large: "Parquet 页脚为 %{size}，超过 DBFlux 读取的 %{limit}。"
+      unsupported_codec: "列 %{column} 使用 %{codec} 压缩，DBFlux 无法读取。"
+      encrypted: "此 Parquet 文件已加密，DBFlux 无法读取。"
+      malformed: "此文件不是有效的 Parquet。"
+      unindexed_chunk_too_large: "列 %{column} 没有页索引，因此显示其任何行都需要读取整个 %{size} 的数据块，超过 %{limit} 的限制。"
+      no_columns_selected: "没有选择要读取的列。"
+      column_out_of_range: "列 %{index} 不存在。此文件有 %{count} 列。"
   governance:
     refresh: "刷新"
     no_pending: 无待处理执行
@@ -3545,6 +3579,7 @@ scripts:
       javascript_mongodb: JavaScript（MongoDB）
       redis: Redis
       delimited: CSV / TSV 文件
+      parquet: "Parquet 文件"
       all_files: 所有文件
   error:
     read_file_failed: "读取文件 %{path} 失败：%{error}"

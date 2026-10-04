@@ -53,6 +53,9 @@ vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 gpui = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 dbflux_ui_document = { workspace = true, features = ["test-support"] }
+parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
 
 [package.metadata.cargo-machete]
 # dbflux_ssh is used only via the vendored-openssl feature passthrough

@@ -2033,6 +2033,40 @@ document:
         read_only_file: "파일이 읽기 전용입니다."
     warning:
       cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
+  parquet:
+    loading: "%{name} 불러오는 중…"
+    empty:
+      title: "%{name}에 행이 없습니다"
+      description: "파일에 스키마는 있지만 표시할 행이 없습니다."
+    action:
+      reload: "파일에서 다시 불러오기"
+    footer:
+      load_more: "더 불러오기"
+      loading_more: "불러오는 중…"
+      source_changed: "파일이 열린 뒤 변경되었습니다. 새 내용을 보려면 다시 불러오세요."
+    header:
+      nulls: "NULL %{percent}"
+    status:
+      rows:
+        all:
+          one: "%{count}개 행"
+          many: "%{count}개 행"
+        of_total: "%{total}개 중 %{loaded}개 행 불러옴"
+      columns: "%{total}개 중 %{shown}개 열 표시"
+    error:
+      open_failed: "%{name}을(를) 열 수 없습니다"
+      load_more_failed: "%{name}을(를) 더 불러올 수 없습니다"
+      source_changed: "파일이 열린 뒤 변경되어 더 이상 행을 읽지 않았습니다. 새 내용을 보려면 다시 불러오세요."
+      object_without_range_reads: "이 스토리지 서비스는 객체의 일부만 읽을 수 없어, 여기서 Parquet 객체를 열면 객체 전체를 다운로드하게 됩니다. 파일을 다운로드한 뒤 로컬에서 여세요."
+      short_read: "파일이 요청한 것보다 적은 바이트를 반환했습니다. 읽는 동안 변경되었을 수 있습니다."
+      not_parquet: "파일이 Parquet 형식이 아닙니다."
+      footer_too_large: "Parquet 푸터가 %{size}로, DBFlux가 읽는 %{limit}보다 큽니다."
+      unsupported_codec: "%{column} 열은 DBFlux가 읽을 수 없는 %{codec}(으)로 압축되어 있습니다."
+      encrypted: "Parquet 파일이 암호화되어 있어 DBFlux가 읽을 수 없습니다."
+      malformed: "파일이 올바른 Parquet가 아닙니다."
+      unindexed_chunk_too_large: "%{column} 열에는 페이지 인덱스가 없어, 행을 하나라도 표시하려면 %{size} 청크 전체를 읽어야 하며 이는 %{limit} 한도보다 큽니다."
+      no_columns_selected: "읽을 열이 선택되지 않았습니다."
+      column_out_of_range: "%{index}번 열이 없습니다. 파일의 열은 %{count}개입니다."
   governance:
     refresh: "새로 고침"
     no_pending: "대기 중인 실행이 없습니다"
@@ -3545,6 +3579,7 @@ scripts:
       javascript_mongodb: JavaScript (MongoDB)
       redis: Redis
       delimited: CSV / TSV 파일
+      parquet: "Parquet 파일"
       all_files: 모든 파일
   error:
     read_file_failed: "%{path} 파일을 읽지 못했습니다: %{error}"
