@@ -121,6 +121,22 @@ impl TabBar {
         cx.emit(TabBarEvent::CloseTab(id));
     }
 
+    /// Commits the input the active document still holds in an open editor,
+    /// before a right-click on a tab opens the tab menu.
+    ///
+    /// The click moves focus out of the document, and an inline editor that
+    /// loses focus drops what was typed into it before any menu item can run.
+    /// Every item of this menu closes tabs, the active one included, so the
+    /// value is committed first and the close it leads to asks about it. Input
+    /// the document cannot commit stays where it is, and the close refuses it.
+    fn commit_active_pending_input(&mut self, cx: &mut Context<Self>) {
+        self.tab_manager.update(cx, |manager, cx| {
+            if let Some(tab) = manager.active_id().and_then(|id| manager.document(id)) {
+                tab.as_pane().commit_pending_input(cx);
+            }
+        });
+    }
+
     pub fn open_context_menu_for_active(&mut self, cx: &mut Context<Self>) {
         let manager = self.tab_manager.read(cx);
         let Some(active_id) = manager.active_id() else {
@@ -298,6 +314,7 @@ impl TabBar {
             cx,
         )
         .group(hover_group.clone())
+        .debug_selector(|| format!("tab-{}", id.0))
         .role(Role::Tab)
         .aria_selected(is_active)
         .min_w(TabMetrics::DOCUMENT_TAB_MIN_WIDTH)
@@ -339,6 +356,7 @@ impl TabBar {
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                this.commit_active_pending_input(cx);
                 this.context_menu = Some(TabContextMenu {
                     tab_id: id,
                     tab_index: idx,
@@ -391,6 +409,7 @@ impl TabBar {
 
         div()
             .id(ElementId::Name(format!("tab-close-{}", id.0).into()))
+            .debug_selector(|| format!("tab-close-{}", id.0))
             .flex()
             .items_center()
             .justify_center()

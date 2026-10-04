@@ -28,6 +28,9 @@ pub struct CellEditorModal {
     row: usize,
     col: usize,
     is_json: bool,
+    /// The text the dialog opened with, to tell an edited value from one that
+    /// was only looked at.
+    opened_value: String,
     /// Name and type of the edited column, for the title.
     column: Option<(String, String)>,
     input: Entity<EditorState>,
@@ -54,6 +57,7 @@ impl CellEditorModal {
             row: 0,
             col: 0,
             is_json: false,
+            opened_value: String::new(),
             column: None,
             input,
             focus_handle: cx.focus_handle(),
@@ -101,8 +105,52 @@ impl CellEditorModal {
             state.set_value(&formatted, window, cx);
             state.focus(window, cx);
         });
+        // Read back rather than kept from `formatted`: the editor may normalize
+        // the text it is given, such as its line endings.
+        self.opened_value = self.input.read(cx).value().to_string();
 
         cx.notify();
+    }
+
+    /// Hands over the value the dialog holds when it differs from the one it
+    /// opened with, and hides the dialog, as Save does.
+    ///
+    /// For a host that is about to close the document under the dialog, which
+    /// stays reachable while it is open. `Ok(None)` when the dialog is closed
+    /// or its text is unchanged. A JSON value that does not parse stays in the
+    /// open dialog with its error shown, and is reported as `Err` with that
+    /// error. No save or close event is emitted: the host writes the value
+    /// itself and decides where focus goes.
+    pub fn take_unsaved_edit(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<CellEditorSaveEvent>, String> {
+        if !self.visible {
+            return Ok(None);
+        }
+
+        let value = self.input.read(cx).value().to_string();
+        if value == self.opened_value {
+            return Ok(None);
+        }
+
+        if self.is_json
+            && let Err(error) = json_editor_view::validate_json(&value, true)
+        {
+            self.validation_error = Some(error.clone());
+            cx.notify();
+            return Err(error);
+        }
+
+        self.visible = false;
+        self.validation_error = None;
+        cx.notify();
+
+        Ok(Some(CellEditorSaveEvent {
+            row: self.row,
+            col: self.col,
+            value,
+        }))
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
@@ -572,5 +620,110 @@ mod keyboard_tests {
             window.update(|_, cx| host.read(cx).commands.is_empty()),
             "Run query never reaches the document behind the dialog"
         );
+    }
+
+    /// Opens the dialog on `value` in a host window and replaces its text
+    /// with `edited`, as typing would.
+    fn open_and_edit<'a>(
+        cx: &'a mut TestAppContext,
+        value: &str,
+        is_json: bool,
+        edited: Option<&str>,
+    ) -> (
+        Entity<Host>,
+        Entity<CellEditorModal>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(host);
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+        let value = value.to_string();
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(2, 1, value, is_json, None, window, cx);
+            });
+        });
+
+        if let Some(edited) = edited {
+            window.update(|window, cx| {
+                modal.update(cx, |modal, cx| {
+                    modal
+                        .input
+                        .update(cx, |input, cx| input.set_value(edited, window, cx));
+                });
+            });
+        }
+        window.run_until_parked();
+
+        (host, modal, window)
+    }
+
+    /// An edited value is handed over and the dialog hides, without a save
+    /// event: the host writes the value itself.
+    #[gpui::test]
+    fn an_edited_value_is_handed_over_for_a_close(cx: &mut TestAppContext) {
+        let (host, modal, window) = open_and_edit(cx, "old", false, Some("new"));
+
+        let taken =
+            window.update(|_, cx| modal.update(cx, |modal, cx| modal.take_unsaved_edit(cx)));
+        window.run_until_parked();
+
+        let edit = taken
+            .expect("a text value is always valid")
+            .expect("an edited value is handed over");
+        assert_eq!((edit.row, edit.col, edit.value.as_str()), (2, 1, "new"));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).saves),
+            0,
+            "the hand-over emits no save event"
+        );
+    }
+
+    /// A value that was only looked at is not an edit.
+    #[gpui::test]
+    fn an_unchanged_value_is_not_handed_over(cx: &mut TestAppContext) {
+        let (_host, modal, window) = open_and_edit(cx, "{\"a\":1}", true, None);
+
+        let taken =
+            window.update(|_, cx| modal.update(cx, |modal, cx| modal.take_unsaved_edit(cx)));
+
+        assert_eq!(taken.map(|edit| edit.map(|edit| edit.value)), Ok(None));
+        assert!(
+            window.update(|_, cx| modal.read(cx).is_visible()),
+            "the dialog stays as it is"
+        );
+    }
+
+    /// A JSON value that does not parse stays in the dialog with its error.
+    #[gpui::test]
+    fn an_invalid_json_value_stays_in_the_dialog(cx: &mut TestAppContext) {
+        let (_host, modal, window) = open_and_edit(cx, "{\"a\":1}", true, Some("{\"a\":"));
+
+        let taken =
+            window.update(|_, cx| modal.update(cx, |modal, cx| modal.take_unsaved_edit(cx)));
+
+        assert!(taken.is_err(), "an invalid value is refused");
+        let (visible, has_error) = window.update(|_, cx| {
+            let modal = modal.read(cx);
+            (modal.is_visible(), modal.validation_error.is_some())
+        });
+        assert!(visible, "the dialog keeps the value");
+        assert!(has_error, "the dialog shows why");
+    }
+
+    /// A closed dialog holds nothing.
+    #[gpui::test]
+    fn a_closed_dialog_hands_over_nothing(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (host, window) = cx.add_window_view(host);
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        let taken =
+            window.update(|_, cx| modal.update(cx, |modal, cx| modal.take_unsaved_edit(cx)));
+
+        assert_eq!(taken.map(|edit| edit.map(|edit| edit.value)), Ok(None));
     }
 }

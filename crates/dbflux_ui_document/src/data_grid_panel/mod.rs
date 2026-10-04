@@ -917,6 +917,31 @@ impl DataGridPanel {
         panel
     }
 
+    /// A table grid showing `result`, with rows identified by `pk_columns`,
+    /// that never queries a connection. For tests outside this crate that need
+    /// an editable grid.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_test_table(
+        result: QueryResult,
+        pk_columns: Vec<String>,
+        app_state: gpui::Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let source = DataSource::Table {
+            profile_id: Uuid::nil(),
+            database: Some("app".to_string()),
+            table: TableRef::with_schema("public", "orders"),
+            pagination: Pagination::default(),
+            order_by: Vec::new(),
+            total_rows: None,
+        };
+
+        let mut panel = Self::new_internal(source, app_state, pk_columns, window, cx);
+        panel.set_result(result, cx);
+        panel
+    }
+
     /// Fetch table details to get PK columns if not already cached.
     fn fetch_table_details_for_pk(
         &mut self,
@@ -3453,6 +3478,32 @@ impl DataGridPanel {
         let (inserts, updates, deletes) = self.pending_edit_counts(cx);
 
         crate::labels::pending_edits_summary(inserts, updates, deletes)
+    }
+
+    /// Commits the input the grid still holds in an open editor, the inline
+    /// cell editor and the cell editor dialog, so it becomes a pending change
+    /// as Enter or Save would make it.
+    ///
+    /// Returns `false` when input could not be committed: a JSON value that
+    /// does not parse stays in the dialog with its error shown, and the caller
+    /// must not close the grid over it.
+    pub fn commit_pending_input(&mut self, cx: &mut Context<Self>) -> bool {
+        let dialog_edit = self
+            .document_view
+            .cell_editor
+            .update(cx, |editor, cx| editor.take_unsaved_edit(cx));
+
+        match dialog_edit {
+            Ok(Some(edit)) => self.write_cell_value(edit.row, edit.col, &edit.value, cx),
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+
+        if let Some(table_state) = &self.grid_table.table_state {
+            table_state.update(cx, |state, cx| state.commit_pending_edit(cx));
+        }
+
+        true
     }
 
     /// Starts applying the staged edits because a close is waiting on them.
