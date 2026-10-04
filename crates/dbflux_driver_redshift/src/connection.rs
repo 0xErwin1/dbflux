@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, TryLockError};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
@@ -544,13 +544,31 @@ pub struct RedshiftConnection {
 }
 
 struct RedshiftCancelHandle {
+    client: Arc<Mutex<Client>>,
     cancel_token: CancelToken,
     cancelled: Arc<AtomicBool>,
+}
+
+/// Reports whether some caller currently holds `mutex`.
+///
+/// Every call that talks to the server holds the client mutex for its whole
+/// round trip, so a held mutex means a statement may be running. The server
+/// applies a cancel request to whatever statement is executing when it
+/// arrives, so sending one while the connection is idle can cancel the next
+/// statement instead. A poisoned mutex counts as free because the call that
+/// poisoned it has already unwound.
+fn mutex_is_held<T>(mutex: &Mutex<T>) -> bool {
+    matches!(mutex.try_lock(), Err(TryLockError::WouldBlock))
 }
 
 impl QueryCancelHandle for RedshiftCancelHandle {
     fn cancel(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
+
+        if !mutex_is_held(&self.client) {
+            log::debug!("[CANCEL] Redshift connection is idle, no cancel request sent");
+            return Ok(());
+        }
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel Redshift query: {e}");
@@ -704,16 +722,10 @@ impl Connection for RedshiftConnection {
     fn cancel_active(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
 
-        let active = self
-            .active_query
-            .read()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
-
-        if active.is_none() {
+        if !mutex_is_held(&self.client) {
+            log::debug!("[CANCEL] Redshift connection is idle, no cancel request sent");
             return Ok(());
         }
-
-        drop(active);
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel Redshift query: {e}");
@@ -723,6 +735,7 @@ impl Connection for RedshiftConnection {
 
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(RedshiftCancelHandle {
+            client: self.client.clone(),
             cancel_token: self.cancel_token.clone(),
             cancelled: self.cancelled.clone(),
         })
@@ -960,7 +973,23 @@ mod tests {
     };
     use dbflux_core::DbError;
     use postgres::config::SslMode;
+    use std::sync::Mutex;
     use std::time::Duration;
+
+    #[test]
+    fn mutex_is_held_reports_false_for_an_unlocked_mutex() {
+        let mutex = Mutex::new(());
+
+        assert!(!super::mutex_is_held(&mutex));
+    }
+
+    #[test]
+    fn mutex_is_held_reports_true_while_a_guard_is_alive() {
+        let mutex = Mutex::new(());
+        let _guard = mutex.lock().expect("lock test mutex");
+
+        assert!(super::mutex_is_held(&mutex));
+    }
 
     /// A real self-signed EC certificate (P-256) in PEM form, paired with
     /// [`TEST_CLIENT_KEY_PEM`]. It only needs to be a structurally valid
