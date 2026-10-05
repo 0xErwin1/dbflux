@@ -19,9 +19,11 @@ use dbflux_parquet::{Cell, CellKind, CellPage, ColumnDisplay, ColumnStatistics};
 use gpui::TextAlign;
 
 /// The shown columns of a Parquet file and the rows read of them so far.
+///
+/// The rows live in the table model the data table shows, shared rather than
+/// copied, so the loaded rows are held once.
 pub(super) struct ParquetPageModel {
-    columns: Vec<ColumnSpec>,
-    rows: Vec<RowData>,
+    table: Arc<TableModel>,
     total_rows: u64,
 }
 
@@ -37,8 +39,7 @@ impl ParquetPageModel {
             .collect();
 
         let mut model = Self {
-            columns,
-            rows: Vec::new(),
+            table: Arc::new(TableModel::new(columns, Vec::new())),
             total_rows,
         };
 
@@ -46,15 +47,20 @@ impl ParquetPageModel {
         model
     }
 
-    /// Appends the rows of `page`, a later window of the same columns.
+    /// Appends the rows of `page`, a later window of the same columns. While
+    /// the data table still shows the previous model, the rows are copied
+    /// once into a new one; the previous copy is freed when the table takes
+    /// the new model.
     pub(super) fn append(&mut self, page: CellPage) {
-        self.rows.extend(page.rows.iter().map(|row| RowData {
-            cells: row.iter().map(cell_value).collect(),
-        }));
+        Arc::make_mut(&mut self.table)
+            .rows
+            .extend(page.rows.iter().map(|row| RowData {
+                cells: row.iter().map(cell_value).collect(),
+            }));
     }
 
     pub(super) fn loaded_rows(&self) -> u64 {
-        self.rows.len() as u64
+        self.table.rows.len() as u64
     }
 
     pub(super) fn total_rows(&self) -> u64 {
@@ -65,8 +71,8 @@ impl ParquetPageModel {
         self.loaded_rows() >= self.total_rows
     }
 
-    pub(super) fn table_model(&self) -> TableModel {
-        TableModel::new(self.columns.clone(), self.rows.clone())
+    pub(super) fn table_model(&self) -> Arc<TableModel> {
+        self.table.clone()
     }
 }
 
@@ -150,4 +156,47 @@ pub(super) fn header_annotation(profile: &ColumnProfile, row_count: u64) -> Head
         "document.parquet.header.nulls",
         percent = nulls
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use dbflux_parquet::{Cell, CellKind, CellPage, ColumnDisplay, ColumnKind};
+
+    use super::ParquetPageModel;
+
+    fn page(first: i64, rows: i64) -> CellPage {
+        CellPage {
+            columns: vec![ColumnDisplay {
+                name: Arc::from("id"),
+                type_name: Arc::from("INT64"),
+                kind: ColumnKind::Integer,
+            }],
+            rows: (first..first + rows)
+                .map(|value| {
+                    vec![Cell {
+                        kind: CellKind::Integer(value),
+                        display: Arc::from(value.to_string()),
+                    }]
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_table_shares_the_loaded_rows_instead_of_copying_them() {
+        let mut model = ParquetPageModel::new(page(0, 3), 6);
+
+        let shown = model.table_model();
+        assert!(Arc::ptr_eq(&shown, &model.table_model()));
+
+        drop(shown);
+        model.append(page(3, 3));
+
+        let shown = model.table_model();
+        assert_eq!(shown.rows.len(), 6);
+        assert_eq!(Arc::strong_count(&shown), 2, "the model and this handle");
+        assert!(model.is_fully_loaded());
+    }
 }

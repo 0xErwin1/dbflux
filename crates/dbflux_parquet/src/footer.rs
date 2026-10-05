@@ -133,6 +133,14 @@ pub fn open<S: ByteSource + ?Sized>(source: &S) -> Result<ParquetFile, ParquetEr
         ))
     })?;
 
+    let covered_rows = row_group_rows(&metadata)?;
+
+    if row_count > covered_rows {
+        return Err(ParquetError::malformed(format!(
+            "the footer declares {row_count} rows but its row groups hold {covered_rows}"
+        )));
+    }
+
     let has_offset_index = every_row_group_has_offset_index(&metadata);
 
     Ok(ParquetFile {
@@ -141,6 +149,26 @@ pub fn open<S: ByteSource + ?Sized>(source: &S) -> Result<ParquetFile, ParquetEr
         row_count,
         has_offset_index,
     })
+}
+
+/// The rows the row groups of `metadata` hold together. A footer total above
+/// it would promise rows no window can read.
+fn row_group_rows(metadata: &ParquetMetaData) -> Result<u64, ParquetError> {
+    metadata.row_groups().iter().enumerate().try_fold(
+        0_u64,
+        |total, (row_group, row_group_metadata)| {
+            let rows = u64::try_from(row_group_metadata.num_rows()).map_err(|_| {
+                ParquetError::malformed(format!(
+                    "row group {row_group} declares a negative row count ({})",
+                    row_group_metadata.num_rows()
+                ))
+            })?;
+
+            total.checked_add(rows).ok_or_else(|| {
+                ParquetError::malformed("the row groups declare more rows than fit in 64 bits")
+            })
+        },
+    )
 }
 
 /// Reads `range`, which must lie inside the file, and refuses a result that is

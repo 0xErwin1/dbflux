@@ -540,7 +540,7 @@ impl ParquetDocument {
             page_model,
         } = opened;
 
-        let model = Arc::new(page_model.table_model());
+        let model = page_model.table_model();
 
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(model, cx);
@@ -679,7 +679,7 @@ impl ParquetDocument {
             Ok(page) => {
                 loaded.page_model.append(page);
 
-                let model = Arc::new(loaded.page_model.table_model());
+                let model = loaded.page_model.table_model();
 
                 loaded.table_state.update(cx, |state, cx| {
                     state.set_model(
