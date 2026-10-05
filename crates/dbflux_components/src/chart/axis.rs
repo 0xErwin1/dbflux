@@ -3,7 +3,7 @@
 //! All formatting is pre-computed at chart-build time; `render()` only reads
 //! the stored `TickLabel` strings.
 
-use dbflux_core::chrono::{DateTime, TimeZone, Utc};
+use dbflux_core::chrono::{DateTime, Datelike, TimeZone, Utc};
 use gpui::SharedString;
 
 /// A single axis tick with its data-space value and pre-formatted label.
@@ -132,23 +132,28 @@ fn format_numeric(v: f64) -> String {
 /// Must remain strictly ascending. Each entry is a "nice" human-readable
 /// duration that `ticks_time` may select as a step boundary.
 const NICE_TIME_STEPS_MS: &[f64] = &[
-    1_000.0,             // 1s
-    5_000.0,             // 5s
-    15_000.0,            // 15s
-    60_000.0,            // 1m
-    5.0 * 60_000.0,      // 5m
-    15.0 * 60_000.0,     // 15m
-    3_600_000.0,         // 1h
-    2.0 * 3_600_000.0,   // 2h
-    3.0 * 3_600_000.0,   // 3h
-    6.0 * 3_600_000.0,   // 6h
-    12.0 * 3_600_000.0,  // 12h
-    86_400_000.0,        // 1d
-    2.0 * 86_400_000.0,  // 2d
-    3.0 * 86_400_000.0,  // 3d
-    7.0 * 86_400_000.0,  // 1w
-    30.0 * 86_400_000.0, // ~1mo
+    1_000.0,            // 1s
+    5_000.0,            // 5s
+    15_000.0,           // 15s
+    60_000.0,           // 1m
+    5.0 * 60_000.0,     // 5m
+    15.0 * 60_000.0,    // 15m
+    3_600_000.0,        // 1h
+    2.0 * 3_600_000.0,  // 2h
+    3.0 * 3_600_000.0,  // 3h
+    6.0 * 3_600_000.0,  // 6h
+    12.0 * 3_600_000.0, // 12h
+    86_400_000.0,       // 1d
+    2.0 * 86_400_000.0, // 2d
+    3.0 * 86_400_000.0, // 3d
+    7.0 * 86_400_000.0, // 1w
 ];
+
+/// Mean Gregorian month length, used only to pick a calendar step size.
+const AVERAGE_MONTH_MS: f64 = 365.2425 / 12.0 * 86_400_000.0;
+
+/// Calendar month steps tried before falling back to whole-year steps.
+const CALENDAR_MONTH_STEPS: &[i64] = &[1, 3, 6];
 
 /// Generate nice time ticks for `[min_ms, max_ms]` (milliseconds since Unix epoch).
 ///
@@ -166,11 +171,9 @@ pub fn ticks_time(min_ms: f64, max_ms: f64, target_count: usize) -> Vec<TickLabe
     let span = max_ms - min_ms;
     let raw_step = span / target_count as f64;
 
-    let step = NICE_TIME_STEPS_MS
-        .iter()
-        .copied()
-        .find(|&s| s >= raw_step)
-        .unwrap_or(*NICE_TIME_STEPS_MS.last().unwrap());
+    let Some(step) = NICE_TIME_STEPS_MS.iter().copied().find(|&s| s >= raw_step) else {
+        return ticks_calendar(min_ms, max_ms, raw_step);
+    };
 
     let first = (min_ms / step).ceil() * step;
     let mut ticks = Vec::new();
@@ -187,6 +190,67 @@ pub fn ticks_time(min_ms: f64, max_ms: f64, target_count: usize) -> Vec<TickLabe
     }
 
     ticks
+}
+
+/// Generate ticks on calendar boundaries for steps longer than a week.
+///
+/// Month and year lengths vary, so fixed-millisecond steps drift away from
+/// month starts. Ticks land on the first day of a month (steps of 1, 3 or 6
+/// months, labelled `%Y-%m`) or of a year (nice multiples of a year, labelled
+/// `%Y`), aligned to multiples of the step so quarters start in January.
+fn ticks_calendar(min_ms: f64, max_ms: f64, raw_step_ms: f64) -> Vec<TickLabel> {
+    let raw_months = raw_step_ms / AVERAGE_MONTH_MS;
+
+    let (step_months, format) = match CALENDAR_MONTH_STEPS
+        .iter()
+        .copied()
+        .find(|&months| months as f64 >= raw_months)
+    {
+        Some(months) => (months, "%Y-%m"),
+        None => {
+            let step_years = nice_step(raw_months / 12.0).ceil().max(1.0) as i64;
+            (step_years * 12, "%Y")
+        }
+    };
+
+    let Some(min_datetime) = DateTime::<Utc>::from_timestamp_millis(min_ms.ceil() as i64) else {
+        return Vec::new();
+    };
+
+    let mut month_index = i64::from(min_datetime.year()) * 12 + i64::from(min_datetime.month0());
+    if month_start(month_index).is_none_or(|start| (start.timestamp_millis() as f64) < min_ms) {
+        month_index += 1;
+    }
+
+    let remainder = month_index.rem_euclid(step_months);
+    if remainder != 0 {
+        month_index += step_months - remainder;
+    }
+
+    let mut ticks = Vec::new();
+
+    while let Some(start) = month_start(month_index) {
+        let value = start.timestamp_millis() as f64;
+        if value > max_ms {
+            break;
+        }
+
+        ticks.push(TickLabel {
+            value,
+            label: start.format(format).to_string(),
+        });
+        month_index += step_months;
+    }
+
+    ticks
+}
+
+/// Midnight UTC on the first day of the month `index` months after year 0.
+fn month_start(index: i64) -> Option<DateTime<Utc>> {
+    let year = i32::try_from(index.div_euclid(12)).ok()?;
+    let month = u32::try_from(index.rem_euclid(12) + 1).ok()?;
+
+    Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0).single()
 }
 
 /// Format a millisecond-since-epoch timestamp as a UTC label.
@@ -353,6 +417,7 @@ pub fn ticks_categorical(values: &[SharedString]) -> Vec<TickLabel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::chrono::Timelike;
 
     #[test]
     fn ticks_numeric_span_1_to_100_returns_5_to_8_ticks() {
@@ -412,6 +477,61 @@ mod tests {
                 "expected YYYY-MM-DD, got {}",
                 t.label
             );
+        }
+    }
+
+    fn utc_ms(year: i32, month: u32, day: u32) -> f64 {
+        Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+            .single()
+            .expect("valid test date")
+            .timestamp_millis() as f64
+    }
+
+    fn tick_datetime(tick: &TickLabel) -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp_millis(tick.value as i64).expect("tick within chrono range")
+    }
+
+    #[test]
+    fn ticks_time_twelve_month_span_lands_on_month_starts() {
+        let ticks = ticks_time(utc_ms(2025, 1, 1), utc_ms(2025, 12, 1), 6);
+        assert!(ticks.len() >= 3, "expected several ticks, got {ticks:?}");
+
+        for tick in &ticks {
+            let datetime = tick_datetime(tick);
+            assert_eq!(
+                (datetime.day(), datetime.hour(), datetime.minute()),
+                (1, 0, 0),
+                "tick {} is not at the start of a month",
+                tick.label
+            );
+            assert_eq!(tick.label, datetime.format("%Y-%m").to_string());
+        }
+    }
+
+    #[test]
+    fn ticks_time_monthly_target_twelve_uses_one_month_steps() {
+        let ticks = ticks_time(utc_ms(2025, 1, 1), utc_ms(2025, 12, 1), 12);
+        let labels: Vec<&str> = ticks.iter().map(|tick| tick.label.as_str()).collect();
+
+        assert_eq!(labels.first(), Some(&"2025-01"));
+        assert_eq!(labels.last(), Some(&"2025-12"));
+        assert_eq!(labels.len(), 12);
+    }
+
+    #[test]
+    fn ticks_time_multi_year_span_uses_year_ticks() {
+        let ticks = ticks_time(utc_ms(2015, 3, 10), utc_ms(2025, 8, 20), 6);
+        assert!(ticks.len() >= 3, "expected several ticks, got {ticks:?}");
+
+        for tick in &ticks {
+            let datetime = tick_datetime(tick);
+            assert_eq!(
+                (datetime.month(), datetime.day(), datetime.hour()),
+                (1, 1, 0),
+                "tick {} is not at the start of a year",
+                tick.label
+            );
+            assert_eq!(tick.label, datetime.format("%Y").to_string());
         }
     }
 
