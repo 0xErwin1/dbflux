@@ -84,6 +84,19 @@ fn reachable_write_or_worse(source: &str) -> bool {
         .chain(OUTPUT_STAGE_NAMES)
         .any(|name| contains_word(source, name))
         || contains_computed_member_access(source)
+        || contains_computed_object_key(source)
+}
+
+/// True if `source` contains a `]` followed (ignoring whitespace) by `:` —
+/// the shape of a computed object key (`{ ["$mer" + "ge"]: "x" }`), which can
+/// build a stage name the word search cannot see. A ternary such as
+/// `c ? a[0] : b` also matches; over-flagging only costs one confirmation.
+fn contains_computed_object_key(source: &str) -> bool {
+    source.match_indices(']').any(|(index, _)| {
+        source
+            .get(index + 1..)
+            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+    })
 }
 
 /// True if `source` contains `word` as a whole identifier (not as a
@@ -211,6 +224,20 @@ mod tests {
             r#"db.orders.aggregate([{ $merge: { into: "archive" } }]);"#,
             r#"db.orders.aggregate([{ "$out": "archive" }]);"#,
             r#"db.orders.aggregate([{ "$facet": { "a": [{ '$merge': "archive" }] } }]);"#,
+        ] {
+            assert_eq!(
+                static_scan(script),
+                StaticScanOutcome::RequiresConfirmation,
+                "{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn computed_object_key_requires_confirmation() {
+        for script in [
+            r#"db.orders.aggregate([{ ["$mer" + "ge"]: "archive" }]);"#,
+            r#"db.orders.aggregate([{ "$match": {}, [key]: "archive" }]);"#,
         ] {
             assert_eq!(
                 static_scan(script),
