@@ -1098,6 +1098,22 @@ fn mysql_read_only_requests_cannot_write() -> Result<(), DbError> {
             "expected the server's read-only error, got {error}"
         );
 
+        let hidden = connection.execute(&read_only_request(
+            "/*!CREATE TABLE read_only_stolen AS*/ SELECT * FROM read_only_items",
+        ));
+        assert!(
+            matches!(hidden, Err(DbError::NotSupported(_))),
+            "{hidden:?}"
+        );
+        let stolen = connection.execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'read_only_stolen'",
+        ))?;
+        assert_eq!(
+            stolen.rows[0][0],
+            Value::Int(0),
+            "the hidden DDL must not run"
+        );
+
         let refused = connection.execute(&read_only_request("COMMIT; DELETE FROM read_only_items"));
         assert!(
             matches!(refused, Err(DbError::NotSupported(_))),

@@ -3044,9 +3044,15 @@ const READ_ONLY_LEADING_KEYWORDS: &[&str] = &[
 ];
 
 /// Refuses a read-only request containing a statement that could end the
-/// read-only transaction or write a file on the server, before anything runs.
+/// read-only transaction or write outside it, before anything runs.
 fn ensure_read_only_statements(statements: &[String]) -> Result<(), DbError> {
     for statement in statements {
+        if has_executable_comment(statement) {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: a read-only request cannot contain executable comments (/*! ... */ or /*M! ... */), which the server runs as SQL; the request was rejected before execution".to_string(),
+            ));
+        }
+
         let stripped = dbflux_core::strip_leading_comments(statement).trim_start();
         let first_word = stripped
             .split(|character: char| !character.is_ascii_alphabetic())
@@ -3062,9 +3068,9 @@ fn ensure_read_only_statements(statements: &[String]) -> Result<(), DbError> {
             ));
         }
 
-        if writes_server_file(stripped) {
+        if contains_into_word(statement) {
             return Err(DbError::NotSupported(
-                "MySQL/MariaDB: SELECT ... INTO OUTFILE or DUMPFILE writes a file on the server, which a read-only transaction does not prevent; the request was rejected before execution".to_string(),
+                "MySQL/MariaDB: a read-only request cannot contain INTO, because SELECT ... INTO OUTFILE or DUMPFILE writes a file on the server, which a read-only transaction does not prevent; the request was rejected before execution".to_string(),
             ));
         }
     }
@@ -3072,74 +3078,30 @@ fn ensure_read_only_statements(statements: &[String]) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Whether `statement` contains `INTO OUTFILE` or `INTO DUMPFILE` outside
-/// string literals, quoted identifiers and comments.
-fn writes_server_file(statement: &str) -> bool {
-    let mut words: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut characters = statement.chars().peekable();
-
-    while let Some(character) = characters.next() {
-        match character {
-            '\'' | '"' | '`' => {
-                push_word(&mut words, &mut current);
-                let quote = character;
-                while let Some(inner) = characters.next() {
-                    if inner == '\\' && quote != '`' {
-                        characters.next();
-                    } else if inner == quote {
-                        if characters.peek() == Some(&quote) {
-                            characters.next();
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-            '#' => {
-                push_word(&mut words, &mut current);
-                for inner in characters.by_ref() {
-                    if inner == '\n' {
-                        break;
-                    }
-                }
-            }
-            '-' if characters.peek() == Some(&'-') => {
-                push_word(&mut words, &mut current);
-                for inner in characters.by_ref() {
-                    if inner == '\n' {
-                        break;
-                    }
-                }
-            }
-            '/' if characters.peek() == Some(&'*') => {
-                push_word(&mut words, &mut current);
-                characters.next();
-                let mut previous = '\0';
-                for inner in characters.by_ref() {
-                    if previous == '*' && inner == '/' {
-                        break;
-                    }
-                    previous = inner;
-                }
-            }
-            character if character.is_ascii_alphanumeric() || character == '_' => {
-                current.push(character.to_ascii_uppercase());
-            }
-            _ => push_word(&mut words, &mut current),
-        }
-    }
-    push_word(&mut words, &mut current);
-
-    words.windows(2).any(|pair| {
-        matches!(pair, [into, target] if into == "INTO" && (target == "OUTFILE" || target == "DUMPFILE"))
-    })
+/// Whether `statement` contains a MySQL `/*! ... */` or MariaDB `/*M! ... */`
+/// comment, whose content the server executes.
+///
+/// The raw text is searched, string literals included: a false match only
+/// refuses the request, while missing one would let hidden SQL run.
+fn has_executable_comment(statement: &str) -> bool {
+    let upper = statement.to_ascii_uppercase();
+    upper.contains("/*!") || upper.contains("/*M!")
 }
 
-fn push_word(words: &mut Vec<String>, current: &mut String) {
-    if !current.is_empty() {
-        words.push(std::mem::take(current));
-    }
+/// Whether the word `INTO` appears anywhere in `statement`.
+///
+/// Quotes, escapes and comments are deliberately ignored. Where a string
+/// ends depends on `ANSI_QUOTES` and `NO_BACKSLASH_ESCAPES`, and `--` only
+/// starts a comment when whitespace follows, so any span could be SQL the
+/// server runs. Refusing every `INTO` covers `INTO OUTFILE` and `INTO
+/// DUMPFILE` in all of them, at the cost of refusing `INTO @variable` and the
+/// word inside literals.
+fn contains_into_word(statement: &str) -> bool {
+    statement
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '_' || character == '$')
+        })
+        .any(|word| word.eq_ignore_ascii_case("INTO"))
 }
 
 /// Runs a request that requires read-only enforcement inside `START
@@ -5751,7 +5713,8 @@ mod read_only_tests {
             "VALUES ROW(1)",
             "(SELECT 1) UNION (SELECT 2)",
             "SELECT 1; SELECT 2",
-            "SELECT 'INTO OUTFILE' AS text",
+            "SELECT intox, into_count FROM t",
+            "SELECT /* plain comment */ 1",
         ] {
             assert!(
                 check(sql).is_ok(),
@@ -5775,6 +5738,41 @@ mod read_only_tests {
             "SELECT 1; TRUNCATE t",
             "SELECT * FROM t INTO OUTFILE '/tmp/out.csv'",
             "SELECT * FROM t INTO DUMPFILE '/tmp/out.bin'",
+        ] {
+            assert!(
+                matches!(check(sql), Err(DbError::NotSupported(_))),
+                "{sql} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_refuse_executable_comments_anywhere() {
+        for sql in [
+            "/*!CREATE TABLE stolen AS*/ SELECT * FROM users",
+            "/*!50000 CREATE TABLE stolen AS */ SELECT * FROM users",
+            "/*M!CREATE OR REPLACE TABLE orders AS*/ SELECT 1",
+            "/*M!100100 CREATE OR REPLACE TABLE orders AS*/ SELECT 1",
+            "SELECT 1 /*!, (SELECT 1) */",
+            "SELECT 1; /*!CREATE TABLE stolen AS*/ SELECT 2",
+        ] {
+            assert!(
+                matches!(check(sql), Err(DbError::NotSupported(_))),
+                "{sql} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_refuse_into_wherever_it_could_be_a_keyword() {
+        for sql in [
+            "SELECT 1 INTO @total",
+            "SELECT 1 /*! INTO OUTFILE '/tmp/out.csv' */",
+            "SELECT --1 INTO OUTFILE '/tmp/out.csv'",
+            "SELECT \"a\\\" INTO OUTFILE '/tmp/out.csv' -- \"",
+            "SELECT 'a\\' INTO OUTFILE '/tmp/out.csv' -- '",
+            "SELECT 'INTO OUTFILE' AS text",
+            "SELECT 1 iNtO DUMPFILE '/tmp/out.bin'",
         ] {
             assert!(
                 matches!(check(sql), Err(DbError::NotSupported(_))),
