@@ -428,14 +428,14 @@ impl ChartShell {
     /// Add (`checked`) or remove a Y column from the bindings and keep the Y
     /// picker open, since it is a checklist where several columns are picked
     /// in a row. Otherwise behaves like `apply_bindings`.
-    pub fn toggle_y_column(&mut self, col_idx: usize, checked: bool, cx: &mut Context<Self>) {
+    pub fn toggle_y_column(&mut self, column_index: usize, checked: bool, cx: &mut Context<Self>) {
         let mut bindings = self.active_bindings();
         if checked {
-            if !bindings.y.contains(&col_idx) {
-                bindings.y.push(col_idx);
+            if !bindings.y.contains(&column_index) {
+                bindings.y.push(column_index);
             }
         } else {
-            bindings.y.retain(|&index| index != col_idx);
+            bindings.y.retain(|&index| index != column_index);
         }
 
         self.apply_bindings(bindings, cx);
