@@ -3,13 +3,14 @@ use crate::ui::document::FileDocumentKey;
 use crate::ui::document::file_format::{FileDocumentFormat, file_document_format};
 use crate::ui::labels::{
     documents_default_title, scripts_filter_all_files_label, scripts_filter_delimited_label,
-    scripts_filter_javascript_mongodb_label, scripts_filter_redis_label, scripts_filter_sql_label,
-    scripts_open_dialog_title, scripts_read_file_failed_message,
+    scripts_filter_javascript_mongodb_label, scripts_filter_redis_label,
+    scripts_filter_spreadsheet_label, scripts_filter_sql_label, scripts_open_dialog_title,
+    scripts_read_file_failed_message,
 };
 
 impl Workspace {
-    /// Opens a file dialog to pick a script, CSV, TSV or Parquet file and opens it
-    /// through [`Self::open_script_from_path`].
+    /// Opens a file dialog to pick a script, CSV, TSV, Parquet or spreadsheet
+    /// file and opens it through [`Self::open_script_from_path`].
     pub(in crate::ui::views::workspace) fn open_script_file(
         &mut self,
         _window: &mut Window,
@@ -22,6 +23,7 @@ impl Workspace {
             let redis_filter_label = scripts_filter_redis_label();
             let delimited_filter_label = scripts_filter_delimited_label();
             let parquet_filter_label = dbflux_i18n::t!("scripts.dialog.filter.parquet");
+            let spreadsheet_filter_label = scripts_filter_spreadsheet_label();
             let all_files_filter_label = scripts_filter_all_files_label();
 
             let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async {
@@ -37,6 +39,10 @@ impl Workspace {
                     .add_filter(
                         &parquet_filter_label,
                         FileDocumentFormat::Parquet.extensions(),
+                    )
+                    .add_filter(
+                        &spreadsheet_filter_label,
+                        FileDocumentFormat::Spreadsheet.extensions(),
                     )
                     .add_filter(&all_files_filter_label, &["*"])
                     .pick_file()

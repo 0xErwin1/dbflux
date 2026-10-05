@@ -1439,6 +1439,7 @@ fn render_rows(
                     };
                     let is_null = display_value.is_null();
                     let is_auto_generated = display_value.is_auto_generated();
+                    let is_placeholder = display_value.is_placeholder();
                     let is_missing = display_value.is_missing();
                     let nested_kind = match display_value.kind {
                         super::model::CellKind::Nested { is_array, .. } => Some(is_array),
@@ -1456,7 +1457,7 @@ fn render_rows(
                         theme.input
                     } else if nested_kind.is_some() {
                         theme.info
-                    } else if is_pending_delete || is_auto_generated {
+                    } else if is_pending_delete || is_auto_generated || is_placeholder {
                         theme.muted_foreground
                     } else if is_null {
                         null_color
@@ -1501,7 +1502,10 @@ fn render_rows(
                         .when(is_active, |d| {
                             d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
                         })
-                        .when(is_null || is_auto_generated || is_missing, |d| d.italic())
+                        .when(
+                            is_null || is_auto_generated || is_placeholder || is_missing,
+                            |d| d.italic(),
+                        )
                         .when(is_pending_delete, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {

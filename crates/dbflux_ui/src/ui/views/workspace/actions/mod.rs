@@ -130,6 +130,7 @@ mod quit;
 mod schema_diff;
 mod scripts;
 mod settings;
+mod spreadsheet;
 mod updates;
 
 impl Workspace {

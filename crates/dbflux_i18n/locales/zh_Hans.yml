@@ -2047,6 +2047,43 @@ document:
         covered_cell: "工作表 %{sheet} 的单元格 %{cell} 被合并单元格覆盖。请改为编辑合并区域的第一个单元格。"
         shared_formula_master: "工作表 %{sheet} 的单元格 %{cell} 中的公式由 %{range} 的单元格共享，编辑它也会改变这些单元格。请在电子表格应用中编辑。"
         inside_formula_range: "工作表 %{sheet} 的单元格 %{cell} 位于公式区域 %{range} 内，该区域只能在电子表格应用中整体编辑。"
+      open_failed: "无法打开 %{name}"
+      sheet_failed: "无法读取 %{name} 的工作表 %{sheet}"
+      objects_unsupported: "暂时无法打开存放在对象存储中的电子表格。请下载 %{name} 后打开本地副本。"
+      not_a_spreadsheet: "此文件不是 xlsx、xlsm、xls 或 ods 工作簿。"
+      encrypted: "工作簿已加密或设置了打开密码，DBFlux 无法读取。"
+      chart_sheet: "工作表 %{sheet} 是图表工作表，没有可显示的单元格。"
+      sheet_out_of_range: "工作表 %{index} 不存在。此工作簿有 %{count} 个工作表。"
+      sheet_too_large: "工作表 %{sheet} 跨 %{rows} 行 × %{columns} 列，共 %{cells} 个单元格，超过 DBFlux 每个工作表加载的 %{limit} 个单元格上限。"
+      malformed: "无法解码此工作簿。"
+    loading: "正在加载 %{name}…"
+    reading_sheet: "正在读取工作表 %{sheet}…"
+    empty:
+      title: "工作表 %{sheet} 是空的"
+      description: "此工作表没有值或公式。"
+    no_worksheet:
+      title: "%{name} 没有工作表"
+      description: "此工作簿的所有工作表都是图表或其他没有单元格的工作表。"
+    summary:
+      sheets:
+        one: "%{count} 个工作表"
+        many: "%{count} 个工作表"
+      rows:
+        one: "%{count} 行"
+        many: "%{count} 行"
+      columns:
+        one: "%{count} 列"
+        many: "%{count} 列"
+      in_memory: "整个工作表都加载在内存中"
+    tab:
+      hidden: "已隐藏"
+      chart: "图表"
+      chart_tooltip: "图表工作表只包含图表、没有单元格，因此无法在此显示。"
+    formula_pending: "打开时重新计算"
+    formula:
+      no_selection: "选择一个单元格以查看其公式。"
+      none: "无公式"
+      unavailable: ".xls 文件不提供公式"
   parquet:
     loading: "正在加载 %{name}…"
     empty:
@@ -3613,6 +3650,7 @@ scripts:
       redis: Redis
       delimited: CSV / TSV 文件
       parquet: "Parquet 文件"
+      spreadsheet: "电子表格文件"
       all_files: 所有文件
   error:
     read_file_failed: "读取文件 %{path} 失败：%{error}"

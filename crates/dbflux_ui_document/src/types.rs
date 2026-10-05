@@ -42,6 +42,8 @@ pub enum DocumentKind {
     Delimited,
     // A Parquet file opened read-only as a paged table
     Parquet,
+    // A spreadsheet workbook (xlsx, xlsm, xls, ods) opened one sheet at a time
+    Spreadsheet,
     // MCP approvals queue (agent calls parked for a person)
     McpApprovals,
     // Migrate-data wizard (table -> table, cross-connection)

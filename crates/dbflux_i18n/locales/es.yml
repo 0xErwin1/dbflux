@@ -2047,6 +2047,43 @@ document:
         covered_cell: "La celda %{cell} de la hoja %{sheet} está cubierta por una celda combinada. Edita la primera celda del rango combinado."
         shared_formula_master: "La celda %{cell} de la hoja %{sheet} tiene una fórmula que comparten las celdas de %{range}, así que editarla también las cambiaría. Edítala en una aplicación de hojas de cálculo."
         inside_formula_range: "La celda %{cell} de la hoja %{sheet} está dentro del rango de fórmula %{range}, que solo una aplicación de hojas de cálculo puede editar como un todo."
+      open_failed: "No se pudo abrir %{name}"
+      sheet_failed: "No se pudo leer la hoja %{sheet} de %{name}"
+      objects_unsupported: "Todavía no se pueden abrir hojas de cálculo guardadas en almacenamiento de objetos. Descarga %{name} y abre la copia local."
+      not_a_spreadsheet: "El archivo no es un libro xlsx, xlsm, xls ni ods."
+      encrypted: "El libro está cifrado o protegido con una contraseña de apertura, y DBFlux no puede leerlo."
+      chart_sheet: "La hoja %{sheet} es una hoja de gráfico y no tiene celdas que mostrar."
+      sheet_out_of_range: "La hoja %{index} no existe. El libro tiene %{count} hojas."
+      sheet_too_large: "La hoja %{sheet} ocupa %{rows} filas por %{columns} columnas, %{cells} celdas, más que las %{limit} celdas que DBFlux carga por hoja."
+      malformed: "No se pudo decodificar el libro."
+    loading: "Cargando %{name}…"
+    reading_sheet: "Leyendo la hoja %{sheet}…"
+    empty:
+      title: "La hoja %{sheet} está vacía"
+      description: "La hoja no tiene valores ni fórmulas."
+    no_worksheet:
+      title: "%{name} no tiene hojas de cálculo"
+      description: "Todas las hojas de este libro son gráficos u otras hojas sin celdas."
+    summary:
+      sheets:
+        one: "%{count} hoja"
+        many: "%{count} hojas"
+      rows:
+        one: "%{count} fila"
+        many: "%{count} filas"
+      columns:
+        one: "%{count} columna"
+        many: "%{count} columnas"
+      in_memory: "la hoja completa se carga en memoria"
+    tab:
+      hidden: "oculta"
+      chart: "gráfico"
+      chart_tooltip: "Una hoja de gráfico contiene un gráfico y ninguna celda, así que no se puede mostrar aquí."
+    formula_pending: "Se recalcula al abrir"
+    formula:
+      no_selection: "Selecciona una celda para ver su fórmula."
+      none: "Sin fórmula"
+      unavailable: "La fórmula no está disponible en archivos .xls"
   parquet:
     loading: "Cargando %{name}…"
     empty:
@@ -3613,6 +3650,7 @@ scripts:
       redis: Redis
       delimited: Archivos CSV / TSV
       parquet: "Archivos Parquet"
+      spreadsheet: "Hojas de cálculo"
       all_files: Todos los archivos
   error:
     read_file_failed: "No se pudo leer el archivo %{path}: %{error}"

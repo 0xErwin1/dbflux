@@ -2047,6 +2047,43 @@ document:
         covered_cell: "%{sheet} 시트의 %{cell} 셀은 병합된 셀에 가려져 있습니다. 병합된 범위의 첫 번째 셀을 편집하세요."
         shared_formula_master: "%{sheet} 시트의 %{cell} 셀에는 %{range} 셀들이 공유하는 수식이 있어 편집하면 그 셀들도 바뀝니다. 스프레드시트 애플리케이션에서 편집하세요."
         inside_formula_range: "%{sheet} 시트의 %{cell} 셀은 수식 범위 %{range} 안에 있으며, 이 범위는 스프레드시트 애플리케이션에서만 전체로 편집할 수 있습니다."
+      open_failed: "%{name}을(를) 열 수 없습니다"
+      sheet_failed: "%{name}의 %{sheet} 시트를 읽을 수 없습니다"
+      objects_unsupported: "개체 스토리지에 저장된 스프레드시트는 아직 열 수 없습니다. %{name}을(를) 다운로드한 뒤 로컬 사본을 여세요."
+      not_a_spreadsheet: "이 파일은 xlsx, xlsm, xls, ods 통합 문서가 아닙니다."
+      encrypted: "통합 문서가 암호화되어 있거나 열기 암호로 보호되어 있어 DBFlux가 읽을 수 없습니다."
+      chart_sheet: "%{sheet} 시트는 차트 시트라서 표시할 셀이 없습니다."
+      sheet_out_of_range: "%{index}번 시트가 없습니다. 이 통합 문서에는 시트가 %{count}개 있습니다."
+      sheet_too_large: "%{sheet} 시트는 %{rows}행 × %{columns}열, 즉 %{cells}개 셀로, DBFlux가 시트 하나에 불러오는 %{limit}개 셀보다 많습니다."
+      malformed: "통합 문서를 해독할 수 없습니다."
+    loading: "%{name} 불러오는 중…"
+    reading_sheet: "%{sheet} 시트를 읽는 중…"
+    empty:
+      title: "%{sheet} 시트가 비어 있습니다"
+      description: "이 시트에는 값이나 수식이 없습니다."
+    no_worksheet:
+      title: "%{name}에 워크시트가 없습니다"
+      description: "이 통합 문서의 모든 시트가 차트이거나 셀이 없는 시트입니다."
+    summary:
+      sheets:
+        one: "시트 %{count}개"
+        many: "시트 %{count}개"
+      rows:
+        one: "%{count}행"
+        many: "%{count}행"
+      columns:
+        one: "%{count}열"
+        many: "%{count}열"
+      in_memory: "시트 전체를 메모리에 불러옵니다"
+    tab:
+      hidden: "숨김"
+      chart: "차트"
+      chart_tooltip: "차트 시트에는 차트만 있고 셀이 없어서 여기에 표시할 수 없습니다."
+    formula_pending: "열 때 다시 계산됨"
+    formula:
+      no_selection: "수식을 보려면 셀을 선택하세요."
+      none: "수식 없음"
+      unavailable: ".xls 파일에서는 수식을 볼 수 없습니다"
   parquet:
     loading: "%{name} 불러오는 중…"
     empty:
@@ -3613,6 +3650,7 @@ scripts:
       redis: Redis
       delimited: CSV / TSV 파일
       parquet: "Parquet 파일"
+      spreadsheet: "스프레드시트 파일"
       all_files: 모든 파일
   error:
     read_file_failed: "%{path} 파일을 읽지 못했습니다: %{error}"

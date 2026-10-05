@@ -93,7 +93,9 @@ pub(crate) fn object_icon(display_name: &str) -> AppIcon {
     match extension.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "avif" => AppIcon::Image,
         "json" | "yaml" | "yml" | "toml" | "xml" | "ndjson" => AppIcon::Braces,
-        "csv" | "tsv" | "parquet" | "xlsx" | "avro" | "orc" => AppIcon::FileSpreadsheet,
+        "csv" | "tsv" | "parquet" | "xlsx" | "xlsm" | "xls" | "ods" | "avro" | "orc" => {
+            AppIcon::FileSpreadsheet
+        }
         "txt" | "md" | "log" | "text" => AppIcon::ScrollText,
         "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "rb" | "php" | "c" | "cpp"
         | "h" | "sh" | "sql" | "html" | "css" => AppIcon::FileCode,
@@ -1018,6 +1020,9 @@ mod tests {
         assert_eq!(object_icon("photo.PNG"), AppIcon::Image);
         assert_eq!(object_icon("config.yaml"), AppIcon::Braces);
         assert_eq!(object_icon("export.csv"), AppIcon::FileSpreadsheet);
+        assert_eq!(object_icon("legacy.xls"), AppIcon::FileSpreadsheet);
+        assert_eq!(object_icon("macros.XLSM"), AppIcon::FileSpreadsheet);
+        assert_eq!(object_icon("budget.ods"), AppIcon::FileSpreadsheet);
         assert_eq!(object_icon("notes.md"), AppIcon::ScrollText);
         assert_eq!(object_icon("main.rs"), AppIcon::FileCode);
         assert_eq!(object_icon("backup"), AppIcon::File);

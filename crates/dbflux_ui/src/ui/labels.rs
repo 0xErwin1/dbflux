@@ -319,6 +319,20 @@ pub(crate) fn scripts_filter_delimited_label() -> String {
     dbflux_i18n::t!("scripts.dialog.filter.delimited")
 }
 
+/// Formats the spreadsheet (xlsx, xlsm, xls, ods) file-dialog filter label.
+pub(crate) fn scripts_filter_spreadsheet_label() -> String {
+    dbflux_i18n::t!("scripts.dialog.filter.spreadsheet")
+}
+
+/// The message shown when a spreadsheet object is opened, which only local
+/// files support for now.
+pub(crate) fn spreadsheet_objects_unsupported_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.error.objects_unsupported",
+        name = file_name
+    )
+}
+
 /// Formats the "All Files" file-dialog filter label.
 pub(crate) fn scripts_filter_all_files_label() -> String {
     dbflux_i18n::t!("scripts.dialog.filter.all_files")

@@ -37,6 +37,11 @@ impl Workspace {
                 self.open_parquet_file(file, cx);
             }
 
+            // Read-only in this release, and local files only.
+            Some(FileDocumentFormat::Spreadsheet) => {
+                self.open_spreadsheet_file(file, cx);
+            }
+
             None => {
                 log::warn!(
                     "Not opening {:?} as a file document: its format is not recognized",

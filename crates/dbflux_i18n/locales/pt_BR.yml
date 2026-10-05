@@ -2047,6 +2047,43 @@ document:
         covered_cell: "A célula %{cell} da planilha %{sheet} está coberta por uma célula mesclada. Edite a primeira célula do intervalo mesclado."
         shared_formula_master: "A célula %{cell} da planilha %{sheet} tem uma fórmula compartilhada pelas células de %{range}, então editá-la também as alteraria. Edite-a em um aplicativo de planilhas."
         inside_formula_range: "A célula %{cell} da planilha %{sheet} está dentro do intervalo de fórmula %{range}, que só um aplicativo de planilhas consegue editar como um todo."
+      open_failed: "Não foi possível abrir %{name}"
+      sheet_failed: "Não foi possível ler a planilha %{sheet} de %{name}"
+      objects_unsupported: "Ainda não é possível abrir pastas de trabalho guardadas em armazenamento de objetos. Baixe %{name} e abra a cópia local."
+      not_a_spreadsheet: "O arquivo não é uma pasta de trabalho xlsx, xlsm, xls ou ods."
+      encrypted: "A pasta de trabalho está criptografada ou protegida por senha de abertura, e o DBFlux não consegue lê-la."
+      chart_sheet: "A planilha %{sheet} é uma planilha de gráfico e não tem células para mostrar."
+      sheet_out_of_range: "A planilha %{index} não existe. A pasta de trabalho tem %{count} planilhas."
+      sheet_too_large: "A planilha %{sheet} ocupa %{rows} linhas por %{columns} colunas, %{cells} células, mais do que as %{limit} células que o DBFlux carrega por planilha."
+      malformed: "Não foi possível decodificar a pasta de trabalho."
+    loading: "Carregando %{name}…"
+    reading_sheet: "Lendo a planilha %{sheet}…"
+    empty:
+      title: "A planilha %{sheet} está vazia"
+      description: "A planilha não tem valores nem fórmulas."
+    no_worksheet:
+      title: "%{name} não tem planilhas de dados"
+      description: "Todas as planilhas desta pasta de trabalho são gráficos ou outras planilhas sem células."
+    summary:
+      sheets:
+        one: "%{count} planilha"
+        many: "%{count} planilhas"
+      rows:
+        one: "%{count} linha"
+        many: "%{count} linhas"
+      columns:
+        one: "%{count} coluna"
+        many: "%{count} colunas"
+      in_memory: "a planilha inteira é carregada na memória"
+    tab:
+      hidden: "oculta"
+      chart: "gráfico"
+      chart_tooltip: "Uma planilha de gráfico contém um gráfico e nenhuma célula, então não pode ser mostrada aqui."
+    formula_pending: "Recalculado ao abrir"
+    formula:
+      no_selection: "Selecione uma célula para ver sua fórmula."
+      none: "Sem fórmula"
+      unavailable: "Fórmula indisponível em arquivos .xls"
   parquet:
     loading: "Carregando %{name}…"
     empty:
@@ -3613,6 +3650,7 @@ scripts:
       redis: Redis
       delimited: Arquivos CSV / TSV
       parquet: "Arquivos Parquet"
+      spreadsheet: "Arquivos de planilha"
       all_files: Todos os arquivos
   error:
     read_file_failed: "Falha ao ler o arquivo %{path}: %{error}"
