@@ -122,7 +122,6 @@ pub fn point_inspector_element(
                 .when_some(delta_avg, |d, v| d.child(kv_row("Δ avg", v, colors))),
             colors,
         ))
-        // Source row section: pretty-print the row fields
         .child(inspector_section(
             dbflux_i18n::t!("chart.point_inspector.source_row"),
             div()
