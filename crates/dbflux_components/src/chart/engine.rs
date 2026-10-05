@@ -3283,21 +3283,36 @@ mod tests {
     /// Readout header for a single time series hovered at `hover_fraction`
     /// of a 1000px-wide plot that spans exactly the series' X range.
     fn readout_header(points: Vec<(f64, f64)>, hover_fraction: f32) -> String {
-        let x_min = points.first().map_or(0.0, |point| point.0);
-        let x_max = points.last().map_or(0.0, |point| point.0);
+        readout_header_for(vec![points], 0, &[], hover_fraction)
+    }
+
+    /// Readout header for several time series with `focused_idx` focused and
+    /// `hidden` series hidden, hovered at `hover_fraction` of a 1000px-wide
+    /// plot that spans the X range of every series.
+    fn readout_header_for(
+        series: Vec<Vec<(f64, f64)>>,
+        focused_idx: usize,
+        hidden: &[usize],
+        hover_fraction: f32,
+    ) -> String {
+        let all_x = series.iter().flatten().map(|point| point.0);
+        let x_min = all_x.clone().fold(f64::INFINITY, f64::min);
+        let x_max = all_x.fold(f64::NEG_INFINITY, f64::max);
         let bounds = Bounds {
             origin: point(gpui::px(0.0), gpui::px(0.0)),
             size: gpui::size(gpui::px(1000.0 + MARGIN_RIGHT), gpui::px(300.0)),
         };
+        let y_columns: Vec<usize> = (1..=series.len()).collect();
+        let hidden: HashSet<usize> = hidden.iter().copied().collect();
 
         build_readout(
             Some(gpui::px(1000.0 * hover_fraction)),
             Some(&bounds),
-            &[points],
+            &series,
             &[],
-            0,
-            &HashSet::new(),
-            &simple_spec(0, &[1]),
+            focused_idx,
+            &hidden,
+            &simple_spec(0, &y_columns),
             x_min,
             x_max - x_min,
             true,
@@ -3305,6 +3320,35 @@ mod tests {
         .expect("pointer inside the plot yields a readout")
         .header_time
         .to_string()
+    }
+
+    /// Ten daily samples starting 2025-01-01, each `hour` hours past midnight.
+    fn daily_series(hour: u32) -> Vec<(f64, f64)> {
+        let start = utc_ms(2025, 1, 1, hour, 0);
+
+        (0..10)
+            .map(|day| (start + day as f64 * DAY_MS, day as f64))
+            .collect()
+    }
+
+    #[test]
+    fn readout_header_skips_a_hidden_focused_series() {
+        let series = vec![daily_series(0), daily_series(12), daily_series(0)];
+
+        assert_eq!(
+            readout_header_for(series, 0, &[0], 0.3),
+            "2025-01-03 12:00 UTC"
+        );
+    }
+
+    #[test]
+    fn readout_header_skips_an_empty_focused_series() {
+        let series = vec![Vec::new(), daily_series(12), daily_series(0)];
+
+        assert_eq!(
+            readout_header_for(series, 0, &[], 0.3),
+            "2025-01-03 12:00 UTC"
+        );
     }
 
     #[test]
