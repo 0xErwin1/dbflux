@@ -5,8 +5,8 @@
 //! recover what the Arrow types lose (UUID, INT96, unsupported logical
 //! types), and every leaf goes through the scalar rules of [`crate::cells`].
 
-use arrow_array::Array;
 use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use parquet::basic::Repetition;
 use parquet::schema::types::Type;
@@ -125,31 +125,11 @@ fn write_value(
     let data_type = array.data_type();
 
     match data_type {
-        DataType::List(_) => {
-            let list = array
-                .as_list_opt::<i32>()
-                .ok_or_else(|| mismatch(data_type))?;
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..) => {
+            let elements = list_elements(array, row)?;
             let element = parquet_type.and_then(list_element);
 
-            write_elements(json, list.value(row).as_ref(), element)
-        }
-
-        DataType::LargeList(_) => {
-            let list = array
-                .as_list_opt::<i64>()
-                .ok_or_else(|| mismatch(data_type))?;
-            let element = parquet_type.and_then(list_element);
-
-            write_elements(json, list.value(row).as_ref(), element)
-        }
-
-        DataType::FixedSizeList(..) => {
-            let list = array
-                .as_fixed_size_list_opt()
-                .ok_or_else(|| mismatch(data_type))?;
-            let element = parquet_type.and_then(list_element);
-
-            write_elements(json, list.value(row).as_ref(), element)
+            write_elements(json, elements.as_ref(), element)
         }
 
         DataType::Struct(_) => {
@@ -206,6 +186,20 @@ fn write_value(
             Ok(())
         }
     }
+}
+
+/// The elements of the list at `row` of `array`, a list of any offset width
+/// or a fixed-size list.
+fn list_elements(array: &dyn Array, row: usize) -> Result<ArrayRef, ParquetError> {
+    let data_type = array.data_type();
+
+    match data_type {
+        DataType::List(_) => array.as_list_opt::<i32>().map(|list| list.value(row)),
+        DataType::LargeList(_) => array.as_list_opt::<i64>().map(|list| list.value(row)),
+        DataType::FixedSizeList(..) => array.as_fixed_size_list_opt().map(|list| list.value(row)),
+        _ => None,
+    }
+    .ok_or_else(|| mismatch(data_type))
 }
 
 fn write_elements(
