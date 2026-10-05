@@ -17,17 +17,21 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 
     let mut value = bytes as f64;
-    let mut unit = 0;
+    let mut unit = "B";
 
-    while value >= 1024.0 && unit + 1 < BYTE_UNITS.len() {
+    for larger_unit in BYTE_UNITS.iter().skip(1) {
+        if value < 1024.0 {
+            break;
+        }
+
         value /= 1024.0;
-        unit += 1;
+        unit = larger_unit;
     }
 
     if value < 10.0 {
-        format!("{value:.1} {}", BYTE_UNITS[unit])
+        format!("{value:.1} {unit}")
     } else {
-        format!("{value:.0} {}", BYTE_UNITS[unit])
+        format!("{value:.0} {unit}")
     }
 }
 

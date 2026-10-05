@@ -189,7 +189,7 @@ components:
     selected_count: "%{selected} de %{total} selecionadas"
     apply: "Aplicar"
     no_match: "Nenhuma coluna corresponde à busca"
-    hint: "Espaço marca · Enter aplica · Esc descarta"
+    hint: "Espaço alterna a seleção · Enter aplica · Esc descarta"
 composites:
   rail:
     add: "Adicionar"

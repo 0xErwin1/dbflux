@@ -409,7 +409,11 @@ impl ColumnProjectionPicker {
             (current + stops.len() - 1) % stops.len()
         };
 
-        let handle = match stops[next] {
+        let Some(stop) = stops.get(next) else {
+            return;
+        };
+
+        let handle = match stop {
             FocusStop::List => self.list_focus.clone(),
             FocusStop::Search => self.search_focus(cx),
             FocusStop::SelectAll => self.select_all_focus.clone(),
