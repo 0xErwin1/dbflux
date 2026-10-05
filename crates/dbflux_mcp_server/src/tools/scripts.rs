@@ -19,7 +19,7 @@ use rmcp::{
     tool, tool_router,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListScriptsParams {
@@ -344,6 +344,52 @@ impl DbFluxServer {
     }
 }
 
+/// Resolves a client-supplied path against the scripts root.
+///
+/// `Path::starts_with` compares components without resolving `..`, so a lexical
+/// prefix check alone lets `../outside` through. Only plain components are
+/// accepted, and an existing path must still lie inside the root once symlinks
+/// are followed.
+fn resolve_in_scripts_root(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let outside_root = || "Path is outside scripts root".to_string();
+
+    let has_only_plain_components = Path::new(relative)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
+
+    if !has_only_plain_components {
+        return Err(outside_root());
+    }
+
+    let full_path = root.join(relative);
+
+    match std::fs::canonicalize(&full_path) {
+        Ok(resolved) if resolved.starts_with(root) => Ok(full_path),
+        Ok(_) => Err(outside_root()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(full_path),
+        Err(error) => Err(format!("Failed to resolve script path: {}", error)),
+    }
+}
+
+/// Rejects a script name or extension that is not a single plain path segment,
+/// since both are joined into the file name of the created script.
+fn validate_script_file_name(name: &str, extension: &str) -> Result<(), String> {
+    let is_single_segment = |value: &str| {
+        let mut components = Path::new(value).components();
+
+        matches!(
+            (components.next(), components.next()),
+            (Some(Component::Normal(_)), None)
+        )
+    };
+
+    if !is_single_segment(name) || !is_single_segment(extension) {
+        return Err("Script name and extension must not contain path separators".to_string());
+    }
+
+    Ok(())
+}
+
 // Implementation methods
 // Note: These implementation methods are called by the #[tool] macro-generated code.
 // Clippy cannot detect this usage, so we suppress dead_code warnings.
@@ -361,11 +407,7 @@ impl DbFluxServer {
 
         // Determine the directory to list
         let target_dir = if let Some(path) = subfolder {
-            let path_buf = root.join(path);
-            if !path_buf.starts_with(root) {
-                return Err("Path is outside scripts root".to_string());
-            }
-            path_buf
+            resolve_in_scripts_root(root, path)?
         } else {
             root.to_path_buf()
         };
@@ -414,11 +456,7 @@ impl DbFluxServer {
         let scripts_dir = ScriptsDirectory::new()
             .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
         let root = scripts_dir.root_path();
-        let full_path = root.join(script_path);
-
-        if !full_path.starts_with(root) {
-            return Err("Path is outside scripts root".to_string());
-        }
+        let full_path = resolve_in_scripts_root(root, script_path)?;
 
         if !full_path.exists() {
             return Err("Script not found".to_string());
@@ -467,15 +505,11 @@ impl DbFluxServer {
         let root = scripts_dir.root_path().to_path_buf();
 
         // Determine parent directory
-        let parent = if let Some(folder_path) = folder {
-            let path_buf = root.join(folder_path);
-            if !path_buf.starts_with(&root) {
-                return Err("Folder path is outside scripts root".to_string());
-            }
-            Some(path_buf)
-        } else {
-            None
-        };
+        validate_script_file_name(name, extension)?;
+
+        let parent = folder
+            .map(|folder_path| resolve_in_scripts_root(&root, folder_path))
+            .transpose()?;
 
         // Create the file
         let created_path = scripts_dir
@@ -516,11 +550,7 @@ impl DbFluxServer {
         let scripts_dir = ScriptsDirectory::new()
             .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
         let root = scripts_dir.root_path();
-        let full_path = root.join(script_path);
-
-        if !full_path.starts_with(root) {
-            return Err("Path is outside scripts root".to_string());
-        }
+        let full_path = resolve_in_scripts_root(root, script_path)?;
 
         if !full_path.exists() {
             return Err("Script not found".to_string());
@@ -546,11 +576,7 @@ impl DbFluxServer {
         let mut scripts_dir = ScriptsDirectory::new()
             .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
         let root = scripts_dir.root_path();
-        let full_path = root.join(script_path);
-
-        if !full_path.starts_with(root) {
-            return Err("Path is outside scripts root".to_string());
-        }
+        let full_path = resolve_in_scripts_root(root, script_path)?;
 
         if !full_path.exists() {
             return Err("Script not found".to_string());
@@ -573,11 +599,7 @@ impl DbFluxServer {
         let scripts_dir = ScriptsDirectory::new()
             .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
         let root = scripts_dir.root_path();
-        let full_path = root.join(script_path);
-
-        if !full_path.starts_with(root) {
-            return Err("Path is outside scripts root".to_string());
-        }
+        let full_path = resolve_in_scripts_root(root, script_path)?;
 
         if !full_path.exists() {
             return Err("Script not found".to_string());
@@ -680,5 +702,92 @@ impl DbFluxServer {
         .await?;
 
         Ok(serialize_query_result(&result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_in_scripts_root, validate_script_file_name};
+    use std::fs;
+
+    fn scripts_root() -> (tempfile::TempDir, std::path::PathBuf) {
+        let parent = tempfile::tempdir().expect("create temp dir");
+        let root = parent.path().join("scripts");
+        fs::create_dir(&root).expect("create scripts root");
+        let root = fs::canonicalize(&root).expect("canonicalize scripts root");
+
+        (parent, root)
+    }
+
+    #[test]
+    fn resolves_a_nested_script_inside_the_root() {
+        let (_parent, root) = scripts_root();
+
+        let resolved = resolve_in_scripts_root(&root, "reports/daily.sql").expect("inside root");
+
+        assert_eq!(resolved, root.join("reports/daily.sql"));
+    }
+
+    #[test]
+    fn rejects_parent_directory_traversal() {
+        let (parent, root) = scripts_root();
+        fs::write(parent.path().join("secret.txt"), "secret").expect("write outside file");
+
+        for path in [
+            "../secret.txt",
+            "reports/../../secret.txt",
+            "./../secret.txt",
+        ] {
+            assert!(
+                resolve_in_scripts_root(&root, path).is_err(),
+                "{path} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_absolute_paths() {
+        let (parent, root) = scripts_root();
+        let absolute = parent.path().join("secret.txt");
+
+        let result = resolve_in_scripts_root(&root, absolute.to_str().expect("utf-8 path"));
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_symlink_that_leads_out_of_the_root() {
+        let (parent, root) = scripts_root();
+        let outside = parent.path().join("secret.sql");
+        fs::write(&outside, "SELECT 1;").expect("write outside file");
+        std::os::unix::fs::symlink(&outside, root.join("escape.sql")).expect("create symlink");
+
+        assert!(resolve_in_scripts_root(&root, "escape.sql").is_err());
+    }
+
+    #[test]
+    fn accepts_a_plain_file_name_and_extension() {
+        assert!(validate_script_file_name("weekly", "sql").is_ok());
+        assert!(validate_script_file_name("weekly.sql", "sql").is_ok());
+    }
+
+    #[test]
+    fn rejects_file_names_and_extensions_with_path_segments() {
+        let cases = [
+            ("../escape", "sql"),
+            ("../../escape.sql", "sql"),
+            ("nested/escape", "sql"),
+            ("weekly", "sql/../../escape"),
+            ("..", "sql"),
+            ("", "sql"),
+        ];
+
+        for (name, extension) in cases {
+            assert!(
+                validate_script_file_name(name, extension).is_err(),
+                "{name:?} with {extension:?} must be rejected"
+            );
+        }
     }
 }

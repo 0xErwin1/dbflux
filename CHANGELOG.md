@@ -32,6 +32,10 @@ All notable changes to DBFlux will be documented in this file.
 * **Point inspector while hovering a chart** — While the pointer is over a chart point, the point inspector's Time now shows that point's time and its Series names the series whose value it shows. Before, Time showed the pointer's position between points, such as `2025-05-03 22:11:54`, and Series could name another series than the one the pointer was on, because it only followed the keyboard.
 * **Chart Y-axis picker stays open** — Clicking a column in the Y-axis picker of a chart, in a result, a chart tab or a dashboard panel's configuration, now leaves the picker open so several columns can be checked or unchecked in a row, as Space already did from the keyboard. Before, it closed after every click.
 
+### Security
+
+* **MCP script tools stay inside the scripts folder** — The MCP `get_script`, `update_script`, `delete_script`, `create_script`, `list_scripts` and `execute_script` tools now refuse a path that leads out of DBFlux's scripts folder, whether through `..`, an absolute path or a symlink that points elsewhere, and `create_script` refuses a name or extension that contains a path separator. Before, an MCP client allowed to use these tools could read, overwrite or delete files outside the scripts folder by passing a path such as `../../.ssh/config`.
+
 ## [0.8.6] - 2026-10-02
 
 ### Added
