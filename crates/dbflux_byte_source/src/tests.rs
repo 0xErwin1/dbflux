@@ -217,3 +217,15 @@ fn a_shared_source_reads_like_the_source_it_holds() {
     assert_eq!(clone.byte_length().unwrap(), 6);
     assert_eq!(clone.read_range(2..4).unwrap(), b"cd".to_vec());
 }
+
+#[test]
+fn a_borrowed_source_reads_like_the_source_it_points_at() {
+    let source = MemorySource::new(b"abcdef".to_vec());
+    let borrowed = &source;
+
+    assert_eq!(ByteSource::byte_length(&borrowed).unwrap(), 6);
+    assert_eq!(
+        ByteSource::read_range(&borrowed, 1..3).unwrap(),
+        b"bc".to_vec()
+    );
+}

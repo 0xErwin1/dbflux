@@ -30,7 +30,9 @@ mod syntax_runs;
 mod governance;
 
 pub mod export_wizard;
+mod file_edit_lifecycle;
 pub mod file_format;
+mod file_save;
 pub mod file_source;
 mod handle;
 pub mod history_panel;

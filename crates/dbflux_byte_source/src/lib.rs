@@ -106,6 +106,18 @@ impl<T: ByteSource + ?Sized> ByteSource for std::sync::Arc<T> {
     }
 }
 
+/// A borrowed source reads like the source it points at, so a by-value reader
+/// API can take a source the caller keeps using afterwards.
+impl<T: ByteSource + ?Sized> ByteSource for &T {
+    fn byte_length(&self) -> Result<u64, SourceError> {
+        (**self).byte_length()
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError> {
+        (**self).read_range(range)
+    }
+}
+
 /// Clamps `range` to a source of `length` bytes. The result is never inverted.
 fn clamp_range(range: Range<u64>, length: u64) -> Range<u64> {
     let end = range.end.min(length);

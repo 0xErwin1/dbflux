@@ -2033,6 +2033,20 @@ document:
         read_only_file: "The file is read-only."
     warning:
       cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
+  spreadsheet:
+    error:
+      write:
+        malformed: "The file is not a spreadsheet package DBFlux can edit in place, so nothing was saved."
+        sheet_out_of_range: "The sheet being saved is no longer in the file. Reload the file and edit it again."
+        not_a_worksheet: "Sheet %{sheet} is not a worksheet, so it has no cells to edit."
+        cell_out_of_range: "Row %{row}, column %{column} of sheet %{sheet} is past the last cell a sheet can hold."
+        text_too_long: "Cell %{cell} of sheet %{sheet} holds %{length} characters, more than the 32767 a cell can hold. Shorten the text."
+        invalid_character: "Cell %{cell} of sheet %{sheet} contains %{character}, which a spreadsheet file cannot store. Remove the character."
+        non_finite_number: "Cell %{cell} of sheet %{sheet} holds %{value}, which a cell cannot store as a number."
+        date_out_of_range: "Cell %{cell} of sheet %{sheet} holds the date %{date}, outside the dates this workbook can store."
+        covered_cell: "Cell %{cell} of sheet %{sheet} is covered by a merged cell. Edit the first cell of the merged range instead."
+        shared_formula_master: "Cell %{cell} of sheet %{sheet} holds a formula the cells of %{range} share, so editing it would change them too. Edit it in a spreadsheet application."
+        inside_formula_range: "Cell %{cell} of sheet %{sheet} is inside the formula range %{range}, which only a spreadsheet application can edit as a whole."
   parquet:
     loading: "Loading %{name}…"
     empty:

@@ -3635,6 +3635,7 @@ dependencies = [
  "dbflux_parquet",
  "dbflux_policy",
  "dbflux_schema_viz",
+ "dbflux_spreadsheet",
  "dbflux_storage",
  "dbflux_test_support",
  "dbflux_transfer",
