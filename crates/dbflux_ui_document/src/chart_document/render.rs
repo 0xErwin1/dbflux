@@ -440,20 +440,7 @@ impl ChartDocument {
                 });
             },
             move |col_idx, checked, _window, cx| {
-                doc_for_y.update(cx, |this, cx| {
-                    this.chart_shell.update(cx, |s, cx| {
-                        let mut b = s.active_bindings();
-                        if checked {
-                            if !b.y.contains(&col_idx) {
-                                b.y.push(col_idx);
-                            }
-                        } else {
-                            b.y.retain(|&i| i != col_idx);
-                        }
-                        s.apply_bindings(b, cx);
-                    });
-                    this.rebuild_chart_view(cx);
-                });
+                doc_for_y.update(cx, |this, cx| this.toggle_y_column(col_idx, checked, cx));
             },
             move |group_col, _window, cx| {
                 doc_for_group.update(cx, |this, cx| {

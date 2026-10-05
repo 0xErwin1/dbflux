@@ -1569,6 +1569,15 @@ impl ChartDocument {
         self.rebuild_chart_view(cx);
     }
 
+    /// Toggle a Y column through the underlying `ChartShell`, keeping the Y
+    /// picker open.
+    pub fn toggle_y_column(&mut self, column_index: usize, checked: bool, cx: &mut Context<Self>) {
+        self.chart_shell.update(cx, |shell, cx| {
+            shell.toggle_y_column(column_index, checked, cx)
+        });
+        self.rebuild_chart_view(cx);
+    }
+
     /// Rebuild the `ChartView` entity from the current `last_result`.
     ///
     /// Called after any chart-config mutation that clears `chart_view`
