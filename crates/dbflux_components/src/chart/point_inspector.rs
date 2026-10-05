@@ -122,9 +122,8 @@ pub fn point_inspector_element(
                 .when_some(delta_avg, |d, v| d.child(kv_row("Δ avg", v, colors))),
             colors,
         ))
-        // Source doc section: pretty-print the row fields
         .child(inspector_section(
-            dbflux_i18n::t!("chart.point_inspector.source_doc"),
+            dbflux_i18n::t!("chart.point_inspector.source_row"),
             div()
                 .flex()
                 .flex_col()
@@ -340,7 +339,7 @@ mod tests {
             "chart.point_inspector.hovered_point",
             "chart.point_inspector.time",
             "chart.point_inspector.value",
-            "chart.point_inspector.source_doc",
+            "chart.point_inspector.source_row",
             "chart.point_inspector.quick_actions",
             "chart.point_inspector.show_in_tree",
         ];
@@ -350,6 +349,22 @@ mod tests {
             let es = dbflux_i18n::t!(key, locale = "es");
             assert!(!en.is_empty() && en != key, "en missing for {key}");
             assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn source_row_label_is_translated_in_every_locale() {
+        let key = "chart.point_inspector.source_row";
+        let english = dbflux_i18n::t!(key, locale = "en");
+        assert_eq!(english, "SOURCE ROW");
+
+        for locale in ["es", "pt_BR", "ko", "zh_Hans"] {
+            let value = dbflux_i18n::t!(key, locale = locale);
+
+            assert!(
+                !value.is_empty() && value != format!("{locale}.{key}") && value != english,
+                "{key} is not translated in {locale}"
+            );
         }
     }
 
