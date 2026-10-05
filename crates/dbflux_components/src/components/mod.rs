@@ -1,3 +1,5 @@
+pub mod column_facts;
+pub mod column_projection;
 // Component modules relocated from dbflux_ui.
 pub mod data_table;
 pub mod document_tree;

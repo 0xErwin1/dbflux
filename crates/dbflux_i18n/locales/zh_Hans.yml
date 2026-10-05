@@ -181,6 +181,15 @@ components:
     json_key_placeholder: JSON 键（可选）
   file_picker:
     browse: 浏览…
+  column_projection:
+    trigger: "%{selected}/%{total} 列"
+    search_placeholder: "搜索列"
+    select_all: "全选"
+    select_none: "全不选"
+    selected_count: "已选 %{selected}/%{total}"
+    apply: "应用"
+    no_match: "没有与搜索匹配的列"
+    hint: "空格切换 · Enter 应用 · Esc 放弃"
 composites:
   rail:
     add: "添加"

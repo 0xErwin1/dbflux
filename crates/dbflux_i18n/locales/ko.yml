@@ -181,6 +181,15 @@ components:
     json_key_placeholder: JSON 키(선택 사항)
   file_picker:
     browse: "찾아보기…"
+  column_projection:
+    trigger: "%{total}개 중 %{selected}개 열"
+    search_placeholder: "열 검색"
+    select_all: "모두 선택"
+    select_none: "모두 해제"
+    selected_count: "%{total}개 중 %{selected}개 선택됨"
+    apply: "적용"
+    no_match: "검색과 일치하는 열이 없습니다"
+    hint: "Space 전환 · Enter 적용 · Esc 취소"
 composites:
   rail:
     add: "추가"
