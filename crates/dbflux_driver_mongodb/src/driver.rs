@@ -3041,37 +3041,6 @@ impl Connection for MongoConnection {
         "SELECT * FROM table WHERE filter LIMIT offset".to_string()
     }
 
-    fn build_insert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-    ) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        (
-            "INSERT INTO table (columns) VALUES (values)".to_string(),
-            Vec::new(),
-        )
-    }
-
-    fn build_update_sql(
-        &self,
-        _table: &str,
-        _set: &[(String, Value)],
-        _filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        (
-            "UPDATE table SET col=val WHERE filter".to_string(),
-            Vec::new(),
-        )
-    }
-
-    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        ("DELETE FROM table WHERE filter".to_string(), Vec::new())
-    }
-
     fn build_upsert_sql(
         &self,
         _table: &str,
@@ -3085,11 +3054,6 @@ impl Connection for MongoConnection {
             "INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(),
             Vec::new(),
         )
-    }
-
-    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "SELECT COUNT(*) FROM table".to_string()
     }
 
     fn build_truncate_sql(&self, _table: &str) -> String {
@@ -3114,14 +3078,6 @@ impl Connection for MongoConnection {
 
     fn supports_transactional_ddl(&self) -> bool {
         false
-    }
-
-    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
-        // For MongoDB, the Value filter is already in document format
-        // This is used by SQL-based drivers to convert JSON filters to SQL WHERE clauses
-        Err(DbError::NotSupported(
-            "translate_filter is not applicable to MongoDB - it uses document-based filters, not SQL".to_string(),
-        ))
     }
 }
 

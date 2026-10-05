@@ -269,28 +269,6 @@ impl Connection for CachedConnection {
             .build_select_sql(table, columns, filter, order_by, limit, offset)
     }
 
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        self.connection.build_insert_sql(table, columns, values)
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        self.connection.build_update_sql(table, set, filter)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        self.connection.build_delete_sql(table, filter)
-    }
-
     fn build_upsert_sql(
         &self,
         table: &str,
@@ -301,10 +279,6 @@ impl Connection for CachedConnection {
     ) -> (String, Vec<Value>) {
         self.connection
             .build_upsert_sql(table, columns, values, conflict_columns, update_columns)
-    }
-
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        self.connection.build_count_sql(table, filter)
     }
 
     fn build_truncate_sql(&self, table: &str) -> String {
@@ -327,10 +301,6 @@ impl Connection for CachedConnection {
 
     fn supports_transactional_ddl(&self) -> bool {
         self.connection.supports_transactional_ddl()
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        self.connection.translate_filter(filter)
     }
 }
 

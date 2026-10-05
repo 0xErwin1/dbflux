@@ -2870,76 +2870,6 @@ impl Connection for MysqlConnection {
         sql
     }
 
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quoted_table, cols, placeholders_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-
-        let set_parts: Vec<String> = set
-            .iter()
-            .map(|(col, _)| format!("{} = ?", MYSQL_DIALECT.quote_identifier(col)))
-            .collect();
-        let set_str = set_parts.join(", ");
-
-        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-
-        if let Some(f) = filter {
-            let (where_clause, filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            params.extend(filter_params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let mut sql = format!("DELETE FROM {}", quoted_table);
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let (where_clause, filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            params.extend(filter_params);
-        }
-
-        (sql, params)
-    }
-
     fn build_upsert_sql(
         &self,
         table: &str,
@@ -2984,21 +2914,6 @@ impl Connection for MysqlConnection {
         (sql, values.to_vec())
     }
 
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
-
-        if let Some(f) = filter {
-            let (where_clause, _filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        sql
-    }
-
     fn build_truncate_sql(&self, table: &str) -> String {
         let quoted_table = MYSQL_DIALECT.quote_identifier(table);
         format!("TRUNCATE TABLE {}", quoted_table)
@@ -3026,10 +2941,6 @@ impl Connection for MysqlConnection {
 
     fn supports_transactional_ddl(&self) -> bool {
         false
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter).0)
     }
 }
 

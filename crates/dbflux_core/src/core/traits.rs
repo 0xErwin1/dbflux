@@ -1948,57 +1948,6 @@ pub trait Connection: Send + Sync {
         unimplemented!("build_select_sql not implemented for this driver")
     }
 
-    /// Build an INSERT query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to insert into
-    /// * `columns` - The columns to insert
-    /// * `values` - The values to insert
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let _ = (table, columns, values);
-        unimplemented!("build_insert_sql not implemented for this driver")
-    }
-
-    /// Build an UPDATE query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to update
-    /// * `set` - Column/value pairs to set
-    /// * `filter` - Optional WHERE clause expression
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let _ = (table, set, filter);
-        unimplemented!("build_update_sql not implemented for this driver")
-    }
-
-    /// Build a DELETE query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to delete from
-    /// * `filter` - Optional WHERE clause expression
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let _ = (table, filter);
-        unimplemented!("build_delete_sql not implemented for this driver")
-    }
-
     /// Build an UPSERT (INSERT ON CONFLICT) query.
     ///
     /// # Arguments
@@ -2020,19 +1969,6 @@ pub trait Connection: Send + Sync {
     ) -> (String, Vec<Value>) {
         let _ = (table, columns, values, conflict_columns, update_columns);
         unimplemented!("build_upsert_sql not implemented for this driver")
-    }
-
-    /// Build a COUNT query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to count
-    /// * `filter` - Optional WHERE clause expression
-    ///
-    /// # Returns
-    /// A SQL string for the COUNT query
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let _ = (table, filter);
-        unimplemented!("build_count_sql not implemented for this driver")
     }
 
     /// Build a TRUNCATE TABLE statement.
@@ -2151,21 +2087,6 @@ pub trait Connection: Send + Sync {
     /// caches (e.g., MongoDB) can override this.
     fn refresh_database_schema(&self, _database: &str) -> Result<(), DbError> {
         Ok(())
-    }
-
-    /// Translate a Value filter expression to a SQL WHERE clause string.
-    ///
-    /// This is used to convert JSON-based filter expressions to SQL syntax.
-    ///
-    /// # Arguments
-    /// * `filter` - The filter expression as a Value
-    ///
-    /// # Returns
-    /// A SQL WHERE clause string
-    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
-        Err(DbError::NotSupported(
-            "translate_filter not implemented for this driver".to_string(),
-        ))
     }
 }
 

@@ -290,16 +290,6 @@ pub(crate) fn translate_filter_to_sql(filter: &Value) -> String {
     }
 }
 
-pub(crate) fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    if let Value::Document(doc) = filter {
-        for value in doc.values() {
-            if !matches!(value, Value::Null) {
-                params.push(value.clone());
-            }
-        }
-    }
-}
-
 // =============================================================================
 // DDL code generation
 // =============================================================================
@@ -476,12 +466,9 @@ mod tests {
         doc.insert("a".to_string(), Value::Null);
         doc.insert("b".to_string(), Value::Text("x".into()));
         assert_eq!(
-            translate_filter_to_sql(&Value::Document(doc.clone())),
+            translate_filter_to_sql(&Value::Document(doc)),
             "\"a\" IS NULL AND \"b\" = 'x'"
         );
-        let mut params = Vec::new();
-        collect_filter_values(&Value::Document(doc), &mut params);
-        assert_eq!(params, vec![Value::Text("x".into())]);
         assert_eq!(
             translate_filter_to_sql(&Value::Text("a > 1".into())),
             "a > 1"

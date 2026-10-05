@@ -3179,11 +3179,6 @@ impl Connection for MssqlConnection {
         sql
     }
 
-    fn build_count_sql(&self, table: &str, _filter: Option<&Value>) -> String {
-        let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        format!("SELECT COUNT(*) FROM {}", quoted_table)
-    }
-
     fn build_truncate_sql(&self, table: &str) -> String {
         let quoted_table = MSSQL_DIALECT.quote_identifier(table);
         format!("TRUNCATE TABLE {}", quoted_table)
