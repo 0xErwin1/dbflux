@@ -1,13 +1,13 @@
 //! `PaneHandle` constructor for `ParquetDocument`.
 //!
 //! The document is read-only, so the pane has no save, quit or pending-input
-//! hooks. It records nothing in the workspace session yet: its
-//! `session_tab_snapshot` stays unset, which the session writer skips.
+//! hooks.
 
 use super::document::ParquetDocument;
 use crate::dedup::DocumentKey;
+use crate::dedup::FileDocumentKey;
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, PaneHandle};
+use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
@@ -16,7 +16,7 @@ impl ParquetDocument {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::Parquet,
             // render
@@ -109,6 +109,34 @@ impl ParquetDocument {
                     })
                 })
             },
-        )
+        );
+
+        // The workspace session reopens a local file by its path, with the
+        // default projection picked again. An object is left out: it needs the
+        // live connection of its profile, which is not there at startup. The
+        // applied projection and the rows loaded are not recorded.
+        pane.session_tab_snapshot = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| {
+                let document = entity.read(cx);
+
+                let FileDocumentKey::Local { path } = document.file() else {
+                    return None;
+                };
+
+                Some(CodeSessionTabSnapshot {
+                    kind: ParquetDocument::SESSION_TAB_KIND,
+                    id: document.id(),
+                    title: document.title(),
+                    language: dbflux_core::QueryLanguage::Sql,
+                    exec_ctx: dbflux_core::ExecutionContext::default(),
+                    file_path: Some(path.clone()),
+                    scratch_path: None,
+                    shadow_path: None,
+                })
+            })
+        });
+
+        pane
     }
 }

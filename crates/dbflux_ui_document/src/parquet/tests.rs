@@ -896,14 +896,29 @@ fn the_pane_is_a_read_only_parquet_tab(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("pane");
     let path = directory.file("rows.parquet", &rows_file(3));
 
-    let (document, window) = open_local(cx, path);
+    let (document, window) = open_local(cx, path.clone());
 
     let pane = window.update(|_, cx| ParquetDocument::into_pane(document.clone(), cx));
 
     assert_eq!(pane.kind(), DocumentKind::Parquet);
     window.update(|_, cx| assert_eq!(pane.tab_title(cx), "rows.parquet"));
 
-    assert!(pane.session_tab_snapshot.is_none());
+    window.update(|_, cx| {
+        let snapshot = pane
+            .session_tab_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot(cx))
+            .expect("a local file takes part in the session");
+
+        assert_eq!(snapshot.kind, "Parquet");
+        assert_eq!(snapshot.id, document.read(cx).id());
+        assert_eq!(snapshot.title, "rows.parquet");
+        assert_eq!(snapshot.file_path.as_deref(), Some(path.as_path()));
+        assert_eq!(snapshot.scratch_path, None);
+        assert_eq!(snapshot.shadow_path, None);
+        assert_eq!(snapshot.exec_ctx.connection_id, None);
+    });
+
     assert!(pane.commit_pending_input.is_none());
     assert!(pane.save_for_close.is_none());
     assert!(pane.quit_disposition.is_none());

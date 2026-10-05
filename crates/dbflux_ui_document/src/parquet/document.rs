@@ -333,6 +333,9 @@ pub struct ParquetDocument {
 impl EventEmitter<DocumentEvent> for ParquetDocument {}
 
 impl ParquetDocument {
+    /// The `tab_kind` a local file is recorded under in the workspace session.
+    pub const SESSION_TAB_KIND: &'static str = "Parquet";
+
     /// Opens the local file at `path`.
     pub fn open_local(path: std::path::PathBuf, cx: &mut Context<Self>) -> Self {
         let file = FileDocumentKey::Local { path: path.clone() };

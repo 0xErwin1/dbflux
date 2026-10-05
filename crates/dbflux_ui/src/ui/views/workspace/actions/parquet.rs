@@ -93,6 +93,65 @@ impl Workspace {
         self.pending_focus = Some(FocusTarget::Document);
         cx.notify();
     }
+
+    /// Reopens a local file the workspace session recorded, with the default
+    /// projection picked again: the projection applied before the restart is
+    /// not kept.
+    ///
+    /// A file that cannot be opened any more is skipped with a log line, as a
+    /// CSV that cannot be opened is, so startup raises no toast for a failure
+    /// the user did not just cause. The path is resolved as
+    /// [`Self::open_parquet_file`] resolves it, because it is the tab's dedup
+    /// key: a session written by hand can spell one file two ways. Unlike
+    /// opening, restoring does not record the file in recent files and does
+    /// not take the keyboard.
+    pub(in crate::ui::views::workspace) fn restore_parquet_tab(
+        &mut self,
+        tab: &dbflux_storage::repositories::state::sessions::RestoredTab,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(stored_path) = tab.file_path.as_ref() else {
+            log::warn!(
+                "Parquet tab '{}' has no file_path in restored session — skipping",
+                tab.title
+            );
+            return;
+        };
+
+        let path = match std::fs::canonicalize(stored_path) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                log::warn!(
+                    "Parquet tab '{}' cannot resolve {}: {error} — skipping",
+                    tab.title,
+                    stored_path.display()
+                );
+                return;
+            }
+        };
+
+        if let Err(error) = std::fs::File::open(&path) {
+            log::warn!(
+                "Parquet tab '{}' cannot open {}: {error} — skipping",
+                tab.title,
+                path.display()
+            );
+            return;
+        }
+
+        let key = DocumentKey::FileDocument(FileDocumentKey::Local { path: path.clone() });
+
+        if self.tab_manager.read(cx).find_by_key(&key, cx).is_some() {
+            return;
+        }
+
+        let doc = cx.new(|cx| ParquetDocument::open_local(path, cx));
+        let pane = ParquetDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+    }
 }
 
 #[cfg(test)]
@@ -108,7 +167,9 @@ mod tests {
     };
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -356,6 +417,293 @@ mod tests {
 
         assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
         assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Parquet]);
+    }
+
+    // -- Session ---------------------------------------------------------------
+
+    /// The tabs the workspace session holds in its storage, in their order.
+    fn session_tabs(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Vec<dbflux_storage::repositories::state::sessions::RestoredTab> {
+        window.update(|_, cx| {
+            let runtime = workspace.read(cx).app_state.read(cx).storage_runtime();
+
+            runtime
+                .sessions()
+                .restore_session(runtime.artifacts())
+                .expect("the session must be readable")
+                .map(|session| session.tabs)
+                .unwrap_or_default()
+        })
+    }
+
+    /// A session tab of `tab_kind` on `file_path`, as `write_session_manifest`
+    /// records it.
+    fn session_tab(
+        tab_kind: &str,
+        title: &str,
+        file_path: Option<PathBuf>,
+        position: usize,
+    ) -> dbflux_storage::repositories::state::sessions::WorkspaceTab {
+        dbflux_storage::repositories::state::sessions::WorkspaceTab {
+            id: uuid::Uuid::new_v4().to_string(),
+            tab_kind: tab_kind.to_string(),
+            language: "sql".to_string(),
+            exec_ctx: dbflux_core::ExecutionContext::default(),
+            scratch_path: None,
+            shadow_path: None,
+            file_path,
+            title: title.to_string(),
+            position,
+            is_pinned: false,
+        }
+    }
+
+    /// Stores a session holding `tabs`, then restores it into the workspace
+    /// the way startup does.
+    fn restore(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        tabs: Vec<dbflux_storage::repositories::state::sessions::WorkspaceTab>,
+        active_index: Option<usize>,
+    ) {
+        window.update(|_, cx| {
+            let runtime = workspace.read(cx).app_state.read(cx).storage_runtime();
+
+            runtime
+                .sessions()
+                .save_workspace_session(
+                    &dbflux_storage::repositories::state::sessions::WorkspaceSessionManifest {
+                        version: 1,
+                        active_index,
+                        tabs,
+                    },
+                )
+                .expect("the session must be storable");
+        });
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.restore_session(window, cx));
+        });
+        window.run_until_parked();
+    }
+
+    /// The table columns the window draws, counted by their header cells.
+    fn drawn_column_count(window: &mut VisualTestContext, capture: &FrameCapture) -> usize {
+        let frame = capture.frame(window);
+
+        frame
+            .nodes()
+            .map(|(_, node)| node.id())
+            .filter(|id| id.starts_with("header-col-"))
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    #[gpui::test]
+    fn an_open_local_parquet_file_is_recorded_in_the_session_by_its_path(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.parquet");
+
+        open(window, &workspace, file.key());
+
+        let tabs = session_tabs(window, &workspace);
+        let resolved = std::fs::canonicalize(&file.path).expect("the test file must resolve");
+
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].tab_kind, "Parquet");
+        assert_eq!(tabs[0].file_path.as_deref(), Some(resolved.as_path()));
+        assert_eq!(tabs[0].title, "cities.parquet");
+    }
+
+    #[gpui::test]
+    fn a_parquet_object_is_not_recorded_in_the_session(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("local.parquet");
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_ranged_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store);
+
+        open(window, &workspace, file.key());
+        open(window, &workspace, object_key(profile_id));
+
+        assert_eq!(
+            tab_kinds(window, &workspace),
+            [DocumentKind::Parquet, DocumentKind::Parquet]
+        );
+
+        let titles: Vec<String> = session_tabs(window, &workspace)
+            .into_iter()
+            .map(|tab| tab.title)
+            .collect();
+        assert_eq!(
+            titles,
+            ["local.parquet"],
+            "an object needs a live connection, so only the local file is restored"
+        );
+    }
+
+    /// The column projection chosen in a tab is not part of the session: the
+    /// restored tab reads the file with its default projection again.
+    #[gpui::test]
+    fn restoring_a_session_reopens_a_local_parquet_file_with_the_default_projection(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.parquet");
+        let capture = FrameCapture::observe(window);
+
+        let document = window.update(|_, cx| {
+            let path = std::fs::canonicalize(&file.path).expect("the test file must resolve");
+            let document = cx.new(|cx| ParquetDocument::open_local(path, cx));
+            let pane = ParquetDocument::into_pane(document.clone(), cx);
+            let tab_manager = workspace.read(cx).tab_manager.clone();
+
+            tab_manager.update(cx, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx);
+            });
+
+            document
+        });
+        window.run_until_parked();
+
+        assert_eq!(drawn_column_count(window, &capture), 2);
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.apply_projection(dbflux_core::ColumnProjection::from_indices(2, &[1]), cx);
+            })
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).shown_columns().to_vec()),
+            [1]
+        );
+        assert_eq!(drawn_column_count(window, &capture), 1);
+
+        let stored: Vec<_> = session_tabs(window, &workspace)
+            .into_iter()
+            .enumerate()
+            .map(|(position, tab)| session_tab(&tab.tab_kind, &tab.title, tab.file_path, position))
+            .collect();
+        assert_eq!(stored.len(), 1);
+
+        close_every_tab(window, &workspace);
+        assert!(tab_titles(window, &workspace).is_empty());
+
+        restore(window, &workspace, stored, Some(0));
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Parquet]);
+        assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
+        assert_eq!(drawn_column_count(window, &capture), 2);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn restoring_keeps_order_among_csv_and_parquet_tabs(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let table = TestFile::new("cities.parquet");
+
+        let first = table.directory.join("first.csv");
+        let last = table.directory.join("last.csv");
+        std::fs::write(&first, b"name,city\nAna,Lima\n").expect("the test file must be writable");
+        std::fs::write(&last, b"name,city\nBo,Quito\n").expect("the test file must be writable");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Delimited", "first.csv", Some(first), 0),
+                session_tab("Parquet", "cities.parquet", Some(table.path.clone()), 1),
+                session_tab("Delimited", "last.csv", Some(last), 2),
+            ],
+            Some(1),
+        );
+
+        assert_eq!(
+            tab_titles(window, &workspace),
+            ["first.csv", "cities.parquet", "last.csv"]
+        );
+        assert_eq!(
+            tab_kinds(window, &workspace),
+            [
+                DocumentKind::Delimited,
+                DocumentKind::Parquet,
+                DocumentKind::Delimited
+            ]
+        );
+        assert_eq!(
+            active_title(window, &workspace).as_deref(),
+            Some("cities.parquet")
+        );
+
+        let kinds: Vec<String> = session_tabs(window, &workspace)
+            .into_iter()
+            .map(|tab| tab.tab_kind)
+            .collect();
+        assert_eq!(kinds, ["Delimited", "Parquet", "Delimited"]);
+        assert!(
+            recent_paths(window, &workspace).is_empty(),
+            "restoring is not opening, so recent files stay as they were"
+        );
+        assert_eq!(toast_count(window), 0);
+    }
+
+    /// A file that is gone at startup is skipped, as a CSV is, without a
+    /// toast for a failure the user did not just cause.
+    #[gpui::test]
+    fn a_parquet_file_missing_at_restore_is_skipped_without_a_report(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.parquet");
+        let missing = file.directory.join("absent.parquet");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Parquet", "absent.parquet", Some(missing), 0),
+                session_tab("Parquet", "no-path.parquet", None, 1),
+                session_tab("Parquet", "cities.parquet", Some(file.path.clone()), 2),
+            ],
+            Some(0),
+        );
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    /// A session can hold a path spelled differently from the one opening the
+    /// file uses. Restoring resolves it, so the file keeps one tab and a later
+    /// open focuses that tab.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_restored_parquet_link_and_the_file_it_names_share_one_tab(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("cities.parquet");
+
+        let link = file.directory.join("link.parquet");
+        std::os::unix::fs::symlink(&file.path, &link).expect("the test link must be creatable");
+        let dotted = file.directory.join(".").join("cities.parquet");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Parquet", "link.parquet", Some(link), 0),
+                session_tab("Parquet", "cities.parquet", Some(dotted), 1),
+            ],
+            Some(0),
+        );
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+
+        open(window, &workspace, file.key());
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+        assert_eq!(toast_count(window), 0);
     }
 
     fn object_key(profile_id: uuid::Uuid) -> FileDocumentKey {
