@@ -93,8 +93,9 @@ pub struct CellPage {
 /// Display rules:
 /// - integers are integer cells, except a UInt64 above `i64::MAX`, which is a
 ///   text cell with its exact digits;
-/// - floats (Float16 included) are float cells; an integral value shows one
-///   decimal (`2.0`), any other value the shortest text of its own width;
+/// - floats (Float16 included) are float cells; an integral value below
+///   `1e15` in magnitude shows one decimal (`2.0`), as the data table shows
+///   driver floats, and any other value the shortest text of its own width;
 /// - decimals are text with the scale applied (`123.45`), never rounded;
 /// - dates are `YYYY-MM-DD`, times `HH:MM:SS` with as many fraction digits as
 ///   the unit holds (3, 6 or 9, zeros kept), timestamps both, separated by a
@@ -453,6 +454,49 @@ fn scalar_cell(array: &dyn Array, row: usize, hints: &LeafHints) -> Result<Cell,
         DataType::Decimal128(..) => decimal_cell::<Decimal128Type>(array, row)?,
         DataType::Decimal256(..) => decimal_cell::<Decimal256Type>(array, row)?,
 
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => byte_cell(array, row, hints)?,
+
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(..)
+        | DataType::Interval(_) => temporal_cell(array, row, hints)?,
+
+        DataType::Dictionary(..) => {
+            let dictionary = array
+                .as_any_dictionary_opt()
+                .ok_or_else(|| mismatch(data_type))?;
+            let values = dictionary.values();
+            let key = dictionary_key(dictionary.keys(), row)?;
+
+            if key >= values.len() {
+                return Err(ParquetError::malformed(format!(
+                    "a dictionary key ({key}) points past its {} values",
+                    values.len()
+                )));
+            }
+
+            scalar_cell(values.as_ref(), key, hints)?
+        }
+
+        other => text_cell(format!("<unsupported: {other}>")),
+    };
+
+    Ok(cell)
+}
+
+/// The cell of a string or binary value.
+fn byte_cell(array: &dyn Array, row: usize, hints: &LeafHints) -> Result<Cell, ParquetError> {
+    let data_type = array.data_type();
+
+    let cell = match data_type {
         DataType::Utf8 => text_cell(string_at::<i32>(array, row)?),
         DataType::LargeUtf8 => text_cell(string_at::<i64>(array, row)?),
         DataType::Utf8View => text_cell(
@@ -479,6 +523,17 @@ fn scalar_cell(array: &dyn Array, row: usize, hints: &LeafHints) -> Result<Cell,
             hints,
         ),
 
+        other => text_cell(format!("<unsupported: {other}>")),
+    };
+
+    Ok(cell)
+}
+
+/// The cell of a date, time, timestamp or interval value.
+fn temporal_cell(array: &dyn Array, row: usize, hints: &LeafHints) -> Result<Cell, ParquetError> {
+    let data_type = array.data_type();
+
+    let cell = match data_type {
         DataType::Date32 => {
             let days = primitive::<Date32Type>(array)?.value(row);
             text_cell(date_text(i64::from(days)))
@@ -529,23 +584,6 @@ fn scalar_cell(array: &dyn Array, row: usize, hints: &LeafHints) -> Result<Cell,
                 "{} months {} days {} ns",
                 interval.months, interval.days, interval.nanoseconds
             ))
-        }
-
-        DataType::Dictionary(..) => {
-            let dictionary = array
-                .as_any_dictionary_opt()
-                .ok_or_else(|| mismatch(data_type))?;
-            let values = dictionary.values();
-            let key = dictionary_key(dictionary.keys(), row)?;
-
-            if key >= values.len() {
-                return Err(ParquetError::malformed(format!(
-                    "a dictionary key ({key}) points past its {} values",
-                    values.len()
-                )));
-            }
-
-            scalar_cell(values.as_ref(), key, hints)?
         }
 
         other => text_cell(format!("<unsupported: {other}>")),
