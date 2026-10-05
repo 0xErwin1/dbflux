@@ -1874,7 +1874,12 @@ impl MongoConnection {
             .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
         let db = client.database(db_name);
 
-        let host = crate::script_host::MongoScriptHost::new(client, &db, self.cancelled.clone());
+        let host = crate::script_host::MongoScriptHost::new(
+            client,
+            &db,
+            self.cancelled.clone(),
+            req.read_only.is_required(),
+        );
         let ceiling = effective_ceiling(req);
 
         let config = dbflux_js::ScriptRunConfig {
@@ -2033,18 +2038,50 @@ fn mongo_operation_classification(
     }
 }
 
+/// Aggregation stages that write their output to a collection.
+const OUTPUT_STAGES: &[&str] = &["$out", "$merge"];
+
+/// The aggregation stage that opens a change stream.
+const CHANGE_STREAM_STAGES: &[&str] = &["$changeStream"];
+
 /// True when `document` holds a `$out` or `$merge` key at any depth, which
 /// covers the sub-pipelines of `$facet`, `$lookup` and `$unionWith`.
 fn document_contains_output_stage(document: &Document) -> bool {
-    document.iter().any(|(key, value)| {
-        matches!(key.as_str(), "$out" | "$merge") || bson_contains_output_stage(value)
-    })
+    document_contains_key(document, OUTPUT_STAGES)
 }
 
-fn bson_contains_output_stage(value: &Bson) -> bool {
+/// Refuses an `aggregate` that opens a change stream, for a request that
+/// requires read-only enforcement.
+///
+/// A change stream is a read, but it never ends: it would hold the
+/// connection's client lock for as long as the server keeps the cursor open,
+/// so an unattended read must not start one. `$changeStream` is detected at
+/// any depth, like the output stages.
+pub(crate) fn ensure_no_change_stream(pipeline: &[Document]) -> Result<(), DbError> {
+    let opens_change_stream = pipeline
+        .iter()
+        .any(|stage| document_contains_key(stage, CHANGE_STREAM_STAGES));
+
+    if opens_change_stream {
+        return Err(DbError::query_failed(
+            "MongoDB: a read-only request cannot open a change stream ($changeStream), \
+             because it never ends; nothing was sent to the server",
+        ));
+    }
+
+    Ok(())
+}
+
+fn document_contains_key(document: &Document, keys: &[&str]) -> bool {
+    document
+        .iter()
+        .any(|(key, value)| keys.contains(&key.as_str()) || bson_contains_key(value, keys))
+}
+
+fn bson_contains_key(value: &Bson, keys: &[&str]) -> bool {
     match value {
-        Bson::Document(document) => document_contains_output_stage(document),
-        Bson::Array(items) => items.iter().any(bson_contains_output_stage),
+        Bson::Document(document) => document_contains_key(document, keys),
+        Bson::Array(items) => items.iter().any(|item| bson_contains_key(item, keys)),
         _ => false,
     }
 }
@@ -2304,6 +2341,10 @@ impl Connection for MongoConnection {
             Ok(query) => {
                 if req.read_only.is_required() {
                     ensure_operation_within_ceiling(&query.operation, effective_ceiling(req))?;
+
+                    if let MongoOperation::Aggregate { pipeline } = &query.operation {
+                        ensure_no_change_stream(pipeline)?;
+                    }
                 }
 
                 let db_name = query
@@ -5884,6 +5925,39 @@ mod tests {
                 "var n = 1; new Mongo().getDB('admin');",
                 "var n = 1; load('other.js');",
                 "var n = 1; db.fs.files.insertOne({filename: 'a'});",
+            ] {
+                assert_script_stopped_before_the_server(
+                    &connection,
+                    &read_only_request(script, Some(ExecutionClassification::Read)),
+                );
+            }
+        }
+
+        #[test]
+        fn required_refuses_change_streams_before_any_server_call() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.aggregate([{"$changeStream": {}}])"#,
+                r#"db.users.aggregate([{"$facet": {"s": [{"$changeStream": {}}]}}])"#,
+                r#"{"collection": "users", "pipeline": [{"$changeStream": {}}]}"#,
+            ] {
+                let request = read_only_request(query, Some(ExecutionClassification::Read));
+                match connection.execute(&request) {
+                    Err(DbError::QueryFailed(error)) => {
+                        assert!(
+                            error.to_string().contains("change stream"),
+                            "{query}: {error}"
+                        );
+                    }
+                    other => panic!("{query}: expected a change stream refusal, got {other:?}"),
+                }
+            }
+
+            for script in [
+                "var n = 1; db.users.aggregate([{$changeStream: {}}]);",
+                "var n = 1; db.users.aggregate([{$unionWith: {coll: 'o', pipeline: [{$changeStream: {}}]}}]);",
+                "var n = 1; db.users.watch();",
             ] {
                 assert_script_stopped_before_the_server(
                     &connection,

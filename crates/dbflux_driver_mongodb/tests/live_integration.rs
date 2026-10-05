@@ -564,6 +564,46 @@ fn mongodb_read_only_requests_refuse_merge_and_insert_and_leave_the_data_unchang
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_read_only_requests_refuse_change_streams_before_the_server() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        let read_only = |query: &str| {
+            QueryRequest::new(query)
+                .with_confirmed_ceiling(ExecutionClassification::Read)
+                .with_read_only(ReadOnlyEnforcement::Required)
+        };
+
+        let refused = connection.execute(&read_only(
+            "db.read_only_stream.aggregate([{\"$changeStream\": {}}])",
+        ));
+        assert!(
+            matches!(&refused, Err(DbError::QueryFailed(error)) if error.to_string().contains("change stream")),
+            "a change stream must be refused before the server, got {refused:?}"
+        );
+
+        let result = connection.execute(&read_only(
+            "var n = 1; db.read_only_stream.aggregate([{$changeStream: {}}]);",
+        ))?;
+        let failure = result
+            .metadata_extra
+            .as_ref()
+            .and_then(|extra| extra.get("script_failure"))
+            .expect("a script change stream must stop the run");
+        assert!(
+            failure["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("change stream"),
+            "{failure}"
+        );
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Document field patches, replacement, reads by identity
 // ---------------------------------------------------------------------------
