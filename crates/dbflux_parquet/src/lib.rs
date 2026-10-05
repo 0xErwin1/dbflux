@@ -22,10 +22,12 @@ mod cells;
 mod decode;
 mod error;
 mod footer;
+mod nested;
 mod window;
 
 pub use cells::{
-    BINARY_PREVIEW_BYTES, Cell, CellKind, CellPage, ColumnDisplay, ColumnKind, cells_of,
+    BINARY_PREVIEW_BYTES, Cell, CellKind, CellPage, ColumnDisplay, ColumnKind,
+    NESTED_DISPLAY_CHARS, cells_of,
 };
 pub use decode::{UNINDEXED_CHUNK_BUDGET, WindowRows, read_window, window_byte_ranges};
 pub use error::ParquetError;
