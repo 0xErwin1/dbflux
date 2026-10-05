@@ -493,6 +493,21 @@ fn clickhouse_read_only_requests_cannot_write() -> Result<(), DbError> {
             assert_eq!(read_only_item_count(connection.as_ref())?, 1, "{sql}");
         }
 
+        for sql in [
+            "SELECT 1 SETTINGS readonly = 0",
+            "SET readonly = 0",
+            "INSERT INTO dbflux_live_read_only SELECT 2 SETTINGS readonly = 0",
+        ] {
+            let error = connection
+                .execute(&read_only_request(sql))
+                .expect_err("a read-only request cannot lift readonly");
+            assert!(
+                error.to_string().contains("readonly"),
+                "{sql}: expected a read-only error, got {error}"
+            );
+            assert_eq!(read_only_item_count(connection.as_ref())?, 1, "{sql}");
+        }
+
         let read =
             connection.execute(&read_only_request("SELECT id FROM dbflux_live_read_only"))?;
         assert_eq!(read.rows.len(), 1);
