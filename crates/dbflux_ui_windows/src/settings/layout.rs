@@ -6,6 +6,8 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
     div()
@@ -69,6 +71,50 @@ pub(super) fn single_form_section_shell(header: impl IntoElement, body: impl Int
                 .flex()
                 .flex_col()
                 .child(body),
+        )
+}
+
+/// [`single_form_section_shell`] whose scrolling body follows `scroll`, so
+/// the section can scroll a field into view. `viewport` receives the bounds
+/// of the visible scrolling area, below the page head, every frame.
+pub(super) fn scrolled_form_section_shell(
+    header: impl IntoElement,
+    body: impl IntoElement,
+    scroll: &ScrollHandle,
+    viewport: Rc<Cell<Bounds<Pixels>>>,
+) -> Div {
+    let viewport_recorder = canvas(move |bounds, _, _| viewport.set(bounds), |_, _, _, _| {})
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(header)
+        .child(
+            div()
+                .debug_selector(|| "settings-form-viewport".to_string())
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(viewport_recorder)
+                .child(
+                    div()
+                        .id("settings-form-scroll")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(scroll)
+                        .px(SettingsMetrics::BODY_PADDING_X)
+                        .pb(Spacing::XL)
+                        .flex()
+                        .flex_col()
+                        .child(body),
+                )
+                .vertical_scrollbar(scroll),
         )
 }
 
