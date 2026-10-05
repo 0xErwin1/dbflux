@@ -903,7 +903,7 @@ impl DataTable {
                                 .gap(GridMetrics::HEADER_GAP)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
-                                .text_size(GridMetrics::TYPE_FONT)
+                                .text_size(type_font_size)
                                 .text_color(theme.muted_foreground)
                                 .child(
                                     div()

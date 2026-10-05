@@ -47,8 +47,7 @@ impl Sidebar {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
+                    .truncate()
                     .child(sidebar_header_label(
                         self.active_tab,
                         self.connections_focused,
