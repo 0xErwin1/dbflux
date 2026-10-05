@@ -1,4 +1,4 @@
-use crate::tokens::SettingsMetrics;
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::keymap::{KeyChord, Modifiers};
 use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
@@ -7,7 +7,7 @@ use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -15,6 +15,10 @@ use gpui::*;
 use super::general_section::{GeneralFormRow, GeneralSection};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
+
+/// Frames a reveal may take before it gives up, should the layout keep
+/// moving the field.
+const MAX_REVEAL_ATTEMPTS: u8 = 4;
 
 impl GeneralSection {
     pub(super) fn has_unsaved_general_changes(&self, cx: &App) -> bool {
@@ -492,16 +496,93 @@ impl GeneralSection {
         }
     }
 
+    /// Reports an invalid field under the field itself, moves the form
+    /// cursor and focus to it, and scrolls it into view on the next render.
+    /// Toasts show in the main window, away from the form the user is
+    /// editing.
+    fn reject_field(
+        &mut self,
+        row: GeneralFormRow,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.gen_field_error = Some((row, message));
+        self.select_row(row);
+        self.gen_focus_current_input(window, cx);
+        self.pending_reveal = Some(row);
+        self.reveal_attempts = 0;
+        cx.notify();
+    }
+
+    /// Scrolls the form so the field of a rejected save is in view, just
+    /// below the page head, then checks the result on the next frame.
+    ///
+    /// The field's last drawn bounds are taken back to the scroll offset they
+    /// were drawn at. Rows above it can still change height between frames
+    /// (an error line appears or goes), so the reveal only ends once a frame
+    /// drawn at the current offset shows the field in view.
+    pub(super) fn reveal_pending_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.pending_reveal else {
+            return;
+        };
+
+        let Some((field, painted_offset)) = self.field_bounds.borrow().get(&row).copied() else {
+            Self::reveal_next_frame(window, cx);
+            return;
+        };
+
+        let offset = self.form_scroll.offset();
+        let content_top = field.top() - painted_offset;
+        let top = content_top + offset.y;
+        let bottom = top + field.size.height;
+
+        let viewport = self.form_viewport.get();
+        let margin = FormMetrics::ROW_GAP;
+        let in_view = top >= viewport.top() + margin && bottom <= viewport.bottom();
+
+        if in_view && painted_offset == offset.y {
+            self.pending_reveal = None;
+            self.reveal_attempts = 0;
+            return;
+        }
+
+        self.reveal_attempts += 1;
+        if self.reveal_attempts > MAX_REVEAL_ATTEMPTS {
+            self.pending_reveal = None;
+            self.reveal_attempts = 0;
+            return;
+        }
+
+        if !in_view {
+            let max_scroll = self.form_scroll.max_offset().y;
+            let target = viewport.top() + margin - content_top;
+
+            self.form_scroll
+                .set_offset(point(offset.x, target.clamp(-max_scroll, Pixels::ZERO)));
+        }
+
+        Self::reveal_next_frame(window, cx);
+    }
+
+    /// Renders the section again on the next frame, to check a reveal.
+    fn reveal_next_frame(window: &mut Window, cx: &mut Context<Self>) {
+        cx.on_next_frame(window, |_, _, cx| cx.notify());
+    }
+
     pub(super) fn save_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.gen_field_error = None;
+
         let max_history_str = self.input_max_history.read(cx).value().trim().to_string();
         let max_history = match max_history_str.parse::<usize>() {
             Ok(value) if value >= 10 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.max_history.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::MaxHistory,
+                    dbflux_i18n::t!("settings.general.max_history.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -510,11 +591,12 @@ impl GeneralSection {
         let auto_save_ms = match auto_save_str.parse::<u64>() {
             Ok(value) if value >= 500 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.auto_save_interval.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::AutoSaveInterval,
+                    dbflux_i18n::t!("settings.general.auto_save_interval.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -528,11 +610,12 @@ impl GeneralSection {
         let refresh_interval = match refresh_interval_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.refresh_interval.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::DefaultRefreshInterval,
+                    dbflux_i18n::t!("settings.general.refresh_interval.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -541,22 +624,24 @@ impl GeneralSection {
         let max_bg_tasks = match max_bg_str.parse::<usize>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.max_background_tasks.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::MaxBackgroundTasks,
+                    dbflux_i18n::t!("settings.general.max_background_tasks.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
 
         let editor_row_limit_str = self.input_editor_row_limit.read(cx).value().to_string();
         let Some(editor_row_limit) = Self::parse_editor_row_limit(&editor_row_limit_str) else {
-            let message = dbflux_i18n::t!("settings.general.editor_row_limit.error");
-            Toast::error(message.clone())
-                .meta_right(now_hms())
-                .action(copy_action(message))
-                .push(cx);
+            self.reject_field(
+                GeneralFormRow::EditorRowLimit,
+                dbflux_i18n::t!("settings.general.editor_row_limit.error"),
+                window,
+                cx,
+            );
             return;
         };
 
@@ -569,11 +654,12 @@ impl GeneralSection {
         let object_preview_limit = match preview_limit_str.parse::<u64>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.object_preview_limit.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::ObjectPreviewLimit,
+                    dbflux_i18n::t!("settings.general.object_preview_limit.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -587,11 +673,12 @@ impl GeneralSection {
         let key_value_size_limit = match kv_size_limit_str.parse::<u64>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.key_value_size_limit.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::KeyValueSizeLimit,
+                    dbflux_i18n::t!("settings.general.key_value_size_limit.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -748,6 +835,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.max_history.label"),
                 &self.input_max_history,
                 None,
+                None,
                 GeneralFormRow::MaxHistory,
                 cx,
             ))
@@ -755,6 +843,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.auto_save_interval.label"),
                 &self.input_auto_save,
                 Some(dbflux_i18n::t!("settings.general.unit.milliseconds")),
+                None,
                 GeneralFormRow::AutoSaveInterval,
                 cx,
             ));
@@ -778,12 +867,14 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.refresh_interval.label"),
                 &self.input_refresh_interval,
                 Some(dbflux_i18n::t!("settings.general.unit.seconds")),
+                None,
                 GeneralFormRow::DefaultRefreshInterval,
                 cx,
             ))
             .child(self.render_gen_input_field(
                 dbflux_i18n::t!("settings.general.max_background_tasks.label"),
                 &self.input_max_bg_tasks,
+                None,
                 None,
                 GeneralFormRow::MaxBackgroundTasks,
                 cx,
@@ -846,6 +937,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.editor_row_limit.label"),
                 &self.input_editor_row_limit,
                 None,
+                None,
                 GeneralFormRow::EditorRowLimit,
                 cx,
             ));
@@ -858,18 +950,16 @@ impl GeneralSection {
                 Some(AppIcon::Boxes.into()),
                 cx,
             ))
-            .child(
-                self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.object_preview_limit.label"),
-                    &self.input_object_preview_limit,
-                    Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
-                    GeneralFormRow::ObjectPreviewLimit,
-                    cx,
-                )
-                .child(layout::help_text(dbflux_i18n::t!(
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.object_preview_limit.label"),
+                &self.input_object_preview_limit,
+                Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
+                Some(dbflux_i18n::t!(
                     "settings.general.object_preview_hint.label"
-                ))),
-            );
+                )),
+                GeneralFormRow::ObjectPreviewLimit,
+                cx,
+            ));
 
         let key_value = div()
             .flex()
@@ -879,18 +969,16 @@ impl GeneralSection {
                 Some(AppIcon::KeyRound.into()),
                 cx,
             ))
-            .child(
-                self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
-                    &self.input_key_value_size_limit,
-                    Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
-                    GeneralFormRow::KeyValueSizeLimit,
-                    cx,
-                )
-                .child(layout::help_text(dbflux_i18n::t!(
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
+                &self.input_key_value_size_limit,
+                Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
+                Some(dbflux_i18n::t!(
                     "settings.general.key_value_size_limit_hint.label"
-                ))),
-            );
+                )),
+                GeneralFormRow::KeyValueSizeLimit,
+                cx,
+            ));
 
         let nightly_storage = Self::is_nightly().then(|| {
             div()
@@ -912,7 +1000,7 @@ impl GeneralSection {
                 ))
         });
 
-        layout::single_form_section_shell(
+        layout::scrolled_form_section_shell(
             dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.general.header.title"),
                 dbflux_i18n::t!("settings.general.header.subtitle"),
@@ -929,6 +1017,8 @@ impl GeneralSection {
                 .child(object_storage)
                 .child(key_value)
                 .children(nightly_storage),
+            &self.form_scroll,
+            self.form_viewport.clone(),
         )
     }
 
@@ -1087,43 +1177,93 @@ impl GeneralSection {
         }
     }
 
-    /// Numeric form row: a short mono field with an optional unit inside it.
+    /// Element id of the validation error shown under the input of `row`.
+    fn input_error_id(row: GeneralFormRow) -> SharedString {
+        SharedString::from(format!("{}-error", Self::input_element_id(row)))
+    }
+
+    /// Numeric form row: a short mono field with an optional unit inside it,
+    /// its validation error when the last save rejected it, and an optional
+    /// helper line under it.
     fn render_gen_input_field(
         &self,
         label: String,
         input: &Entity<InputState>,
         unit: Option<String>,
+        help: Option<String>,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> Div {
+        let element_id = Self::input_element_id(row);
+        let error = self
+            .gen_field_error
+            .as_ref()
+            .filter(|(error_row, _)| *error_row == row)
+            .map(|(_, message)| message.clone());
+
         let field = Input::new(input)
-            .id(Self::input_element_id(row))
+            .id(element_id)
             .aria_label(label.clone())
             .when_some(unit, |field, unit| {
                 field.suffix(Text::code(unit).muted_foreground())
             });
 
+        let field_bounds = self.field_bounds.clone();
+        let form_scroll = self.form_scroll.clone();
+        let bounds_recorder = canvas(
+            move |bounds, _, _| {
+                field_bounds
+                    .borrow_mut()
+                    .insert(row, (bounds, form_scroll.offset().y));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+        let control = layout::cursor_ring(
+            self.is_at(row) && !self.gen_editing_field,
+            div()
+                .relative()
+                .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
+                .font_family(AppFonts::MONO)
+                .child(field)
+                .child(bounds_recorder),
+            cx,
+        )
+        .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
+        .debug_selector(move || format!("{element_id}-control"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.switching_input = true;
+                this.select_row(row);
+                this.gen_focus_current_input(window, cx);
+                cx.notify();
+            }),
+        );
+
         layout::form_row(
             label,
-            layout::cursor_ring(
-                self.is_at(row) && !self.gen_editing_field,
-                div()
-                    .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
-                    .font_family(AppFonts::MONO)
-                    .child(field),
-                cx,
-            )
-            .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    this.switching_input = true;
-                    this.select_row(row);
-                    this.gen_focus_current_input(window, cx);
-                    cx.notify();
+            div()
+                .flex()
+                .flex_col()
+                .gap(FormMetrics::HELP_GAP)
+                .child(control)
+                .when_some(error, |column, error| {
+                    let error_id = Self::input_error_id(row);
+
+                    column.child(
+                        div()
+                            .id(error_id.clone())
+                            .debug_selector(move || error_id.to_string())
+                            .child(layout::help_text(error).danger()),
+                    )
                 }),
-            ),
-            None,
+            help.map(SharedString::from),
         )
+        .debug_selector(move || format!("{element_id}-row"))
     }
 }
