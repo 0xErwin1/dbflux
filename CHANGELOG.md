@@ -28,6 +28,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Sorted set scores with decimals were not grouped by thousands** — The score column of a sorted set in the key-value browser now groups the digits of decimal scores the same way as whole ones, so 48210.5 shows as 48,210.5 next to 41,875. Before, only whole-number scores were grouped.
 * **Multi-select lists ignored mouse clicks on their items** — Clicking an item in a multi-select list, such as the Category, Level and Outcome filters of the audit viewer, now toggles it and keeps the list open. Before, pressing the mouse button on an item closed the list before the click registered, so items could only be toggled with the keyboard.
 * **Whole numbers in chart tooltips** — The chart tooltip and the point inspector no longer pad values with zeros: a count of 21 reads `21` instead of `21.000`, zero reads `0`, and 1.5 reads `1.5`. Values keep up to three decimals.
+* **Chart tooltip names the hovered point** — The tooltip that follows the pointer over a time chart now opens with the time of the point being read: a date such as `2025-03-01` for daily or monthly data, the date and time of day when a chart spanning several days has points within the day, and the time of day alone on charts shorter than a day. Before, it showed the time of day under the pointer followed by the minutes since the start of the chart, so monthly data read `00:00 UTC · t+172800m`.
 
 ## [0.8.6] - 2026-10-02
 
