@@ -33,6 +33,10 @@ All notable changes to DBFlux will be documented in this file.
 * **Chart Y-axis picker stays open** — Clicking a column in the Y-axis picker of a chart, in a result, a chart tab or a dashboard panel's configuration, now leaves the picker open so several columns can be checked or unchecked in a row, as Space already did from the keyboard. Before, it closed after every click.
 * **Chart point inspector called every result row a document** — The section of the chart point inspector that lists the fields of the result row behind a point is now titled Source row, instead of Source doc, so it reads correctly for tables as well as document collections. The label changed in every interface language.
 
+### Security
+
+* **MCP script tools stay inside the scripts folder** — The MCP `get_script`, `update_script`, `delete_script`, `create_script`, `list_scripts` and `execute_script` tools now refuse a path that leads out of DBFlux's scripts folder, whether through `..`, an absolute path or a symlink that points elsewhere, and `create_script` refuses a name or extension that contains a path separator. Before, an MCP client allowed to use these tools could read, overwrite or delete files outside the scripts folder by passing a path such as `../../.ssh/config`.
+
 ## [0.8.6] - 2026-10-02
 
 ### Added
