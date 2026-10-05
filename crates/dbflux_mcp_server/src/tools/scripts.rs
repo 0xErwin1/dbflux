@@ -473,7 +473,7 @@ async fn run_script_query(
     classification: ExecutionClassification,
     read_only: ReadOnlyEnforcement,
 ) -> Result<ScriptOutcome, String> {
-    use crate::helper::serialize_query_result;
+    use crate::helper::{script_failure_message, serialize_query_result};
 
     let request = QueryRequest {
         sql: query.to_string(),
@@ -498,10 +498,16 @@ async fn run_script_query(
     })
     .await?;
 
-    Ok(match outcome {
-        Ok(result) => ScriptOutcome::Completed(serialize_query_result(&result)),
-        Err(reason) => ScriptOutcome::ReadOnlyRefused(reason),
-    })
+    let result = match outcome {
+        Ok(result) => result,
+        Err(reason) => return Ok(ScriptOutcome::ReadOnlyRefused(reason)),
+    };
+
+    if let Some(failure) = script_failure_message(&result) {
+        return Err(failure);
+    }
+
+    Ok(ScriptOutcome::Completed(serialize_query_result(&result)))
 }
 
 /// Resolves a client-supplied path against the scripts root.
@@ -1167,6 +1173,33 @@ mod tests {
             assert_eq!(
                 received_flags(&driver),
                 vec![ReadOnlyEnforcement::Required, ReadOnlyEnforcement::None]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_script_stopped_mid_run_is_reported_as_an_error() {
+            let mut stopped = dbflux_core::QueryResult::empty();
+            stopped.metadata_extra = Some(std::collections::HashMap::from([(
+                "script_failure".to_string(),
+                serde_json::json!({
+                    "index": 1,
+                    "message": ".aggregate() is classified Write, which exceeds the confirmed Read ceiling for this run",
+                }),
+            )]));
+            let driver = FakeDriver::new(DbKind::MongoDB).with_default_result(stopped);
+            let connection = connect(&driver);
+
+            let outcome = run_script_query(
+                connection,
+                "db.a.find({}); db.a.aggregate([{$merge: 'x'}]);",
+                ExecutionClassification::Read,
+                ReadOnlyEnforcement::Required,
+            )
+            .await;
+
+            assert!(
+                matches!(outcome, Err(ref message) if message.contains("exceeds the confirmed Read ceiling")),
+                "{outcome:?}"
             );
         }
 

@@ -100,6 +100,32 @@ pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
     }
 }
 
+/// The failure that stopped a multi-statement script run, when the result
+/// records one under the `script_failure` metadata key (`{ "index", "message" }`).
+///
+/// A script engine reports a statement that failed or was refused mid-run in
+/// the result's metadata rather than as an error, so the statements that
+/// already ran keep their results. An MCP client must not read such a result
+/// as a success, so callers turn this message into a tool error.
+pub fn script_failure_message(result: &QueryResult) -> Option<String> {
+    let failure = result.metadata_extra.as_ref()?.get("script_failure")?;
+
+    let message = failure
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("the script failed");
+
+    let statement = failure
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|index| format!(" at statement {index}"))
+        .unwrap_or_default();
+
+    Some(format!(
+        "Script stopped{statement}; statements before it may have run: {message}"
+    ))
+}
+
 fn serialize_single_result_set(result: &QueryResult) -> serde_json::Value {
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
     serde_json::json!({
@@ -255,6 +281,24 @@ mod tests {
         // Primary first, then the earlier set in batch order.
         assert_eq!(sets[0]["columns"][0], serde_json::json!("b"));
         assert_eq!(sets[1]["columns"][0], serde_json::json!("a"));
+    }
+
+    #[test]
+    fn script_failure_message_reads_the_failure_a_script_run_recorded() {
+        let mut result = QueryResult::table(Vec::new(), Vec::new(), None, Duration::ZERO);
+        assert_eq!(script_failure_message(&result), None);
+
+        result.metadata_extra = Some(std::collections::HashMap::from([(
+            "script_failure".to_string(),
+            serde_json::json!({ "index": 1, "message": "exceeds the confirmed Read ceiling" }),
+        )]));
+
+        let message = script_failure_message(&result).expect("the failure must be reported");
+        assert!(message.contains("statement 1"), "{message}");
+        assert!(
+            message.contains("exceeds the confirmed Read ceiling"),
+            "{message}"
+        );
     }
 
     #[test]
