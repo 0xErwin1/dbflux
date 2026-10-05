@@ -23,8 +23,10 @@
 
 연결 관리자에는 드라이버 선택기가 표시됩니다. 사용 가능한 드라이버는 바이너리가
 빌드될 때 포함된 기능에 따라 다르며, 표준 빌드에는 SQLite, PostgreSQL,
-MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft SQL Server, AWS 기반
-통합이 포함됩니다. 구성되어 있으면 외부에서 등록된 RPC 드라이버도 여기에
+MySQL/MariaDB, Microsoft SQL Server, Amazon Redshift, ClickHouse, TursoDB,
+MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3가 포함됩니다.
+선택기는 드라이버를 관계형, 문서, 키-값, 시계열 및 로그, 오브젝트 스토리지
+범주로 묶어 보여 줍니다. 구성되어 있으면 외부에서 등록된 RPC 드라이버도 여기에
 표시됩니다(`docs/RPC_SERVICES_CONFIG.md` 참조).
 
 `/`로 드라이버 목록을 필터링하고, `j`/`k`(또는 방향 키)로 이동하고, `Enter`로

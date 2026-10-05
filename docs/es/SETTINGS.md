@@ -38,8 +38,8 @@ Integration](MCP_AI_INTEGRATION.md).
 
 | Setting      | Opciones                 | Default |
 | ------------ | ------------------------ | ------- |
-| **Theme**    | Dark, Mirage, Light      | Dark    |
-| **Style**    | Default, Compact         | Default |
+| **Theme**    | Follow system, Dark, Light | Dark  |
+| **Density**  | Default, Compact         | Default |
 | **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
 
 La lista de idiomas se deriva de los catálogos de traducción incluidos con

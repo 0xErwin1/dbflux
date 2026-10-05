@@ -54,7 +54,7 @@ Every audit event is an `EventRecord` (`dbflux_core/src/observability/types.rs`)
 | `Governance` | `governance` | Policy evaluation outcomes |
 | `Config` | `config` | Profile changes, settings modifications |
 | `System` | `system` | Application startup, panics, migrations |
-| `ObjectStorage` | `object_storage` | Object-storage CRUD/mutation events (upload, delete, presign, rename, create bucket/folder, save-back edit) |
+| `ObjectStorage` | `object_storage` | Object-storage CRUD/mutation events (upload, download, delete, presign, rename, create bucket/folder, save-back edit) |
 
 ### Actor Types
 
@@ -135,6 +135,7 @@ Categories at a glance:
 | **Governance** | Policy decisions. |
 | **Config** | Profile and settings changes. |
 | **System** | Startup, migrations, and internal log events. |
+| **Object Storage** | Bucket creation and deletion, and object uploads, downloads, renames, deletions, new folders, presigned URLs, and saved edits. |
 
 ### Filter
 
