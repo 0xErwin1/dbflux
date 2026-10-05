@@ -71,7 +71,7 @@ chart:
     hovered_point: PONTO SOB O CURSOR
     time: Hora
     value: Valor
-    source_doc: DOCUMENTO DE ORIGEM
+    source_row: LINHA DE ORIGEM
     quick_actions: AÇÕES RÁPIDAS
     show_in_tree: Mostrar na árvore
 common:

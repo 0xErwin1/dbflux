@@ -71,7 +71,7 @@ chart:
     hovered_point: HOVERED POINT
     time: Time
     value: Value
-    source_doc: SOURCE DOC
+    source_row: SOURCE ROW
     quick_actions: QUICK ACTIONS
     show_in_tree: Show in tree
 common:
