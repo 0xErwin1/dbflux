@@ -2061,7 +2061,10 @@ impl DataGridPanel {
                         V::Null => "null".to_string(),
                         V::Bool(b) => b.to_string(),
                         V::Int(i) => i.to_string(),
-                        V::Float(f) => format!("{:.3}", f),
+                        V::Float(f) => format!("{:.3}", f)
+                            .trim_end_matches('0')
+                            .trim_end_matches('.')
+                            .to_string(),
                         V::Text(s) | V::Json(s) | V::Decimal(s) | V::ObjectId(s) => s.clone(),
                         V::Bytes(b) => format!("<{} bytes>", b.len()),
                         V::DateTime(dt) => dt.to_rfc3339(),

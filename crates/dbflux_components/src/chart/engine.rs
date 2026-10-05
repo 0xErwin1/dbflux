@@ -3084,9 +3084,11 @@ pub fn format_x_value(x: f64, is_time: bool) -> String {
 /// the readout matches the axis-tick formatter and dashboards like CloudWatch
 /// (`2.5G`, not `2.500e9`). Very small non-zero magnitudes (`< 1e-3`) keep
 /// scientific notation — SI sub-unit suffixes would clash with axis glyphs.
+/// Other values keep up to three decimals without trailing zeros, so integer
+/// values read `21`, not `21.000`.
 pub fn format_y_value(y: f64) -> String {
     if y == 0.0 {
-        return "0.000".to_string();
+        return "0".to_string();
     }
     let abs = y.abs();
 
@@ -3119,6 +3121,9 @@ pub fn format_y_value(y: f64) -> String {
     }
 
     format!("{:.3}", y)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
@@ -3326,8 +3331,17 @@ mod tests {
         assert!(format_y_value(0.0001).contains('e'));
 
         // Pass-through formatting for the readable range.
-        assert_eq!(format_y_value(0.0), "0.000");
-        assert_eq!(format_y_value(1.5), "1.500");
+        assert_eq!(format_y_value(0.0), "0");
+        assert_eq!(format_y_value(1.5), "1.5");
+    }
+
+    #[test]
+    fn format_y_value_drops_trailing_zeros_below_one_thousand() {
+        assert_eq!(format_y_value(21.0), "21");
+        assert_eq!(format_y_value(-7.0), "-7");
+        assert_eq!(format_y_value(0.125), "0.125");
+        assert_eq!(format_y_value(12.25), "12.25");
+        assert_eq!(format_y_value(999.0), "999");
     }
 
     fn make_col(name: &str, kind: ColumnKind) -> ColumnMeta {
