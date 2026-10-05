@@ -1037,7 +1037,9 @@ impl ParquetDocument {
     /// Makes `projection` the applied one and reads the file again from its
     /// first row with its columns, which the reader returns in schema order.
     /// Does nothing for a projection without columns, of another file, or
-    /// equal to the applied one.
+    /// equal to the applied one. Once the file was found changed nothing is
+    /// read until it is opened again: the picker and the Columns view go back
+    /// to the shown columns.
     ///
     /// A window being read meanwhile is dropped when it arrives, and the read
     /// starts then, with the source it hands back.
@@ -1050,6 +1052,12 @@ impl ParquetDocument {
             || projection.total_count() != loaded.total_columns
             || projection == loaded.projection
         {
+            return;
+        }
+
+        if loaded.source_changed {
+            loaded.sync_projection_controls(cx);
+            cx.notify();
             return;
         }
 

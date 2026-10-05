@@ -659,6 +659,37 @@ fn a_projection_that_cannot_be_read_goes_back_to_the_shown_columns(cx: &mut Test
 }
 
 #[gpui::test]
+fn a_changed_file_reads_no_other_projection_until_reloaded(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("projection-after-change");
+    let path = directory.file("rows.parquet", &rows_file(1200));
+
+    let (document, window) = open_local(cx, path.clone());
+
+    std::fs::write(&path, rows_file(1300)).expect("the file must be rewritable");
+
+    apply_projection(&document, window, 4, &[1]);
+    assert_eq!(toast_count(window), 1);
+    assert!(window.update(|_, cx| document.read(cx).source_changed()));
+
+    let picker = picker(&document, window);
+    window.update(|_, cx| {
+        picker.update(cx, |picker, cx| {
+            picker.set_applied(ColumnProjection::from_indices(4, &[2]), cx);
+        })
+    });
+
+    apply_projection(&document, window, 4, &[2]);
+
+    assert_eq!(toast_count(window), 1, "no second read fails");
+    assert_eq!(titles(&document, window), ["id", "name", "payload", "tags"]);
+    assert_eq!(
+        projections(&document, window),
+        (vec![0, 1, 2, 3], vec![0, 1, 2, 3], vec![0, 1, 2, 3]),
+        "the picker and the Columns view show the shown columns again"
+    );
+}
+
+#[gpui::test]
 fn estimate_bar_matches_the_bytes_the_next_page_reads(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("estimate");
     let bytes = rows_file(1200);
