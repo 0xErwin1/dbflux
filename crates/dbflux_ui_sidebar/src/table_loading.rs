@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::{TaskKind, TaskTarget};
 use dbflux_ui_base::object_tree::{
     ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey, ObjectTreeRequestStatus,
@@ -766,17 +767,16 @@ impl Sidebar {
             .prepare_fetch_schema_types(profile_id, database, schema)
         {
             Ok(p) => p,
-            Err(e) => {
-                if e != "Schema types already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_types_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
+            Err(PrepareFetchError::AlreadyCached) => return false,
+            Err(PrepareFetchError::Failed(error)) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        crate::labels::cannot_load_schema_types_label(),
+                    )
+                    .with_cause(error),
+                    cx,
+                );
                 return false;
             }
         };
@@ -817,17 +817,16 @@ impl Sidebar {
             .prepare_fetch_schema_indexes(profile_id, database, schema)
         {
             Ok(p) => p,
-            Err(e) => {
-                if e != "Schema indexes already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_indexes_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
+            Err(PrepareFetchError::AlreadyCached) => return false,
+            Err(PrepareFetchError::Failed(error)) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        crate::labels::cannot_load_schema_indexes_label(),
+                    )
+                    .with_cause(error),
+                    cx,
+                );
                 return false;
             }
         };
@@ -868,17 +867,16 @@ impl Sidebar {
             .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
         {
             Ok(p) => p,
-            Err(e) => {
-                if e != "Schema foreign keys already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_foreign_keys_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
+            Err(PrepareFetchError::AlreadyCached) => return false,
+            Err(PrepareFetchError::Failed(error)) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        crate::labels::cannot_load_schema_foreign_keys_label(),
+                    )
+                    .with_cause(error),
+                    cx,
+                );
                 return false;
             }
         };
@@ -923,17 +921,16 @@ impl Sidebar {
             .prepare_fetch_schema_routines(profile_id, database, schema)
         {
             Ok(p) => p,
-            Err(e) => {
-                if e != "Schema routines already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_routines_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
+            Err(PrepareFetchError::AlreadyCached) => return false,
+            Err(PrepareFetchError::Failed(error)) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        crate::labels::cannot_load_schema_routines_label(),
+                    )
+                    .with_cause(error),
+                    cx,
+                );
                 return false;
             }
         };
