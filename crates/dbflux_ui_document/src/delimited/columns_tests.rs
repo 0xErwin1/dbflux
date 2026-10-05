@@ -944,7 +944,7 @@ fn the_column_strings_resolve_in_every_locale() {
 fn start_loading_rest(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
-) -> Option<dbflux_delimited::PagedReader<super::source::DelimitedSource>> {
+) -> Option<dbflux_delimited::PagedReader<crate::file_source::LocationSource>> {
     let reader = window.update(|_, cx| {
         document.update(cx, |document, cx| {
             let loaded = document.loaded_mut().expect("the file is loaded");
@@ -964,7 +964,7 @@ fn start_loading_rest(
 fn end_loading_rest(
     document: &Entity<DelimitedDocument>,
     window: &mut VisualTestContext,
-    reader: Option<dbflux_delimited::PagedReader<super::source::DelimitedSource>>,
+    reader: Option<dbflux_delimited::PagedReader<crate::file_source::LocationSource>>,
 ) {
     window.update(|_, cx| {
         document.update(cx, |document, cx| {

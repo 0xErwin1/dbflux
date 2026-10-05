@@ -1765,7 +1765,6 @@ document:
       load_more_failed: "无法加载 %{name} 的更多内容"
       reread_failed: "无法重新读取 %{name}"
       save_failed: "无法保存 %{name}"
-      source_changed: "文件在打开后已在别处被修改，因此未保存任何内容，你的编辑仍然保留。要查看新内容，请放弃编辑并选择从文件重新加载，然后重新编辑。"
       next_page_required: "在最后加载的记录之后添加了一行，其在文件中的位置尚不确定。请加载下一页，然后再次保存。"
       full_load_required: "在加载整个文件之前添加了一列。请加载所有页面，然后再次保存。"
       saved_version_unknown: "%{name} 已保存，但无法读取其新版本"
@@ -1799,12 +1798,6 @@ document:
         unsupported: "无法以 %{character} 作为分隔符或引号读取 %{encoding} 文本。请选择其他分隔符、引号或编码。"
         line_break: "换行符不能用作分隔符或引号。请选择其他字符。"
         quote_equals_delimiter: "引号和分隔符都是 %{character}。请为其中一个选择不同的字符。"
-      storage:
-        read: "无法读取文件：%{cause}"
-        local_io: "无法访问 %{path}：%{cause}"
-        temporary_file: "无法保存 %{target}：在 %{directory} 中写入临时文件失败：%{cause}"
-        object_store: "无法访问 %{bucket}/%{key}：%{cause}"
-        read_only_file: "该文件为只读。"
       read:
         unexpected_length: "文件返回的字节数与请求的不同，因此无法读取。"
       write:
@@ -1825,7 +1818,6 @@ document:
       malformed_text: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。检测到的编码可能不正确。"
       malformed_text_chosen: "部分字节不是有效的 %{encoding} 文本，显示为 \uFFFD。所选编码可能不正确。"
       detected_delimiter_unreadable: "检测到的分隔符 %{detected} 无法在 %{encoding} 文本中读取，因此文件以 %{delimiter} 读取，列可能不正确。请选择其他编码或分隔符。"
-      cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
     status:
       delimiter: "分隔符：%{delimiter}"
       encoding: "编码：%{encoding}"
@@ -1988,6 +1980,17 @@ document:
       back: 返回
       continue: 继续
       close: 关闭
+  file:
+    error:
+      source_changed: "文件在打开后已在别处被修改，因此未保存任何内容，你的编辑仍然保留。要查看新内容，请放弃编辑并选择从文件重新加载，然后重新编辑。"
+      storage:
+        read: "无法读取文件：%{cause}"
+        local_io: "无法访问 %{path}：%{cause}"
+        temporary_file: "无法保存 %{target}：在 %{directory} 中写入临时文件失败：%{cause}"
+        object_store: "无法访问 %{bucket}/%{key}：%{cause}"
+        read_only_file: "该文件为只读。"
+    warning:
+      cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
   governance:
     refresh: "刷新"
     no_pending: 无待处理执行

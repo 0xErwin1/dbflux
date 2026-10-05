@@ -26,9 +26,9 @@ use super::document_tests::{
     open_local_in_small_pages, open_object_in_small_pages, pane_action_ids, row_count,
     run_pane_action, set_overrides, state, toast_count, warnings,
 };
-use super::source::{DelimitedLocation, open_source, read_version};
 use super::tests::{BUCKET, FakeConnection, KEY, TestDirectory};
 use crate::delimited::DelimitedWarning;
+use crate::file_source::{FileLocation, open_source, read_version};
 use crate::handle::DocumentEvent;
 use crate::keyboard_coverage::DELIMITED;
 use crate::keyboard_test_support::init_keyboard_runtime;
@@ -963,7 +963,7 @@ fn an_object_save_replaces_the_object_reopens_it_and_is_audited_once(cx: &mut Te
     assert!(!is_dirty(&document, window));
     assert_eq!(toast_count(window), 0);
 
-    let location = DelimitedLocation::Object {
+    let location = FileLocation::Object {
         connection: connection.clone(),
         bucket: BUCKET.to_string(),
         key: KEY.to_string(),
@@ -1379,7 +1379,7 @@ fn the_editing_strings_resolve_in_every_locale() {
         "document.delimited.action.discard",
         "document.delimited.action.insert_above",
         "document.delimited.error.save_failed",
-        "document.delimited.error.source_changed",
+        "document.file.error.source_changed",
         "document.delimited.error.next_page_required",
         "document.delimited.error.full_load_required",
         "document.delimited.error.saved_version_unknown",
@@ -1605,7 +1605,7 @@ fn reload_reads_a_file_changed_elsewhere_after_a_discard(cx: &mut TestAppContext
 
 #[test]
 fn the_source_changed_message_names_the_reload_action() {
-    let message = dbflux_i18n::t!("document.delimited.error.source_changed");
+    let message = dbflux_i18n::t!("document.file.error.source_changed");
     let reload = dbflux_i18n::t!("document.delimited.action.reload");
 
     assert!(message.contains(&reload), "{message}");

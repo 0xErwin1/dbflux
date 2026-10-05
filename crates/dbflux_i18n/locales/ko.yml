@@ -1765,7 +1765,6 @@ document:
       load_more_failed: "%{name}을(를) 더 불러올 수 없습니다"
       reread_failed: "%{name}을(를) 다시 읽을 수 없습니다"
       save_failed: "%{name}을(를) 저장할 수 없습니다"
-      source_changed: "파일을 연 뒤 다른 곳에서 파일이 변경되어 아무것도 저장하지 않았고 편집 내용은 유지됩니다. 새 내용을 보려면 편집 내용을 취소하고 파일에서 다시 불러오기를 선택한 다음 다시 편집하세요."
       next_page_required: "마지막으로 불러온 레코드 뒤에 행이 추가되어 파일에서의 위치를 아직 알 수 없습니다. 다음 페이지를 불러온 뒤 다시 저장하세요."
       full_load_required: "파일 전체를 불러오기 전에 열이 추가되었습니다. 모든 페이지를 불러온 뒤 다시 저장하세요."
       saved_version_unknown: "%{name}을(를) 저장했지만 새 버전을 읽을 수 없습니다"
@@ -1799,12 +1798,6 @@ document:
         unsupported: "%{encoding} 텍스트는 %{character}을(를) 구분자나 따옴표로 사용해 읽을 수 없습니다. 다른 구분자, 따옴표 또는 인코딩을 선택하세요."
         line_break: "줄바꿈은 구분자나 따옴표가 될 수 없습니다. 다른 문자를 선택하세요."
         quote_equals_delimiter: "따옴표와 구분자가 모두 %{character}입니다. 둘 중 하나에 다른 문자를 선택하세요."
-      storage:
-        read: "파일을 읽을 수 없습니다: %{cause}"
-        local_io: "%{path}에 접근할 수 없습니다: %{cause}"
-        temporary_file: "%{target}을(를) 저장할 수 없습니다. %{directory}에 임시 파일을 쓰지 못했습니다: %{cause}"
-        object_store: "%{bucket}/%{key}에 접근할 수 없습니다: %{cause}"
-        read_only_file: "파일이 읽기 전용입니다."
       read:
         unexpected_length: "파일이 요청한 것과 다른 바이트 수를 반환하여 읽을 수 없습니다."
       write:
@@ -1825,7 +1818,6 @@ document:
       malformed_text: "일부 바이트가 올바른 %{encoding} 텍스트가 아니어서 \uFFFD(으)로 표시됩니다. 감지된 인코딩이 잘못되었을 수 있습니다."
       malformed_text_chosen: "일부 바이트가 올바른 %{encoding} 텍스트가 아니어서 \uFFFD(으)로 표시됩니다. 선택한 인코딩이 잘못되었을 수 있습니다."
       detected_delimiter_unreadable: "감지된 구분자 %{detected}은(는) %{encoding} 텍스트에서 읽을 수 없어 파일을 %{delimiter}(으)로 읽었으며, 열이 올바르지 않을 수 있습니다. 다른 인코딩이나 구분자를 선택하세요."
-      cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
     status:
       delimiter: "구분자: %{delimiter}"
       encoding: "인코딩: %{encoding}"
@@ -1988,6 +1980,17 @@ document:
       back: 뒤로
       continue: 계속
       close: 닫기
+  file:
+    error:
+      source_changed: "파일을 연 뒤 다른 곳에서 파일이 변경되어 아무것도 저장하지 않았고 편집 내용은 유지됩니다. 새 내용을 보려면 편집 내용을 취소하고 파일에서 다시 불러오기를 선택한 다음 다시 편집하세요."
+      storage:
+        read: "파일을 읽을 수 없습니다: %{cause}"
+        local_io: "%{path}에 접근할 수 없습니다: %{cause}"
+        temporary_file: "%{target}을(를) 저장할 수 없습니다. %{directory}에 임시 파일을 쓰지 못했습니다: %{cause}"
+        object_store: "%{bucket}/%{key}에 접근할 수 없습니다: %{cause}"
+        read_only_file: "파일이 읽기 전용입니다."
+    warning:
+      cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
   governance:
     refresh: "새로 고침"
     no_pending: "대기 중인 실행이 없습니다"

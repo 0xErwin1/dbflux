@@ -2934,10 +2934,10 @@ pub(crate) fn delimited_reopen_failed_message(file_name: &str) -> String {
     dbflux_i18n::t!("document.delimited.error.reopen_failed", name = file_name)
 }
 
-/// Why the bytes of a delimited file could not be read, with `cause`, the
-/// file system's or the driver's own message.
-pub(crate) fn delimited_read_failed_cause(cause: &dyn std::fmt::Display) -> String {
-    dbflux_i18n::t!("document.delimited.error.storage.read", cause = cause)
+/// Why the bytes of a file could not be read, with `cause`, the file
+/// system's or the driver's own message.
+pub(crate) fn file_read_failed_cause(cause: &dyn std::fmt::Display) -> String {
+    dbflux_i18n::t!("document.file.error.storage.read", cause = cause)
 }
 
 /// What the user is told about a failure of the delimited reader.
@@ -2949,7 +2949,7 @@ pub(crate) fn delimited_read_error_cause(error: &dbflux_delimited::ReadError) ->
     use dbflux_delimited::ReadError;
 
     match error {
-        ReadError::Source(source) => delimited_read_failed_cause(source),
+        ReadError::Source(source) => file_read_failed_cause(source),
 
         ReadError::UnexpectedReadLength { .. } => with_technical_detail(
             dbflux_i18n::t!("document.delimited.error.read.unexpected_length"),
@@ -2973,7 +2973,7 @@ pub(crate) fn delimited_write_error_cause(error: &dbflux_delimited::WriteError) 
     use dbflux_delimited::WriteError;
 
     let message = match error {
-        WriteError::Source(source) => return delimited_read_failed_cause(source),
+        WriteError::Source(source) => return file_read_failed_cause(source),
 
         WriteError::Read(error) => return delimited_read_error_cause(error),
 
@@ -7479,33 +7479,11 @@ mod tests {
         placeholders
     }
 
-    /// Every key of the delimited document's storage, reader, writer and
-    /// page errors resolves in each shipped catalog, is translated rather
-    /// than the English fallback, and keeps the English placeholders.
-    #[test]
-    fn delimited_error_keys_resolve_in_every_locale() {
-        let keys = [
-            "document.delimited.error.storage.read",
-            "document.delimited.error.storage.local_io",
-            "document.delimited.error.storage.temporary_file",
-            "document.delimited.error.storage.object_store",
-            "document.delimited.error.storage.read_only_file",
-            "document.delimited.error.read.unexpected_length",
-            "document.delimited.error.write.sink",
-            "document.delimited.error.write.records_moved",
-            "document.delimited.error.write.conflicting_edits",
-            "document.delimited.error.write.unencodable",
-            "document.delimited.error.write.unquotable",
-            "document.delimited.error.write.leading_byte_order_mark",
-            "document.delimited.error.write.fused_line_break",
-            "document.delimited.error.write.truncated_code_unit",
-            "document.delimited.error.write.unclosed_quote",
-            "document.delimited.error.page.out_of_order",
-            "document.delimited.error.page.no_header",
-            "document.delimited.error.page.column_out_of_range",
-        ];
-
-        for key in keys {
+    /// Asserts that every key in `keys` resolves in each shipped catalog, is
+    /// translated rather than the English fallback, and keeps the English
+    /// placeholders.
+    fn assert_translated_in_every_locale(keys: &[&str]) {
+        for &key in keys {
             let english = dbflux_i18n::translate_in("en", key);
             assert_ne!(english, key, "key {key} did not resolve in en");
 
@@ -7525,6 +7503,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Every key of the file storage layer's errors and warnings is
+    /// translated in each shipped catalog.
+    #[test]
+    fn file_storage_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.file.error.source_changed",
+            "document.file.error.storage.read",
+            "document.file.error.storage.local_io",
+            "document.file.error.storage.temporary_file",
+            "document.file.error.storage.object_store",
+            "document.file.error.storage.read_only_file",
+            "document.file.warning.cannot_save_in_place",
+        ]);
+    }
+
+    /// Every key of the delimited document's reader, writer and page errors
+    /// is translated in each shipped catalog.
+    #[test]
+    fn delimited_error_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.delimited.error.read.unexpected_length",
+            "document.delimited.error.write.sink",
+            "document.delimited.error.write.records_moved",
+            "document.delimited.error.write.conflicting_edits",
+            "document.delimited.error.write.unencodable",
+            "document.delimited.error.write.unquotable",
+            "document.delimited.error.write.leading_byte_order_mark",
+            "document.delimited.error.write.fused_line_break",
+            "document.delimited.error.write.truncated_code_unit",
+            "document.delimited.error.write.unclosed_quote",
+            "document.delimited.error.page.out_of_order",
+            "document.delimited.error.page.no_header",
+            "document.delimited.error.page.column_out_of_range",
+        ]);
     }
 
     /// A refusal of the writer is told in the user's words, with the

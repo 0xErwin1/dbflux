@@ -1,5 +1,11 @@
-//! Where a delimited file lives, how its bytes are read by range, and which
-//! version of it was opened.
+//! Where a file document's file lives, how its bytes are read by range, and
+//! which version of it was opened.
+//!
+//! Nothing here depends on the file's format, except that
+//! [`StorageError::Write`] carries the delimited writer's error, because only
+//! the delimited document saves edits. Every function blocks on file
+//! or network I/O and touches no GPUI state, so callers run it on the
+//! background executor and report the returned errors themselves.
 
 use std::fmt;
 use std::ops::Range;
@@ -7,18 +13,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use dbflux_byte_source::{ByteSource, FileSource, SourceError};
 use dbflux_core::chrono::{DateTime, Utc};
 use dbflux_core::{Connection, DbError, ObjectMetadata, ObjectStoreConnection};
-use dbflux_delimited::{ByteSource, FileSource, SourceError, WriteError};
+use dbflux_delimited::WriteError;
 
-/// Where a delimited file lives.
+/// Where a file lives.
 ///
 /// An object is reached the way the object editor reaches one: through the
 /// profile's live connection and its `object_store_api()`. The caller resolves
 /// that connection from the application state on the foreground thread and
 /// hands it over, because nothing in this layer may touch GPUI.
 #[derive(Clone)]
-pub enum DelimitedLocation {
+pub enum FileLocation {
     /// A file on the local file system.
     Local { path: PathBuf },
 
@@ -62,9 +69,9 @@ impl SourceVersion {
     ///
     /// A local file needs a modification time for that, and an object needs
     /// an etag or a last-modified time. Without them the length is the only
-    /// thing compared, and [`super::save_edited`] refuses to save, because it
-    /// could overwrite a change it cannot see. A caller checks this when the
-    /// file is opened to tell the user that the file cannot be saved.
+    /// thing compared, and [`crate::delimited::save_edited`] refuses to save,
+    /// because it could overwrite a change it cannot see. A caller checks this
+    /// when the file is opened to tell the user that the file cannot be saved.
     pub fn detects_same_length_change(&self) -> bool {
         match self {
             Self::Local { modified, .. } => modified.is_some(),
@@ -78,7 +85,7 @@ impl SourceVersion {
     }
 }
 
-/// A failure of the delimited document's storage layer.
+/// A failure of a file document's storage layer.
 #[derive(Debug)]
 pub enum StorageError {
     /// The file is not the version that was opened, so the byte ranges read
@@ -122,14 +129,14 @@ pub enum StorageError {
 }
 
 impl StorageError {
-    pub(super) fn local_io(path: &Path, source: std::io::Error) -> Self {
+    pub(crate) fn local_io(path: &Path, source: std::io::Error) -> Self {
         Self::LocalIo {
             path: path.to_path_buf(),
             source,
         }
     }
 
-    pub(super) fn object_store(bucket: &str, key: &str, source: DbError) -> Self {
+    pub(crate) fn object_store(bucket: &str, key: &str, source: DbError) -> Self {
         Self::ObjectStore {
             bucket: bucket.to_string(),
             key: key.to_string(),
@@ -142,15 +149,15 @@ impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SourceChanged => {
-                formatter.write_str(&dbflux_i18n::t!("document.delimited.error.source_changed"))
+                formatter.write_str(&dbflux_i18n::t!("document.file.error.source_changed"))
             }
 
             Self::VersionUnverifiable => formatter.write_str(&dbflux_i18n::t!(
-                "document.delimited.warning.cannot_save_in_place"
+                "document.file.warning.cannot_save_in_place"
             )),
 
             Self::Read(source) => {
-                formatter.write_str(&crate::labels::delimited_read_failed_cause(source))
+                formatter.write_str(&crate::labels::file_read_failed_cause(source))
             }
 
             Self::Write(source) => {
@@ -158,7 +165,7 @@ impl fmt::Display for StorageError {
             }
 
             Self::LocalIo { path, source } => formatter.write_str(&dbflux_i18n::t!(
-                "document.delimited.error.storage.local_io",
+                "document.file.error.storage.local_io",
                 path = path.display(),
                 cause = source
             )),
@@ -168,7 +175,7 @@ impl fmt::Display for StorageError {
                 directory,
                 source,
             } => formatter.write_str(&dbflux_i18n::t!(
-                "document.delimited.error.storage.temporary_file",
+                "document.file.error.storage.temporary_file",
                 target = target,
                 directory = directory.display(),
                 cause = source
@@ -179,7 +186,7 @@ impl fmt::Display for StorageError {
                 key,
                 source,
             } => formatter.write_str(&dbflux_i18n::t!(
-                "document.delimited.error.storage.object_store",
+                "document.file.error.storage.object_store",
                 bucket = bucket,
                 key = key,
                 cause = source
@@ -222,7 +229,7 @@ pub struct ObjectSource {
 }
 
 impl ObjectSource {
-    pub(super) fn new(
+    pub(crate) fn new(
         connection: Arc<dyn Connection>,
         bucket: &str,
         key: &str,
@@ -257,19 +264,19 @@ impl ByteSource for ObjectSource {
     }
 }
 
-/// The bytes of a delimited file at either kind of location, as the one
-/// source type a `PagedReader` is opened over.
-pub enum DelimitedSource {
+/// The bytes of a file at either kind of location, as the one source type a
+/// reader is opened over.
+pub enum LocationSource {
     Local(FileSource),
     Object(ObjectSource),
 }
 
-impl DelimitedSource {
+impl LocationSource {
     /// Reads an object through `connection` from now on, for a profile that
     /// reconnected since the source was opened. The byte ranges already read
     /// stay valid: they belong to the object's version, not to a connection.
     /// A local file has no connection and is left as it is.
-    pub(super) fn use_connection(&mut self, connection: Arc<dyn Connection>) {
+    pub(crate) fn use_connection(&mut self, connection: Arc<dyn Connection>) {
         match self {
             Self::Local(_) => {}
             Self::Object(source) => source.connection = connection,
@@ -277,7 +284,7 @@ impl DelimitedSource {
     }
 }
 
-impl ByteSource for DelimitedSource {
+impl ByteSource for LocationSource {
     fn byte_length(&self) -> Result<u64, SourceError> {
         match self {
             Self::Local(source) => source.byte_length(),
@@ -301,19 +308,19 @@ impl ByteSource for DelimitedSource {
 /// source keeps the length its version reports. Opening an object costs one
 /// `head_object` call and no body read.
 pub fn open_source(
-    location: &DelimitedLocation,
-) -> Result<(DelimitedSource, SourceVersion), StorageError> {
+    location: &FileLocation,
+) -> Result<(LocationSource, SourceVersion), StorageError> {
     match location {
-        DelimitedLocation::Local { path } => {
+        FileLocation::Local { path } => {
             let (file, metadata) = open_local_file(path)?;
 
             Ok((
-                DelimitedSource::Local(FileSource::new(file)),
+                LocationSource::Local(FileSource::new(file)),
                 local_version(&metadata),
             ))
         }
 
-        DelimitedLocation::Object {
+        FileLocation::Object {
             connection,
             bucket,
             key,
@@ -322,20 +329,20 @@ pub fn open_source(
 
             let source = ObjectSource::new(connection.clone(), bucket, key, metadata.size_bytes);
 
-            Ok((DelimitedSource::Object(source), object_version(&metadata)))
+            Ok((LocationSource::Object(source), object_version(&metadata)))
         }
     }
 }
 
 /// Reads the version the file at `location` has now: one `stat` for a local
 /// file, one `head_object` call for an object.
-pub fn read_version(location: &DelimitedLocation) -> Result<SourceVersion, StorageError> {
+pub fn read_version(location: &FileLocation) -> Result<SourceVersion, StorageError> {
     match location {
-        DelimitedLocation::Local { path } => std::fs::metadata(path)
+        FileLocation::Local { path } => std::fs::metadata(path)
             .map(|metadata| local_version(&metadata))
             .map_err(|error| StorageError::local_io(path, error)),
 
-        DelimitedLocation::Object {
+        FileLocation::Object {
             connection,
             bucket,
             key,
@@ -347,7 +354,7 @@ pub fn read_version(location: &DelimitedLocation) -> Result<SourceVersion, Stora
 
 /// Whether the file at `location` is no longer the `captured` version.
 pub fn has_changed_since(
-    location: &DelimitedLocation,
+    location: &FileLocation,
     captured: &SourceVersion,
 ) -> Result<bool, StorageError> {
     Ok(read_version(location)? != *captured)
@@ -355,7 +362,7 @@ pub fn has_changed_since(
 
 /// Opens a local file for reading and returns it with the metadata of that
 /// same handle, so the version taken from it describes the bytes it reads.
-pub(super) fn open_local_file(
+pub(crate) fn open_local_file(
     path: &Path,
 ) -> Result<(std::fs::File, std::fs::Metadata), StorageError> {
     std::fs::File::open(path)
@@ -367,14 +374,14 @@ pub(super) fn open_local_file(
         .map_err(|error| StorageError::local_io(path, error))
 }
 
-pub(super) fn local_version(metadata: &std::fs::Metadata) -> SourceVersion {
+pub(crate) fn local_version(metadata: &std::fs::Metadata) -> SourceVersion {
     SourceVersion::Local {
         modified: metadata.modified().ok(),
         length: metadata.len(),
     }
 }
 
-pub(super) fn object_version(metadata: &ObjectMetadata) -> SourceVersion {
+pub(crate) fn object_version(metadata: &ObjectMetadata) -> SourceVersion {
     SourceVersion::Object {
         etag: metadata.etag.clone(),
         last_modified: metadata.last_modified,
@@ -383,7 +390,7 @@ pub(super) fn object_version(metadata: &ObjectMetadata) -> SourceVersion {
 }
 
 #[allow(clippy::result_large_err)]
-pub(super) fn head_object(
+pub(crate) fn head_object(
     connection: &dyn Connection,
     bucket: &str,
     key: &str,
@@ -396,7 +403,7 @@ pub(super) fn head_object(
 /// The object-store API of `connection`, or the error every other object
 /// document reports when the connection has none.
 #[allow(clippy::result_large_err)]
-pub(super) fn object_store(
+pub(crate) fn object_store(
     connection: &dyn Connection,
 ) -> Result<&dyn ObjectStoreConnection, DbError> {
     connection.object_store_api().ok_or_else(|| {

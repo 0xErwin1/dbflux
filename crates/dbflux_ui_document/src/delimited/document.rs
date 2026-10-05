@@ -53,11 +53,11 @@ use gpui::*;
 use super::columns::{ColumnPrompt, ColumnPromptRequest, LoadRestPrompt, LoadingRest};
 use super::editing::{CellEditRequest, CellEditTarget, install_page_model, pad_pending_inserts};
 use super::page_model::{PageModel, PageModelError};
-use super::source::{DelimitedLocation, DelimitedSource, SourceVersion, StorageError, open_source};
 use super::text::{MAX_TEXT_BYTES, SourceSpan};
 use super::text_view::TextViewState;
 use super::toolbar::{DELIMITERS, DialectControls, QUOTES};
 use crate::dedup::FileDocumentKey;
+use crate::file_source::{FileLocation, LocationSource, SourceVersion, StorageError, open_source};
 use crate::handle::DocumentEvent;
 use crate::object_text::db_error_to_user_facing;
 use crate::pane::ObjectSavedCallback;
@@ -188,7 +188,7 @@ pub(super) struct OpenedFile {
     /// override.
     pub(super) dialect: Dialect,
     pub(super) version: SourceVersion,
-    pub(super) reader: PagedReader<DelimitedSource>,
+    pub(super) reader: PagedReader<LocationSource>,
     pub(super) page_model: PageModel,
 
     /// The bytes of the loaded records kept for the text view.
@@ -257,7 +257,7 @@ pub(super) struct LoadedFile {
     /// The reader the first page came from, kept open over the same source
     /// for the pages that follow it. `None` while a page is being read: the
     /// background read has it and hands it back with the page.
-    pub(super) reader: Option<PagedReader<DelimitedSource>>,
+    pub(super) reader: Option<PagedReader<LocationSource>>,
 
     /// The length of the source the reader's byte ranges were read from,
     /// kept here so a save can build its edit set while a page read holds
@@ -457,7 +457,7 @@ pub struct DelimitedDocument {
     focus_handle: FocusHandle,
     is_active_tab: bool,
     file: FileDocumentKey,
-    pub(super) location: DelimitedLocation,
+    pub(super) location: FileLocation,
 
     /// The application state the live connection of an object's profile is
     /// resolved from for every page and every save, and whose audit log
@@ -544,7 +544,7 @@ impl DelimitedDocument {
         cx: &mut Context<Self>,
     ) -> Self {
         let file = FileDocumentKey::Local { path: path.clone() };
-        let location = DelimitedLocation::Local { path };
+        let location = FileLocation::Local { path };
 
         Self::open(file, location, None, reader_options, cx)
     }
@@ -588,7 +588,7 @@ impl DelimitedDocument {
             bucket: bucket.clone(),
             key: key.clone(),
         };
-        let location = DelimitedLocation::Object {
+        let location = FileLocation::Object {
             connection,
             bucket,
             key,
@@ -599,7 +599,7 @@ impl DelimitedDocument {
 
     fn open(
         file: FileDocumentKey,
-        location: DelimitedLocation,
+        location: FileLocation,
         app_state: Option<Entity<AppStateEntity>>,
         reader_options: ReaderOptions,
         cx: &mut Context<Self>,
@@ -1262,7 +1262,7 @@ impl DelimitedDocument {
             return Err(ConnectionUnavailable);
         };
 
-        if let DelimitedLocation::Object {
+        if let FileLocation::Object {
             connection: opened_with,
             ..
         } = &mut self.location
@@ -1304,7 +1304,7 @@ impl DelimitedDocument {
     fn apply_page_outcome(
         &mut self,
         reader_epoch: u64,
-        reader: PagedReader<DelimitedSource>,
+        reader: PagedReader<LocationSource>,
         result: Result<ReadPage, OpenError>,
         cx: &mut Context<Self>,
     ) {
@@ -1722,7 +1722,7 @@ fn warning_text(warning: DelimitedWarning, dialect: &Dialect, detected: &Dialect
         ),
 
         DelimitedWarning::CannotSaveInPlace => {
-            dbflux_i18n::t!("document.delimited.warning.cannot_save_in_place")
+            dbflux_i18n::t!("document.file.warning.cannot_save_in_place")
         }
     }
 }
@@ -1742,7 +1742,7 @@ fn status_items(dialect: &Dialect, page_model: &PageModel) -> Vec<SharedString> 
 /// Opens the file at `location`, detects its dialect from a leading sample
 /// and reads its first page. Blocks on file or network I/O.
 pub(super) fn open_first_page(
-    location: &DelimitedLocation,
+    location: &FileLocation,
     extension: Option<&str>,
     reader_options: ReaderOptions,
 ) -> Result<OpenedFile, OpenError> {
@@ -1795,7 +1795,7 @@ pub(super) fn readable_dialect(
 /// The source is a new one, with the version the file has now. The reader
 /// that is in use keeps its own source, so a failure here costs nothing.
 pub(super) fn reread_pages(
-    location: &DelimitedLocation,
+    location: &FileLocation,
     dialect: Dialect,
     reader_options: ReaderOptions,
     pages: usize,
@@ -1833,7 +1833,7 @@ pub(super) fn pages_to_read_again(page_model: &PageModel) -> usize {
 /// Opens a reader over `source` with `dialect` and reads the first page.
 /// Blocks on file or network I/O.
 pub(super) fn read_first_page(
-    source: DelimitedSource,
+    source: LocationSource,
     version: SourceVersion,
     dialect: Dialect,
     reader_options: ReaderOptions,
@@ -1862,7 +1862,7 @@ pub(super) fn read_first_page(
 /// header's, which the reader fetched to read it, when they fit in
 /// [`MAX_TEXT_BYTES`]. A header that does not fit closes the span, so that
 /// no record is kept without the header before it.
-fn header_source_span(reader: &PagedReader<DelimitedSource>) -> SourceSpan {
+fn header_source_span(reader: &PagedReader<LocationSource>) -> SourceSpan {
     let start = reader.byte_order_mark_length();
 
     match reader.header_bytes() {
@@ -1901,7 +1901,7 @@ pub(super) fn append_read(
 /// bytes, for the text view. The bytes come from the read itself. Blocks on
 /// file or network I/O.
 pub(super) fn read_page(
-    reader: &mut PagedReader<DelimitedSource>,
+    reader: &mut PagedReader<LocationSource>,
     page_index: usize,
     page_size: NonZeroUsize,
     keep_budget: usize,

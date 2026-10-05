@@ -1765,7 +1765,6 @@ document:
       load_more_failed: "Could not load more of %{name}"
       reread_failed: "Could not re-read %{name}"
       save_failed: "Could not save %{name}"
-      source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
       next_page_required: "A row was added after the last loaded record, so its place in the file is not known yet. Load the next page, then save again."
       full_load_required: "A column was added before the whole file was loaded. Load every page, then save again."
       saved_version_unknown: "%{name} was saved, but its new version could not be read"
@@ -1799,12 +1798,6 @@ document:
         unsupported: "%{encoding} text cannot be read with %{character} as its delimiter or quote. Choose another delimiter, quote or encoding."
         line_break: "A line break cannot be the delimiter or the quote. Choose another character."
         quote_equals_delimiter: "The quote and the delimiter are both %{character}. Choose a different character for one of them."
-      storage:
-        read: "Could not read the file: %{cause}"
-        local_io: "Could not access %{path}: %{cause}"
-        temporary_file: "Could not save %{target}: writing a temporary file in %{directory} failed: %{cause}"
-        object_store: "Could not access %{bucket}/%{key}: %{cause}"
-        read_only_file: "The file is read-only."
       read:
         unexpected_length: "The file returned a different number of bytes than were asked for, so it could not be read."
       write:
@@ -1825,7 +1818,6 @@ document:
       malformed_text: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The detected encoding is probably wrong."
       malformed_text_chosen: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The chosen encoding is probably wrong."
       detected_delimiter_unreadable: "The detected delimiter %{detected} cannot be read in %{encoding} text, so the file is read with %{delimiter} and its columns are probably wrong. Choose another encoding or delimiter."
-      cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
     status:
       delimiter: "Delimiter: %{delimiter}"
       encoding: "Encoding: %{encoding}"
@@ -1988,6 +1980,17 @@ document:
       back: Back
       continue: Continue
       close: Close
+  file:
+    error:
+      source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
+      storage:
+        read: "Could not read the file: %{cause}"
+        local_io: "Could not access %{path}: %{cause}"
+        temporary_file: "Could not save %{target}: writing a temporary file in %{directory} failed: %{cause}"
+        object_store: "Could not access %{bucket}/%{key}: %{cause}"
+        read_only_file: "The file is read-only."
+    warning:
+      cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
   governance:
     refresh: "Refresh"
     no_pending: No pending executions
