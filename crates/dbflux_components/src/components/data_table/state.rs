@@ -374,23 +374,32 @@ impl DataTableState {
     /// columns, matched by title so a reordered column keeps its own facts.
     /// A different column set drops them all: facts carried over by a
     /// matching title could describe another column, and the host sets the
-    /// annotations of the new columns anyway.
+    /// annotations of the new columns anyway. So does a reorder of columns
+    /// that share a title, because the title cannot tell which of them moved
+    /// where.
     fn reload_header_annotations(&mut self, previous_titles: &[Arc<str>]) {
         if self.header_annotations.is_empty() {
             return;
         }
 
-        let mut previous_sorted = previous_titles.to_vec();
-        let mut current_sorted: Vec<Arc<str>> = self
+        let current_titles: Vec<Arc<str>> = self
             .model
             .columns
             .iter()
             .map(|column| column.title.clone())
             .collect();
+
+        let mut previous_sorted = previous_titles.to_vec();
+        let mut current_sorted = current_titles.clone();
         previous_sorted.sort();
         current_sorted.sort();
 
-        if previous_sorted != current_sorted {
+        let titles_repeat = previous_sorted
+            .windows(2)
+            .any(|pair| matches!(pair, [left, right] if left == right));
+        let reordered = previous_titles != current_titles.as_slice();
+
+        if previous_sorted != current_sorted || (titles_repeat && reordered) {
             self.header_annotations.clear();
             return;
         }
@@ -2773,6 +2782,51 @@ mod tests {
             "a different column set drops every annotation, kept titles included"
         );
         assert_eq!(header_height, super::super::theme::HEADER_HEIGHT);
+    }
+
+    #[gpui::test]
+    fn header_annotations_clear_when_repeated_titles_move(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["value", "id", "value"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), None, annotation("2.3×")], cx);
+                s.set_model(
+                    model_of(&["id", "value", "value"], 1),
+                    ModelSwap::ResetCursor,
+                    cx,
+                );
+            });
+        });
+
+        assert_eq!(
+            annotations(cx, &state),
+            vec![None, None, None],
+            "a repeated title cannot tell which column moved where"
+        );
+    }
+
+    #[gpui::test]
+    fn header_annotations_with_repeated_titles_survive_a_page_of_the_same_columns(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = state_of(cx, model_of(&["value", "id", "value"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), None, annotation("2.3×")], cx);
+                s.set_model(
+                    model_of(&["value", "id", "value"], 3),
+                    ModelSwap::KeepCursor,
+                    cx,
+                );
+            });
+        });
+
+        assert_eq!(
+            annotations(cx, &state),
+            vec![annotation("41×"), None, annotation("2.3×")]
+        );
     }
 
     use super::{CELL_PADDING_X, GridMetrics, MAX_AUTO_COLUMN_WIDTH, MONO_ADVANCE_EM};
