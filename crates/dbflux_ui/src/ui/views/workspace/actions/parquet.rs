@@ -13,9 +13,9 @@ impl Workspace {
     /// document reports why it cannot be read.
     ///
     /// An object is read through the live connection of its profile, so a
-    /// profile that is not connected is reported and opens nothing. A store
-    /// that cannot read a byte range of an object is refused with a message:
-    /// every footer and page read would download the whole object.
+    /// profile that is not connected is reported and opens nothing. An
+    /// object of a store that cannot read a byte range opens a tab that asks
+    /// whether to download it whole, and closes when the user declines.
     ///
     /// The keyboard moves to the new tab on the next render, so callers
     /// without a window can open one.
@@ -77,26 +77,6 @@ impl Workspace {
                     return;
                 };
 
-                let reads_ranges = connection
-                    .object_store_api()
-                    .is_some_and(|api| api.supports_range_reads());
-
-                if !reads_ranges {
-                    let name = key.rsplit('/').next().unwrap_or(&key);
-
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::User,
-                            dbflux_i18n::t!("document.parquet.error.open_failed", name = name),
-                        )
-                        .with_cause(dbflux_i18n::t!(
-                            "document.parquet.error.object_without_range_reads"
-                        )),
-                        cx,
-                    );
-                    return;
-                }
-
                 let app_state = self.app_state.clone();
 
                 cx.new(|cx| {
@@ -119,7 +99,8 @@ impl Workspace {
 mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-    use crate::ui::document::{DocumentKind, DocumentState, FileDocumentKey};
+    use crate::ui::document::file_source::{LocationSource, ObjectReads, download_whole_object};
+    use crate::ui::document::{DocumentKind, DocumentState, FileDocumentKey, ParquetDocument, Tab};
     use crate::ui::views::workspace::Workspace;
     use crate::ui::views::workspace::actions::delimited::tests::{
         BUCKET, ObjectStoreFake, close_every_tab, connect_object_store, new_workspace, open_path,
@@ -127,7 +108,7 @@ mod tests {
     };
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -142,6 +123,22 @@ mod tests {
         let cities: ArrayRef = Arc::new(StringArray::from(vec!["Lima", "Quito"]));
         let batch =
             RecordBatch::try_new(schema.clone(), vec![ids, cities]).expect("the batch must build");
+
+        let mut buffer = Vec::new();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, schema, None)
+            .expect("the writer must open");
+        writer.write(&batch).expect("the batch must be written");
+        writer.close().expect("the writer must close");
+
+        buffer
+    }
+
+    /// A Parquet file of `rows` ids, written in one row group.
+    fn ids_parquet(rows: i64) -> Vec<u8> {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+
+        let ids: ArrayRef = Arc::new(Int64Array::from((0..rows).collect::<Vec<_>>()));
+        let batch = RecordBatch::try_new(schema.clone(), vec![ids]).expect("the batch must build");
 
         let mut buffer = Vec::new();
         let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, schema, None)
@@ -385,34 +382,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn an_object_of_a_store_without_ranged_reads_is_refused_with_a_message(
-        cx: &mut TestAppContext,
-    ) {
-        let (workspace, window) = new_workspace(cx);
-        let bytes = cities_parquet();
-        let store = ObjectStoreFake::with_objects(&[("2026/cities.parquet", &bytes)]);
-        let profile_id = connect_object_store(window, &workspace, store);
-
-        open(window, &workspace, object_key(profile_id));
-
-        assert!(tab_titles(window, &workspace).is_empty());
-        assert_eq!(toast_count(window), 1);
-
-        let last_toast = window.update(|_, cx| {
-            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
-                .host
-                .read(cx)
-                .last_toast_title()
-        });
-        assert!(
-            last_toast
-                .as_deref()
-                .is_some_and(|title| title.contains("cities.parquet")),
-            "{last_toast:?}"
-        );
-    }
-
-    #[gpui::test]
     fn an_object_of_a_profile_that_is_not_connected_opens_no_tab(cx: &mut TestAppContext) {
         let (workspace, window) = new_workspace(cx);
 
@@ -420,5 +389,312 @@ mod tests {
 
         assert!(tab_titles(window, &workspace).is_empty());
         assert_eq!(toast_count(window), 1);
+    }
+
+    const OBJECT_KEY: &str = "2026/cities.parquet";
+
+    /// Opens the object `key` of `profile_id` the way the workspace does, and
+    /// returns the document so the test can answer its prompt.
+    fn open_object_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        profile_id: uuid::Uuid,
+        key: &str,
+    ) -> Entity<ParquetDocument> {
+        let key = key.to_string();
+
+        let document = window.update(|_, cx| {
+            let app_state = workspace.read(cx).app_state.clone();
+            let connection = app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.connection.clone())
+                .expect("the profile is connected");
+
+            let document = cx.new(|cx| {
+                ParquetDocument::open_object(
+                    app_state,
+                    profile_id,
+                    connection,
+                    BUCKET.to_string(),
+                    key,
+                    cx,
+                )
+            });
+            let pane = ParquetDocument::into_pane(document.clone(), cx);
+            let tab_manager = workspace.read(cx).tab_manager.clone();
+
+            tab_manager.update(cx, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx);
+            });
+
+            document
+        });
+        window.run_until_parked();
+
+        document
+    }
+
+    fn prompt_message(
+        window: &mut VisualTestContext,
+        document: &Entity<ParquetDocument>,
+    ) -> Option<String> {
+        window.update(|_, cx| document.read(cx).download_prompt_message())
+    }
+
+    fn confirm_download(window: &mut VisualTestContext, document: &Entity<ParquetDocument>) {
+        window.update(|_, cx| document.update(cx, |document, cx| document.confirm_download(cx)));
+        window.run_until_parked();
+    }
+
+    fn reload(window: &mut VisualTestContext, document: &Entity<ParquetDocument>) {
+        window.update(|_, cx| document.update(cx, |document, cx| document.reload(cx)));
+        window.run_until_parked();
+    }
+
+    fn row_counts(
+        window: &mut VisualTestContext,
+        document: &Entity<ParquetDocument>,
+    ) -> Option<(u64, u64)> {
+        window.update(|_, cx| document.read(cx).row_counts())
+    }
+
+    fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
+        window.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .last_toast_title()
+        })
+    }
+
+    #[gpui::test]
+    fn an_object_of_a_store_without_ranged_reads_opens_one_tab_and_reads_nothing(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        open(window, &workspace, object_key(profile_id));
+
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+        assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
+        assert_eq!(store.full_reads(), 0, "nothing is read before confirming");
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn object_without_range_reads_asks_before_download(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let document = open_object_tab(window, &workspace, profile_id, OBJECT_KEY);
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+
+        let message = prompt_message(window, &document).expect("the prompt is open");
+        let size = dbflux_components::components::column_facts::format_bytes(bytes.len() as u64);
+
+        assert!(message.contains("cities.parquet"), "{message}");
+        assert!(message.contains(&size), "{message} names {size}");
+        assert_eq!(store.full_reads(), 0, "nothing is read before confirming");
+        assert_eq!(row_counts(window, &document), None);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn confirming_downloads_once_and_opens_the_table(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = ids_parquet(1200);
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let document = open_object_tab(window, &workspace, profile_id, OBJECT_KEY);
+        confirm_download(window, &document);
+
+        assert_eq!(store.full_reads(), 1);
+        assert_eq!(prompt_message(window, &document), None);
+        assert_eq!(row_counts(window, &document), Some((500, 1200)));
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).object_reads()),
+            Some(ObjectReads::Downloaded)
+        );
+
+        window.update(|_, cx| document.update(cx, |document, cx| document.load_more(cx)));
+        window.run_until_parked();
+
+        assert_eq!(row_counts(window, &document), Some((1000, 1200)));
+        assert_eq!(store.full_reads(), 1, "paging reads the downloaded copy");
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn cancelling_opens_nothing_and_reports_nothing(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let document = open_object_tab(window, &workspace, profile_id, OBJECT_KEY);
+        assert!(prompt_message(window, &document).is_some());
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| document.dismiss_download_prompt(cx))
+        });
+        window.run_until_parked();
+
+        assert!(tab_titles(window, &workspace).is_empty());
+        assert_eq!(store.full_reads(), 0);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn object_with_range_reads_opens_without_asking(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_ranged_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store);
+
+        let document = open_object_tab(window, &workspace, profile_id, OBJECT_KEY);
+
+        assert_eq!(prompt_message(window, &document), None);
+        assert_eq!(row_counts(window, &document), Some((2, 2)));
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).object_reads()),
+            Some(ObjectReads::ByRange)
+        );
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn reload_of_a_downloaded_object_reports_unchanged_or_asks_again(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let document = open_object_tab(window, &workspace, profile_id, OBJECT_KEY);
+        confirm_download(window, &document);
+        assert_eq!(row_counts(window, &document), Some((2, 2)));
+
+        reload(window, &document);
+
+        assert_eq!(prompt_message(window, &document), None);
+        assert_eq!(
+            store.full_reads(),
+            1,
+            "an unchanged object is not downloaded again"
+        );
+        assert_eq!(row_counts(window, &document), Some((2, 2)));
+        assert_eq!(toast_count(window), 1);
+        let unchanged = last_toast_title(window);
+        assert!(
+            unchanged
+                .as_deref()
+                .is_some_and(|title| title.contains("cities.parquet")),
+            "{unchanged:?}"
+        );
+
+        let changed = ids_parquet(3);
+        store.replace(OBJECT_KEY, &changed);
+
+        reload(window, &document);
+
+        let message = prompt_message(window, &document).expect("a changed object asks again");
+        let size = dbflux_components::components::column_facts::format_bytes(changed.len() as u64);
+        assert!(message.contains(&size), "{message} names {size}");
+        assert_eq!(store.full_reads(), 1);
+        assert_eq!(
+            row_counts(window, &document),
+            Some((2, 2)),
+            "the rows stay while the prompt is open"
+        );
+
+        confirm_download(window, &document);
+
+        assert_eq!(store.full_reads(), 2);
+        assert_eq!(row_counts(window, &document), Some((3, 3)));
+        assert_eq!(toast_count(window), 1);
+    }
+
+    #[gpui::test]
+    fn a_download_over_the_memory_limit_reads_a_temporary_file_removed_after_use(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let connection = window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.connection.clone())
+                .expect("the profile is connected")
+        });
+
+        let (in_memory, _version) =
+            download_whole_object(connection.as_ref(), BUCKET, OBJECT_KEY, u64::MAX)
+                .expect("the download succeeds");
+        assert!(matches!(in_memory, LocationSource::Memory(_)));
+
+        let (on_disk, _version) = download_whole_object(connection.as_ref(), BUCKET, OBJECT_KEY, 0)
+            .expect("the download succeeds");
+        let LocationSource::Downloaded(file) = &on_disk else {
+            panic!("an object over the limit is downloaded to a file");
+        };
+        let path = file.path().to_path_buf();
+
+        assert!(path.exists());
+        assert_eq!(std::fs::read(&path).expect("the copy reads"), bytes);
+        assert_eq!(store.full_reads(), 2);
+
+        drop(on_disk);
+
+        assert!(!path.exists(), "the temporary copy is removed");
+    }
+
+    #[gpui::test]
+    fn an_object_larger_than_its_reported_size_does_not_stay_in_memory(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        store.report_size(1);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let connection = window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.connection.clone())
+                .expect("the profile is connected")
+        });
+
+        let limit = bytes.len() as u64 - 1;
+        let (source, _version) =
+            download_whole_object(connection.as_ref(), BUCKET, OBJECT_KEY, limit)
+                .expect("the download succeeds");
+        let LocationSource::Downloaded(file) = &source else {
+            panic!("an object that arrives over the limit is kept in a file");
+        };
+        let path = file.path().to_path_buf();
+
+        assert_eq!(std::fs::read(&path).expect("the copy reads"), bytes);
+        assert_eq!(store.full_reads(), 1, "the object is read once");
+
+        drop(source);
+
+        assert!(!path.exists(), "the temporary copy is removed");
     }
 }

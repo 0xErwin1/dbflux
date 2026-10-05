@@ -2063,12 +2063,20 @@ document:
       rows:
         one: "행 %{count}개"
         many: "행 %{count}개"
+      read_by_range: "범위 단위로 읽음"
+      downloaded_whole: "전체 다운로드됨"
+    download:
+      title: "객체 전체를 다운로드할까요?"
+      body: "%{name}의 크기는 %{size}입니다. 이 스토리지 서비스는 객체의 일부만 읽을 수 없어, DBFlux가 객체 전체를 한 번 다운로드한 뒤 그 사본에서 행을 읽습니다."
+      body_changed: "%{name}이(가) 다운로드된 뒤 변경되어 현재 크기는 %{size}입니다. 이 스토리지 서비스는 객체의 일부만 읽을 수 없어, 다시 불러오면 전체를 다시 다운로드하고 표시된 행을 바꿉니다."
+      confirm: "다운로드"
+      cancel: "취소"
+      unchanged: "%{name}은(는) 다운로드된 뒤 변경되지 않았습니다."
     error:
       open_failed: "%{name}을(를) 열 수 없습니다"
       load_more_failed: "%{name}을(를) 더 불러올 수 없습니다"
       projection_failed: "%{name}의 선택한 열을 읽을 수 없습니다"
       source_changed: "파일이 열린 뒤 변경되어 더 이상 행을 읽지 않았습니다. 새 내용을 보려면 다시 불러오세요."
-      object_without_range_reads: "이 스토리지 서비스는 객체의 일부만 읽을 수 없어, 여기서 Parquet 객체를 열면 객체 전체를 다운로드하게 됩니다. 파일을 다운로드한 뒤 로컬에서 여세요."
       short_read: "파일이 요청한 것보다 적은 바이트를 반환했습니다. 읽는 동안 변경되었을 수 있습니다."
       not_parquet: "파일이 Parquet 형식이 아닙니다."
       footer_too_large: "Parquet 푸터가 %{size}로, DBFlux가 읽는 %{limit}보다 큽니다."

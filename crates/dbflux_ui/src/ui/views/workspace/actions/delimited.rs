@@ -1014,6 +1014,12 @@ pub(super) mod tests {
     pub(in crate::ui::views::workspace::actions) struct ObjectStoreFake {
         objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
         range_reads: bool,
+        /// How many times the store sent a whole object: `get_object`, which
+        /// the trait's default range read also calls, and `download_object`.
+        full_reads: std::sync::atomic::AtomicUsize,
+        /// The size `head_object` reports instead of the stored length, as
+        /// when another writer replaces the object right after it.
+        reported_size: std::sync::Mutex<Option<u64>>,
     }
 
     impl ObjectStoreFake {
@@ -1039,7 +1045,27 @@ pub(super) mod tests {
                         .collect(),
                 ),
                 range_reads,
+                full_reads: std::sync::atomic::AtomicUsize::new(0),
+                reported_size: std::sync::Mutex::new(None),
             })
+        }
+
+        /// Makes `head_object` report `size` bytes for every object.
+        pub(in crate::ui::views::workspace::actions) fn report_size(&self, size: u64) {
+            *self.reported_size.lock().expect("the reported size") = Some(size);
+        }
+
+        /// How many times the store sent a whole object.
+        pub(in crate::ui::views::workspace::actions) fn full_reads(&self) -> usize {
+            self.full_reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// Replaces the object `key`, as another writer would.
+        pub(in crate::ui::views::workspace::actions) fn replace(&self, key: &str, bytes: &[u8]) {
+            self.objects
+                .lock()
+                .expect("the object map")
+                .insert(key.to_string(), bytes.to_vec());
         }
 
         #[allow(clippy::result_large_err)]
@@ -1084,10 +1110,11 @@ pub(super) mod tests {
             key: &str,
         ) -> Result<dbflux_core::ObjectMetadata, dbflux_core::DbError> {
             let bytes = self.bytes(bucket, key)?;
+            let reported_size = *self.reported_size.lock().expect("the reported size");
 
             Ok(dbflux_core::ObjectMetadata {
                 key: key.to_string(),
-                size_bytes: bytes.len() as u64,
+                size_bytes: reported_size.unwrap_or(bytes.len() as u64),
                 content_type: None,
                 last_modified: None,
                 etag: Some("\"one\"".to_string()),
@@ -1098,16 +1125,27 @@ pub(super) mod tests {
         }
 
         fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, dbflux_core::DbError> {
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
             self.bytes(bucket, key)
         }
 
         fn download_object(
             &self,
-            _bucket: &str,
-            _key: &str,
-            _dest: &std::path::Path,
+            bucket: &str,
+            key: &str,
+            dest: &std::path::Path,
         ) -> Result<u64, dbflux_core::DbError> {
-            not_used()
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            let bytes = self.bytes(bucket, key)?;
+
+            std::fs::write(dest, &bytes)
+                .map_err(|error| dbflux_core::DbError::query_failed(error.to_string()))?;
+
+            Ok(bytes.len() as u64)
         }
 
         fn put_object(

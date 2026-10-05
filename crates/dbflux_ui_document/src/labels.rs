@@ -2978,9 +2978,15 @@ pub(crate) fn parquet_row_count_status(loaded: u64, total: u64) -> String {
     }
 }
 
-/// The summary of a Parquet file in its header: its columns, its rows and
-/// its size on disk, which the footer may not know.
-pub(crate) fn parquet_summary(columns: usize, rows: u64, compressed_bytes: Option<u64>) -> String {
+/// The summary of a Parquet file in its header: its columns, its rows, its
+/// size on disk, which the footer may not know, and for an object whether
+/// it is read by range or from a copy downloaded whole.
+pub(crate) fn parquet_summary(
+    columns: usize,
+    rows: u64,
+    compressed_bytes: Option<u64>,
+    reads: Option<crate::file_source::ObjectReads>,
+) -> String {
     let columns = if columns == 1 {
         dbflux_i18n::t!("document.parquet.summary.columns.one", count = columns)
     } else {
@@ -2995,7 +3001,50 @@ pub(crate) fn parquet_summary(columns: usize, rows: u64, compressed_bytes: Optio
 
     let size = dbflux_components::components::column_facts::format_optional_bytes(compressed_bytes);
 
-    format!("{columns} · {rows} · {size}")
+    match reads {
+        Some(reads) => format!(
+            "{columns} · {rows} · {size} · {}",
+            parquet_object_reads_label(reads)
+        ),
+        None => format!("{columns} · {rows} · {size}"),
+    }
+}
+
+/// How the bytes of a Parquet object are read, for its summary.
+pub(crate) fn parquet_object_reads_label(reads: crate::file_source::ObjectReads) -> String {
+    match reads {
+        crate::file_source::ObjectReads::ByRange => {
+            dbflux_i18n::t!("document.parquet.summary.read_by_range")
+        }
+        crate::file_source::ObjectReads::Downloaded => {
+            dbflux_i18n::t!("document.parquet.summary.downloaded_whole")
+        }
+    }
+}
+
+/// What the prompt before a whole download of a Parquet object asks: the
+/// object's name and size, and that all of it is downloaded once.
+pub(crate) fn parquet_download_body(file_name: &str, size_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.parquet.download.body",
+        name = file_name,
+        size = dbflux_components::components::column_facts::format_bytes(size_bytes)
+    )
+}
+
+/// What the prompt asks when a reload found a downloaded Parquet object
+/// changed: its new size, and that all of it is downloaded again.
+pub(crate) fn parquet_download_changed_body(file_name: &str, size_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.parquet.download.body_changed",
+        name = file_name,
+        size = dbflux_components::components::column_facts::format_bytes(size_bytes)
+    )
+}
+
+/// The notice of a reload that found a downloaded Parquet object unchanged.
+pub(crate) fn parquet_download_unchanged(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.download.unchanged", name = file_name)
 }
 
 /// The summary of the error shown when the chosen columns of a Parquet file
@@ -7685,7 +7734,14 @@ mod tests {
             "document.parquet.error.open_failed",
             "document.parquet.error.load_more_failed",
             "document.parquet.error.source_changed",
-            "document.parquet.error.object_without_range_reads",
+            "document.parquet.summary.read_by_range",
+            "document.parquet.summary.downloaded_whole",
+            "document.parquet.download.title",
+            "document.parquet.download.body",
+            "document.parquet.download.body_changed",
+            "document.parquet.download.confirm",
+            "document.parquet.download.cancel",
+            "document.parquet.download.unchanged",
             "document.parquet.error.short_read",
             "document.parquet.error.not_parquet",
             "document.parquet.error.footer_too_large",

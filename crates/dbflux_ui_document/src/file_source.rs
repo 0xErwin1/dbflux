@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use dbflux_byte_source::{ByteSource, FileSource, SourceError};
+use dbflux_byte_source::{ByteSource, FileSource, MemorySource, SourceError};
 use dbflux_core::chrono::{DateTime, Utc};
 use dbflux_core::{Connection, DbError, ObjectMetadata, ObjectStoreConnection};
 use dbflux_delimited::WriteError;
@@ -64,6 +64,13 @@ pub enum SourceVersion {
 }
 
 impl SourceVersion {
+    /// The length in bytes the file or object had at this version.
+    pub fn length(&self) -> u64 {
+        match self {
+            Self::Local { length, .. } | Self::Object { length, .. } => *length,
+        }
+    }
+
     /// Whether comparing this version with a later one can tell that the
     /// content was replaced by other content of the same length.
     ///
@@ -264,11 +271,93 @@ impl ByteSource for ObjectSource {
     }
 }
 
+/// Objects up to this size are downloaded whole into memory, and larger ones
+/// into a temporary file.
+///
+/// A Parquet page of the default projection reads about 3 to 14 MiB, and a
+/// footer at most a few MiB, so 64 MiB keeps an in-memory copy within a few
+/// pages' worth of memory while most exported files skip the disk write. A
+/// larger object costs disk space instead of memory, the way the object
+/// browser's Download does.
+pub const DOWNLOAD_IN_MEMORY_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How the bytes of an object are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectReads {
+    /// Each read asks the store for the byte range it needs.
+    ByRange,
+
+    /// The object was downloaded whole once, after the user agreed, and is
+    /// read from that copy. The store cannot read a byte range of an object.
+    Downloaded,
+}
+
+impl ObjectReads {
+    /// How `connection` reads objects: by range when its store declares
+    /// ranged reads, and by a single whole download otherwise.
+    pub fn of(connection: &dyn Connection) -> Self {
+        let by_range = connection
+            .object_store_api()
+            .is_some_and(|api| api.supports_range_reads());
+
+        if by_range {
+            Self::ByRange
+        } else {
+            Self::Downloaded
+        }
+    }
+}
+
+/// A whole object downloaded into a temporary file, which is removed when
+/// this is dropped.
+pub struct DownloadedFile {
+    /// `None` only while dropping: the file is closed before it is removed,
+    /// because Windows refuses to remove an open file.
+    source: Option<FileSource>,
+    path: PathBuf,
+}
+
+impl DownloadedFile {
+    /// Where the copy lives.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for DownloadedFile {
+    fn drop(&mut self) {
+        drop(self.source.take());
+        remove_download_file(&self.path);
+    }
+}
+
+impl ByteSource for DownloadedFile {
+    fn byte_length(&self) -> Result<u64, SourceError> {
+        match &self.source {
+            Some(source) => source.byte_length(),
+            None => Ok(0),
+        }
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError> {
+        match &self.source {
+            Some(source) => source.read_range(range),
+            None => Ok(Vec::new()),
+        }
+    }
+}
+
 /// The bytes of a file at either kind of location, as the one source type a
 /// reader is opened over.
 pub enum LocationSource {
     Local(FileSource),
     Object(ObjectSource),
+
+    /// A whole object downloaded into memory.
+    Memory(MemorySource),
+
+    /// A whole object downloaded into a temporary file.
+    Downloaded(DownloadedFile),
 }
 
 impl LocationSource {
@@ -278,7 +367,7 @@ impl LocationSource {
     /// A local file has no connection and is left as it is.
     pub(crate) fn use_connection(&mut self, connection: Arc<dyn Connection>) {
         match self {
-            Self::Local(_) => {}
+            Self::Local(_) | Self::Memory(_) | Self::Downloaded(_) => {}
             Self::Object(source) => source.connection = connection,
         }
     }
@@ -289,6 +378,8 @@ impl ByteSource for LocationSource {
         match self {
             Self::Local(source) => source.byte_length(),
             Self::Object(source) => source.byte_length(),
+            Self::Memory(source) => source.byte_length(),
+            Self::Downloaded(source) => source.byte_length(),
         }
     }
 
@@ -296,7 +387,118 @@ impl ByteSource for LocationSource {
         match self {
             Self::Local(source) => source.read_range(range),
             Self::Object(source) => source.read_range(range),
+            Self::Memory(source) => source.read_range(range),
+            Self::Downloaded(source) => source.read_range(range),
         }
+    }
+}
+
+/// Downloads the object `key` of `bucket` whole, once: into memory when the
+/// store reports `in_memory_limit` bytes or fewer, and otherwise into a new
+/// temporary file in the system's temporary directory. Costs one
+/// `head_object` call and one whole read.
+///
+/// The copy is a snapshot: nothing read from it asks the store again. The
+/// version returned is the one `head_object` reported right before the
+/// download, which a later [`read_version`] is compared with. An object
+/// replaced between the two calls makes that comparison report a change that
+/// is already in the copy, and one that arrives larger than `in_memory_limit`
+/// is moved to the temporary file instead of staying in memory. The store
+/// cannot read part of an object, so its bytes are still held in memory while
+/// they arrive.
+#[allow(clippy::result_large_err)]
+pub fn download_whole_object(
+    connection: &dyn Connection,
+    bucket: &str,
+    key: &str,
+    in_memory_limit: u64,
+) -> Result<(LocationSource, SourceVersion), StorageError> {
+    let metadata = head_object(connection, bucket, key)?;
+    let version = object_version(&metadata);
+
+    let api =
+        object_store(connection).map_err(|error| StorageError::object_store(bucket, key, error))?;
+
+    if metadata.size_bytes <= in_memory_limit {
+        let bytes = api
+            .get_object(bucket, key)
+            .map_err(|error| StorageError::object_store(bucket, key, error))?;
+
+        let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+
+        if length <= in_memory_limit {
+            return Ok((LocationSource::Memory(MemorySource::new(bytes)), version));
+        }
+
+        let path = create_download_file(&std::env::temp_dir())?;
+        let written =
+            std::fs::write(&path, &bytes).map_err(|error| StorageError::local_io(&path, error));
+        drop(bytes);
+
+        return Ok((downloaded_source(path, written)?, version));
+    }
+
+    let path = create_download_file(&std::env::temp_dir())?;
+
+    let downloaded = api
+        .download_object(bucket, key, &path)
+        .map(drop)
+        .map_err(|error| StorageError::object_store(bucket, key, error));
+
+    Ok((downloaded_source(path, downloaded)?, version))
+}
+
+/// The copy of an object written to `path`, or `written`'s error after the
+/// file is removed.
+fn downloaded_source(
+    path: PathBuf,
+    written: Result<(), StorageError>,
+) -> Result<LocationSource, StorageError> {
+    match written.and_then(|()| open_local_file(&path)) {
+        Ok((file, _metadata)) => Ok(LocationSource::Downloaded(DownloadedFile {
+            source: Some(FileSource::new(file)),
+            path,
+        })),
+
+        Err(error) => {
+            remove_download_file(&path);
+
+            Err(error)
+        }
+    }
+}
+
+/// Creates an empty file only this user can read, under a name no other
+/// file has, in `directory`, for a download to write into.
+fn create_download_file(directory: &Path) -> Result<PathBuf, StorageError> {
+    let path = directory.join(format!("dbflux-object-{}", uuid::Uuid::new_v4()));
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+
+    options
+        .open(&path)
+        .map(drop)
+        .map_err(|error| StorageError::local_io(&path, error))?;
+
+    Ok(path)
+}
+
+/// Removes a downloaded copy. A copy that cannot be removed is traced: the
+/// document that read it is gone, and nothing else can act on the failure.
+fn remove_download_file(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path) {
+        log::warn!(
+            "Failed to remove downloaded copy {}: {error}",
+            path.display()
+        );
     }
 }
 

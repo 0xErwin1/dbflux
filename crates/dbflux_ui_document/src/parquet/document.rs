@@ -18,6 +18,12 @@
 //! counts as a new read generation: a window started under an older one is
 //! dropped when it arrives, and the read of the latest projection starts as
 //! soon as the source is back.
+//!
+//! An object of a store that cannot read a byte range is downloaded whole
+//! once, after the user agrees in a prompt that names its size, and read from
+//! that copy. The copy is a snapshot: its windows are not checked against the
+//! store, and a reload compares the object's version with the one recorded at
+//! the download, asking again before downloading a changed object.
 
 use std::fmt;
 use std::sync::Arc;
@@ -29,6 +35,7 @@ use dbflux_components::components::data_table::{
     DataTable, DataTableEvent, DataTableState, HeaderAnnotation, ModelSwap,
 };
 use dbflux_components::components::read_estimate_bar::ReadEstimateBar;
+use dbflux_components::modals::ModalFocus;
 use dbflux_core::{
     ColumnProjection, Connection, DEFAULT_PAGE_ROWS, DEFAULT_PROJECTION_BUDGET_BYTES,
     DEFAULT_PROJECTION_MAX_COLUMNS, DbError, EstimateScope, PartUnit, ProfileSource, ReadEstimate,
@@ -39,13 +46,15 @@ use dbflux_parquet::{
     column_statistics, file_statistics, read_estimate, read_window,
 };
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use super::page_model::{ParquetPageModel, column_profile, header_annotation};
 use crate::dedup::FileDocumentKey;
 use crate::file_source::{
-    FileLocation, LocationSource, SourceVersion, StorageError, has_changed_since, open_source,
+    DOWNLOAD_IN_MEMORY_LIMIT_BYTES, FileLocation, LocationSource, ObjectReads, SourceVersion,
+    StorageError, download_whole_object, has_changed_since, open_source, read_version,
 };
 use crate::handle::DocumentEvent;
 use crate::object_text::db_error_to_user_facing;
@@ -251,9 +260,39 @@ pub(super) enum ParquetView {
 
 pub(super) enum ParquetPhase {
     Loading,
+    /// An object that is only read whole waits for the user to agree to the
+    /// download. Nothing of it was read yet.
+    AwaitingDownload,
     Failed(String),
     Empty,
     Loaded(Box<LoadedFile>),
+}
+
+/// The open question whether to download an object whole.
+pub(super) struct DownloadPrompt {
+    /// The object's size, as `head_object` reports it.
+    size: u64,
+
+    /// Whether the object changed since the copy whose rows are shown was
+    /// downloaded, so a download replaces them.
+    replaces_rows: bool,
+
+    focus: ModalFocus,
+}
+
+impl DownloadPrompt {
+    pub(super) fn focus_mut(&mut self) -> &mut ModalFocus {
+        &mut self.focus
+    }
+}
+
+/// Why the version of an object read whole is asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum VersionCheck {
+    /// The document is opened: the answer is the size the prompt names.
+    Open,
+    /// The user asked to reload: an unchanged object is not downloaded again.
+    Reload,
 }
 
 /// A Parquet file opened read-only as a table.
@@ -267,7 +306,16 @@ pub struct ParquetDocument {
     /// resolved from for every window. `None` for a local file.
     app_state: Option<Entity<AppStateEntity>>,
 
+    /// How an object is read. `None` for a local file.
+    reads: Option<ObjectReads>,
+
     phase: ParquetPhase,
+
+    /// The question whether to download an object whole, while it is open.
+    download_prompt: Option<DownloadPrompt>,
+
+    /// Set while the version of an object read whole is asked for.
+    checking_version: bool,
 
     view: ParquetView,
 
@@ -290,13 +338,17 @@ impl ParquetDocument {
         let file = FileDocumentKey::Local { path: path.clone() };
         let location = FileLocation::Local { path };
 
-        Self::open(file, location, None, cx)
+        Self::open(file, location, None, None, cx)
     }
 
     /// Opens the object `key` of `bucket` through `connection`, the live
     /// connection of the profile `profile_id` in `app_state`. Further windows
     /// are read through the connection the profile has when they are asked
     /// for.
+    ///
+    /// When the store cannot read a byte range of an object, only the
+    /// object's version is read here, and the user is asked whether to
+    /// download it whole. Declining closes the tab.
     pub fn open_object(
         app_state: Entity<AppStateEntity>,
         profile_id: uuid::Uuid,
@@ -310,19 +362,21 @@ impl ParquetDocument {
             bucket: bucket.clone(),
             key: key.clone(),
         };
+        let reads = ObjectReads::of(connection.as_ref());
         let location = FileLocation::Object {
             connection,
             bucket,
             key,
         };
 
-        Self::open(file, location, Some(app_state), cx)
+        Self::open(file, location, Some(app_state), Some(reads), cx)
     }
 
     fn open(
         file: FileDocumentKey,
         location: FileLocation,
         app_state: Option<Entity<AppStateEntity>>,
+        reads: Option<ObjectReads>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut document = Self {
@@ -331,7 +385,10 @@ impl ParquetDocument {
             file,
             location,
             app_state,
+            reads,
             phase: ParquetPhase::Loading,
+            download_prompt: None,
+            checking_version: false,
             view: ParquetView::Data,
             open_generation: 0,
             pending_table_focus: false,
@@ -370,7 +427,9 @@ impl ParquetDocument {
         match &self.phase {
             ParquetPhase::Loading => DocumentState::Loading,
             ParquetPhase::Failed(_) => DocumentState::Error,
-            ParquetPhase::Empty | ParquetPhase::Loaded(_) => DocumentState::Clean,
+            ParquetPhase::AwaitingDownload | ParquetPhase::Empty | ParquetPhase::Loaded(_) => {
+                DocumentState::Clean
+            }
         }
     }
 
@@ -464,6 +523,11 @@ impl ParquetDocument {
     /// Gives the keyboard to the view that is shown: the table, or the rows
     /// of the Columns view.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(prompt) = &mut self.download_prompt {
+            prompt.focus.focus(None, window, cx);
+            return;
+        }
+
         match &self.phase {
             ParquetPhase::Loaded(loaded) => {
                 if self.view == ParquetView::Columns
@@ -477,7 +541,10 @@ impl ParquetDocument {
                 handle.focus(window, cx);
             }
 
-            ParquetPhase::Loading | ParquetPhase::Failed(_) | ParquetPhase::Empty => {
+            ParquetPhase::Loading
+            | ParquetPhase::AwaitingDownload
+            | ParquetPhase::Failed(_)
+            | ParquetPhase::Empty => {
                 self.focus_handle.focus(window, cx);
             }
         }
@@ -539,9 +606,94 @@ impl ParquetDocument {
         self.has_more_rows() && !self.is_loading_more() && !self.source_changed()
     }
 
-    /// Whether the file can be opened again now: it is not being opened.
+    /// Whether the file can be opened again now: it is not being opened, its
+    /// version is not being asked for, and no download is waiting for an
+    /// answer.
     pub fn can_reload(&self) -> bool {
-        !matches!(self.phase, ParquetPhase::Loading)
+        !matches!(
+            self.phase,
+            ParquetPhase::Loading | ParquetPhase::AwaitingDownload
+        ) && !self.checking_version
+            && self.download_prompt.is_none()
+    }
+
+    /// How an object is read, and `None` for a local file.
+    pub fn object_reads(&self) -> Option<ObjectReads> {
+        self.reads
+    }
+
+    /// What the open download prompt asks: the object's name, its size, and
+    /// that all of it is downloaded once. `None` while no prompt is open.
+    pub fn download_prompt_message(&self) -> Option<String> {
+        let prompt = self.download_prompt.as_ref()?;
+        let title = self.title();
+
+        Some(if prompt.replaces_rows {
+            crate::labels::parquet_download_changed_body(&title, prompt.size)
+        } else {
+            crate::labels::parquet_download_body(&title, prompt.size)
+        })
+    }
+
+    pub(super) fn download_prompt_mut(&mut self) -> Option<&mut DownloadPrompt> {
+        self.download_prompt.as_mut()
+    }
+
+    /// Closes the download prompt and downloads the object whole, then shows
+    /// its first window. Rows shown from an older copy are dropped. Does
+    /// nothing when no prompt is open, and reports a profile that is not
+    /// connected without downloading.
+    pub fn confirm_download(&mut self, cx: &mut Context<Self>) {
+        let Some(mut prompt) = self.download_prompt.take() else {
+            return;
+        };
+
+        prompt.focus.restore(cx);
+
+        let summary = crate::labels::parquet_open_failed_message(&self.title());
+
+        if self.use_live_connection(summary, cx).is_err() {
+            if matches!(self.phase, ParquetPhase::AwaitingDownload) {
+                self.phase = ParquetPhase::Failed(dbflux_i18n::t!(
+                    "document.object_browser.error.connection_unavailable"
+                ));
+                cx.emit(DocumentEvent::MetaChanged);
+            }
+
+            cx.notify();
+            return;
+        }
+
+        let FileLocation::Object {
+            connection,
+            bucket,
+            key,
+        } = self.location.clone()
+        else {
+            return;
+        };
+
+        self.start_open(
+            move || open_downloaded(connection.as_ref(), &bucket, &key, DEFAULT_PAGE_ROWS),
+            cx,
+        );
+    }
+
+    /// Closes the download prompt without downloading. When nothing of the
+    /// object was shown yet, the tab asks to be closed: declining the
+    /// download declines the open.
+    pub fn dismiss_download_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(mut prompt) = self.download_prompt.take() else {
+            return;
+        };
+
+        prompt.focus.restore(cx);
+
+        if matches!(self.phase, ParquetPhase::AwaitingDownload) {
+            cx.emit(DocumentEvent::RequestClose);
+        }
+
+        cx.notify();
     }
 
     /// The status line: the rows loaded of the file's total and, when the
@@ -744,6 +896,11 @@ impl ParquetDocument {
 
     /// Opens the file again from its first window, dropping the rows shown.
     /// This is how a file changed elsewhere is seen again.
+    ///
+    /// An object read whole is not downloaded again when its version is the
+    /// one recorded at the download, which is said in a notice. A changed
+    /// object, or one whose rows are not shown, is offered for download
+    /// again, and the rows shown stay until the user agrees.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         if !self.can_reload() {
             return;
@@ -755,10 +912,32 @@ impl ParquetDocument {
             return;
         }
 
+        if self.reads == Some(ObjectReads::Downloaded) {
+            self.check_object_version(VersionCheck::Reload, cx);
+            return;
+        }
+
         self.load_first_window(cx);
     }
 
     fn load_first_window(&mut self, cx: &mut Context<Self>) {
+        if self.reads == Some(ObjectReads::Downloaded) {
+            self.check_object_version(VersionCheck::Open, cx);
+            return;
+        }
+
+        let location = self.location.clone();
+
+        self.start_open(move || open_first_window(&location, DEFAULT_PAGE_ROWS), cx);
+    }
+
+    /// Shows the loading notice and runs `open` on the background executor,
+    /// storing what it returns. A result of an older open is dropped.
+    fn start_open(
+        &mut self,
+        open: impl FnOnce() -> Result<OpenedFile, OpenError> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         self.phase = ParquetPhase::Loading;
         self._subscriptions.clear();
         self.open_generation += 1;
@@ -766,11 +945,8 @@ impl ParquetDocument {
         cx.notify();
 
         let generation = self.open_generation;
-        let location = self.location.clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { open_first_window(&location, DEFAULT_PAGE_ROWS) });
+        let task = cx.background_executor().spawn(async move { open() });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -821,6 +997,108 @@ impl ParquetDocument {
         cx.notify();
     }
 
+    /// Reads the version of an object read whole on the background executor:
+    /// one `head_object` call, no body. Opening shows the loading notice
+    /// meanwhile, and a reload keeps what is shown.
+    fn check_object_version(&mut self, purpose: VersionCheck, cx: &mut Context<Self>) {
+        if purpose == VersionCheck::Open {
+            self.phase = ParquetPhase::Loading;
+            self._subscriptions.clear();
+            self.open_generation += 1;
+            cx.emit(DocumentEvent::MetaChanged);
+        }
+
+        self.checking_version = true;
+        cx.notify();
+
+        let generation = self.open_generation;
+        let location = self.location.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { read_version(&location) });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                this.update(cx, |document, cx| {
+                    document.apply_version_check(generation, purpose, result, cx)
+                })
+                .ok();
+            });
+        })
+        .detach();
+    }
+
+    /// Handles a reload that found the object at `version`, as the version
+    /// read of an object read whole does.
+    #[cfg(test)]
+    pub(super) fn apply_reload_version(&mut self, version: SourceVersion, cx: &mut Context<Self>) {
+        let generation = self.open_generation;
+
+        self.apply_version_check(generation, VersionCheck::Reload, Ok(version), cx);
+    }
+
+    /// Asks whether to download the object, or says that a reload found it
+    /// unchanged. This is the first place a failed version read is caught,
+    /// so it is reported here and only here.
+    fn apply_version_check(
+        &mut self,
+        generation: u64,
+        purpose: VersionCheck,
+        result: Result<SourceVersion, StorageError>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.open_generation {
+            return;
+        }
+
+        self.checking_version = false;
+
+        let title = self.title();
+
+        match result {
+            Ok(version) => {
+                let shown_version = self.loaded().map(|loaded| loaded.version.clone());
+                let unchanged =
+                    purpose == VersionCheck::Reload && shown_version.as_ref() == Some(&version);
+
+                if unchanged {
+                    Toast::info(crate::labels::parquet_download_unchanged(&title)).push(cx);
+                } else {
+                    if matches!(self.phase, ParquetPhase::Loading) {
+                        self.phase = ParquetPhase::AwaitingDownload;
+                    }
+
+                    let mut focus = ModalFocus::new(cx);
+                    focus.focus_on_next_render();
+
+                    self.download_prompt = Some(DownloadPrompt {
+                        size: version.length(),
+                        replaces_rows: shown_version.is_some(),
+                        focus,
+                    });
+                }
+            }
+
+            Err(error) => {
+                let error = OpenError::from(error);
+                let summary = crate::labels::parquet_open_failed_message(&title);
+                let cause = error.to_string();
+
+                report_error(open_error_to_user_facing(&error, summary), cx);
+
+                if matches!(self.phase, ParquetPhase::Loading) {
+                    self.phase = ParquetPhase::Failed(cause);
+                }
+            }
+        }
+
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
     fn build_loaded(&mut self, opened: OpenedRows, cx: &mut Context<Self>) -> LoadedFile {
         let OpenedRows {
             version,
@@ -837,6 +1115,7 @@ impl ParquetDocument {
             total_columns,
             page_model.total_rows(),
             profile.total_compressed_bytes,
+            self.reads,
         )
         .into();
         let profile = Arc::new(profile);
@@ -917,11 +1196,11 @@ impl ParquetDocument {
 
         let summary = crate::labels::parquet_load_more_failed_message(&self.title());
 
-        let Ok(connection) = self.use_live_connection(summary, cx) else {
+        let Ok(connection) = self.connection_for_windows(summary, cx) else {
             return;
         };
 
-        let location = self.location.clone();
+        let recheck = self.version_recheck();
         let generation = self.open_generation;
 
         let Some(loaded) = self.loaded_mut() else {
@@ -942,7 +1221,8 @@ impl ParquetDocument {
         let window = RowWindow::new(loaded.page_model.loaded_rows(), DEFAULT_PAGE_ROWS);
 
         let task = cx.background_executor().spawn(async move {
-            let result = read_next_window(&location, &version, &source, &file, window, &columns);
+            let result =
+                read_next_window(recheck.as_ref(), &version, &source, &file, window, &columns);
 
             (source, result)
         });
@@ -1083,7 +1363,7 @@ impl ParquetDocument {
 
         let summary = crate::labels::parquet_projection_failed_message(&self.title());
 
-        let Ok(connection) = self.use_live_connection(summary, cx) else {
+        let Ok(connection) = self.connection_for_windows(summary, cx) else {
             if let Some(loaded) = self.loaded_mut() {
                 loaded.revert_projection(cx);
             }
@@ -1091,7 +1371,7 @@ impl ParquetDocument {
             return;
         };
 
-        let location = self.location.clone();
+        let recheck = self.version_recheck();
         let open_generation = self.open_generation;
 
         let Some(loaded) = self.loaded_mut() else {
@@ -1117,7 +1397,8 @@ impl ParquetDocument {
 
         let task = cx.background_executor().spawn(async move {
             let window = RowWindow::new(0, DEFAULT_PAGE_ROWS);
-            let result = read_next_window(&location, &version, &source, &file, window, &columns);
+            let result =
+                read_next_window(recheck.as_ref(), &version, &source, &file, window, &columns);
 
             (source, columns, result)
         });
@@ -1188,6 +1469,27 @@ impl ParquetDocument {
         cx.notify();
     }
 
+    /// The connection a further window is read through: `Ok(None)` for a
+    /// local file and for a downloaded copy, which needs no connection, and
+    /// otherwise the live connection of the object's profile.
+    fn connection_for_windows(
+        &mut self,
+        summary: String,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<Arc<dyn Connection>>, ConnectionUnavailable> {
+        if self.reads == Some(ObjectReads::Downloaded) {
+            return Ok(None);
+        }
+
+        self.use_live_connection(summary, cx)
+    }
+
+    /// Where the version is read again before each window, and `None` for a
+    /// downloaded copy, which is a snapshot that does not change.
+    fn version_recheck(&self) -> Option<FileLocation> {
+        (self.reads != Some(ObjectReads::Downloaded)).then(|| self.location.clone())
+    }
+
     /// Resolves the live connection of an object's profile and makes the
     /// document's location read through it. `Ok(None)` for a local file.
     ///
@@ -1252,6 +1554,31 @@ pub(super) fn open_first_window(
 ) -> Result<OpenedFile, OpenError> {
     let (source, version) = open_source(location)?;
 
+    open_rows(source, version, page_rows)
+}
+
+/// Downloads the object `key` of `bucket` whole through `connection` and
+/// opens it like [`open_first_window`]. Blocks on network and file I/O.
+fn open_downloaded(
+    connection: &dyn Connection,
+    bucket: &str,
+    key: &str,
+    page_rows: u64,
+) -> Result<OpenedFile, OpenError> {
+    let (source, version) =
+        download_whole_object(connection, bucket, key, DOWNLOAD_IN_MEMORY_LIMIT_BYTES)?;
+
+    open_rows(source, version, page_rows)
+}
+
+/// Reads the footer and statistics of the file `source` reads, `version` of
+/// it, picks the default projection and reads the first window of
+/// `page_rows` rows of it.
+fn open_rows(
+    source: LocationSource,
+    version: SourceVersion,
+    page_rows: u64,
+) -> Result<OpenedFile, OpenError> {
     let file = dbflux_parquet::open(&source)?;
 
     // A file without rows may have no row groups at all, which the window
@@ -1374,17 +1701,20 @@ fn default_columns(
     Ok(projection.selected_indices())
 }
 
-/// Checks that the file at `location` is still `version`, then reads
-/// `window` of `columns` through `source`. Blocks on file or network I/O.
+/// Checks that the file at `recheck` is still `version`, then reads
+/// `window` of `columns` through `source`. A downloaded copy has no
+/// `recheck`: it is a snapshot. Blocks on file or network I/O.
 pub(super) fn read_next_window(
-    location: &FileLocation,
+    recheck: Option<&FileLocation>,
     version: &SourceVersion,
     source: &LocationSource,
     file: &ParquetFile,
     window: RowWindow,
     columns: &[usize],
 ) -> Result<CellPage, OpenError> {
-    if has_changed_since(location, version)? {
+    if let Some(location) = recheck
+        && has_changed_since(location, version)?
+    {
         return Err(OpenError::SourceChanged);
     }
 

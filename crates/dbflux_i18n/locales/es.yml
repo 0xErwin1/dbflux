@@ -2063,12 +2063,20 @@ document:
       rows:
         one: "%{count} fila"
         many: "%{count} filas"
+      read_by_range: "leído por rangos"
+      downloaded_whole: "descargado completo"
+    download:
+      title: "¿Descargar el objeto completo?"
+      body: "%{name} ocupa %{size}. Este servicio de almacenamiento no puede leer una parte de un objeto, así que DBFlux lo descarga completo una vez y lee sus filas de esa copia."
+      body_changed: "%{name} cambió desde que se descargó y ahora ocupa %{size}. Este servicio de almacenamiento no puede leer una parte de un objeto, así que recargarlo lo descarga completo otra vez y reemplaza las filas mostradas."
+      confirm: "Descargar"
+      cancel: "Cancelar"
+      unchanged: "%{name} no cambió desde que se descargó."
     error:
       open_failed: "No se pudo abrir %{name}"
       load_more_failed: "No se pudo cargar más de %{name}"
       projection_failed: "No se pudieron leer las columnas elegidas de %{name}"
       source_changed: "El archivo cambió desde que se abrió, así que no se leyeron más filas. Recárgalo para ver su contenido nuevo."
-      object_without_range_reads: "Este servicio de almacenamiento no puede leer una parte de un objeto, así que abrir un objeto Parquet desde él descargaría el objeto completo. Descarga el archivo y ábrelo de forma local."
       short_read: "El archivo devolvió menos bytes de los pedidos. Puede haber cambiado mientras se leía."
       not_parquet: "El archivo no está en formato Parquet."
       footer_too_large: "El pie de Parquet ocupa %{size}, más de los %{limit} que DBFlux lee."
