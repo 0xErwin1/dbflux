@@ -18,11 +18,8 @@ impl Workspace {
     /// object of a store that cannot read a byte range opens a tab that asks
     /// whether to download it whole, and closes when the user declines.
     /// `on_object_saved` is told the object's key after each save that
-    /// replaces it.
-    ///
-    /// Save as .xlsx of an xls file picks its target through the app state's
-    /// save target override when one is set, and the file it writes opens
-    /// in its own tab through this same method.
+    /// replaces it. The file Save as .xlsx writes opens through this same
+    /// method.
     ///
     /// The keyboard moves to the new tab on the next render, so callers
     /// without a window can open one.
@@ -102,6 +99,75 @@ impl Workspace {
                 })
             }
         };
+        self.open_spreadsheet_tab(document, cx);
+
+        self.pending_focus = Some(FocusTarget::Document);
+        cx.notify();
+    }
+
+    /// Reopens a local file the workspace session recorded, on its first
+    /// sheet and without pending edits.
+    ///
+    /// A file that cannot be opened any more is skipped with a log line, as a
+    /// CSV that cannot be opened is, so startup raises no toast for a failure
+    /// the user did not just cause. The path is resolved as
+    /// [`Self::open_spreadsheet_file`] resolves it, because it is the tab's
+    /// dedup key: a session written by hand can spell one file two ways.
+    /// Unlike opening, restoring does not record the file in recent files and
+    /// does not take the keyboard.
+    pub(in crate::ui::views::workspace) fn restore_spreadsheet_tab(
+        &mut self,
+        tab: &dbflux_storage::repositories::state::sessions::RestoredTab,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(stored_path) = tab.file_path.as_ref() else {
+            log::warn!(
+                "Spreadsheet tab '{}' has no file_path in restored session — skipping",
+                tab.title
+            );
+            return;
+        };
+
+        let path = match std::fs::canonicalize(stored_path) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                log::warn!(
+                    "Spreadsheet tab '{}' cannot resolve {}: {error} — skipping",
+                    tab.title,
+                    stored_path.display()
+                );
+                return;
+            }
+        };
+
+        if let Err(error) = std::fs::File::open(&path) {
+            log::warn!(
+                "Spreadsheet tab '{}' cannot open {}: {error} — skipping",
+                tab.title,
+                path.display()
+            );
+            return;
+        }
+
+        let key = DocumentKey::FileDocument(FileDocumentKey::Local { path: path.clone() });
+
+        if self.tab_manager.read(cx).find_by_key(&key, cx).is_some() {
+            return;
+        }
+
+        let document = cx.new(|cx| SpreadsheetDocument::open_local(path, cx));
+
+        self.open_spreadsheet_tab(document, cx);
+    }
+
+    /// Opens `document` in a new tab. Save as .xlsx of an xls file picks its
+    /// target through the app state's save target override when one is set,
+    /// and the file it writes opens through [`Self::open_spreadsheet_file`].
+    fn open_spreadsheet_tab(
+        &mut self,
+        document: Entity<SpreadsheetDocument>,
+        cx: &mut Context<Self>,
+    ) {
         let save_target_override = self.app_state.read(cx).save_target_override();
         let workspace = cx.entity().downgrade();
 
@@ -121,9 +187,6 @@ impl Workspace {
         self.tab_manager.update(cx, |manager, cx| {
             manager.open(Tab::Pane(Box::new(pane)), cx);
         });
-
-        self.pending_focus = Some(FocusTarget::Document);
-        cx.notify();
     }
 }
 
@@ -133,17 +196,20 @@ mod tests {
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
     use crate::keymap::Command;
     use crate::ui::document::{DocumentKind, DocumentState, FileDocumentKey};
+    use crate::ui::document::{SpreadsheetDocument, Tab};
     use crate::ui::views::workspace::Workspace;
     use crate::ui::views::workspace::actions::delimited::tests::{
         BUCKET, ObjectStoreFake, connect_object_store,
     };
     use crate::ui::views::workspace::actions::local_file::tests::{
-        close_every_tab, new_workspace, open_path, recent_paths, tab_kinds, tab_states, tab_titles,
-        toast_count,
+        close_every_tab, new_workspace, open_path, recent_paths, restore, session_tab,
+        session_tabs, tab_kinds, tab_states, tab_titles, toast_count,
     };
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
     use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::cell::RefCell;
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::rc::Rc;
     use std::sync::Arc;
@@ -398,5 +464,201 @@ mod tests {
         assert_eq!(toast_count(window), 1, "the new file is reported");
 
         std::fs::remove_dir_all(&directory).ok();
+    }
+
+    // -- Session ---------------------------------------------------------------
+
+    /// The table columns the window draws, counted by their header cells.
+    fn drawn_column_count(window: &mut VisualTestContext, capture: &FrameCapture) -> usize {
+        let frame = capture.frame(window);
+
+        frame
+            .nodes()
+            .map(|(_, node)| node.id())
+            .filter(|id| id.starts_with("header-col-"))
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    #[gpui::test]
+    fn an_open_local_spreadsheet_is_recorded_in_the_session_by_its_path(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("budget.ods");
+
+        open(window, &workspace, file.key());
+
+        let tabs = session_tabs(window, &workspace);
+        let resolved = std::fs::canonicalize(&file.path).expect("the test file must resolve");
+
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].tab_kind, "Spreadsheet");
+        assert_eq!(tabs[0].file_path.as_deref(), Some(resolved.as_path()));
+        assert_eq!(tabs[0].title, "budget.ods");
+    }
+
+    #[gpui::test]
+    fn a_spreadsheet_object_is_not_recorded_in_the_session(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("local.ods");
+        let bytes = fixture("in.ods");
+        let store = ObjectStoreFake::with_ranged_objects(&[("2026/budget.ods", &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store);
+
+        open(window, &workspace, file.key());
+        open(
+            window,
+            &workspace,
+            FileDocumentKey::Object {
+                profile_id,
+                bucket: BUCKET.to_string(),
+                key: "2026/budget.ods".to_string(),
+            },
+        );
+
+        assert_eq!(
+            tab_kinds(window, &workspace),
+            [DocumentKind::Spreadsheet, DocumentKind::Spreadsheet]
+        );
+
+        let titles: Vec<String> = session_tabs(window, &workspace)
+            .into_iter()
+            .map(|tab| tab.title)
+            .collect();
+        assert_eq!(
+            titles,
+            ["local.ods"],
+            "an object needs a live connection, so only the local file is restored"
+        );
+    }
+
+    /// The sheet shown before the restart is not part of the session: the
+    /// restored tab shows the first sheet again.
+    #[gpui::test]
+    fn restoring_reopens_a_local_spreadsheet_on_its_first_sheet(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("budget.ods");
+        let capture = FrameCapture::observe(window);
+
+        let document = window.update(|_, cx| {
+            let path = std::fs::canonicalize(&file.path).expect("the test file must resolve");
+            let document = cx.new(|cx| SpreadsheetDocument::open_local(path, cx));
+            let pane = SpreadsheetDocument::into_pane(document.clone(), cx);
+            let tab_manager = workspace.read(cx).tab_manager.clone();
+
+            tab_manager.update(cx, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx);
+            });
+
+            document
+        });
+        window.run_until_parked();
+
+        let first_sheet_columns = drawn_column_count(window, &capture);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.select_sheet(1, window, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).active_sheet()),
+            Some(1)
+        );
+        assert_ne!(drawn_column_count(window, &capture), first_sheet_columns);
+
+        let stored: Vec<_> = session_tabs(window, &workspace)
+            .into_iter()
+            .enumerate()
+            .map(|(position, tab)| session_tab(&tab.tab_kind, &tab.title, tab.file_path, position))
+            .collect();
+        assert_eq!(stored.len(), 1);
+
+        close_every_tab(window, &workspace);
+        assert!(tab_titles(window, &workspace).is_empty());
+
+        restore(window, &workspace, stored, Some(0));
+
+        assert_eq!(tab_titles(window, &workspace), ["budget.ods"]);
+        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Spreadsheet]);
+        assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
+        assert_eq!(drawn_column_count(window, &capture), first_sheet_columns);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn restoring_keeps_order_among_other_file_tabs(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let book = TestFile::new("budget.ods");
+
+        let first = book.directory.join("first.csv");
+        let last = book.directory.join("last.csv");
+        std::fs::write(&first, b"name,city\nAna,Lima\n").expect("the test file must be writable");
+        std::fs::write(&last, b"name,city\nBo,Quito\n").expect("the test file must be writable");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Delimited", "first.csv", Some(first), 0),
+                session_tab("Spreadsheet", "budget.ods", Some(book.path.clone()), 1),
+                session_tab("Delimited", "last.csv", Some(last), 2),
+            ],
+            Some(0),
+        );
+
+        assert_eq!(
+            tab_titles(window, &workspace),
+            ["first.csv", "budget.ods", "last.csv"]
+        );
+        assert_eq!(
+            tab_kinds(window, &workspace),
+            [
+                DocumentKind::Delimited,
+                DocumentKind::Spreadsheet,
+                DocumentKind::Delimited
+            ]
+        );
+        assert_eq!(
+            active_title(window, &workspace).as_deref(),
+            Some("first.csv"),
+            "the restored spreadsheet does not take the active tab"
+        );
+
+        let kinds: Vec<String> = session_tabs(window, &workspace)
+            .into_iter()
+            .map(|tab| tab.tab_kind)
+            .collect();
+        assert_eq!(kinds, ["Delimited", "Spreadsheet", "Delimited"]);
+        assert!(
+            recent_paths(window, &workspace).is_empty(),
+            "restoring is not opening, so recent files stay as they were"
+        );
+        assert_eq!(toast_count(window), 0);
+    }
+
+    /// A file that is gone at startup is skipped, as a CSV is, without a
+    /// toast for a failure the user did not just cause. A path spelled
+    /// another way names the same tab.
+    #[gpui::test]
+    fn a_spreadsheet_missing_at_restore_is_skipped_without_a_report(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let file = TestFile::new("budget.ods");
+        let missing = file.directory.join("absent.ods");
+        let dotted = file.directory.join(".").join("budget.ods");
+
+        restore(
+            window,
+            &workspace,
+            vec![
+                session_tab("Spreadsheet", "absent.ods", Some(missing), 0),
+                session_tab("Spreadsheet", "no-path.ods", None, 1),
+                session_tab("Spreadsheet", "budget.ods", Some(file.path.clone()), 2),
+                session_tab("Spreadsheet", "budget.ods", Some(dotted), 3),
+            ],
+            Some(0),
+        );
+
+        assert_eq!(tab_titles(window, &workspace), ["budget.ods"]);
+        assert_eq!(toast_count(window), 0);
     }
 }
