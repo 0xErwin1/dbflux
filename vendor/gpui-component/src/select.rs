@@ -423,6 +423,31 @@ where
         committed_ix
     }
 
+    /// Highlights the first match when the open list has rows and no
+    /// highlight, so Enter picks a match right after a search that went from
+    /// no matches to some.
+    ///
+    /// The list decides the highlight for a new query from the rows it last
+    /// drew, which are none after a search that matched nothing.
+    fn highlight_first_match_if_unset(
+        list: &mut ListState<SearchableListAdapter<D>>,
+        window: &mut Window,
+        cx: &mut Context<ListState<SearchableListAdapter<D>>>,
+    ) {
+        if list.selected_index().is_some() {
+            return;
+        }
+
+        let delegate = &list.delegate().delegate;
+        let first_match = (0..delegate.sections_count(cx))
+            .find(|section| delegate.items_count(*section) > 0)
+            .map(|section| IndexPath::default().section(section));
+
+        if first_match.is_some() {
+            list.set_selected_index(first_match, window, cx);
+        }
+    }
+
     /// [`Self::restore_list_to_selection`] for this select's list, keeping the
     /// committed selection's index in step.
     fn reset_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -539,9 +564,14 @@ where
 
         let (bg, fg) = input_style(self.state.disabled, cx);
 
+        let is_open = self.state.open;
         self.state.list.update(cx, |list, cx| {
             list.set_searchable(searchable, cx);
             list.delegate_mut().size = self.state.size;
+
+            if is_open {
+                Self::highlight_first_match_if_unset(list, window, cx);
+            }
         });
 
         div().size_full().relative().child(

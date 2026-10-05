@@ -1360,6 +1360,8 @@ impl GeneralSection {
         let select = Select::new(select)
             .id(id)
             .appearance(false)
+            .h_full()
+            .px(Fields::PADDING_X)
             .font_family(dbflux_components::fonts::ui_family(cx))
             .text_size(Fields::TEXT)
             .icon(AppIcon::ChevronDown)
@@ -1374,7 +1376,9 @@ impl GeneralSection {
                         "settings.general.font_family.no_matches"
                     )))
             });
-        let control = dbflux_components::composites::control_shell(select, cx);
+        // The select carries the field padding itself instead of the shell, so
+        // its bounds, which place the popup, span the whole field.
+        let control = dbflux_components::composites::control_shell(select, cx).px_0();
 
         self.render_gen_dropdown(label, Some(help), control, row, cx)
     }

@@ -1299,13 +1299,17 @@ mod tests {
                 section.save_general_settings(window, cx);
 
                 assert_eq!(
-                    toast_host.read(cx).last_toast_title(),
+                    section
+                        .gen_field_error
+                        .as_ref()
+                        .map(|(_, message)| message.clone()),
                     Some(dbflux_i18n::t!(
                         key,
                         min = dbflux_core::GeneralSettings::MIN_FONT_SIZE,
                         max = dbflux_core::GeneralSettings::MAX_FONT_SIZE
                     ))
                 );
+                assert_eq!(toast_host.read(cx).last_toast_title(), None);
                 assert_eq!(stored_general_settings(section, cx), stored_before);
 
                 input.update(cx, |input, cx| input.set_value(original, window, cx));
@@ -1526,6 +1530,27 @@ mod tests {
         assert_eq!(
             ui_family_cursor(&section, window),
             Some(gpui_component::IndexPath::new(0))
+        );
+    }
+
+    #[gpui::test]
+    fn enter_selects_the_first_match_after_a_search_that_matched_nothing(cx: &mut TestAppContext) {
+        let (section, window) = open_font_select_section(cx);
+
+        open_ui_family_select(&section, window);
+        // One keystroke per frame, as a person types: the list draws no rows
+        // for "zz", then the edit back to a query with matches.
+        for key in ["z", "z", "backspace", "backspace"] {
+            window.simulate_keystrokes(key);
+            window.run_until_parked();
+        }
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        assert_eq!(
+            ui_family_value(&section, window),
+            Some(None),
+            "Enter picks the first match once the search finds one"
         );
     }
 

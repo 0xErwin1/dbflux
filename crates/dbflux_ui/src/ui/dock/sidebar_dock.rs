@@ -19,9 +19,8 @@ const MIN_WIDTH: Pixels = px(200.0);
 const MAX_WIDTH: Pixels = px(800.0);
 const GRIP_WIDTH: Pixels = px(7.0);
 
-/// The starting width at the current interface size: the sidebar's rows and
+/// The default width at the current interface size: the sidebar's rows and
 /// header grow with the interface font, so its default width grows with them.
-/// A width the user drags stays where they put it.
 fn scaled_default_width(cx: &App) -> Pixels {
     (DEFAULT_EXPANDED_WIDTH * dbflux_components::fonts::ui_scale(cx)).clamp(MIN_WIDTH, MAX_WIDTH)
 }
@@ -44,6 +43,9 @@ pub struct SidebarDock {
     hover_generation: u64,
     width: Pixels,
     last_expanded_width: Pixels,
+    /// Set once the user drags the sidebar; until then its width follows
+    /// the default width at the current interface size.
+    user_resized: bool,
 
     is_resizing: bool,
     resize_start_x: Option<Pixels>,
@@ -65,6 +67,7 @@ impl SidebarDock {
             hover_generation: 0,
             width: default_width,
             last_expanded_width: default_width,
+            user_resized: false,
             is_resizing: false,
             resize_start_x: None,
             resize_start_width: None,
@@ -195,6 +198,7 @@ impl SidebarDock {
 
     pub(crate) fn begin_resize(&mut self, position_x: Pixels, cx: &mut Context<Self>) {
         self.is_resizing = true;
+        self.user_resized = true;
         self.resize_start_x = Some(position_x);
         self.resize_start_width = Some(self.width);
         cx.notify();
@@ -240,6 +244,19 @@ impl SidebarDock {
         }
     }
 
+    /// Moves an undragged sidebar to the default width at the current
+    /// interface size, so an interface font change resizes it without a
+    /// restart.
+    fn follow_default_width(&mut self, cx: &App) {
+        if self.user_resized {
+            return;
+        }
+
+        let default_width = scaled_default_width(cx);
+        self.width = default_width;
+        self.last_expanded_width = default_width;
+    }
+
     pub(crate) fn current_width(&self) -> Pixels {
         if self.is_collapsed() {
             COLLAPSED_WIDTH
@@ -251,6 +268,7 @@ impl SidebarDock {
 
 impl Render for SidebarDock {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.follow_default_width(cx);
         let is_collapsed = self.is_collapsed();
 
         let pointer_entity = cx.entity().clone();

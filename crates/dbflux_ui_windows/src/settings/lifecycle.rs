@@ -77,6 +77,7 @@ impl SettingsCoordinator {
             pending_section_confirm: None,
             pending_focus_return: false,
             sidebar_width: scaled_default_sidebar_width(cx),
+            sidebar_user_resized: false,
             sidebar_is_resizing: false,
             sidebar_resize_start_x: None,
             sidebar_resize_start_width: None,

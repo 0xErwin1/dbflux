@@ -216,6 +216,10 @@ impl SettingsCoordinator {
 
 impl Render for SettingsCoordinator {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.sidebar_user_resized {
+            self.sidebar_width = super::scaled_default_sidebar_width(cx);
+        }
+
         if self.pending_focus_return {
             self.pending_focus_return = false;
             self.focus_area = SettingsFocus::Content;
@@ -344,6 +348,7 @@ impl SettingsCoordinator {
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
                     this.sidebar_is_resizing = true;
+                    this.sidebar_user_resized = true;
                     this.sidebar_resize_start_x = Some(event.position.x);
                     this.sidebar_resize_start_width = Some(this.sidebar_width);
                     cx.notify();
