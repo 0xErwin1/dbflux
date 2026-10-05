@@ -246,6 +246,18 @@ impl SheetWriteError {
     }
 }
 
+/// Reports a failure to scan an xlsx package while reading it, such as when
+/// looking for the row where appended rows go.
+impl From<SheetWriteError> for SpreadsheetError {
+    fn from(error: SheetWriteError) -> Self {
+        match error {
+            SheetWriteError::Source(source) => Self::Source(source),
+            SheetWriteError::Malformed { message } => Self::Malformed { message },
+            other => Self::malformed(other.to_string()),
+        }
+    }
+}
+
 impl From<quick_xml::Error> for SheetWriteError {
     fn from(error: quick_xml::Error) -> Self {
         Self::malformed(format!("invalid XML: {error}"))

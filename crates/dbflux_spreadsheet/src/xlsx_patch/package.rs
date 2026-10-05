@@ -2,6 +2,7 @@
 //! relationships that locate its sheets, and the zip entries behind them.
 
 use std::io::{Read, Seek};
+use std::ops::Range;
 
 use quick_xml::encoding::Decoder;
 use quick_xml::events::{BytesStart, Event};
@@ -259,4 +260,104 @@ pub(crate) fn attribute(
 /// Reads an `xsd:boolean`, which is `1` or `true` when set.
 pub(crate) fn is_true(value: &str) -> bool {
     matches!(value.trim(), "1" | "true")
+}
+
+/// Rebuilds a start or empty tag with one attribute set and others dropped,
+/// keeping every other attribute's raw text and order.
+pub(crate) fn rebuild_tag(
+    element: &BytesStart<'_>,
+    set: Option<(&str, &str)>,
+    remove: &[&[u8]],
+    self_closing: bool,
+) -> Result<String, SheetWriteError> {
+    let mut tag = format!("<{}", String::from_utf8_lossy(element.name().as_ref()));
+    let mut set = set;
+
+    for entry in element.attributes() {
+        let entry = entry?;
+        let key = entry.key.as_ref();
+
+        if remove.contains(&key) {
+            continue;
+        }
+
+        let value = match set {
+            Some((set_key, set_value)) if set_key.as_bytes() == key => {
+                set = None;
+                set_value.to_string()
+            }
+            _ => String::from_utf8_lossy(&entry.value).replace('"', "&quot;"),
+        };
+
+        tag.push_str(&format!(" {}=\"{value}\"", String::from_utf8_lossy(key)));
+    }
+
+    if let Some((key, value)) = set {
+        tag.push_str(&format!(" {key}=\"{value}\""));
+    }
+
+    tag.push_str(if self_closing { "/>" } else { ">" });
+
+    Ok(tag)
+}
+
+/// Replaces byte ranges of `input`, given in increasing order and not
+/// overlapping, with new text.
+pub(crate) fn splice(input: &[u8], replacements: &[(Range<usize>, String)]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len());
+    let mut copied = 0;
+
+    for (range, text) in replacements {
+        if let Some(bytes) = input.get(copied..range.start) {
+            output.extend_from_slice(bytes);
+        }
+        output.extend_from_slice(text.as_bytes());
+        copied = copied.max(range.end);
+    }
+
+    if let Some(bytes) = input.get(copied..) {
+        output.extend_from_slice(bytes);
+    }
+
+    output
+}
+
+/// Removes every `local_name` element that `matches` accepts, with its
+/// content when it has any.
+pub(crate) fn remove_elements(
+    xml: &[u8],
+    local_name: &[u8],
+    matches: impl Fn(&BytesStart<'_>, Decoder) -> Result<bool, SheetWriteError>,
+) -> Result<Vec<u8>, SheetWriteError> {
+    let mut reader = xml_reader(xml)?;
+    let mut removals = Vec::new();
+
+    loop {
+        let start = reader_position(&reader)?;
+
+        match reader.read_event()? {
+            Event::Empty(element)
+                if element.local_name().as_ref() == local_name
+                    && matches(&element, reader.decoder())? =>
+            {
+                removals.push((start..reader_position(&reader)?, String::new()));
+            }
+            Event::Start(element)
+                if element.local_name().as_ref() == local_name
+                    && matches(&element, reader.decoder())? =>
+            {
+                reader.read_to_end(element.name())?;
+                removals.push((start..reader_position(&reader)?, String::new()));
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(splice(xml, &removals))
+}
+
+pub(crate) fn reader_position(reader: &Reader<&[u8]>) -> Result<usize, SheetWriteError> {
+    usize::try_from(reader.buffer_position())
+        .map_err(|_| SheetWriteError::malformed("a part is larger than memory can address"))
 }

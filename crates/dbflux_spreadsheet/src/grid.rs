@@ -15,15 +15,16 @@ pub const MAX_GRID_CELLS: usize = 10_000_000;
 /// One sheet's cells, laid out so that grid `(row, column)` is the sheet's
 /// `(row, column)` counted from A1, both zero-based.
 ///
-/// The grid ends at the last row and column that hold a value or a formula.
-/// Merged ranges and tables can reach further down without holding a value
-/// there, so [`SheetGrid::row_count`] is not by itself the row where new rows
-/// can be appended.
+/// The grid ends at the last row and column that hold a value or a formula,
+/// or for xlsx and xlsm at [`SheetGrid::append_row`] when that is further
+/// down: merged ranges and tables can reach past the last value, and the
+/// grid is padded with empty rows to cover them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetGrid {
     row_count: usize,
     column_count: usize,
     cells: Vec<SheetCell>,
+    append_row: Option<usize>,
 }
 
 impl SheetGrid {
@@ -33,6 +34,42 @@ impl SheetGrid {
 
     pub fn column_count(&self) -> usize {
         self.column_count
+    }
+
+    /// The zero-based row where appended rows go: one past the last row that
+    /// holds a cell, a merged range or a table, so an appended row never
+    /// lands inside one of them. `Some` for xlsx and xlsm worksheets, where
+    /// [`crate::patch_xlsx`] writes appended rows, unless the worksheet's
+    /// part could not be scanned for it, and `None` for the other formats.
+    pub fn append_row(&self) -> Option<usize> {
+        self.append_row
+    }
+
+    /// Records where appended rows go, padding the grid with empty rows up
+    /// to that row when it is past the last row read.
+    pub(crate) fn with_append_row(mut self, append_row: usize) -> Result<Self, SpreadsheetError> {
+        if append_row > self.row_count {
+            let cell_count = append_row.saturating_mul(self.column_count);
+            if cell_count > MAX_GRID_CELLS {
+                return Err(SpreadsheetError::SheetTooLarge {
+                    rows: append_row,
+                    columns: self.column_count,
+                    limit: MAX_GRID_CELLS,
+                });
+            }
+
+            let empty = SheetCell {
+                value: CellValue::Empty,
+                display: Arc::from(""),
+                formula: CellFormula::None,
+            };
+            self.cells.resize(cell_count, empty);
+            self.row_count = append_row;
+        }
+
+        self.append_row = Some(append_row);
+
+        Ok(self)
     }
 
     /// Returns the cell at a zero-based position, or `None` outside the grid.
@@ -226,6 +263,7 @@ pub(crate) fn build_grid(
         row_count,
         column_count,
         cells,
+        append_row: None,
     })
 }
 
