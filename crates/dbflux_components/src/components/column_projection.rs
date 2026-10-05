@@ -598,17 +598,10 @@ impl ColumnProjectionPicker {
             .collect()
     }
 
-    fn render_popover(&self, window: &Window, cx: &Context<Self>) -> gpui::AnyElement {
-        let Some(draft) = self.draft.as_ref() else {
-            return div().into_any_element();
-        };
+    fn render_search_row(&self, cx: &Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
 
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let can_apply = self.can_apply();
-        let list_focused = self.list_focus.contains_focused(window, cx);
-
-        let search = div()
+        div()
             .id("column-projection-search-row")
             .px(Spacing::SM)
             .pt(Spacing::SM)
@@ -631,9 +624,17 @@ impl ColumnProjectionPicker {
                             .size(Fields::LEADING_ICON)
                             .color(muted),
                     ),
-            );
+            )
+    }
 
-        let bulk_actions = div()
+    fn render_bulk_actions(
+        &self,
+        draft: &ColumnProjection,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+
+        div()
             .flex()
             .items_center()
             .gap(Spacing::XS)
@@ -669,7 +670,13 @@ impl ColumnProjectionPicker {
                         selected = draft.selected_count(),
                         total = draft.total_count()
                     )),
-            );
+            )
+    }
+
+    fn render_list_region(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let list_focused = self.list_focus.contains_focused(window, cx);
 
         let list = if self.visible.is_empty() {
             div()
@@ -694,7 +701,7 @@ impl ColumnProjectionPicker {
             .into_any_element()
         };
 
-        let list_region = div()
+        div()
             .id("column-projection-list")
             .key_context(ContextId::Dropdown.as_gpui_context())
             .track_focus(&self.list_focus)
@@ -706,9 +713,15 @@ impl ColumnProjectionPicker {
                     crate::primitives::ChamferRing::focus(ChromeColors::tint(theme)),
                 ))
             })
-            .child(list);
+            .child(list)
+    }
 
-        let footer = div()
+    fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let can_apply = self.can_apply();
+
+        div()
             .flex()
             .items_center()
             .gap(Spacing::SM)
@@ -736,7 +749,15 @@ impl ColumnProjectionPicker {
                 .disabled(!can_apply)
                 .focus_handle(&self.apply_focus)
                 .on_click(cx.listener(|this, _event, window, cx| this.apply(window, cx))),
-            );
+            )
+    }
+
+    fn render_popover(&self, window: &Window, cx: &Context<Self>) -> gpui::AnyElement {
+        let Some(draft) = self.draft.as_ref() else {
+            return div().into_any_element();
+        };
+
+        let theme = cx.theme();
 
         let popover = div()
             .id("column-projection-popover")
@@ -756,10 +777,10 @@ impl ColumnProjectionPicker {
                     .fill(theme.popover)
                     .border(theme.border),
             )
-            .child(search)
-            .child(bulk_actions)
-            .child(list_region)
-            .child(footer);
+            .child(self.render_search_row(cx))
+            .child(self.render_bulk_actions(draft, cx))
+            .child(self.render_list_region(window, cx))
+            .child(self.render_footer(cx));
 
         deferred(
             anchored()
