@@ -9,7 +9,8 @@
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig,
     DbDriver, DbError, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
-    ExecutionClassification, Pagination, QueryRequest, SchemaLoadingStrategy, Value,
+    ExecutionClassification, Pagination, QueryRequest, ReadOnlyEnforcement, SchemaLoadingStrategy,
+    Value,
 };
 use dbflux_driver_mongodb::MongoDriver;
 use dbflux_test_support::containers;
@@ -493,6 +494,71 @@ fn mongodb_script_single_statement_behaves_identically_to_stage_one() -> Result<
                 .is_none(),
             "a single statement must not go through the script ledger"
         );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_read_only_requests_refuse_merge_and_insert_and_leave_the_data_unchanged()
+-> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "db.read_only_source.insertMany([{\"a\": 1}, {\"a\": 2}])",
+        ))?;
+
+        let read_only = |query: &str| {
+            QueryRequest::new(query)
+                .with_confirmed_ceiling(ExecutionClassification::Read)
+                .with_read_only(ReadOnlyEnforcement::Required)
+        };
+
+        let count = |collection: &str| -> Result<Value, DbError> {
+            let result = connection.execute(&QueryRequest::new(format!(
+                "db.{collection}.countDocuments({{}})"
+            )))?;
+            Ok(result.rows[0][0].clone())
+        };
+
+        for query in [
+            "db.read_only_source.aggregate([{\"$merge\": {\"into\": \"read_only_target\"}}])",
+            "db.read_only_source.insertOne({\"a\": 3})",
+        ] {
+            let refused = connection.execute(&read_only(query));
+            assert!(
+                matches!(&refused, Err(DbError::QueryFailed(error)) if error.to_string().contains("ceiling")),
+                "{query} must be refused by the read ceiling, got {refused:?}"
+            );
+        }
+
+        for script in [
+            "var n = 1; db.read_only_source.aggregate([{$facet: {copy: [{$merge: 'read_only_target'}]}}]);",
+            "var n = 1; db.read_only_source.aggregate([{$merge: {into: 'read_only_target'}}]);",
+            "var n = 1; db.read_only_source.insertOne({a: 3});",
+        ] {
+            let result = connection.execute(&read_only(script))?;
+            let failure = result
+                .metadata_extra
+                .as_ref()
+                .and_then(|extra| extra.get("script_failure"))
+                .unwrap_or_else(|| panic!("{script} must stop under a read-only request"));
+            assert!(
+                failure["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("ceiling"),
+                "{script}: {failure}"
+            );
+        }
+
+        assert_eq!(count("read_only_source")?, Value::Int(2));
+        assert_eq!(count("read_only_target")?, Value::Int(0));
+
+        let read = connection.execute(&read_only("db.read_only_source.find({})"))?;
+        assert_eq!(read.rows.len(), 2, "a read must still run read-only");
 
         Ok(())
     })

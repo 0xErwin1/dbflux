@@ -205,7 +205,9 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         default_isolation_level: None,
         supports_savepoints: false,
         supports_nested_transactions: false,
-        supports_read_only: false,
+        // Honoured by checking every operation against a Read ceiling before
+        // it is sent; see `effective_ceiling`.
+        supports_read_only: true,
         supports_deferrable: false,
     }),
     limits: Some(DriverLimits {
@@ -1854,11 +1856,11 @@ impl MongoConnection {
     /// serialized into `metadata_extra` under `script_operations` /
     /// `script_failure` for `execution.rs`'s audit fan-out to consume.
     ///
-    /// `req.confirmed_ceiling` is the governance ceiling authorised by the
-    /// caller (the editor's one-time confirmation, or the MCP policy
-    /// decision); `None` defaults to `Read` — an omitted ceiling refuses a
-    /// destructive op, it never permits one (see
-    /// `QueryRequest::confirmed_ceiling`'s invariant).
+    /// Every dispatched operation is checked against `effective_ceiling(req)`
+    /// before it is sent: the governance ceiling authorised by the caller
+    /// (the editor's one-time confirmation, or the MCP policy decision),
+    /// `Read` when it is omitted, and at most `Read` when the request
+    /// requires read-only enforcement.
     fn execute_script(
         &self,
         req: &QueryRequest,
@@ -1873,9 +1875,7 @@ impl MongoConnection {
         let db = client.database(db_name);
 
         let host = crate::script_host::MongoScriptHost::new(client, &db, self.cancelled.clone());
-        let ceiling = req
-            .confirmed_ceiling
-            .unwrap_or(dbflux_core::ExecutionClassification::Read);
+        let ceiling = effective_ceiling(req);
 
         let config = dbflux_js::ScriptRunConfig {
             source: req.sql.clone(),
@@ -1938,6 +1938,114 @@ impl MongoConnection {
         primary.metadata_extra = Some(metadata_extra);
 
         Ok(primary)
+    }
+}
+
+/// The classification ceiling a request runs under.
+///
+/// `confirmed_ceiling` is the ceiling the caller authorised, and an omitted
+/// one defaults to `Read`, so it refuses a write rather than permitting one
+/// (see `QueryRequest::confirmed_ceiling`). A request that requires
+/// read-only enforcement runs under at most `Read`: a higher ceiling is
+/// lowered to `Read`, a lower one (`Metadata`) is kept.
+///
+/// This is how the driver honours `ReadOnlyEnforcement::Required`. MongoDB
+/// has no read-only session mode, so the guarantee comes from the closed set
+/// of operations `execute` can send: every one is classified before it is
+/// sent (the script engine per dispatched statement, the single-statement
+/// path by `ensure_operation_within_ceiling`), anything the parsers do not
+/// recognise is refused, and the driver-owned instance metric and inspector
+/// requests only run fixed `serverStatus` and `$currentOp` reads.
+fn effective_ceiling(req: &QueryRequest) -> dbflux_core::ExecutionClassification {
+    use dbflux_core::ExecutionClassification;
+
+    let confirmed = req
+        .confirmed_ceiling
+        .unwrap_or(ExecutionClassification::Read);
+
+    let exceeds_read = !dbflux_core::ceiling_permits(ExecutionClassification::Read, confirmed);
+    if req.read_only.is_required() && exceeds_read {
+        return ExecutionClassification::Read;
+    }
+
+    confirmed
+}
+
+/// Refuses a single-statement operation whose classification exceeds
+/// `ceiling`, before anything is sent to the server.
+fn ensure_operation_within_ceiling(
+    operation: &MongoOperation,
+    ceiling: dbflux_core::ExecutionClassification,
+) -> Result<(), DbError> {
+    let classification = mongo_operation_classification(operation);
+
+    if dbflux_core::ceiling_permits(ceiling, classification) {
+        return Ok(());
+    }
+
+    Err(DbError::query_failed(format!(
+        "MongoDB: the operation is classified {classification:?}, which exceeds the {ceiling:?} \
+         ceiling of this read-only request; nothing was sent to the server"
+    )))
+}
+
+/// Governance classification of a single-statement operation, from what it
+/// does rather than from the query text. Mirrors
+/// `ScriptMethod::classification`: an arbitrary command is rated as the worst
+/// case because its effect depends on a document the driver does not
+/// interpret, and an `aggregate` with a `$out` or `$merge` stage is a write.
+fn mongo_operation_classification(
+    operation: &MongoOperation,
+) -> dbflux_core::ExecutionClassification {
+    use dbflux_core::ExecutionClassification;
+
+    match operation {
+        MongoOperation::Find { .. } => ExecutionClassification::Read,
+        MongoOperation::Aggregate { pipeline } => {
+            if pipeline.iter().any(document_contains_output_stage) {
+                ExecutionClassification::Write
+            } else {
+                ExecutionClassification::Read
+            }
+        }
+        MongoOperation::Count { .. }
+        | MongoOperation::GetName
+        | MongoOperation::GetCollectionNames
+        | MongoOperation::GetCollectionInfos
+        | MongoOperation::DbStats
+        | MongoOperation::ServerStatus
+        | MongoOperation::Version
+        | MongoOperation::HostInfo
+        | MongoOperation::CurrentOp => ExecutionClassification::Metadata,
+        MongoOperation::InsertOne { .. }
+        | MongoOperation::InsertMany { .. }
+        | MongoOperation::UpdateOne { .. }
+        | MongoOperation::UpdateMany { .. }
+        | MongoOperation::ReplaceOne { .. } => ExecutionClassification::Write,
+        MongoOperation::DeleteOne { .. }
+        | MongoOperation::DeleteMany { .. }
+        | MongoOperation::Drop
+        | MongoOperation::DropDatabase => ExecutionClassification::Destructive,
+        MongoOperation::CreateCollection { .. } => ExecutionClassification::AdminSafe,
+        MongoOperation::RunCommand { .. } | MongoOperation::AdminCommand { .. } => {
+            ExecutionClassification::AdminDestructive
+        }
+    }
+}
+
+/// True when `document` holds a `$out` or `$merge` key at any depth, which
+/// covers the sub-pipelines of `$facet`, `$lookup` and `$unionWith`.
+fn document_contains_output_stage(document: &Document) -> bool {
+    document.iter().any(|(key, value)| {
+        matches!(key.as_str(), "$out" | "$merge") || bson_contains_output_stage(value)
+    })
+}
+
+fn bson_contains_output_stage(value: &Bson) -> bool {
+    match value {
+        Bson::Document(document) => document_contains_output_stage(document),
+        Bson::Array(items) => items.iter().any(bson_contains_output_stage),
+        _ => false,
     }
 }
 
@@ -2142,10 +2250,6 @@ impl Connection for MongoConnection {
                     .to_string(),
             ));
         }
-        // The script ceiling is checked by DBFlux per operation, not by the
-        // server, so it does not count as database-enforced read-only mode.
-        req.refuse_read_only_enforcement("MongoDB")?;
-
         self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
@@ -2198,6 +2302,10 @@ impl Connection for MongoConnection {
         // script engine instead of a parse failure to report.
         match crate::query_parser::parse_query(&req.sql) {
             Ok(query) => {
+                if req.read_only.is_required() {
+                    ensure_operation_within_ceiling(&query.operation, effective_ceiling(req))?;
+                }
+
                 let db_name = query
                     .database
                     .as_ref()
@@ -5559,5 +5667,330 @@ mod tests {
         assert!(!skeleton.contains("s3cr3t"));
         assert!(skeleton.starts_with("mongodb+srv://"));
         assert_eq!(secret.expose_secret(), "s3cr3t");
+    }
+
+    mod read_only {
+        use super::*;
+        use dbflux_core::{ExecutionClassification, ReadOnlyEnforcement};
+
+        /// A connection whose client points at a closed local port. Building
+        /// the client contacts no server, and an operation that does reach
+        /// for one fails with a server-selection error after a short timeout,
+        /// so a refusal naming the ceiling proves nothing was sent.
+        fn offline_connection() -> MongoConnection {
+            let uri = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200&connectTimeoutMS=200";
+            let client = Client::with_uri_str(uri).expect("client options parse without a server");
+
+            MongoConnection {
+                client: Arc::new(Mutex::new(client)),
+                default_database: Some("testdb".to_string()),
+                schema_settings: MongoSchemaSettings {
+                    schema_sample_size: 100,
+                    show_system_databases: false,
+                },
+                ssh_tunnel: None,
+                connection_uri: uri.to_string(),
+                active_query: RwLock::new(None),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                _tls_pem_guard: None,
+            }
+        }
+
+        fn read_only_request(
+            query: &str,
+            ceiling: Option<ExecutionClassification>,
+        ) -> QueryRequest {
+            let request = QueryRequest::new(query).with_read_only(ReadOnlyEnforcement::Required);
+
+            match ceiling {
+                Some(ceiling) => request.with_confirmed_ceiling(ceiling),
+                None => request,
+            }
+        }
+
+        fn is_server_selection_failure(message: &str) -> bool {
+            message.to_ascii_lowercase().contains("server selection")
+        }
+
+        fn assert_refused_by_ceiling(connection: &MongoConnection, request: &QueryRequest) {
+            match connection.execute(request) {
+                Err(DbError::QueryFailed(error)) => {
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("ceiling"),
+                        "{}: expected a ceiling refusal, got {message}",
+                        request.sql
+                    );
+                }
+                other => panic!("{}: expected a ceiling refusal, got {other:?}", request.sql),
+            }
+        }
+
+        /// Runs a script under `Required` and asserts it stopped before any
+        /// operation reached the server: the run reports a failure, no
+        /// dispatched operation succeeded, and the failure is not a
+        /// server-selection error.
+        fn assert_script_stopped_before_the_server(
+            connection: &MongoConnection,
+            request: &QueryRequest,
+        ) -> String {
+            let result = connection
+                .execute(request)
+                .unwrap_or_else(|error| panic!("{}: script must run, got {error:?}", request.sql));
+            let extra = result.metadata_extra.unwrap_or_default();
+
+            let message = extra
+                .get("script_failure")
+                .and_then(|failure| failure["message"].as_str())
+                .unwrap_or_else(|| panic!("{}: the script must stop", request.sql))
+                .to_string();
+            assert!(
+                !is_server_selection_failure(&message),
+                "{}: the operation reached for the server: {message}",
+                request.sql
+            );
+
+            let operations = extra
+                .get("script_operations")
+                .and_then(|operations| operations.as_array())
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                operations
+                    .iter()
+                    .all(|operation| operation["outcome"] != "success"),
+                "{}: no operation may succeed: {operations:?}",
+                request.sql
+            );
+
+            message
+        }
+
+        #[test]
+        fn metadata_declares_read_only_enforcement() {
+            assert!(MONGODB_METADATA.enforces_read_only());
+        }
+
+        #[test]
+        fn required_refuses_single_statement_writes_before_any_server_call() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.insertOne({"name": "a"})"#,
+                r#"db.users.insertMany([{"name": "a"}])"#,
+                r#"db.users.updateOne({}, {"$set": {"a": 1}})"#,
+                r#"db.users.updateMany({"a": 1}, {"$set": {"a": 2}})"#,
+                r#"db.users.replaceOne({}, {"a": 1})"#,
+                r#"db.users.deleteOne({})"#,
+                r#"db.users.deleteMany({"a": 1})"#,
+                "db.users.drop()",
+                "db.dropDatabase()",
+                r#"db.createCollection("archive")"#,
+                r#"db.runCommand({"ping": 1})"#,
+                r#"db.runCommand({"insert": "users", "documents": [{"a": 1}]})"#,
+                r#"db.runCommand({"findAndModify": "users", "update": {"$set": {"a": 1}}})"#,
+                r#"db.adminCommand({"renameCollection": "testdb.a", "to": "testdb.b"})"#,
+                r#"db.users.aggregate([{"$out": "archive"}])"#,
+                r#"db.users.aggregate([{"$match": {}}, {"$merge": {"into": "archive"}}])"#,
+                r#"db.users.aggregate([{"$facet": {"copy": [{"$merge": "archive"}]}}])"#,
+                r#"db.users.aggregate([{"$lookup": {"from": "o", "pipeline": [{"$out": "archive"}], "as": "x"}}])"#,
+                r#"db.users.aggregate([{"$unionWith": {"coll": "o", "pipeline": [{"$merge": "archive"}]}}])"#,
+                r#"{"collection": "users", "pipeline": [{"$out": "archive"}]}"#,
+                r#"{"collection": "users", "replace": {"filter": {}, "replacement": {"a": 1}}}"#,
+            ] {
+                assert_refused_by_ceiling(
+                    &connection,
+                    &read_only_request(query, Some(ExecutionClassification::Read)),
+                );
+            }
+        }
+
+        #[test]
+        fn required_refuses_unsupported_single_statement_operations_without_a_server_call() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.findOneAndUpdate({}, {"$set": {"a": 1}})"#,
+                r#"db.users.findOneAndDelete({})"#,
+                r#"db.users.findOneAndReplace({}, {"a": 1})"#,
+                r#"db.users.bulkWrite([{"insertOne": {"document": {"a": 1}}}])"#,
+                r#"db.users.mapReduce("function() {}", "function() {}", {"out": "x"})"#,
+                r#"db.users.renameCollection("archive")"#,
+                r#"db.users.createIndex({"a": 1})"#,
+                r#"db.users.copyTo("archive")"#,
+                r#"db.eval("1")"#,
+                r#"db.getSiblingDB("admin").runCommand({"ping": 1})"#,
+                r#"db.users.find({}).forEach(function (d) {})"#,
+            ] {
+                let request = read_only_request(query, Some(ExecutionClassification::Read));
+                match connection.execute(&request) {
+                    Ok(result) => {
+                        let message = result
+                            .metadata_extra
+                            .as_ref()
+                            .and_then(|extra| extra.get("script_failure"))
+                            .and_then(|failure| failure["message"].as_str())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| panic!("{query}: must not succeed"));
+                        assert!(!is_server_selection_failure(&message), "{query}: {message}");
+                    }
+                    Err(DbError::NotSupported(message)) => {
+                        panic!("{query}: Required must be honoured, got NotSupported({message})")
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        assert!(!is_server_selection_failure(&message), "{query}: {message}");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn required_stops_script_writes_before_any_server_call() {
+            let connection = offline_connection();
+
+            for script in [
+                "var n = 1; db.users.insertOne({name: 'a'});",
+                "var n = 1; db.users.insertMany([{name: 'a'}]);",
+                "var n = 1; db.users.updateOne({}, {$set: {a: 1}});",
+                "var n = 1; db.users.updateMany({}, {$set: {a: 1}});",
+                "var n = 1; db.users.replaceOne({}, {a: 1});",
+                "var n = 1; db.users.deleteOne({});",
+                "var n = 1; db.users.deleteMany({});",
+                "var n = 1; db.users.drop();",
+                "var n = 1; db.dropDatabase();",
+                "var n = 1; db.createCollection('archive');",
+                "var n = 1; db.runCommand({ping: 1});",
+                "var n = 1; db.runCommand({insert: 'users', documents: [{a: 1}]});",
+                "var n = 1; db.getSiblingDB.runCommand({ping: 1});",
+                "var n = 1; db.users.aggregate([{$out: 'archive'}]);",
+                "var n = 1; db.users.aggregate([{$merge: {into: 'archive'}}]);",
+                "var n = 1; db.users.aggregate([{$facet: {copy: [{$merge: 'archive'}]}}]);",
+                "var n = 1; db.users.aggregate([{$lookup: {from: 'o', pipeline: [{$out: 'archive'}], as: 'x'}}]);",
+                "var n = 1; db.users.aggregate([{$unionWith: {coll: 'o', pipeline: [{$merge: 'archive'}]}}]);",
+                "var stage = {}; stage['$mer' + 'ge'] = 'archive'; db.users.aggregate([stage]);",
+                "const m = 'insert' + 'One'; db.users[m]({a: 1});",
+                "var n = 1; db.users.findOneAndUpdate({}, {$set: {a: 1}});",
+                "var n = 1; db.users.findOneAndDelete({});",
+                "var n = 1; db.users.findOneAndReplace({}, {a: 1});",
+                "var n = 1; db.users.bulkWrite([{insertOne: {document: {a: 1}}}]);",
+                "var n = 1; db.users.mapReduce('function() {}', 'function() {}', {out: 'x'});",
+                "var n = 1; db.users.renameCollection('archive');",
+                "var n = 1; db.users.createIndex({a: 1});",
+                "var n = 1; db.users.copyTo('archive');",
+                "var n = 1; db.eval('1');",
+                "var n = 1; db.adminCommand({ping: 1});",
+                "var n = 1; db.getSiblingDB('admin').runCommand({ping: 1});",
+                "var n = 1; new Mongo().getDB('admin');",
+                "var n = 1; load('other.js');",
+                "var n = 1; db.fs.files.insertOne({filename: 'a'});",
+            ] {
+                assert_script_stopped_before_the_server(
+                    &connection,
+                    &read_only_request(script, Some(ExecutionClassification::Read)),
+                );
+            }
+        }
+
+        #[test]
+        fn required_forces_a_read_ceiling_over_a_higher_confirmed_one() {
+            let connection = offline_connection();
+
+            for ceiling in [
+                None,
+                Some(ExecutionClassification::Write),
+                Some(ExecutionClassification::Destructive),
+                Some(ExecutionClassification::AdminDestructive),
+            ] {
+                assert_refused_by_ceiling(
+                    &connection,
+                    &read_only_request(r#"db.users.insertOne({"a": 1})"#, ceiling),
+                );
+
+                let message = assert_script_stopped_before_the_server(
+                    &connection,
+                    &read_only_request("var n = 1; db.users.deleteMany({});", ceiling),
+                );
+                assert!(message.contains("Read ceiling"), "{ceiling:?}: {message}");
+            }
+        }
+
+        #[test]
+        fn required_keeps_a_lower_confirmed_ceiling() {
+            let connection = offline_connection();
+
+            assert_refused_by_ceiling(
+                &connection,
+                &read_only_request(
+                    r#"db.users.find({})"#,
+                    Some(ExecutionClassification::Metadata),
+                ),
+            );
+
+            let message = assert_script_stopped_before_the_server(
+                &connection,
+                &read_only_request(
+                    "var n = 1; db.users.find({});",
+                    Some(ExecutionClassification::Metadata),
+                ),
+            );
+            assert!(message.contains("Metadata ceiling"), "{message}");
+        }
+
+        #[test]
+        fn required_lets_reads_reach_the_server() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.find({"a": 1})"#,
+                r#"db.users.findOne({})"#,
+                r#"db.users.aggregate([{"$match": {}}, {"$group": {"_id": "$merge"}}])"#,
+                r#"db.users.countDocuments({})"#,
+                "db.getCollectionNames()",
+                "db.stats()",
+                r#"{"collection": "users", "filter": {}}"#,
+            ] {
+                match connection.execute(&read_only_request(
+                    query,
+                    Some(ExecutionClassification::Read),
+                )) {
+                    Err(DbError::NotSupported(message)) => {
+                        panic!("{query}: Required must be honoured, got NotSupported({message})")
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        assert!(
+                            is_server_selection_failure(&message),
+                            "{query}: a read must pass the ceiling and reach for the server: {message}"
+                        );
+                    }
+                    Ok(_) => panic!("{query}: no server is listening, the read cannot succeed"),
+                }
+            }
+
+            for script in [
+                "var n = 1; db.users.find({a: 1});",
+                "var n = 1; db.users.aggregate([{$match: {}}]);",
+                "var n = 1; db.users.countDocuments({});",
+            ] {
+                let result = connection
+                    .execute(&read_only_request(
+                        script,
+                        Some(ExecutionClassification::Read),
+                    ))
+                    .unwrap_or_else(|error| panic!("{script}: must run, got {error:?}"));
+                let message = result
+                    .metadata_extra
+                    .as_ref()
+                    .and_then(|extra| extra.get("script_failure"))
+                    .and_then(|failure| failure["message"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                assert!(
+                    is_server_selection_failure(&message),
+                    "{script}: a read must pass the ceiling and reach for the server: {message}"
+                );
+            }
+        }
     }
 }
