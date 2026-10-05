@@ -9,13 +9,16 @@ use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus,
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 /// The leader keys Settings > General offers, in the keymap's stored key
 /// form: Space, and Vim's usual alternatives, comma and backslash (Vim's own
 /// default).
 const VIM_LEADER_CHOICES: [&str; 3] = ["space", ",", "\\"];
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum GeneralFormRow {
     Theme,
     Style,
@@ -42,6 +45,9 @@ pub(super) enum GeneralFormRow {
     SaveButton,
 }
 
+/// Each numeric field's last drawn bounds and the scroll offset of that frame.
+pub(super) type FieldBounds = Rc<RefCell<HashMap<GeneralFormRow, (Bounds<Pixels>, Pixels)>>>;
+
 pub(super) struct GeneralSection {
     pub(super) app_state: Entity<AppStateEntity>,
     pub(super) gen_settings: GeneralSettings,
@@ -60,6 +66,21 @@ pub(super) struct GeneralSection {
     pub(super) input_editor_row_limit: Entity<InputState>,
     pub(super) input_object_preview_limit: Entity<InputState>,
     pub(super) input_key_value_size_limit: Entity<InputState>,
+    /// The last rejected field and its message, shown under that field
+    /// until the next save attempt.
+    pub(super) gen_field_error: Option<(GeneralFormRow, String)>,
+    /// A rejected field to scroll into view on the next render.
+    pub(super) pending_reveal: Option<GeneralFormRow>,
+    /// Frames the pending reveal has adjusted the scroll in.
+    pub(super) reveal_attempts: u8,
+    /// Scroll position of the form body.
+    pub(super) form_scroll: ScrollHandle,
+    /// Bounds of the visible form area below the page head, from the last
+    /// frame.
+    pub(super) form_viewport: Rc<Cell<Bounds<Pixels>>>,
+    /// Bounds of each numeric field from the last frame and the scroll offset
+    /// they were drawn at, for scrolling a rejected field into view.
+    pub(super) field_bounds: FieldBounds,
     pub(super) content_focused: bool,
     pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
@@ -271,6 +292,12 @@ impl GeneralSection {
             input_editor_row_limit,
             input_object_preview_limit,
             input_key_value_size_limit,
+            gen_field_error: None,
+            pending_reveal: None,
+            reveal_attempts: 0,
+            form_scroll: ScrollHandle::new(),
+            form_viewport: Rc::default(),
+            field_bounds: Rc::default(),
             content_focused: false,
             switching_input: false,
             _subscriptions: vec![
@@ -530,7 +557,8 @@ impl SettingsSection for GeneralSection {
 }
 
 impl Render for GeneralSection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.reveal_pending_field(window, cx);
         self.render_general_section(cx)
     }
 }
@@ -755,9 +783,17 @@ mod tests {
                 section.save_general_settings(window, cx);
 
                 assert_eq!(
+                    section.gen_field_error,
+                    Some((
+                        GeneralFormRow::EditorRowLimit,
+                        dbflux_i18n::t!("settings.general.editor_row_limit.error").to_string()
+                    )),
+                    "{value:?} must show the validation error under the field"
+                );
+                assert_eq!(
                     toast_host.read(cx).last_toast_title(),
-                    Some(dbflux_i18n::t!("settings.general.editor_row_limit.error").to_string()),
-                    "{value:?} must show the validation error"
+                    None,
+                    "a form validation error stays in the settings window"
                 );
                 assert_eq!(section.gen_settings.editor_row_limit, 10_000);
                 assert_eq!(
@@ -1088,5 +1124,203 @@ mod tests {
                 "settings.general.placeholder.refresh_policy fell back to the raw key for locale {locale}"
             );
         }
+    }
+
+    /// Opens the General section under a `Root`, which sets the rem size and
+    /// lays the section out in a real window.
+    fn open_general_section(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<GeneralSection>,
+        Entity<ToastHost>,
+        &mut gpui::VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        let toast_host = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<GeneralSection>>>> =
+            std::rc::Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                slot.replace(Some(section.clone()));
+                gpui_component::Root::new(section, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("the section is built");
+        (section, toast_host, window)
+    }
+
+    fn redraw(window: &mut gpui::VisualTestContext) {
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
+
+    fn save(section: &Entity<GeneralSection>, window: &mut gpui::VisualTestContext) {
+        window.update(|window, cx| {
+            section.update(cx, |section, cx| section.save_general_settings(window, cx));
+        });
+        redraw(window);
+    }
+
+    fn set_input(
+        section: &Entity<GeneralSection>,
+        window: &mut gpui::VisualTestContext,
+        input: fn(&GeneralSection) -> Entity<dbflux_components::controls::InputState>,
+        value: &'static str,
+    ) {
+        window.update(|window, cx| {
+            let input = input(section.read(cx));
+            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        });
+    }
+
+    #[gpui::test]
+    fn the_object_preview_hint_sits_under_its_field(cx: &mut TestAppContext) {
+        let (_section, _toasts, window) = open_general_section(cx);
+
+        let control = window
+            .debug_bounds("general-object-preview-limit-control")
+            .expect("the object preview field renders");
+        let row = window
+            .debug_bounds("general-object-preview-limit-row")
+            .expect("the object preview row renders");
+
+        assert!(
+            row.bottom()
+                > control.bottom()
+                    + crate::tokens::FormMetrics::ROW_PADDING_Y
+                    + crate::tokens::FormMetrics::HELP_GAP,
+            "the hint adds a line under the field instead of sitting beside it: \
+             control {control:?}, row {row:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejected_save_moves_the_cursor_to_the_first_invalid_field() {
+        with_general_section(|section, _, window, cx| {
+            section
+                .input_max_history
+                .update(cx, |input, cx| input.set_value("5", window, cx));
+            section
+                .input_key_value_size_limit
+                .update(cx, |input, cx| input.set_value("0", window, cx));
+
+            section.save_general_settings(window, cx);
+
+            let max_history_row = section
+                .gen_form_rows()
+                .iter()
+                .position(|row| *row == GeneralFormRow::MaxHistory)
+                .expect("max history row");
+            assert_eq!(section.gen_form_cursor, max_history_row);
+            assert!(section.content_focused);
+            assert!(
+                section.gen_editing_field,
+                "the invalid field takes focus for editing"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_validation_error_shows_under_its_field_and_not_as_a_toast(cx: &mut TestAppContext) {
+        let (section, toasts, window) = open_general_section(cx);
+
+        set_input(
+            &section,
+            window,
+            |section| section.input_editor_row_limit.clone(),
+            "0",
+        );
+        save(&section, window);
+
+        let control = window
+            .debug_bounds("editor-row-limit-control")
+            .expect("the editor row limit field renders");
+        let error = window
+            .debug_bounds("editor-row-limit-error")
+            .expect("the error renders in the settings window");
+
+        assert!(
+            error.top() >= control.bottom(),
+            "the error sits under the field: control {control:?}, error {error:?}"
+        );
+        assert_eq!(
+            window.update(|_, cx| toasts.read(cx).last_toast_title()),
+            None,
+            "the main window gets no toast for a settings form error"
+        );
+    }
+
+    #[gpui::test]
+    fn a_rejected_save_scrolls_the_invalid_field_below_the_page_head(cx: &mut TestAppContext) {
+        let (section, _toasts, window) = open_general_section(cx);
+        window.simulate_resize(gpui::size(gpui::px(1200.0), gpui::px(480.0)));
+        redraw(window);
+
+        let fully_visible = |window: &mut gpui::VisualTestContext, selector: &'static str| {
+            let field = window
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} renders"));
+            let viewport = window
+                .debug_bounds("settings-form-viewport")
+                .expect("the form viewport renders");
+
+            assert!(
+                field.top() >= viewport.top() && field.bottom() <= viewport.bottom(),
+                "{selector} is fully visible below the page head: \
+                 field {field:?}, viewport {viewport:?}"
+            );
+        };
+
+        set_input(
+            &section,
+            window,
+            |section| section.input_key_value_size_limit.clone(),
+            "0",
+        );
+        save(&section, window);
+        fully_visible(window, "general-key-value-size-limit-control");
+
+        // From the bottom of the form, a field near the top comes back into
+        // view below the page head, not under it.
+        set_input(
+            &section,
+            window,
+            |section| section.input_key_value_size_limit.clone(),
+            "10",
+        );
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(gpui::px(600.0), gpui::px(300.0)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-5000.0))),
+            ..Default::default()
+        });
+        redraw(window);
+        set_input(
+            &section,
+            window,
+            |section| section.input_max_history.clone(),
+            "5",
+        );
+        save(&section, window);
+        fully_visible(window, "general-max-history-control");
     }
 }
