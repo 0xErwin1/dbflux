@@ -2078,21 +2078,7 @@ impl DataGridPanel {
             vec![]
         };
 
-        let focused_series_idx = self
-            .chart
-            .chart_shell
-            .as_ref()
-            .map_or(0, |s| s.read(cx).chart_focused_series_idx);
-
-        let series_name = self
-            .chart
-            .chart_shell
-            .as_ref()
-            .and_then(|s| s.read(cx).chart_view().cloned())
-            .map(|cv| cv.read(cx).series_label(focused_series_idx).to_string())
-            .unwrap_or_default();
-
-        let (hovered_x, hovered_y) = self
+        let (series_name, hovered_x, hovered_y) = self
             .chart
             .chart_shell
             .as_ref()
@@ -2100,20 +2086,13 @@ impl DataGridPanel {
                 let shell = s.read(cx);
                 let chart_entity = shell.chart_view()?.clone();
                 let chart = chart_entity.read(cx);
-                let x = chart.hover_data_x()?;
-                let series_idx = chart.focused_series_idx();
-                let x_is_time = chart.x_is_time();
-                let x_str = dbflux_components::chart::format_x_value(x, x_is_time);
-                // Resolve Y from the nearest decimated point.
-                let y_str = chart
-                    .nearest_point_idx(series_idx, x)
-                    .and_then(|pi| {
-                        // Read the Y value from the decimated point directly.
-                        let pts = chart.render_model_decimated_series(series_idx)?;
-                        Some(dbflux_components::chart::format_y_value(pts.get(pi)?.1))
-                    })
-                    .unwrap_or_default();
-                Some((x_str, y_str))
+                let point = chart.hovered_point()?;
+
+                Some((
+                    chart.series_label(point.series_idx).to_string(),
+                    dbflux_components::chart::format_x_value(point.x, chart.x_is_time()),
+                    dbflux_components::chart::format_y_value(point.y),
+                ))
             })
             .unwrap_or_default();
 

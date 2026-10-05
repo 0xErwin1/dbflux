@@ -113,6 +113,16 @@ pub(crate) struct RenderModel {
     pub source_indices: Option<Vec<Vec<usize>>>,
 }
 
+/// The data point under the pointer or the keyboard highlight, as returned by
+/// [`ChartView::hovered_point`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HoveredPoint {
+    pub series_idx: usize,
+    pub point_idx_in_series: usize,
+    pub x: f64,
+    pub y: f64,
+}
+
 // ---------------------------------------------------------------------------
 // ChartView
 // ---------------------------------------------------------------------------
@@ -616,6 +626,32 @@ impl ChartView {
         }
         let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
         Some(self.render_model.x_min + (rel_x as f64 / plot_w as f64) * x_range)
+    }
+
+    /// The decimated point the pointer or the keyboard highlights: the
+    /// keyboard point when there is one, otherwise the point of the focused
+    /// series nearest to the pointer's X. Unlike `hover_data_x`, which is the
+    /// pointer's own position, its X and Y belong to a real point.
+    pub fn hovered_point(&self) -> Option<HoveredPoint> {
+        let series_idx = self.focused_series_idx;
+
+        let point_idx_in_series = match self.keyboard_point_value() {
+            Some(_) => self.keyboard_point?,
+            None => self.nearest_point_idx(series_idx, self.hover_data_x()?)?,
+        };
+
+        let (x, y) = *self
+            .render_model
+            .decimated
+            .get(series_idx)?
+            .get(point_idx_in_series)?;
+
+        Some(HoveredPoint {
+            series_idx,
+            point_idx_in_series,
+            x,
+            y,
+        })
     }
 
     /// The point highlighted from the keyboard, if any.
@@ -3669,6 +3705,66 @@ mod tests {
             assert!(
                 !view.step_keyboard_series(1, cx),
                 "one visible series has nowhere to move"
+            );
+        });
+    }
+
+    /// While the pointer hovers, the hovered point is the point of the focused
+    /// series nearest to the pointer, not the pointer's own X; a keyboard
+    /// point takes its place when one is highlighted.
+    #[gpui::test]
+    fn hovered_point_is_the_nearest_point_of_the_focused_series(cx: &mut gpui::TestAppContext) {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+
+        let view = cx.new(|_| {
+            ChartView::build(&partially_overlapping_hosts(), spec).expect("build should succeed")
+        });
+
+        view.update(cx, |view, _| {
+            assert_eq!(view.hovered_point(), None, "nothing hovered yet");
+
+            let plot_width = 300.0;
+            *view.plot_bounds.borrow_mut() = Some(Bounds {
+                origin: point(gpui::px(0.0), gpui::px(0.0)),
+                size: gpui::size(gpui::px(plot_width + MARGIN_RIGHT), gpui::px(200.0)),
+            });
+
+            let x_min = view.render_model.x_min;
+            let x_range = view.render_model.x_max - x_min;
+            let pointer_x = 2_400.0;
+            let pointer_px = ((pointer_x - x_min) / x_range) as f32 * plot_width;
+            view.hover_x_screen = Some(gpui::px(pointer_px));
+            view.focused_series_idx = 1;
+
+            let hover_x = view.hover_data_x().expect("pointer inside the plot");
+            assert!(
+                (hover_x - pointer_x).abs() < 1.0,
+                "hover_data_x is the pointer, got {hover_x}"
+            );
+            assert_eq!(
+                view.hovered_point(),
+                Some(HoveredPoint {
+                    series_idx: 1,
+                    point_idx_in_series: 0,
+                    x: 2_000.0,
+                    y: 10.0,
+                }),
+                "series b's point nearest to the pointer"
+            );
+        });
+
+        view.update(cx, |view, cx| {
+            view.jump_keyboard_point(true, cx);
+            assert_eq!(
+                view.hovered_point(),
+                Some(HoveredPoint {
+                    series_idx: 1,
+                    point_idx_in_series: 2,
+                    x: 4_000.0,
+                    y: 10.0,
+                }),
+                "the keyboard point stands in for the pointer"
             );
         });
     }
