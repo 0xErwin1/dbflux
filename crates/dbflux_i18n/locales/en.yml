@@ -2033,6 +2033,40 @@ document:
         read_only_file: "The file is read-only."
     warning:
       cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
+  parquet:
+    loading: "Loading %{name}…"
+    empty:
+      title: "%{name} has no rows"
+      description: "The file holds a schema but no rows to show."
+    action:
+      reload: "Reload from file"
+    footer:
+      load_more: "Load more"
+      loading_more: "Loading…"
+      source_changed: "The file changed since it was opened. Reload it to see its new content."
+    header:
+      nulls: "%{percent} null"
+    status:
+      rows:
+        all:
+          one: "%{count} row"
+          many: "%{count} rows"
+        of_total: "%{loaded} of %{total} rows loaded"
+      columns: "%{shown} of %{total} columns shown"
+    error:
+      open_failed: "Could not open %{name}"
+      load_more_failed: "Could not load more of %{name}"
+      source_changed: "The file changed since it was opened, so no more rows were read. Reload it to see its new content."
+      object_without_range_reads: "This storage service cannot read part of an object, so opening a Parquet object from it would download all of it. Download the file and open it locally instead."
+      short_read: "The file returned fewer bytes than requested. It may have changed while it was being read."
+      not_parquet: "The file is not in Parquet format."
+      footer_too_large: "The Parquet footer is %{size}, more than the %{limit} DBFlux reads."
+      unsupported_codec: "Column %{column} is compressed with %{codec}, which DBFlux cannot read."
+      encrypted: "The Parquet file is encrypted, which DBFlux cannot read."
+      malformed: "The file is not valid Parquet."
+      unindexed_chunk_too_large: "Column %{column} has no page index, so showing any of its rows means reading its whole %{size} chunk, more than the %{limit} limit."
+      no_columns_selected: "No columns were selected to read."
+      column_out_of_range: "Column %{index} does not exist. The file has %{count} columns."
   governance:
     refresh: "Refresh"
     no_pending: No pending executions
@@ -3545,6 +3579,7 @@ scripts:
       javascript_mongodb: JavaScript (MongoDB)
       redis: Redis
       delimited: CSV / TSV Files
+      parquet: "Parquet Files"
       all_files: All Files
   error:
     read_file_failed: "Failed to read file %{path}: %{error}"

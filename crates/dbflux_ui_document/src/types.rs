@@ -40,6 +40,8 @@ pub enum DocumentKind {
     DumpAnalysis,
     // A delimited text file (CSV or TSV) opened as a table
     Delimited,
+    // A Parquet file opened read-only as a paged table
+    Parquet,
     // MCP approvals queue (agent calls parked for a person)
     McpApprovals,
     // Migrate-data wizard (table -> table, cross-connection)

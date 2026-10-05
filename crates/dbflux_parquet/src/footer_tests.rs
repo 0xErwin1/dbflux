@@ -302,6 +302,34 @@ fn a_brotli_column_names_the_codec() {
     }
 }
 
+/// The metadata writer recomputes the file's row count from its row groups,
+/// so the fixture patches the encoded count instead. In the Thrift compact
+/// footer the file's `num_rows` is the first field headed `0x16` that holds
+/// the zigzag varint of 1000 (`0xd0 0x0f`); the row group's count and each
+/// column's value count follow it. 1002 encodes as `0xd4 0x0f`.
+#[test]
+fn a_footer_declaring_more_rows_than_its_row_groups_is_malformed() {
+    let mut bytes = write_parquet(&[batch(1000)], None);
+    let footer_start = metadata_start(&bytes);
+    let encoded_count = [0x16, 0xd0, 0x0f];
+
+    let file_count = bytes[footer_start..]
+        .windows(encoded_count.len())
+        .position(|window| window == encoded_count)
+        .map(|offset| footer_start + offset)
+        .expect("the footer encodes the row count");
+
+    bytes[file_count + 1] = 0xd4;
+
+    match open(&MemorySource::new(bytes)) {
+        Err(ParquetError::Malformed { message }) => {
+            assert!(message.contains("1002 rows"), "{message}");
+            assert!(message.contains("1000"), "{message}");
+        }
+        other => panic!("expected Malformed, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_short_read_from_the_source_is_reported() {
     let bytes = write_parquet(&[batch(3)], None);

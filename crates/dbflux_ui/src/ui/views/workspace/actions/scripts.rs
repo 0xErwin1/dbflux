@@ -1,6 +1,6 @@
 use super::*;
 use crate::ui::document::FileDocumentKey;
-use crate::ui::document::file_format::{file_document_extensions, file_document_format};
+use crate::ui::document::file_format::{FileDocumentFormat, file_document_format};
 use crate::ui::labels::{
     documents_default_title, scripts_filter_all_files_label, scripts_filter_delimited_label,
     scripts_filter_javascript_mongodb_label, scripts_filter_redis_label, scripts_filter_sql_label,
@@ -8,7 +8,7 @@ use crate::ui::labels::{
 };
 
 impl Workspace {
-    /// Opens a file dialog to pick a script, CSV or TSV file and opens it
+    /// Opens a file dialog to pick a script, CSV, TSV or Parquet file and opens it
     /// through [`Self::open_script_from_path`].
     pub(in crate::ui::views::workspace) fn open_script_file(
         &mut self,
@@ -21,6 +21,7 @@ impl Workspace {
             let javascript_mongodb_filter_label = scripts_filter_javascript_mongodb_label();
             let redis_filter_label = scripts_filter_redis_label();
             let delimited_filter_label = scripts_filter_delimited_label();
+            let parquet_filter_label = dbflux_i18n::t!("scripts.dialog.filter.parquet");
             let all_files_filter_label = scripts_filter_all_files_label();
 
             let file_handle = rfd::AsyncFileDialog::new()
@@ -28,7 +29,14 @@ impl Workspace {
                 .add_filter(&sql_filter_label, &["sql"])
                 .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
                 .add_filter(&redis_filter_label, &["redis", "red"])
-                .add_filter(&delimited_filter_label, file_document_extensions())
+                .add_filter(
+                    &delimited_filter_label,
+                    FileDocumentFormat::Delimited.extensions(),
+                )
+                .add_filter(
+                    &parquet_filter_label,
+                    FileDocumentFormat::Parquet.extensions(),
+                )
                 .add_filter(&all_files_filter_label, &["*"])
                 .pick_file()
                 .await;
@@ -59,8 +67,9 @@ impl Workspace {
     /// come through here.
     ///
     /// A `.csv` or `.tsv` file, in any letter case, opens as a table in the
-    /// delimited document. Every other file opens in the code editor, or
-    /// focuses the tab that already shows it.
+    /// delimited document, and a `.parquet` file in the Parquet document.
+    /// Every other file opens in the code editor, or focuses the tab that
+    /// already shows it.
     pub fn open_script_from_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         if file_document_format(&path).is_some() {
             self.open_file_document(FileDocumentKey::Local { path }, None, cx);

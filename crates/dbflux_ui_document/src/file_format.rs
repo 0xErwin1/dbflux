@@ -12,6 +12,20 @@ use std::path::Path;
 pub enum FileDocumentFormat {
     /// Comma- or tab-separated text, opened in the delimited document.
     Delimited,
+
+    /// An Apache Parquet file, opened read-only in the Parquet document.
+    Parquet,
+}
+
+impl FileDocumentFormat {
+    /// The extensions, without the leading dot, of the files this format
+    /// opens, as the open-file dialog offers them.
+    pub fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Self::Delimited => DELIMITED_EXTENSIONS,
+            Self::Parquet => PARQUET_EXTENSIONS,
+        }
+    }
 }
 
 /// The format of the file or object at `path`, or `None` when it does not open
@@ -22,20 +36,19 @@ pub enum FileDocumentFormat {
 pub fn file_document_format(path: &Path) -> Option<FileDocumentFormat> {
     let extension = path.extension()?;
 
-    let is_delimited = DELIMITED_EXTENSIONS
-        .iter()
-        .any(|candidate| extension.eq_ignore_ascii_case(candidate));
-
-    is_delimited.then_some(FileDocumentFormat::Delimited)
-}
-
-/// The extensions, without the leading dot, that the open-file dialog offers
-/// for data documents.
-pub fn file_document_extensions() -> &'static [&'static str] {
-    DELIMITED_EXTENSIONS
+    [FileDocumentFormat::Delimited, FileDocumentFormat::Parquet]
+        .into_iter()
+        .find(|format| {
+            format
+                .extensions()
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
 }
 
 const DELIMITED_EXTENSIONS: &[&str] = &["csv", "tsv"];
+
+const PARQUET_EXTENSIONS: &[&str] = &["parquet"];
 
 #[cfg(test)]
 mod tests {
@@ -61,13 +74,33 @@ mod tests {
 
         for name in [
             "query.sql",
-            "cities.parquet",
             "notes.txt",
             "cities.csv.gz",
             "csv",
             ".csv",
             "reports/csv/",
         ] {
+            assert_eq!(file_document_format(Path::new(name)), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn file_document_format_recognizes_parquet_in_any_case() {
+        for name in [
+            "cities.parquet",
+            "CITIES.PARQUET",
+            "Cities.Parquet",
+            "/home/ana/exports/trips.parquet",
+            "2026/q1/trips.PARQUET",
+        ] {
+            assert_eq!(
+                file_document_format(Path::new(name)),
+                Some(FileDocumentFormat::Parquet),
+                "{name}"
+            );
+        }
+
+        for name in ["trips.parquet.gz", "parquet", ".parquet", "trips.pq"] {
             assert_eq!(file_document_format(Path::new(name)), None, "{name}");
         }
     }

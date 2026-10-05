@@ -123,6 +123,7 @@ mod documents;
 mod dump_analysis;
 mod metrics;
 mod migrate;
+mod parquet;
 mod query;
 mod quit;
 mod schema_diff;

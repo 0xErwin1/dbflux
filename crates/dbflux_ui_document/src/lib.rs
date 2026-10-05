@@ -20,6 +20,7 @@ pub mod dedup;
 pub mod delimited;
 pub(crate) mod document_builder;
 pub mod dump_analysis;
+pub mod parquet;
 pub mod query_builder;
 pub mod schema_diff;
 mod style_guardrails;
@@ -84,6 +85,7 @@ pub use pane::{
     BoxedDocEventCallback, CodeSessionTabSnapshot, DocumentSidePanel, ObjectEditorRequest,
     ObjectSavedCallback, PaneHandle, StatusSegment,
 };
+pub use parquet::ParquetDocument;
 pub use result_view::ResultViewMode;
 pub use schema_viz::{SchemaVizDocument, SchemaVizMode};
 pub use tab_bar::{TabBar, TabBarEvent};
