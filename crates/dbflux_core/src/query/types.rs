@@ -100,6 +100,25 @@ impl QueryResultShape {
 
 // -- Query Request --
 
+/// Whether the database itself must refuse writes while a request runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReadOnlyEnforcement {
+    /// No read-only guarantee is requested: the request runs with the
+    /// session's normal permissions.
+    #[default]
+    None,
+
+    /// The request must run in a mode where the database refuses every write,
+    /// or not run at all. See [`QueryRequest::read_only`].
+    Required,
+}
+
+impl ReadOnlyEnforcement {
+    pub fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+}
+
 /// Parameters for executing a SQL query.
 #[derive(Debug, Clone, Default)]
 pub struct QueryRequest {
@@ -159,6 +178,24 @@ pub struct QueryRequest {
     /// performed the authorisation, so this field cannot be built from
     /// untrusted bytes.
     pub confirmed_ceiling: Option<crate::ExecutionClassification>,
+
+    /// Read-only enforcement requested for this execution.
+    ///
+    /// Only the code that authorised the request as a read may set
+    /// [`ReadOnlyEnforcement::Required`]: the MCP policy decision for a
+    /// `Read`/`Metadata` script, or the editor's auto-refresh of a read
+    /// query. It is never derived from document content.
+    ///
+    /// With `Required`, a driver applies a mode the database enforces (a
+    /// read-only transaction, a query-only session flag, a per-request
+    /// setting) inside the same locked session call that runs the SQL, never
+    /// as a separate execution another caller could interleave with, and
+    /// removes it before returning. A driver that cannot do that, or that finds
+    /// the session inside a transaction it must not end, refuses the whole
+    /// request with [`DbError::NotSupported`](crate::DbError::NotSupported)
+    /// before anything runs. Drivers that honour it declare
+    /// [`TransactionCapabilities::supports_read_only`](crate::TransactionCapabilities::supports_read_only).
+    pub read_only: ReadOnlyEnforcement,
 }
 
 impl QueryRequest {
@@ -174,6 +211,26 @@ impl QueryRequest {
     pub fn with_confirmed_ceiling(mut self, ceiling: crate::ExecutionClassification) -> Self {
         self.confirmed_ceiling = Some(ceiling);
         self
+    }
+
+    /// Sets the read-only enforcement for this execution. See
+    /// [`QueryRequest::read_only`] for who may set it.
+    pub fn with_read_only(mut self, read_only: ReadOnlyEnforcement) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Refuses a request that requires read-only enforcement, for a driver
+    /// that cannot provide it. Call it before anything runs, so the refusal
+    /// has no side effects.
+    pub fn refuse_read_only_enforcement(&self, driver: &str) -> Result<(), crate::DbError> {
+        if self.read_only.is_required() {
+            return Err(crate::DbError::NotSupported(format!(
+                "{driver}: database-enforced read-only execution is unsupported; the request was rejected before execution"
+            )));
+        }
+
+        Ok(())
     }
 
     pub fn with_limit(mut self, limit: u32) -> Self {
@@ -719,5 +776,34 @@ mod tests {
         result.set_rows_truncated(false);
 
         assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn query_request_requests_no_read_only_enforcement_by_default() {
+        let request = QueryRequest::new("SELECT 1");
+
+        assert_eq!(request.read_only, ReadOnlyEnforcement::None);
+        assert!(!request.read_only.is_required());
+    }
+
+    #[test]
+    fn with_read_only_marks_the_request_as_requiring_enforcement() {
+        let request = QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
+
+        assert!(request.read_only.is_required());
+    }
+
+    #[test]
+    fn refuse_read_only_enforcement_rejects_only_required_requests() {
+        let plain = QueryRequest::new("SELECT 1");
+        assert!(plain.refuse_read_only_enforcement("Test driver").is_ok());
+
+        let required = QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
+        match required.refuse_read_only_enforcement("Test driver") {
+            Err(crate::DbError::NotSupported(message)) => {
+                assert!(message.starts_with("Test driver"), "{message}");
+            }
+            other => panic!("expected NotSupported, got {other:?}"),
+        }
     }
 }

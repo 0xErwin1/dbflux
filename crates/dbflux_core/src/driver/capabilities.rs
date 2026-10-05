@@ -1829,7 +1829,12 @@ pub struct TransactionCapabilities {
     /// Whether nested transactions (savepoints) are supported.
     pub supports_nested_transactions: bool,
 
-    /// Whether the driver supports READ ONLY transactions.
+    /// Whether the driver honours
+    /// [`ReadOnlyEnforcement::Required`](crate::ReadOnlyEnforcement::Required):
+    /// it runs such a request in a mode the database enforces, or refuses it
+    /// before running anything. Callers rely on it to decide whether a read
+    /// can run unattended, so it must never be claimed for a mode DBFlux
+    /// emulates on its own.
     pub supports_read_only: bool,
 
     /// Whether the driver supports deferrable transactions.
@@ -1847,7 +1852,7 @@ impl Default for TransactionCapabilities {
             default_isolation_level: Some(IsolationLevel::ReadCommitted),
             supports_savepoints: true,
             supports_nested_transactions: true,
-            supports_read_only: true,
+            supports_read_only: false,
             supports_deferrable: false,
         }
     }
@@ -2142,6 +2147,15 @@ impl Clone for DriverMetadata {
 }
 
 impl DriverMetadata {
+    /// Whether the driver honours
+    /// [`ReadOnlyEnforcement::Required`](crate::ReadOnlyEnforcement::Required)
+    /// (see [`TransactionCapabilities::supports_read_only`]).
+    pub fn enforces_read_only(&self) -> bool {
+        self.transactions
+            .as_ref()
+            .is_some_and(|transactions| transactions.supports_read_only)
+    }
+
     /// Check if a capability is supported.
     pub fn supports(&self, capability: DriverCapabilities) -> bool {
         self.capabilities.contains(capability)
@@ -2911,7 +2925,10 @@ mod tests {
         let tc = TransactionCapabilities::default();
         assert!(tc.supports_transactions);
         assert!(tc.supports_savepoints);
-        assert!(tc.supports_read_only);
+        assert!(
+            !tc.supports_read_only,
+            "read-only enforcement must be declared by a driver that implements it"
+        );
         assert!(tc.default_isolation_level.is_some());
     }
 
@@ -3067,8 +3084,29 @@ mod tests {
         assert!(tc.default_isolation_level.is_some());
         assert!(tc.supports_savepoints);
         assert!(tc.supports_nested_transactions);
-        assert!(tc.supports_read_only);
+        assert!(!tc.supports_read_only);
         assert!(!tc.supports_deferrable);
+    }
+
+    #[test]
+    fn metadata_enforces_read_only_only_when_its_transactions_declare_it() {
+        let mut metadata = DriverMetadataBuilder::new(
+            "test",
+            "Test Driver",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+        assert!(!metadata.enforces_read_only());
+
+        metadata.transactions = Some(TransactionCapabilities::default());
+        assert!(!metadata.enforces_read_only());
+
+        metadata.transactions = Some(TransactionCapabilities {
+            supports_read_only: true,
+            ..TransactionCapabilities::default()
+        });
+        assert!(metadata.enforces_read_only());
     }
 
     // --- DriverLimits Tests ---

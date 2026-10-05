@@ -726,6 +726,7 @@ impl DbFluxServer {
             database: None,
             execution_context: None,
             confirmed_ceiling: Some(classification),
+            read_only: dbflux_core::ReadOnlyEnforcement::None,
         };
 
         let result = Self::execute_connection_blocking(conn.clone(), move |connection| {
