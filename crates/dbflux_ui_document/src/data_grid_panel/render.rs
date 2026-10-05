@@ -1105,9 +1105,12 @@ impl DataGridPanel {
                 }),
             )
             .child(
-                crate::completion_support::frameless_single_line_completion_editor(filter_input)
-                    .text_color(theme.accent_foreground)
-                    .flex_1(),
+                crate::completion_support::frameless_single_line_completion_editor(
+                    filter_input,
+                    cx,
+                )
+                .text_color(theme.accent_foreground)
+                .flex_1(),
             );
 
         let limit_value = div()

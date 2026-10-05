@@ -51,7 +51,7 @@ use uuid::Uuid;
 use crate::migrate_wizard::phases::can_advance_from_source_target;
 use crate::migrate_wizard::tree_model::{TreeModel, TreePayload, object_tree_node_id};
 
-const ROW_HEIGHT: Pixels = Heights::ROW_COMPACT;
+const ROW_HEIGHT: Rems = Heights::ROW_COMPACT;
 const INDENT_PX: f32 = 14.0;
 
 /// Which of the two trees an operation targets.

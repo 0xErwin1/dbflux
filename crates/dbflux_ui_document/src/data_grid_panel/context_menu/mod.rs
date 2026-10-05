@@ -1736,8 +1736,9 @@ impl DataGridPanel {
 
         // Separators are shorter than rows, so this over-estimates a little;
         // a menu placed a few pixels higher than necessary is harmless.
-        let menu_height =
-            MenuMetrics::ROW_HEIGHT * menu_items.len() as f32 + MenuMetrics::PADDING_Y * 2.0;
+        let menu_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
+            * menu_items.len() as f32
+            + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
         self.render_context_menu_overlay(

@@ -181,7 +181,7 @@ pub fn render_columns(
                     .items_center(),
             )
             .child(mark.ring(&entry_row, "input", div().flex_1()).child(
-                crate::completion_support::single_line_completion_editor(add_state).w_full(),
+                crate::completion_support::single_line_completion_editor(add_state, cx).w_full(),
             ))
             .child(
                 mark.ring_element(

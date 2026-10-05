@@ -525,7 +525,7 @@ impl RowInspectorContent {
         step: crate::data_grid_panel::side_island::IslandScroll,
         cx: &mut Context<Self>,
     ) {
-        crate::data_grid_panel::side_island::scroll_by(&self.scroll_handle, step);
+        crate::data_grid_panel::side_island::scroll_by(&self.scroll_handle, step, cx);
         cx.notify();
     }
 

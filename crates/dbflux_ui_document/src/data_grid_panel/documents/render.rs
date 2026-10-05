@@ -130,8 +130,8 @@ impl DataGridPanel {
         let theme = cx.theme().clone();
         let slots = self.has_document_query_slots(cx);
 
-        let editor = |state: &Entity<EditorState>| {
-            crate::completion_support::frameless_single_line_completion_editor(state)
+        let editor = |state: &Entity<EditorState>, cx: &App| {
+            crate::completion_support::frameless_single_line_completion_editor(state, cx)
                 .text_color(ChromeColors::strong(&theme))
                 .into_any_element()
         };
@@ -140,7 +140,7 @@ impl DataGridPanel {
             "collection-slot-filter",
             "filter",
             dbflux_i18n::t!("document.collection.slot.tooltip.filter"),
-            editor(&self.filter_bar.filter_input),
+            editor(&self.filter_bar.filter_input, cx),
             None,
             cx,
         );
@@ -182,7 +182,7 @@ impl DataGridPanel {
                     "collection-slot-project",
                     "project",
                     dbflux_i18n::t!("document.collection.slot.tooltip.project"),
-                    editor(&self.collection.projection_input),
+                    editor(&self.collection.projection_input, cx),
                     Some(CollectionMetrics::PROJECT_SLOT_WIDTH),
                     cx,
                 ))
@@ -190,7 +190,7 @@ impl DataGridPanel {
                     "collection-slot-sort",
                     "sort",
                     dbflux_i18n::t!("document.collection.slot.tooltip.sort"),
-                    editor(&self.collection.sort_input),
+                    editor(&self.collection.sort_input, cx),
                     Some(CollectionMetrics::SORT_SLOT_WIDTH),
                     cx,
                 ))

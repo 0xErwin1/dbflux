@@ -147,8 +147,9 @@ pub(super) fn render_tree_item(
         || item_id.starts_with("KL|");
     if is_loading_row {
         let theme = cx.theme();
-        let label_start =
-            TreeMetrics::INDENT * depth as f32 + TreeMetrics::CHEVRON + TreeMetrics::GAP;
+        let label_start = TreeMetrics::INDENT * depth as f32
+            + dbflux_components::fonts::ui_px(cx, TreeMetrics::CHEVRON)
+            + TreeMetrics::GAP;
         return ListItem::new(ix).h(TreeMetrics::ROW_HEIGHT).child(
             div()
                 .w_full()
@@ -1200,7 +1201,7 @@ fn render_failure_slice(
     let theme = cx.theme();
     let danger = theme.danger;
     let muted = theme.muted_foreground;
-    let row_height = TreeMetrics::ROW_HEIGHT;
+    let row_height = dbflux_components::fonts::ui_px(cx, TreeMetrics::ROW_HEIGHT);
     let block_left = TreeMetrics::PADDING_X + TreeMetrics::INDENT * depth as f32 + Spacing::SM;
 
     let failure = params

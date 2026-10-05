@@ -1,4 +1,5 @@
 use crate::controls::{GpuiInput as Input, InputEvent, InputState};
+use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
@@ -14,7 +15,7 @@ use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
 use super::state::{DocumentTreeState, DocumentViewMode};
 
-/// Height of each row in the tree.
+/// Height of each row in the tree at the default grid font size.
 pub const TREE_ROW_HEIGHT: Pixels = px(26.0);
 
 /// Indentation per depth level.
@@ -396,6 +397,7 @@ impl Render for DocumentTree {
 
                                     let editing_node = state_ref.editing_node().cloned();
                                     let inline_edit_input = state_ref.inline_edit_input().cloned();
+                                    let row_height = fonts::grid_scaled(cx, TREE_ROW_HEIGHT);
 
                                     range
                                         .filter_map(|ix| visible_nodes.get(ix).cloned())
@@ -425,6 +427,7 @@ impl Render for DocumentTree {
                                                 theme.clone(),
                                                 state_clone,
                                                 node_id,
+                                                row_height,
                                             )
                                         })
                                         .collect()
@@ -581,6 +584,7 @@ fn render_tree_row(
     theme: gpui_component::Theme,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
+    row_height: Pixels,
 ) -> Stateful<Div> {
     let indent = INDENT_WIDTH * node.depth as f32;
     let is_expandable = node.is_expandable();
@@ -618,7 +622,7 @@ fn render_tree_row(
         .id(ElementId::Name(
             format!("tree-row-{:?}", node.id.path).into(),
         ))
-        .h(TREE_ROW_HEIGHT)
+        .h(row_height)
         .w_full()
         .flex()
         .items_center()

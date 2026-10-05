@@ -220,8 +220,13 @@ pub(crate) fn check_row(checkbox: impl IntoElement, description: Option<SharedSt
         .when_some(description, |row, description| {
             row.child(
                 div()
-                    .pl(dbflux_components::tokens::Fields::CHECKBOX_SIZE
-                        + dbflux_components::tokens::Fields::CHECKBOX_GAP)
+                    .flex()
+                    .gap(dbflux_components::tokens::Fields::CHECKBOX_GAP)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(dbflux_components::tokens::Fields::CHECKBOX_SIZE),
+                    )
                     .child(help_text(description)),
             )
         })

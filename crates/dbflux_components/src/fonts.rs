@@ -160,6 +160,12 @@ pub fn editor_family(cx: &App) -> SharedString {
     active(cx).editor_family.clone()
 }
 
+/// Scales an editor-surface measurement drawn for the default editor size,
+/// such as the console's monospace text, by the chosen editor size.
+pub fn editor_scaled(cx: &App, value: Pixels) -> Pixels {
+    value * active(cx).editor_size / GeneralSettings::DEFAULT_EDITOR_FONT_SIZE
+}
+
 pub fn editor_font_size(cx: &App) -> Pixels {
     px(active(cx).editor_size)
 }
@@ -365,6 +371,7 @@ mod tests {
             assert_eq!(editor_family(cx), SharedString::from(AppFonts::MONO));
             assert_eq!(editor_font_size(cx), EditorMetrics::CODE_FONT);
             assert_eq!(editor_line_height(cx), EditorMetrics::CODE_LINE_HEIGHT);
+            assert_eq!(editor_scaled(cx, px(12.5)), px(12.5));
             assert_eq!(grid_family(cx), SharedString::from(AppFonts::MONO));
             assert_eq!(grid_font_size(cx), GridMetrics::FONT);
             assert_eq!(grid_type_font_size(cx), GridMetrics::TYPE_FONT);
@@ -405,6 +412,7 @@ mod tests {
             assert_eq!(scaled(cx, px(10.0)), px(15.0));
             assert_eq!(editor_font_size(cx), px(20.0));
             assert_eq!(editor_line_height(cx), px(34.0));
+            assert_eq!(editor_scaled(cx, px(13.0)), px(20.0));
             assert_eq!(grid_font_size(cx), px(25.0));
             assert_eq!(grid_type_font_size(cx), px(21.0));
             assert_eq!(grid_row_height(cx), px(62.0));

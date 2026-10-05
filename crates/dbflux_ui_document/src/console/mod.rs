@@ -20,6 +20,7 @@ use crate::completion_support::{
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::CompletionProvider;
 use dbflux_components::controls::{Button, InputEvent, InputMoveDown, InputMoveUp};
+use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Kbd, Text};
 use dbflux_components::tokens::{ChromeColors, ConsoleMetrics, FontSizes, Spacing};
@@ -778,8 +779,8 @@ impl NativeConsole {
             .pb(ConsoleMetrics::PADDING_BOTTOM)
             .px(ConsoleMetrics::PADDING_X)
             .font_family(AppFonts::MONO)
-            .text_size(ConsoleMetrics::FONT)
-            .line_height(ConsoleMetrics::LINE_HEIGHT)
+            .text_size(fonts::editor_scaled(cx, ConsoleMetrics::FONT))
+            .line_height(fonts::editor_scaled(cx, ConsoleMetrics::LINE_HEIGHT))
             // Up and Down walk the history, unless an open completion menu
             // needs them.
             .capture_action(cx.listener(|this, _: &InputMoveUp, window, cx| {
@@ -870,7 +871,7 @@ impl NativeConsole {
                             .child(
                                 frameless_single_line_completion_editor_sized(
                                     &self.input,
-                                    ConsoleMetrics::FONT,
+                                    fonts::editor_scaled(cx, ConsoleMetrics::FONT),
                                     cx,
                                 )
                                 .aria_label(dbflux_i18n::t!("document.console.title"))

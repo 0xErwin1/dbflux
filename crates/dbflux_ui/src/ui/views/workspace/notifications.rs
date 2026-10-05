@@ -635,7 +635,8 @@ impl Workspace {
             .get()
             .map(|bounds| (viewport.width - bounds.right()).max(px(0.0)))
             .unwrap_or(ShellMetrics::TITLE_BAR_PADDING_X);
-        let top = ShellMetrics::TITLE_BAR_HEIGHT + NotificationMetrics::POPOVER_GAP_TOP;
+        let top = ShellMetrics::TITLE_BAR_HEIGHT.to_pixels(window.rem_size())
+            + NotificationMetrics::POPOVER_GAP_TOP;
         let max_height = viewport.height * NotificationMetrics::POPOVER_MAX_HEIGHT_FRACTION;
 
         let popover = self.build_notifications_popover(cx).max_height(max_height);

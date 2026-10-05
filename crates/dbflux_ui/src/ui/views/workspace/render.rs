@@ -779,7 +779,7 @@ impl Render for Workspace {
                 let menu_y = menu.position.y;
                 let menu_width = px(160.0);
                 let menu_gap = Spacing::XS;
-                let menu_item_height = Heights::ROW_COMPACT;
+                let menu_item_height = Heights::ROW_COMPACT.to_pixels(window.rem_size());
                 let separator_height = px(1.0) + Spacing::XS * 2.0;
                 let menu_container_padding = px(4.0);
 
@@ -887,11 +887,14 @@ impl Render for Workspace {
             // The toast menu opens where the toasts stack, under the title
             // bar at the right edge.
             .when_some(toast_actions_menu, |this, menu| {
+                let top = ShellMetrics::TITLE_BAR_HEIGHT.to_pixels(window.rem_size())
+                    + Feedback::TOAST_STACK_INSET;
+
                 this.child(
                     deferred(
                         div()
                             .absolute()
-                            .top(ShellMetrics::TITLE_BAR_HEIGHT + Feedback::TOAST_STACK_INSET)
+                            .top(top)
                             .right(Feedback::TOAST_STACK_INSET)
                             .child(menu),
                     )

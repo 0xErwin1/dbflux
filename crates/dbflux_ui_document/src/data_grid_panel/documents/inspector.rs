@@ -346,7 +346,7 @@ impl DocumentInspectorContent {
         cx: &mut Context<Self>,
     ) {
         let handle = self.scroll_handle.0.borrow().base_handle.clone();
-        crate::data_grid_panel::side_island::scroll_by(&handle, step);
+        crate::data_grid_panel::side_island::scroll_by(&handle, step, cx);
         cx.notify();
     }
 }

@@ -109,8 +109,11 @@ pub fn render_joins(
             header = header.child(
                 mark.ring(&join_row, "table", div().flex_1().min_w(gpui::px(0.0)))
                     .child(
-                        crate::completion_support::single_line_completion_editor(to_table_state)
-                            .w_full(),
+                        crate::completion_support::single_line_completion_editor(
+                            to_table_state,
+                            cx,
+                        )
+                        .w_full(),
                     ),
             );
         } else {
@@ -258,7 +261,7 @@ fn render_join_tree(
                 row = row.child(
                     mark.ring(&condition_row, "left", div().flex_1().min_w(gpui::px(0.0)))
                         .child(
-                            crate::completion_support::single_line_completion_editor(&state)
+                            crate::completion_support::single_line_completion_editor(&state, cx)
                                 .w_full(),
                         ),
                 );
@@ -283,7 +286,7 @@ fn render_join_tree(
                 row = row.child(
                     mark.ring(&condition_row, "right", div().flex_1().min_w(gpui::px(0.0)))
                         .child(
-                            crate::completion_support::single_line_completion_editor(&state)
+                            crate::completion_support::single_line_completion_editor(&state, cx)
                                 .w_full(),
                         ),
                 );

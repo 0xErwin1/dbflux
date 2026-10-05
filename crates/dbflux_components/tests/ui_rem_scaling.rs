@@ -5,11 +5,12 @@
 //! interface font size. A length built with `ui(..)` must therefore keep its
 //! design size at the default interface size and grow with the interface scale.
 
+use dbflux_components::controls::Button;
 use dbflux_components::fonts::{self, FontSettings};
 use dbflux_components::icon::IconSource;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::theme;
-use dbflux_components::tokens::ui;
+use dbflux_components::tokens::{BASE_REM, ButtonMetrics, ui};
 use gpui::prelude::*;
 use gpui::{Bounds, Context, Pixels, TestAppContext, VisualTestContext, Window, div, px};
 
@@ -42,6 +43,12 @@ impl Render for ScaledHarness {
                 div()
                     .debug_selector(|| "ui-text".to_string())
                     .child(Text::body("Ag").font_size(ui(TEXT_SIZE))),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "ui-button".to_string())
+                    .flex()
+                    .child(Button::new("scaling-probe-button", "Save")),
             )
     }
 }
@@ -89,12 +96,17 @@ fn ui_lengths_keep_their_design_size_at_the_default_interface_size(cx: &mut Test
     assert_eq!(row.size.height, px(ROW_HEIGHT));
     assert_eq!(row.size.width, px(ROW_HEIGHT));
     assert_eq!(icon.size.height, px(ICON_SIZE));
+    assert_eq!(
+        bounds(window, "ui-button").size.height,
+        ButtonMetrics::HEIGHT.to_pixels(px(BASE_REM))
+    );
 }
 
 #[gpui::test]
 fn ui_lengths_double_when_the_interface_size_doubles(cx: &mut TestAppContext) {
     let window = open_window(cx);
     let default_text = bounds(window, "ui-text");
+    let default_button = bounds(window, "ui-button");
 
     set_ui_size(window, DOUBLE_UI_SIZE);
 
@@ -105,6 +117,10 @@ fn ui_lengths_double_when_the_interface_size_doubles(cx: &mut TestAppContext) {
     assert_eq!(row.size.height, px(ROW_HEIGHT * 2.0));
     assert_eq!(row.size.width, px(ROW_HEIGHT * 2.0));
     assert_eq!(icon.size.height, px(ICON_SIZE * 2.0));
+    assert_eq!(
+        bounds(window, "ui-button").size.height,
+        default_button.size.height * 2.0
+    );
 
     let text_ratio = f32::from(text.size.height) / f32::from(default_text.size.height);
     assert!(

@@ -27,7 +27,7 @@ use gpui_component::scroll::Scrollbar;
 const ENTRY_ICON_SIZE: Pixels = px(15.0);
 
 /// Size of the icon in front of a changelog section label.
-const SECTION_ICON_SIZE: Pixels = FontSizes::XS;
+const SECTION_ICON_SIZE: Rems = FontSizes::XS;
 
 /// Size of the Expanded section and column labels on the boards.
 const LABEL_SIZE: Pixels = px(10.0);

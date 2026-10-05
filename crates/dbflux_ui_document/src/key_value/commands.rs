@@ -86,7 +86,7 @@ impl super::KeyValueDocument {
                     KeyValueFocusMode::ValuePanel => KvMenuTarget::Value,
                     _ => KvMenuTarget::Key,
                 };
-                let position = self.keyboard_menu_position(target);
+                let position = self.keyboard_menu_position(target, window);
                 self.open_context_menu(target, position, window, cx);
                 true
             }

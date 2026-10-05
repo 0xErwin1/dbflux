@@ -109,7 +109,7 @@ fn toggle_group<const N: usize>(
 }
 
 /// Height of a toggle segment (the 24 px segments of P1Schema).
-const SEGMENT_HEIGHT: Pixels = SchemaMetrics::TOGGLE_HEIGHT;
+const SEGMENT_HEIGHT: Rems = SchemaMetrics::TOGGLE_HEIGHT;
 
 /// Longest type name shown in a column row before it is cut short.
 ///

@@ -426,8 +426,10 @@ impl LoginModal {
                                 .font_weight(FontWeight::BLACK)
                                 .text_size(ModalMetrics::DEVICE_CODE_FONT)
                                 .letter_spacing(
-                                    ModalMetrics::DEVICE_CODE_FONT
-                                        * ModalMetrics::DEVICE_CODE_TRACKING_EM,
+                                    dbflux_components::fonts::ui_px(
+                                        cx,
+                                        ModalMetrics::DEVICE_CODE_FONT,
+                                    ) * ModalMetrics::DEVICE_CODE_TRACKING_EM,
                                 )
                                 .text_color(ChromeColors::strong(theme))
                                 .child(code),

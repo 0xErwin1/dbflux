@@ -51,7 +51,7 @@ pub fn render_group_by(
 
         if let Some(col_input) = gb_col_inputs.get(i).cloned() {
             row_div = row_div.child(
-                crate::completion_support::single_line_completion_editor(&col_input)
+                crate::completion_support::single_line_completion_editor(&col_input, cx)
                     .flex_1()
                     .min_w(gpui::px(0.0))
                     .w_full(),
@@ -142,7 +142,7 @@ pub fn render_group_by(
                         div().flex_1().min_w(gpui::px(0.0)),
                     )
                     .child(
-                        crate::completion_support::single_line_completion_editor(&col_input)
+                        crate::completion_support::single_line_completion_editor(&col_input, cx)
                             .w_full(),
                     ),
                 );

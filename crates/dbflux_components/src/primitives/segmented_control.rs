@@ -256,6 +256,7 @@ impl RenderOnce for SegmentedControl {
 mod tests {
     use super::*;
     use crate::primitives::{FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR};
+    use crate::tokens::BASE_REM;
     use gpui::{
         Context, Entity, FocusHandle, Modifiers, Render, TestAppContext, VisualTestContext, point,
         px,
@@ -356,7 +357,10 @@ mod tests {
             .debug_bounds("segments")
             .expect("the control is laid out");
 
-        assert_eq!(track.size.height, Fields::HEIGHT);
+        assert_eq!(
+            track.size.height,
+            Fields::HEIGHT.to_pixels(gpui::px(BASE_REM))
+        );
     }
 
     #[gpui::test]
