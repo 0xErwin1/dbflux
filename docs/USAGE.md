@@ -27,6 +27,8 @@ launch to your first query; otherwise pick the page for what you are doing.
   documents.
 - [CSV and TSV Files](CSV_FILES.md) — opening, editing, and saving delimited
   files as a table or as text.
+- [Parquet Files](PARQUET_FILES.md) — reading Parquet files as a read-only,
+  paged table and inspecting their columns.
 - [Charts](CHARTS.md) and [Dashboards](DASHBOARDS.md) — charting results and
   building dashboards.
 - [Keyboard Reference](KEYBOARD.md) — every default binding, including Vim mode.
