@@ -2061,10 +2061,7 @@ impl DataGridPanel {
                         V::Null => "null".to_string(),
                         V::Bool(b) => b.to_string(),
                         V::Int(i) => i.to_string(),
-                        V::Float(f) => format!("{:.3}", f)
-                            .trim_end_matches('0')
-                            .trim_end_matches('.')
-                            .to_string(),
+                        V::Float(f) => format_inspector_float(*f),
                         V::Text(s) | V::Json(s) | V::Decimal(s) | V::ObjectId(s) => s.clone(),
                         V::Bytes(b) => format!("<{} bytes>", b.len()),
                         V::DateTime(dt) => dt.to_rfc3339(),
@@ -3875,6 +3872,20 @@ impl DataGridPanel {
     }
 }
 
+/// Float cell as the point inspector lists it: up to three decimals with
+/// trailing zeros and a bare decimal point trimmed. A value that rounds to
+/// zero reads `0`, never `-0`.
+fn format_inspector_float(value: f64) -> String {
+    let formatted = format!("{:.3}", value);
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+
+    if trimmed == "-0" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn format_hex_dump(data: &[u8]) -> String {
     const BYTES_PER_LINE: usize = 16;
 
@@ -3932,6 +3943,16 @@ fn format_hex_dump(data: &[u8]) -> String {
 mod tests {
     use super::DataGridContentMode;
     use crate::data_view::DataViewMode;
+
+    #[test]
+    fn inspector_floats_trim_trailing_zeros_and_never_read_negative_zero() {
+        assert_eq!(super::format_inspector_float(21.0), "21");
+        assert_eq!(super::format_inspector_float(12.25), "12.25");
+        assert_eq!(super::format_inspector_float(-7.5), "-7.5");
+        assert_eq!(super::format_inspector_float(0.0), "0");
+        assert_eq!(super::format_inspector_float(-0.0), "0");
+        assert_eq!(super::format_inspector_float(-0.0004), "0");
+    }
 
     #[test]
     fn table_mode_with_columns_and_zero_rows_prefers_table_content() {
