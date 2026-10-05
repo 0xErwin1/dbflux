@@ -2142,6 +2142,9 @@ impl Connection for MongoConnection {
                     .to_string(),
             ));
         }
+        // The script ceiling is checked by DBFlux per operation, not by the
+        // server, so it does not count as database-enforced read-only mode.
+        req.refuse_read_only_enforcement("MongoDB")?;
 
         self.cancelled.store(false, Ordering::SeqCst);
 

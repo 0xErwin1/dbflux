@@ -941,7 +941,15 @@ static FAKE_CLICKHOUSE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     }),
     mutation: None,
     ddl: None,
-    transactions: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: Vec::new(),
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
     limits: None,
     ssl_modes: None,
     ssl_cert_fields: None,
@@ -1501,7 +1509,7 @@ mod tests {
         assert!(!metadata.syntax.as_ref().expect("syntax").supports_schemas);
         assert!(metadata.query.is_some());
         assert!(metadata.mutation.is_none());
-        assert!(metadata.transactions.is_none());
+        assert!(metadata.enforces_read_only());
     }
 
     #[test]

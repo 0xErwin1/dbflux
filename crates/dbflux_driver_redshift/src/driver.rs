@@ -8,9 +8,9 @@ use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DeploymentClass, DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldKind,
     FormSection, FormTab, FormValues, Icon, OrderByMode, PaginationStyle, PlaceholderStyle,
-    QueryCapabilities, QueryLanguage, SshTunnelConfig, SyntaxInfo, TransferFamily, WhereOperator,
-    field_password, field_required, field_use_uri, ssh_tab, when_checked, when_unchecked,
-    with_default, with_help,
+    QueryCapabilities, QueryLanguage, SshTunnelConfig, SyntaxInfo, TransactionCapabilities,
+    TransferFamily, WhereOperator, field_password, field_required, field_use_uri, ssh_tab,
+    when_checked, when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use postgres::Config;
@@ -110,7 +110,17 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     }),
     mutation: None,
     ddl: None,
-    transactions: None,
+    // DBFlux runs no user transactions on Redshift; declared only so callers
+    // can see that `ReadOnlyEnforcement::Required` runs in `BEGIN READ ONLY`.
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: Vec::new(),
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
     limits: None,
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {

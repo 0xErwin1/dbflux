@@ -155,7 +155,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         // transaction-control classifier before they reach the server.
         supports_savepoints: false,
         supports_nested_transactions: false,
-        supports_read_only: true,
+        supports_read_only: false,
         supports_deferrable: true,
     }),
     limits: Some(DriverLimits {

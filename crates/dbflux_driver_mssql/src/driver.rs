@@ -1950,6 +1950,8 @@ impl Connection for MssqlConnection {
                 "SQL Server: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
             ));
         }
+        // SQL Server has no read-only transaction mode to apply per request.
+        req.refuse_read_only_enforcement("SQL Server")?;
 
         if req.limit.is_some()
             && let Some(source) = req
@@ -6861,6 +6863,25 @@ mod query_safety_tests {
     // The connection is built with no client: only the preflight paths can
     // succeed against it, which is exactly the observable seam this proof
     // needs — no container required.
+    #[test]
+    fn mssql_refuses_read_only_enforcement_before_the_client_lock() {
+        let connection = lockless_connection();
+        connection
+            .poisoned
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(!connection.metadata().enforces_read_only());
+
+        let request = QueryRequest::new("SELECT 1")
+            .with_read_only(dbflux_core::ReadOnlyEnforcement::Required);
+        let outcome = connection.execute(&request);
+
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "expected NotSupported, got {outcome:?}"
+        );
+    }
+
     fn lockless_connection() -> MssqlConnection {
         MssqlConnection {
             inner: Arc::new(Mutex::new(MssqlConnectionInner {

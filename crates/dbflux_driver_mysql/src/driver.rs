@@ -2118,6 +2118,22 @@ impl Connection for MysqlConnection {
             }
         }
 
+        if req.read_only.is_required() {
+            if let Some(
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                | ExecutionSourceContext::InstanceInspectorQuery { .. },
+            ) = req
+                .execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.source.as_ref())
+            {
+                return Err(DbError::NotSupported(
+                    "MySQL/MariaDB: read-only enforcement cannot be applied to an instance catalog query; the request was rejected before execution".to_string(),
+                ));
+            }
+            ensure_read_only_statements(&QueryLanguage::Sql.split_statements(&req.sql))?;
+        }
+
         self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
@@ -2174,6 +2190,17 @@ impl Connection for MysqlConnection {
         }
 
         let statements = QueryLanguage::Sql.split_statements(&req.sql);
+
+        if req.read_only.is_required() {
+            return mysql_execute_read_only(
+                &mut state.conn,
+                &req.sql,
+                &statements,
+                start,
+                &self.cancelled,
+                req.limit,
+            );
+        }
 
         let in_transaction_before = if statements
             .iter()
@@ -3001,6 +3028,162 @@ fn mysql_execute_request(
     match limit {
         Some(limit) => mysql_execute_bounded(conn, sql, &[], start, cancelled, limit),
         None => mysql_execute_one_statement(conn, sql, start, cancelled),
+    }
+}
+
+/// Leading keywords of the statements a read-only request may contain.
+///
+/// None of them can commit the transaction or write outside it: DDL, `LOCK`,
+/// `SET autocommit`, transaction control and `CALL` (a procedure may `COMMIT`)
+/// all end MySQL's read-only transaction or bypass it, so they are refused
+/// instead of being left for the server, which would run them read-write.
+/// Data changes inside an accepted statement, such as a CTE `DELETE` or
+/// `EXPLAIN ANALYZE DELETE`, are refused by the server itself.
+const READ_ONLY_LEADING_KEYWORDS: &[&str] = &[
+    "SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "TABLE", "VALUES", "HELP",
+];
+
+/// Refuses a read-only request containing a statement that could end the
+/// read-only transaction or write a file on the server, before anything runs.
+fn ensure_read_only_statements(statements: &[String]) -> Result<(), DbError> {
+    for statement in statements {
+        let stripped = dbflux_core::strip_leading_comments(statement).trim_start();
+        let first_word = stripped
+            .split(|character: char| !character.is_ascii_alphabetic())
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+
+        let allowed =
+            stripped.starts_with('(') || READ_ONLY_LEADING_KEYWORDS.contains(&first_word.as_str());
+        if !allowed {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: a read-only request may only contain SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, TABLE or VALUES statements; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        if writes_server_file(stripped) {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: SELECT ... INTO OUTFILE or DUMPFILE writes a file on the server, which a read-only transaction does not prevent; the request was rejected before execution".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether `statement` contains `INTO OUTFILE` or `INTO DUMPFILE` outside
+/// string literals, quoted identifiers and comments.
+fn writes_server_file(statement: &str) -> bool {
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut characters = statement.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        match character {
+            '\'' | '"' | '`' => {
+                push_word(&mut words, &mut current);
+                let quote = character;
+                while let Some(inner) = characters.next() {
+                    if inner == '\\' && quote != '`' {
+                        characters.next();
+                    } else if inner == quote {
+                        if characters.peek() == Some(&quote) {
+                            characters.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            '#' => {
+                push_word(&mut words, &mut current);
+                for inner in characters.by_ref() {
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+            }
+            '-' if characters.peek() == Some(&'-') => {
+                push_word(&mut words, &mut current);
+                for inner in characters.by_ref() {
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+            }
+            '/' if characters.peek() == Some(&'*') => {
+                push_word(&mut words, &mut current);
+                characters.next();
+                let mut previous = '\0';
+                for inner in characters.by_ref() {
+                    if previous == '*' && inner == '/' {
+                        break;
+                    }
+                    previous = inner;
+                }
+            }
+            character if character.is_ascii_alphanumeric() || character == '_' => {
+                current.push(character.to_ascii_uppercase());
+            }
+            _ => push_word(&mut words, &mut current),
+        }
+    }
+    push_word(&mut words, &mut current);
+
+    words.windows(2).any(|pair| {
+        matches!(pair, [into, target] if into == "INTO" && (target == "OUTFILE" || target == "DUMPFILE"))
+    })
+}
+
+fn push_word(words: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        words.push(std::mem::take(current));
+    }
+}
+
+/// Runs a request that requires read-only enforcement inside `START
+/// TRANSACTION READ ONLY` and always rolls it back.
+///
+/// `START TRANSACTION` implicitly commits a transaction that is already open,
+/// so the request is refused unless the session is provably outside one.
+fn mysql_execute_read_only(
+    conn: &mut Conn,
+    sql: &str,
+    statements: &[String],
+    start: Instant,
+    cancelled: &AtomicBool,
+    limit: Option<u32>,
+) -> Result<QueryResult, DbError> {
+    match probe_in_transaction(conn) {
+        Some(false) => {}
+        Some(true) => {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string(),
+            ));
+        }
+        None => {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: read-only execution needs to confirm that no transaction is open, and neither @@in_transaction nor performance_schema.events_transactions_current could be read; the request was rejected before execution".to_string(),
+            ));
+        }
+    }
+
+    conn.query_drop("START TRANSACTION READ ONLY")
+        .map_err(|error| format_mysql_query_error(&error))?;
+
+    let outcome = if statements.len() > 1 {
+        mysql_execute_script(conn, statements, start, cancelled, limit)
+    } else {
+        mysql_execute_request(conn, sql, start, cancelled, limit)
+    };
+
+    match conn.query_drop("ROLLBACK") {
+        Ok(()) => outcome,
+        Err(error) => {
+            log::warn!("[TRANSACTION] ROLLBACK of a read-only request failed: {error}");
+            outcome.and(Err(format_mysql_query_error(&error)))
+        }
     }
 }
 
@@ -5542,5 +5725,61 @@ mod picker_tests {
 
         assert!(mysql.picker_rank() < mariadb.picker_rank());
         assert_eq!(mariadb.picker_hint(), ":3306");
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::ensure_read_only_statements;
+    use dbflux_core::{DbError, QueryLanguage};
+
+    fn check(sql: &str) -> Result<(), DbError> {
+        ensure_read_only_statements(&QueryLanguage::Sql.split_statements(sql))
+    }
+
+    #[test]
+    fn read_only_requests_accept_statements_that_cannot_end_the_transaction() {
+        for sql in [
+            "SELECT 1",
+            "  -- note\n select * from t",
+            "WITH d AS (SELECT id FROM t) DELETE FROM t WHERE id IN (SELECT id FROM d)",
+            "SHOW TABLES",
+            "DESCRIBE t",
+            "DESC t",
+            "EXPLAIN ANALYZE DELETE FROM t",
+            "TABLE t",
+            "VALUES ROW(1)",
+            "(SELECT 1) UNION (SELECT 2)",
+            "SELECT 1; SELECT 2",
+            "SELECT 'INTO OUTFILE' AS text",
+        ] {
+            assert!(
+                check(sql).is_ok(),
+                "{sql} must reach the read-only transaction"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_refuse_statements_that_could_end_the_transaction() {
+        for sql in [
+            "COMMIT; DELETE FROM t",
+            "BEGIN",
+            "START TRANSACTION",
+            "SET autocommit = 1",
+            "CREATE TABLE t2 (id INT)",
+            "DROP TABLE t",
+            "LOCK TABLES t WRITE",
+            "CALL cleanup()",
+            "DELETE FROM t",
+            "SELECT 1; TRUNCATE t",
+            "SELECT * FROM t INTO OUTFILE '/tmp/out.csv'",
+            "SELECT * FROM t INTO DUMPFILE '/tmp/out.bin'",
+        ] {
+            assert!(
+                matches!(check(sql), Err(DbError::NotSupported(_))),
+                "{sql} must be refused"
+            );
+        }
     }
 }

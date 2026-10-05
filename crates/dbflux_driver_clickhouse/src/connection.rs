@@ -21,6 +21,10 @@ use crate::types::{
     parse_clickhouse_type,
 };
 
+/// `readonly = 2` refuses writes and DDL but, unlike `readonly = 1`, still
+/// accepts the per-request settings DBFlux sends with every query.
+const READ_ONLY_SETTINGS: &[(&str, &str)] = &[("readonly", "2")];
+
 pub struct ClickHouseConnection {
     client: Arc<ClickHouseHttpClient>,
     active_database: RwLock<String>,
@@ -53,6 +57,35 @@ impl ClickHouseConnection {
         let response = self
             .client
             .execute(sql, database, timeout, row_limit, row_offset)
+            .map_err(|error| {
+                ClickHouseErrorFormatter::format_http_error(&error).into_query_error()
+            })?;
+        parse_response(response, started.elapsed())
+    }
+
+    /// Runs `sql` with `readonly = 2`, so ClickHouse refuses every write for
+    /// this request while still accepting the settings DBFlux sends with it.
+    /// Each HTTP request is its own query, so no session or transaction state
+    /// carries over from earlier requests.
+    fn execute_sql_read_only(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        timeout: Option<Duration>,
+        row_limit: Option<u32>,
+        row_offset: Option<u32>,
+    ) -> Result<QueryResult, DbError> {
+        let started = Instant::now();
+        let response = self
+            .client
+            .execute_with_settings(
+                sql,
+                database,
+                timeout,
+                row_limit,
+                row_offset,
+                READ_ONLY_SETTINGS,
+            )
             .map_err(|error| {
                 ClickHouseErrorFormatter::format_http_error(&error).into_query_error()
             })?;
@@ -243,11 +276,25 @@ impl Connection for ClickHouseConnection {
             ));
         }
 
-        if let Some(source) = request
+        let source = request
             .execution_context
             .as_ref()
-            .and_then(|context| context.source.as_ref())
+            .and_then(|context| context.source.as_ref());
+        if request.read_only.is_required()
+            && matches!(
+                source,
+                Some(
+                    ExecutionSourceContext::InstanceMetricQuery { .. }
+                        | ExecutionSourceContext::InstanceInspectorQuery { .. }
+                )
+            )
         {
+            return Err(DbError::NotSupported(
+                "ClickHouse: read-only enforcement cannot be applied to an instance catalog query; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        if let Some(source) = source {
             match source {
                 ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
                     return crate::instance_catalog::dispatch_metric_series(
@@ -272,6 +319,15 @@ impl Connection for ClickHouseConnection {
         }
         let active_database = self.current_database()?;
         let database = request.database.as_deref().unwrap_or(&active_database);
+        if request.read_only.is_required() {
+            return self.execute_sql_read_only(
+                &request.sql,
+                Some(database),
+                request.statement_timeout,
+                request.limit,
+                request.offset,
+            );
+        }
         self.execute_sql(
             &request.sql,
             Some(database),

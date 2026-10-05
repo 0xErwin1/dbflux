@@ -926,6 +926,17 @@ impl Connection for SqliteConnection {
             #[cfg(test)]
             run_after_execute_lock_hook();
 
+            if req.read_only.is_required() {
+                return execute_query_only(
+                    &conn,
+                    &req.sql,
+                    req.limit,
+                    &bounded_statements,
+                    start,
+                    &self.cancelled,
+                );
+            }
+
             match req.limit {
                 Some(limit) if bounded_statements.len() > 1 => {
                     execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
@@ -1939,6 +1950,119 @@ fn execute_sql(
     }
 
     Ok(primary)
+}
+
+/// Runs a request that requires read-only enforcement under `PRAGMA
+/// query_only`, which makes SQLite refuse every write with `SQLITE_READONLY`.
+///
+/// `query_only` is chosen over a per-statement `sqlite3_stmt_readonly` check
+/// because the engine enforces it for everything a statement reaches,
+/// triggers and attached databases included. Its one escape is a later
+/// statement that turns the pragma off, so the request runs one statement at a
+/// time and the pragma is checked before each one. The previous value is
+/// restored on every exit path.
+///
+/// A transaction the user already opened is refused rather than joined, so
+/// the request never runs where the user expects their own work to continue.
+/// A transaction the request opens itself cannot hold a write and is rolled
+/// back before returning.
+fn execute_query_only(
+    conn: &RusqliteConnection,
+    sql: &str,
+    limit: Option<u32>,
+    bounded_statements: &[&str],
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    if !conn.is_autocommit() {
+        return Err(DbError::NotSupported(
+            "SQLite: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string(),
+        ));
+    }
+
+    let query_only_before = read_query_only(conn)?;
+    set_query_only(conn, true)?;
+
+    let outcome =
+        execute_query_only_statements(conn, sql, limit, bounded_statements, start, cancelled);
+
+    let rollback = if conn.is_autocommit() {
+        Ok(())
+    } else {
+        conn.execute_batch("ROLLBACK")
+            .map_err(|error| format_sqlite_query_error(&error))
+    };
+    let restore = set_query_only(conn, query_only_before);
+
+    let result = outcome?;
+    rollback?;
+    restore?;
+
+    Ok(result)
+}
+
+/// Runs the statements of a query-only request in order, checking before each
+/// one that `query_only` is still on. Bounded requests reuse the statements
+/// the SQLite lexer already split; unbounded ones follow `execute_sql`.
+fn execute_query_only_statements(
+    conn: &RusqliteConnection,
+    sql: &str,
+    limit: Option<u32>,
+    bounded_statements: &[&str],
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let statements: Vec<String> = match limit {
+        Some(_) if bounded_statements.len() > 1 => bounded_statements
+            .iter()
+            .map(|statement| statement.to_string())
+            .collect(),
+        Some(_) => vec![sql.to_string()],
+        None => {
+            let split = QueryLanguage::Sql.split_statements(sql);
+            if split.len() <= 1 {
+                vec![sql.to_string()]
+            } else {
+                split
+            }
+        }
+    };
+
+    let mut remaining_rows = limit;
+    let mut primary: Option<QueryResult> = None;
+
+    for statement in &statements {
+        if !read_query_only(conn)? {
+            return Err(DbError::NotSupported(
+                "SQLite: a read-only request cannot turn off PRAGMA query_only; the remaining statements were not run".to_string(),
+            ));
+        }
+
+        let result = execute_one_statement(conn, statement, remaining_rows, start, cancelled)?;
+
+        if let Some(rows) = remaining_rows.as_mut() {
+            let retained_rows = u32::try_from(result.rows.len()).unwrap_or(u32::MAX);
+            *rows = rows.saturating_sub(retained_rows);
+        }
+
+        match primary.as_mut() {
+            Some(primary) => primary.push_additional_result(result),
+            None => primary = Some(result),
+        }
+    }
+
+    primary.ok_or_else(|| DbError::query_failed("SQLite: the request held no statements"))
+}
+
+fn read_query_only(conn: &RusqliteConnection) -> Result<bool, DbError> {
+    conn.query_row("PRAGMA query_only", [], |row| row.get(0))
+        .map_err(|error| format_sqlite_query_error(&error))
+}
+
+fn set_query_only(conn: &RusqliteConnection, enabled: bool) -> Result<(), DbError> {
+    let value = if enabled { "ON" } else { "OFF" };
+    conn.execute_batch(&format!("PRAGMA query_only = {value}"))
+        .map_err(|error| format_sqlite_query_error(&error))
 }
 
 /// Settles the transaction a failed execution left open on the shared connection.
@@ -3428,5 +3552,152 @@ mod picker_tests {
     #[test]
     fn picker_names_a_file_instead_of_a_port() {
         assert_eq!(SqliteDriver::new().picker_hint(), "file");
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{SqliteConnection, SqliteConnectionState};
+    use dbflux_core::{Connection, DbError, QueryRequest, ReadOnlyEnforcement, Value};
+    use rusqlite::Connection as RusqliteConnection;
+    use std::sync::{Arc, Mutex};
+
+    fn connection_with_one_row() -> (Arc<Mutex<SqliteConnectionState>>, SqliteConnection) {
+        let raw = RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        raw.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1);",
+        )
+        .expect("fixture should load");
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(raw)));
+        let connection = SqliteConnection::for_test(state.clone());
+
+        (state, connection)
+    }
+
+    fn read_only(sql: &str) -> QueryRequest {
+        QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+    }
+
+    fn row_count(state: &Arc<Mutex<SqliteConnectionState>>) -> i64 {
+        state
+            .lock()
+            .expect("state mutex")
+            .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+            .expect("count rows")
+    }
+
+    fn query_only_enabled(state: &Arc<Mutex<SqliteConnectionState>>) -> bool {
+        state
+            .lock()
+            .expect("state mutex")
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .expect("read query_only")
+    }
+
+    #[test]
+    fn sqlite_declares_read_only_enforcement() {
+        let (_state, connection) = connection_with_one_row();
+
+        assert!(connection.metadata().enforces_read_only());
+    }
+
+    #[test]
+    fn a_read_runs_under_read_only_enforcement() {
+        let (state, connection) = connection_with_one_row();
+
+        let result = connection
+            .execute(&read_only("SELECT id FROM items"))
+            .expect("a read should run");
+
+        assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+        assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_write_fails_under_read_only_enforcement_and_the_session_is_restored() {
+        let (state, connection) = connection_with_one_row();
+
+        for sql in [
+            "DELETE FROM items",
+            "WITH doomed AS (SELECT id FROM items) DELETE FROM items WHERE id IN (SELECT id FROM doomed)",
+            "SELECT 1; DELETE FROM items",
+        ] {
+            let outcome = connection.execute(&read_only(sql));
+            assert!(outcome.is_err(), "{sql} must fail, got {outcome:?}");
+            assert_eq!(row_count(&state), 1, "{sql} must not delete the row");
+            assert!(!query_only_enabled(&state), "{sql} left query_only on");
+        }
+
+        let bounded = connection.execute(&read_only("SELECT 1; DELETE FROM items").with_limit(10));
+        assert!(bounded.is_err(), "bounded write must fail, got {bounded:?}");
+        assert_eq!(row_count(&state), 1);
+
+        connection
+            .execute(&QueryRequest::new("DELETE FROM items"))
+            .expect("a write without read-only enforcement still runs");
+        assert_eq!(row_count(&state), 0);
+    }
+
+    #[test]
+    fn turning_query_only_off_inside_the_request_is_refused() {
+        let (state, connection) = connection_with_one_row();
+
+        let outcome = connection.execute(&read_only("PRAGMA query_only = OFF; DELETE FROM items"));
+
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "got {outcome:?}"
+        );
+        assert_eq!(row_count(&state), 1);
+        assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_session_that_already_had_query_only_keeps_it() {
+        let (state, connection) = connection_with_one_row();
+        state
+            .lock()
+            .expect("state mutex")
+            .execute_batch("PRAGMA query_only = ON")
+            .expect("enable query_only");
+
+        connection
+            .execute(&read_only("SELECT id FROM items"))
+            .expect("a read should run");
+
+        assert!(query_only_enabled(&state));
+    }
+
+    #[test]
+    fn read_only_enforcement_is_refused_inside_an_open_transaction() {
+        let (state, connection) = connection_with_one_row();
+        connection
+            .execute(&QueryRequest::new("BEGIN"))
+            .expect("open a user transaction");
+
+        let outcome = connection.execute(&read_only("SELECT id FROM items"));
+
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "got {outcome:?}"
+        );
+        assert!(
+            !state.lock().expect("state mutex").is_autocommit(),
+            "the user's transaction must stay open"
+        );
+        assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_transaction_opened_by_a_read_only_request_is_closed() {
+        let (state, connection) = connection_with_one_row();
+
+        connection
+            .execute(&read_only("BEGIN; SELECT id FROM items"))
+            .expect("a read inside its own transaction should run");
+
+        assert!(state.lock().expect("state mutex").is_autocommit());
+        assert!(!query_only_enabled(&state));
     }
 }

@@ -18,7 +18,7 @@ use dbflux_core::{
     ColumnKind, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, ExecutionContext,
     ExecutionSourceContext,
 };
-use dbflux_core::{QueryRequest, Value};
+use dbflux_core::{QueryRequest, ReadOnlyEnforcement, Value};
 use dbflux_driver_clickhouse::ClickHouseDriver;
 use dbflux_driver_clickhouse::instance_catalog::{METRIC_DEFS, MetricSource};
 use dbflux_test_support::containers::{self, ClickHouseConfig};
@@ -446,6 +446,72 @@ fn clickhouse_metric_raw_names_exist_in_their_system_tables() -> Result<(), DbEr
                 "metric {metric_id} declares raw name '{raw_name}', absent from {table}"
             );
         }
+
+        Ok(())
+    })
+}
+
+fn read_only_request(sql: &str) -> QueryRequest {
+    QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+}
+
+fn read_only_item_count(connection: &dyn Connection) -> Result<usize, DbError> {
+    Ok(connection
+        .execute(&QueryRequest::new("SELECT id FROM dbflux_live_read_only"))?
+        .rows
+        .len())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_read_only_requests_cannot_write() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE dbflux_live_read_only (id UInt64) ENGINE = MergeTree ORDER BY id",
+        ))?;
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            table: "dbflux_live_read_only",
+        };
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO dbflux_live_read_only VALUES (1)",
+        ))?;
+
+        for sql in [
+            "DELETE FROM dbflux_live_read_only WHERE 1 = 1",
+            "INSERT INTO dbflux_live_read_only SELECT id + 1 FROM dbflux_live_read_only",
+            "ALTER TABLE dbflux_live_read_only DELETE WHERE 1 = 1",
+        ] {
+            let error = connection
+                .execute(&read_only_request(sql))
+                .expect_err("a write must fail under readonly = 2");
+            assert!(
+                error.to_string().contains("readonly"),
+                "{sql}: expected a read-only error, got {error}"
+            );
+            assert_eq!(read_only_item_count(connection.as_ref())?, 1, "{sql}");
+        }
+
+        let read =
+            connection.execute(&read_only_request("SELECT id FROM dbflux_live_read_only"))?;
+        assert_eq!(read.rows.len(), 1);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE USER IF NOT EXISTS dbflux_reader IDENTIFIED BY 'reader' SETTINGS readonly = 2",
+        ))?;
+        connection.execute(&QueryRequest::new(format!(
+            "GRANT SELECT ON {}.* TO dbflux_reader",
+            config.database
+        )))?;
+        let reader = connect(&ClickHouseConfig {
+            endpoint: config.endpoint.clone(),
+            user: "dbflux_reader".to_string(),
+            password: "reader".to_string(),
+            database: config.database.clone(),
+        })?;
+        let read = reader.execute(&read_only_request("SELECT id FROM dbflux_live_read_only"))?;
+        assert_eq!(read.rows.len(), 1, "a readonly = 2 user can still read");
 
         Ok(())
     })

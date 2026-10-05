@@ -651,6 +651,9 @@ impl Connection for TursoConnection {
                     .into(),
             ));
         }
+        // Not verified against a server: whether `PRAGMA query_only` holds on
+        // a Hrana stream is unknown, so read-only enforcement is refused.
+        req.refuse_read_only_enforcement("Turso")?;
 
         let start = Instant::now();
         let params = req
