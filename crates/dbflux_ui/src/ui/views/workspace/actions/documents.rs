@@ -37,9 +37,8 @@ impl Workspace {
                 self.open_parquet_file(file, cx);
             }
 
-            // Local files only, so nothing is told of a save to an object.
             Some(FileDocumentFormat::Spreadsheet) => {
-                self.open_spreadsheet_file(file, cx);
+                self.open_spreadsheet_file(file, on_object_saved, cx);
             }
 
             None => {

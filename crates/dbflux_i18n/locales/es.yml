@@ -2064,7 +2064,6 @@ document:
         inside_formula_range: "La celda %{cell} de la hoja %{sheet} está dentro del rango de fórmula %{range}, que solo una aplicación de hojas de cálculo puede editar como un todo."
       open_failed: "No se pudo abrir %{name}"
       sheet_failed: "No se pudo leer la hoja %{sheet} de %{name}"
-      objects_unsupported: "Todavía no se pueden abrir hojas de cálculo guardadas en almacenamiento de objetos. Descarga %{name} y abre la copia local."
       not_a_spreadsheet: "El archivo no es un libro xlsx, xlsm, xls ni ods."
       encrypted: "El libro está cifrado o protegido con una contraseña de apertura, y DBFlux no puede leerlo."
       chart_sheet: "La hoja %{sheet} es una hoja de gráfico y no tiene celdas que mostrar."

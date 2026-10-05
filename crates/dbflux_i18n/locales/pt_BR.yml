@@ -2064,7 +2064,6 @@ document:
         inside_formula_range: "A célula %{cell} da planilha %{sheet} está dentro do intervalo de fórmula %{range}, que só um aplicativo de planilhas consegue editar como um todo."
       open_failed: "Não foi possível abrir %{name}"
       sheet_failed: "Não foi possível ler a planilha %{sheet} de %{name}"
-      objects_unsupported: "Ainda não é possível abrir pastas de trabalho guardadas em armazenamento de objetos. Baixe %{name} e abra a cópia local."
       not_a_spreadsheet: "O arquivo não é uma pasta de trabalho xlsx, xlsm, xls ou ods."
       encrypted: "A pasta de trabalho está criptografada ou protegida por senha de abertura, e o DBFlux não consegue lê-la."
       chart_sheet: "A planilha %{sheet} é uma planilha de gráfico e não tem células para mostrar."

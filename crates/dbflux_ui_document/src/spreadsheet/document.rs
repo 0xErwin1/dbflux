@@ -16,6 +16,12 @@
 //! off the table and keeps them, already turned into the patcher's edits, and
 //! lays them back onto the table when the sheet is shown again. Editing and
 //! saving are in the `editing` and `save` modules.
+//!
+//! An object is read through the live connection of its profile. A store
+//! that reads byte ranges is read by range, as a local file is. An object of
+//! a store that cannot read a byte range is downloaded whole once, after the
+//! user agrees in a prompt that names its size, and every sheet is read from
+//! that copy. Declining closes the tab.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -24,7 +30,10 @@ use std::sync::Arc;
 use dbflux_byte_source::ByteSource;
 use dbflux_components::components::data_table::model::KeyedPendingEdits;
 use dbflux_components::components::data_table::{DataTable, DataTableEvent, DataTableState};
+use dbflux_components::modals::ModalFocus;
+use dbflux_core::Connection;
 use dbflux_spreadsheet::{SheetInfo, SheetKind, SpreadsheetError, SpreadsheetFormat, Workbook};
+use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
@@ -32,13 +41,18 @@ use super::grid_model::{BLANK_SHEET_COLUMNS, FormulaReadout, SheetModel, cell_ad
 use super::input::SheetChanges;
 use crate::dedup::FileDocumentKey;
 use crate::file_edit_lifecycle::FileEditLifecycle;
-use crate::file_source::{FileLocation, LocationSource, SourceVersion, StorageError, open_source};
+use crate::file_source::{
+    DOWNLOAD_IN_MEMORY_LIMIT_BYTES, FileLocation, LocationSource, ObjectReads, SourceVersion,
+    StorageError, download_whole_object, open_source, read_version,
+};
 use crate::handle::DocumentEvent;
+use crate::pane::ObjectSavedCallback;
 use crate::types::{DocumentId, DocumentState};
 
 /// The source a workbook reads through. It is shared because the reader
-/// reads an xlsx or ods package again to find where appended rows go.
-type SheetSource = Arc<LocationSource>;
+/// reads an xlsx or ods package again to find where appended rows go, and a
+/// save of a downloaded object patches the copy it reads.
+pub(super) type SheetSource = Arc<LocationSource>;
 
 pub(super) type OpenWorkbook = Workbook<SheetSource>;
 
@@ -78,6 +92,9 @@ impl From<SpreadsheetError> for OpenError {
 /// What the background open hands to the foreground.
 pub(super) struct OpenedWorkbook {
     workbook: OpenWorkbook,
+
+    /// The bytes the workbook reads.
+    source: SheetSource,
 
     /// The version of the file that was read, which a save checks.
     version: SourceVersion,
@@ -131,6 +148,10 @@ pub(super) struct LoadedWorkbook {
     /// has it and hands it back.
     pub(super) workbook: Option<OpenWorkbook>,
 
+    /// The bytes the workbook reads: the file, the object read by range, or
+    /// the copy of an object downloaded whole.
+    pub(super) source: SheetSource,
+
     pub(super) sheets: Vec<SheetInfo>,
 
     pub(super) format: SpreadsheetFormat,
@@ -160,8 +181,25 @@ pub(super) struct LoadedWorkbook {
 
 pub(super) enum SpreadsheetPhase {
     Loading,
+    /// An object that is only read whole waits for the user to agree to the
+    /// download. Nothing of it was read yet.
+    AwaitingDownload,
     Failed(String),
     Loaded(Box<LoadedWorkbook>),
+}
+
+/// The open question whether to download an object whole.
+pub(super) struct DownloadPrompt {
+    /// The object's size, as `head_object` reports it.
+    size: u64,
+
+    focus: ModalFocus,
+}
+
+impl DownloadPrompt {
+    pub(super) fn focus_mut(&mut self) -> &mut ModalFocus {
+        &mut self.focus
+    }
 }
 
 /// A spreadsheet file, one sheet at a time.
@@ -171,6 +209,26 @@ pub struct SpreadsheetDocument {
     file: FileDocumentKey,
     pub(super) location: FileLocation,
     pub(super) phase: SpreadsheetPhase,
+
+    /// The application state the live connection of an object's profile is
+    /// resolved from, and whose audit log records an object's saves. `None`
+    /// for a local file.
+    pub(super) app_state: Option<Entity<AppStateEntity>>,
+
+    /// How an object is read. `None` for a local file.
+    pub(super) reads: Option<ObjectReads>,
+
+    /// The question whether to download an object whole, while it is open.
+    download_prompt: Option<DownloadPrompt>,
+
+    /// Told the object's key after each save that replaced the object, so
+    /// the object browser that opened it refreshes its view of that object.
+    /// `None` for a local file and for an object opened without one.
+    pub(super) on_object_saved: Option<ObjectSavedCallback>,
+
+    /// The object, as `bucket/key`, whose pending edits the shutdown flush
+    /// dropped instead of uploading them.
+    pub(super) dropped_at_shutdown: Vec<String>,
 
     /// Set when a sheet arrives, so the next render hands the keyboard to
     /// the table if a notice held it.
@@ -191,12 +249,57 @@ impl SpreadsheetDocument {
         let file = FileDocumentKey::Local { path: path.clone() };
         let location = FileLocation::Local { path };
 
+        Self::open(file, location, None, None, cx)
+    }
+
+    /// Opens the object `key` of `bucket` through `connection`, the live
+    /// connection of the profile `profile_id` in `app_state`. Saves go
+    /// through the connection the profile has when they start.
+    ///
+    /// When the store cannot read a byte range of an object, only the
+    /// object's version is read here, and the user is asked whether to
+    /// download it whole. Declining closes the tab.
+    pub fn open_object(
+        app_state: Entity<AppStateEntity>,
+        profile_id: uuid::Uuid,
+        connection: Arc<dyn Connection>,
+        bucket: String,
+        key: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let file = FileDocumentKey::Object {
+            profile_id,
+            bucket: bucket.clone(),
+            key: key.clone(),
+        };
+        let reads = ObjectReads::of(connection.as_ref());
+        let location = FileLocation::Object {
+            connection,
+            bucket,
+            key,
+        };
+
+        Self::open(file, location, Some(app_state), Some(reads), cx)
+    }
+
+    fn open(
+        file: FileDocumentKey,
+        location: FileLocation,
+        app_state: Option<Entity<AppStateEntity>>,
+        reads: Option<ObjectReads>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut document = Self {
             id: DocumentId::new(),
             focus_handle: cx.focus_handle(),
             file,
             location,
             phase: SpreadsheetPhase::Loading,
+            app_state,
+            reads,
+            download_prompt: None,
+            on_object_saved: None,
+            dropped_at_shutdown: Vec::new(),
             pending_table_focus: false,
             saving: false,
             lifecycle: FileEditLifecycle::default(),
@@ -204,6 +307,12 @@ impl SpreadsheetDocument {
 
         document.start_open(cx);
         document
+    }
+
+    /// Sets what is told the object's key after each save that replaces the
+    /// object. Only an object's saves call it.
+    pub fn set_on_object_saved(&mut self, on_saved: ObjectSavedCallback) {
+        self.on_object_saved = Some(on_saved);
     }
 
     pub fn id(&self) -> DocumentId {
@@ -237,7 +346,9 @@ impl SpreadsheetDocument {
         match &self.phase {
             SpreadsheetPhase::Loading => DocumentState::Loading,
             SpreadsheetPhase::Failed(_) => DocumentState::Error,
-            SpreadsheetPhase::Loaded(_) => DocumentState::Clean,
+            SpreadsheetPhase::AwaitingDownload | SpreadsheetPhase::Loaded(_) => {
+                DocumentState::Clean
+            }
         }
     }
 
@@ -305,9 +416,15 @@ impl SpreadsheetDocument {
         }
     }
 
-    /// Gives the keyboard to the table of the shown sheet, or to the document
-    /// while a notice takes its place.
+    /// Gives the keyboard to the download prompt while it is open, to the
+    /// table of the shown sheet, or to the document while a notice takes its
+    /// place.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(prompt) = &mut self.download_prompt {
+            prompt.focus.focus(None, window, cx);
+            return;
+        }
+
         if let Some(shown) = self.shown_sheet() {
             let handle = shown.table_state.read(cx).focus_handle().clone();
             handle.focus(window, cx);
@@ -325,8 +442,114 @@ impl SpreadsheetDocument {
                 SheetPhase::Failed(cause) => Some(cause),
                 _ => None,
             },
-            SpreadsheetPhase::Loading => None,
+            SpreadsheetPhase::Loading | SpreadsheetPhase::AwaitingDownload => None,
         }
+    }
+
+    /// How an object is read, and `None` for a local file.
+    pub fn object_reads(&self) -> Option<ObjectReads> {
+        self.reads
+    }
+
+    /// What the open download prompt asks: the object's name, its size, and
+    /// that all of it is downloaded once. `None` while no prompt is open.
+    pub fn download_prompt_message(&self) -> Option<String> {
+        let prompt = self.download_prompt.as_ref()?;
+
+        Some(crate::labels::parquet_download_body(
+            &self.title(),
+            prompt.size,
+        ))
+    }
+
+    pub(super) fn download_prompt_mut(&mut self) -> Option<&mut DownloadPrompt> {
+        self.download_prompt.as_mut()
+    }
+
+    /// Closes the download prompt and downloads the object whole, then shows
+    /// its first sheet. Does nothing when no prompt is open, and reports a
+    /// profile that is not connected without downloading.
+    pub fn confirm_download(&mut self, cx: &mut Context<Self>) {
+        let Some(mut prompt) = self.download_prompt.take() else {
+            return;
+        };
+
+        prompt.focus.restore(cx);
+
+        let summary = crate::labels::spreadsheet_open_failed_message(&self.title());
+
+        if self.use_live_connection(summary, cx).is_err() {
+            self.phase = SpreadsheetPhase::Failed(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+            return;
+        }
+
+        self.spawn_open(cx);
+    }
+
+    /// Closes the download prompt without downloading. Nothing of the object
+    /// was shown, so the tab asks to be closed: declining the download
+    /// declines the open.
+    pub fn dismiss_download_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(mut prompt) = self.download_prompt.take() else {
+            return;
+        };
+
+        prompt.focus.restore(cx);
+
+        if matches!(self.phase, SpreadsheetPhase::AwaitingDownload) {
+            cx.emit(DocumentEvent::RequestClose);
+        }
+
+        cx.notify();
+    }
+
+    /// Resolves the live connection of an object's profile and makes the
+    /// document's location read through it. A local file has no connection
+    /// and passes.
+    ///
+    /// A profile that is not connected is reported here under `summary`, and
+    /// the caller reads and writes nothing.
+    pub(super) fn use_live_connection(
+        &mut self,
+        summary: String,
+        cx: &mut Context<Self>,
+    ) -> Result<(), ConnectionUnavailable> {
+        let FileDocumentKey::Object { profile_id, .. } = &self.file else {
+            return Ok(());
+        };
+
+        let connection = self.app_state.as_ref().and_then(|app_state| {
+            app_state
+                .read(cx)
+                .connections()
+                .get(profile_id)
+                .map(|connected| connected.connection.clone())
+        });
+
+        let Some(connection) = connection else {
+            report_error(
+                UserFacingError::new(ErrorKind::User, summary).with_cause(dbflux_i18n::t!(
+                    "document.object_browser.error.connection_unavailable"
+                )),
+                cx,
+            );
+
+            return Err(ConnectionUnavailable);
+        };
+
+        if let FileLocation::Object {
+            connection: opened_with,
+            ..
+        } = &mut self.location
+        {
+            *opened_with = connection;
+        }
+
+        Ok(())
     }
 
     /// The sheets of the opened workbook, in workbook order. Empty until the
@@ -452,17 +675,89 @@ impl SpreadsheetDocument {
     // -- Opening -------------------------------------------------------------
 
     /// Shows the loading notice and opens the file on the background
-    /// executor.
+    /// executor. An object that is only read whole has its version read
+    /// first, and the user is asked whether to download it.
     fn start_open(&mut self, cx: &mut Context<Self>) {
+        if self.reads == Some(ObjectReads::Downloaded) {
+            self.phase = SpreadsheetPhase::Loading;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+
+            self.ask_to_download(cx);
+            return;
+        }
+
+        self.spawn_open(cx);
+    }
+
+    /// Reads the object's version on the background executor, for the size
+    /// the download prompt names.
+    fn ask_to_download(&mut self, cx: &mut Context<Self>) {
+        let location = self.location.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { read_version(&location) });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                this.update(cx, |document, cx| document.apply_object_version(result, cx))
+                    .ok();
+            });
+        })
+        .detach();
+    }
+
+    /// Opens the download prompt with the object's size. This is the first
+    /// place a failed version read is caught, so it is reported here and only
+    /// here.
+    fn apply_object_version(
+        &mut self,
+        result: Result<SourceVersion, StorageError>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(version) => {
+                let mut focus = ModalFocus::new(cx);
+                focus.focus_on_next_render();
+
+                self.phase = SpreadsheetPhase::AwaitingDownload;
+                self.download_prompt = Some(DownloadPrompt {
+                    size: version.length(),
+                    focus,
+                });
+            }
+
+            Err(error) => {
+                let error = OpenError::from(error);
+                let summary = crate::labels::spreadsheet_open_failed_message(&self.title());
+                let cause = error.to_string();
+
+                report_error(open_error_to_user_facing(&error, summary), cx);
+
+                self.phase = SpreadsheetPhase::Failed(cause);
+            }
+        }
+
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    /// Shows the loading notice and opens the workbook on the background
+    /// executor, downloading an object that is only read whole.
+    fn spawn_open(&mut self, cx: &mut Context<Self>) {
         self.phase = SpreadsheetPhase::Loading;
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
 
         let location = self.location.clone();
+        let reads = self.reads;
 
         let task = cx
             .background_executor()
-            .spawn(async move { open_workbook(&location, None) });
+            .spawn(async move { read_workbook(&location, reads, None) });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -505,6 +800,7 @@ impl SpreadsheetDocument {
     pub(super) fn install_workbook(&mut self, opened: OpenedWorkbook, cx: &mut Context<Self>) {
         let OpenedWorkbook {
             workbook,
+            source,
             version,
             source_length,
             first_sheet,
@@ -516,6 +812,7 @@ impl SpreadsheetDocument {
             version,
             source_length,
             workbook: Some(workbook),
+            source,
             active_sheet: None,
             sheet: SheetPhase::NoWorksheet,
             read_generation: 0,
@@ -795,16 +1092,51 @@ fn first_sheet(sheets: &[SheetInfo]) -> Option<usize> {
         .or_else(|| sheets.iter().position(is_worksheet))
 }
 
+/// The profile of an object is not connected, which was reported.
+#[derive(Debug)]
+pub(super) struct ConnectionUnavailable;
+
 /// Opens the workbook at `location` and reads one sheet: the worksheet at
-/// `preferred` when there is one, or else the first shown sheet. Blocks on
-/// file I/O and on decoding the sheet.
-pub(super) fn open_workbook(
+/// `preferred` when there is one, or else the first shown sheet. An object
+/// read as `reads` says [`ObjectReads::Downloaded`] is downloaded whole
+/// first, into memory or a temporary file. Blocks on file or network I/O and
+/// on decoding the sheet.
+pub(super) fn read_workbook(
     location: &FileLocation,
+    reads: Option<ObjectReads>,
     preferred: Option<usize>,
 ) -> Result<OpenedWorkbook, OpenError> {
-    let (source, version) = open_source(location)?;
+    let (source, version) = match (location, reads) {
+        (
+            FileLocation::Object {
+                connection,
+                bucket,
+                key,
+            },
+            Some(ObjectReads::Downloaded),
+        ) => download_whole_object(
+            connection.as_ref(),
+            bucket,
+            key,
+            DOWNLOAD_IN_MEMORY_LIMIT_BYTES,
+        )?,
+
+        _ => open_source(location)?,
+    };
+
+    open_workbook_over(source, version, preferred)
+}
+
+/// Opens the workbook `source` reads, `version` of it, and reads one sheet
+/// as [`read_workbook`] does.
+fn open_workbook_over(
+    source: LocationSource,
+    version: SourceVersion,
+    preferred: Option<usize>,
+) -> Result<OpenedWorkbook, OpenError> {
     let source_length = source.byte_length().map_err(StorageError::Read)?;
-    let mut workbook = dbflux_spreadsheet::open(Arc::new(source))?;
+    let source = Arc::new(source);
+    let mut workbook = dbflux_spreadsheet::open(source.clone())?;
 
     let preferred = preferred.filter(|&index| {
         workbook
@@ -819,6 +1151,7 @@ pub(super) fn open_workbook(
 
     Ok(OpenedWorkbook {
         workbook,
+        source,
         version,
         source_length,
         first_sheet,

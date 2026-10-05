@@ -788,9 +788,12 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
 /// through the worksheets; a chart sheet's tab takes no click. Append row is
 /// the table's add-row key (`a a`) and a pane action, and Save is the table's
 /// save key.
+///
+/// An object read whole is downloaded after a prompt (`Modal`): Enter
+/// downloads and Escape declines.
 pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
     name: "spreadsheet file",
-    contexts: &[ContextId::Results, ContextId::DataTable],
+    contexts: &[ContextId::Results, ContextId::DataTable, ContextId::Modal],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
         (
@@ -808,6 +811,15 @@ pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsAddRow),
         ),
         ("spreadsheet-save", KeyboardPath::Command(Command::SaveRow)),
+        (
+            "spreadsheet-download-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "spreadsheet-download-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
     ],
 };
 
