@@ -4205,3 +4205,263 @@ fn the_leader_alone_times_out_without_typing(cx: &mut TestAppContext) {
     );
     assert!(editor.commands().is_empty());
 }
+
+fn read_only_editor<'a>(cx: &'a mut TestAppContext, content: &str) -> Fixture<'a> {
+    open_editor_with(
+        cx,
+        EditorSetup {
+            content,
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    )
+}
+
+#[gpui::test]
+fn open_line_below_keeps_indent_and_terminator_and_undoes_with_typed_text(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("  ab{separator}cd");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(2);
+
+        editor.keys("o");
+        assert_eq!(editor.text(), format!("  ab{separator}  {separator}cd"));
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.cursor(), 4 + separator.len() + 2, "{separator:?}");
+
+        editor.type_text("x");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("  ab{separator}  x{separator}cd"));
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+        editor.keys("u");
+        assert_eq!(editor.text(), content, "one undo step for {separator:?}");
+    }
+}
+
+#[gpui::test]
+fn open_line_above_on_the_first_row_keeps_indent(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("\tab{separator}cd");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(2);
+
+        editor.keys("shift-o");
+        assert_eq!(editor.text(), format!("\t{separator}\tab{separator}cd"));
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.cursor(), 1);
+
+        editor.type_text("x");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("\tx{separator}\tab{separator}cd"));
+
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn open_line_below_the_last_line_with_and_without_a_trailing_newline(cx: &mut TestAppContext) {
+    for (content, cursor, expected, new_cursor) in [
+        ("ab\ncd", 3, "ab\ncd\n", 6),
+        ("ab\r\ncd", 4, "ab\r\ncd\r\n", 8),
+        ("ab\n", 0, "ab\n\n", 3),
+        ("ab", 1, "ab\n", 3),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+
+        editor.keys("o");
+        assert_eq!(editor.text(), expected, "{content:?}");
+        assert_eq!(editor.cursor(), new_cursor, "{content:?}");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+
+        editor.keys("escape u");
+        assert_eq!(editor.text(), content, "{content:?}");
+    }
+}
+
+#[gpui::test]
+fn yank_line_then_put_below_and_above(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one\n  two", true);
+    editor.keys("y y p");
+    assert_eq!(editor.text(), "one\none\n  two");
+    assert_eq!(editor.cursor(), 4);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("u");
+    assert_eq!(editor.text(), "one\n  two");
+
+    let mut editor = open_editor(cx, "one\n  two\nend", true);
+    editor.set_cursor(6);
+    editor.keys("y y shift-p");
+    assert_eq!(editor.text(), "one\n  two\n  two\nend");
+    assert_eq!(editor.cursor(), 6, "first non-blank of the inserted line");
+    editor.keys("u");
+    assert_eq!(editor.text(), "one\n  two\nend");
+}
+
+#[gpui::test]
+fn a_yanked_unterminated_last_line_puts_as_a_whole_line(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("one{separator}two");
+        let mut editor = open_editor(cx, &content, true);
+        let last = 3 + separator.len();
+        editor.set_cursor(last);
+
+        editor.keys("y y");
+        assert_eq!(editor.clipboard_text().as_deref(), Some("two"));
+        editor.keys("p");
+        assert_eq!(
+            editor.text(),
+            format!("one{separator}two{separator}two"),
+            "no stray empty line"
+        );
+        assert_eq!(editor.cursor(), last + 3 + separator.len());
+
+        editor.set_cursor(0);
+        editor.keys("shift-p");
+        assert_eq!(
+            editor.text(),
+            format!("two{separator}one{separator}two{separator}two")
+        );
+        assert_eq!(editor.cursor(), 0);
+    }
+}
+
+#[gpui::test]
+fn yank_word_puts_characterwise_after_and_before_the_cursor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab cd", true);
+    editor.keys("y w");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("ab "));
+
+    editor.keys("p");
+    assert_eq!(editor.text(), "aab b cd");
+    assert_eq!(editor.cursor(), 3, "on the last inserted character");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("u");
+    assert_eq!(editor.text(), "ab cd");
+
+    editor.set_cursor(0);
+    editor.keys("shift-p");
+    assert_eq!(editor.text(), "ab ab cd");
+    assert_eq!(editor.cursor(), 2);
+}
+
+#[gpui::test]
+fn a_count_repeats_the_put_in_one_undo_step(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "x", true);
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("yz".to_string()));
+    editor.keys("3 p");
+    assert_eq!(editor.text(), "xyzyzyz");
+    assert_eq!(editor.cursor(), 6);
+    editor.keys("u");
+    assert_eq!(editor.text(), "x");
+
+    let mut editor = open_editor(cx, "a\nb", true);
+    editor.keys("y y 2 p");
+    assert_eq!(editor.text(), "a\na\na\nb");
+    assert_eq!(editor.cursor(), 2);
+    editor.keys("u");
+    assert_eq!(editor.text(), "a\nb");
+}
+
+#[gpui::test]
+fn external_clipboard_kind_follows_its_trailing_line_break(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab\ncd", true);
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("line\n".to_string()));
+    editor.keys("p");
+    assert_eq!(editor.text(), "ab\nline\ncd");
+    assert_eq!(editor.cursor(), 3);
+
+    let mut editor = open_editor(cx, "ab", true);
+    editor.keys("y y");
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("zz".to_string()));
+    editor.keys("p");
+    assert_eq!(
+        editor.text(),
+        "azzb",
+        "a different clipboard text ignores the remembered linewise yank"
+    );
+}
+
+#[gpui::test]
+fn put_with_an_empty_clipboard_does_nothing(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab", true);
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string(String::new()));
+    editor.keys("p shift-p ctrl-shift-v");
+    assert_eq!(editor.text(), "ab");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn put_and_open_line_do_nothing_in_a_read_only_editor(cx: &mut TestAppContext) {
+    let mut editor = read_only_editor(cx, "ab\ncd");
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("X\n".to_string()));
+
+    editor.keys("p shift-p ctrl-shift-v o");
+    assert_eq!(editor.text(), "ab\ncd");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("shift-o");
+    assert_eq!(editor.text(), "ab\ncd");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("i ctrl-shift-v");
+    assert_eq!(editor.text(), "ab\ncd");
+}
+
+#[gpui::test]
+fn ctrl_shift_v_puts_before_the_cursor_in_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab", true);
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("XY".to_string()));
+    editor.set_cursor(1);
+
+    editor.keys("ctrl-shift-v");
+    assert_eq!(editor.text(), "aXYb");
+    assert_eq!(editor.cursor(), 2);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("ctrl-v");
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::VisualBlock),
+        "ctrl-v stays Visual Block"
+    );
+}
+
+#[gpui::test]
+fn ctrl_shift_v_inserts_the_clipboard_in_insert_and_replace_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab", true);
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("XY".to_string()));
+
+    editor.keys("a ctrl-shift-v");
+    assert_eq!(editor.text(), "aXYb");
+    assert_eq!(editor.cursor(), 3);
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.type_text("z");
+    assert_eq!(editor.text(), "aXYzb");
+    editor.keys("escape");
+
+    let mut editor = open_editor(cx, "ab", true);
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string("XY".to_string()));
+    editor.keys("shift-r ctrl-shift-v");
+    assert_eq!(editor.text(), "XYab");
+    assert_eq!(editor.mode(), Some(VimMode::Replace));
+}
