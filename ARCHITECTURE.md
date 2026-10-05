@@ -493,6 +493,7 @@ crates/
     src/lib.rs              # ProxyTunnelConfig, SOCKS5/HTTP handshake, tunnel loop
   dbflux_ssh/               # SSH tunnel support
   dbflux_byte_source/       # Random-access byte sources for file readers (memory, local file)
+  dbflux_parquet/           # Parquet footer and page-index reads over a byte source (no GPUI)
   dbflux_export/            # Export (CSV, JSON, Text, Binary)
     src/lib.rs              # Shape-based export API and format dispatch
     src/binary.rs           # Binary/hex/base64 exporter

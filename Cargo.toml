@@ -32,6 +32,7 @@ members = [
     "crates/dbflux_transfer",
     "crates/dbflux_byte_source",
     "crates/dbflux_delimited",
+    "crates/dbflux_parquet",
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
     "crates/dbflux_ssm",
@@ -91,6 +92,7 @@ dbflux_proxy = { path = "crates/dbflux_proxy" }
 dbflux_export = { path = "crates/dbflux_export" }
 dbflux_byte_source = { path = "crates/dbflux_byte_source" }
 dbflux_delimited = { path = "crates/dbflux_delimited" }
+dbflux_parquet = { path = "crates/dbflux_parquet" }
 dbflux_ipc = { path = "crates/dbflux_ipc" }
 dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
 dbflux_aws = { path = "crates/dbflux_aws" }
@@ -194,6 +196,20 @@ mlua = "0.11"
 rquickjs = "0.13"
 flate2 = "1"
 zstd = "0.13"
+# Held at 59.3: it builds on Rust 1.85 with the workspace's zstd 0.13, and 60 needs
+# Rust 1.88 and zstd 0.14. The arrow crates must stay on the same version as parquet.
+# Brotli and encryption are left out on purpose: such files are refused with a typed error.
+parquet = { version = "59.3", default-features = false, features = [
+    "arrow",
+    "snap",
+    "zstd",
+    "lz4",
+    "flate2-zlib-rs",
+    "simdutf8",
+] }
+arrow-array = "59.3"
+arrow-schema = "59.3"
+bytes = "1"
 snap = "1"
 lz4_flex = "0.14"
 rmp-serde = "1.3"
