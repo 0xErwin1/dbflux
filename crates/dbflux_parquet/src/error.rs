@@ -34,9 +34,29 @@ pub enum ParquetError {
     #[error("the Parquet file is encrypted, which DBFlux cannot read")]
     Encrypted,
 
-    /// The footer or page index does not decode as valid Parquet metadata.
-    #[error("malformed Parquet metadata: {message}")]
+    /// The footer, page index or column data does not decode as valid
+    /// Parquet; the message is the decoder's own.
+    #[error("malformed Parquet file: {message}")]
     Malformed { message: String },
+
+    /// A row window needs a whole column chunk, because its row group has no
+    /// offset index, and that chunk is larger than the read budget.
+    #[error(
+        "column `{column}` has no page index, so reading any of its rows needs the whole {size}-byte chunk, more than the {limit}-byte limit"
+    )]
+    UnindexedChunkTooLarge {
+        column: String,
+        size: u64,
+        limit: u64,
+    },
+
+    /// A row window was asked for without any column.
+    #[error("no columns were selected to read")]
+    NoColumnsSelected,
+
+    /// A selected column index is not a top-level field of the file.
+    #[error("column {index} does not exist; the file has {column_count} top-level columns")]
+    ColumnOutOfRange { index: usize, column_count: usize },
 }
 
 impl ParquetError {

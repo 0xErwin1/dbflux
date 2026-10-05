@@ -145,7 +145,7 @@ pub fn open<S: ByteSource + ?Sized>(source: &S) -> Result<ParquetFile, ParquetEr
 
 /// Reads `range`, which must lie inside the file, and refuses a result that is
 /// shorter than the range.
-fn read_exact<S: ByteSource + ?Sized>(
+pub(crate) fn read_exact<S: ByteSource + ?Sized>(
     source: &S,
     range: Range<u64>,
 ) -> Result<Vec<u8>, ParquetError> {

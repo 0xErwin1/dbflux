@@ -5,7 +5,6 @@
     clippy::panic
 )]
 
-use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -20,38 +19,8 @@ use parquet::file::metadata::{
 };
 use parquet::file::properties::WriterProperties;
 
+use crate::test_support::CountingSource;
 use crate::{MAX_FOOTER_BYTES, ParquetError, TAIL_READ_BYTES, open};
-
-/// Records every range a reader asks for, in order.
-struct CountingSource<S> {
-    inner: S,
-    requests: RefCell<Vec<Range<u64>>>,
-}
-
-impl<S> CountingSource<S> {
-    fn new(inner: S) -> Self {
-        Self {
-            inner,
-            requests: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn requests(&self) -> Vec<Range<u64>> {
-        self.requests.borrow().clone()
-    }
-}
-
-impl<S: ByteSource> ByteSource for CountingSource<S> {
-    fn byte_length(&self) -> Result<u64, SourceError> {
-        self.inner.byte_length()
-    }
-
-    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError> {
-        self.requests.borrow_mut().push(range.clone());
-
-        self.inner.read_range(range)
-    }
-}
 
 /// Returns one byte less than asked for on every read.
 struct ShortSource(MemorySource);

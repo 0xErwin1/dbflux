@@ -5,6 +5,10 @@
 //! range requests and refuses, with a typed [`ParquetError`], files this build
 //! cannot decode: encrypted files and columns compressed with Brotli or LZO.
 //!
+//! [`read_window`] then decodes a [`RowWindow`] of rows for chosen top-level
+//! columns, reading only the pages that hold those rows when the file has an
+//! offset index.
+//!
 //! ```
 //! use dbflux_byte_source::MemorySource;
 //! use dbflux_parquet::{ParquetError, open};
@@ -14,11 +18,19 @@
 //! assert!(matches!(open(&source), Err(ParquetError::NotParquet { .. })));
 //! ```
 
+mod decode;
 mod error;
 mod footer;
+mod window;
 
+pub use decode::{UNINDEXED_CHUNK_BUDGET, WindowRows, read_window, window_byte_ranges};
 pub use error::ParquetError;
 pub use footer::{MAX_FOOTER_BYTES, ParquetFile, TAIL_READ_BYTES, open};
+pub use window::RowWindow;
 
 #[cfg(test)]
+mod decode_tests;
+#[cfg(test)]
 mod footer_tests;
+#[cfg(test)]
+mod test_support;

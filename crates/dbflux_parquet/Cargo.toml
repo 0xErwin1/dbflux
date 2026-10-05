@@ -13,14 +13,12 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+arrow-array.workspace = true
 arrow-schema.workspace = true
 bytes.workspace = true
 dbflux_byte_source.workspace = true
 parquet.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-arrow-array.workspace = true
 
 [lints]
 workspace = true
