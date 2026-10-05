@@ -30,6 +30,7 @@ members = [
     "crates/dbflux_tunnel_core",
     "crates/dbflux_export",
     "crates/dbflux_transfer",
+    "crates/dbflux_byte_source",
     "crates/dbflux_delimited",
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
@@ -88,6 +89,7 @@ dbflux_driver_turso = { path = "crates/dbflux_driver_turso" }
 dbflux_ssh = { path = "crates/dbflux_ssh" }
 dbflux_proxy = { path = "crates/dbflux_proxy" }
 dbflux_export = { path = "crates/dbflux_export" }
+dbflux_byte_source = { path = "crates/dbflux_byte_source" }
 dbflux_delimited = { path = "crates/dbflux_delimited" }
 dbflux_ipc = { path = "crates/dbflux_ipc" }
 dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
