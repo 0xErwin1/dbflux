@@ -2034,7 +2034,22 @@ document:
     warning:
       cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
   spreadsheet:
+    unsaved_summary: "%{name}의 저장하지 않은 편집"
+    formula_warning:
+      one: "수식 셀 %{count}개가 값으로 바뀝니다"
+      many: "수식 셀 %{count}개가 값으로 바뀝니다"
+    read_only:
+      xls: "이 .xls 파일은 읽기 전용입니다. DBFlux는 .xls 형식을 쓸 수 없습니다. 편집하려면 .xlsx로 저장하세요."
+    action:
+      append_row: "행 추가"
+      save: "저장"
+      saving: "저장 중…"
     error:
+      save_failed: "%{name}을(를) 저장할 수 없습니다"
+      rows_only_at_end: "행은 시트 끝에만 추가할 수 있습니다. 시트 안에서 행을 삽입하거나 삭제하면 수식, 차트, 범위가 가리키는 셀이 이동하므로, 추가한 뒤 아직 저장하지 않은 행만 삭제할 수 있습니다."
+      save_while_reading: "시트를 읽는 중입니다. 시트가 표시되면 다시 저장하세요."
+      input:
+        a1_reference: "시트 %{sheet}의 셀 %{cell}에 A1 형식 참조가 있는 수식이 있습니다. ods 파일은 [.A1] 또는 [.A1:.B3] 같은 OpenFormula 참조를 사용합니다. 수식을 고치거나, 값 앞에 '를 붙여 텍스트로 저장하세요."
       write:
         malformed: "이 파일은 DBFlux가 제자리에서 편집할 수 있는 스프레드시트 패키지가 아니어서 아무것도 저장하지 않았습니다."
         sheet_out_of_range: "저장하려던 시트가 더 이상 파일에 없습니다. 파일을 다시 불러온 뒤 다시 편집하세요."

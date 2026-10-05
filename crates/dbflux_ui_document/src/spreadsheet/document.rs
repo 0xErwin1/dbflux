@@ -1,4 +1,5 @@
-//! The spreadsheet file tab: a workbook shown read-only, one sheet at a time.
+//! The spreadsheet file tab: a workbook shown one sheet at a time, editable
+//! for xlsx, xlsm and ods and read-only for xls.
 //!
 //! Opening runs on the background executor: the file is opened, the format
 //! is recognized from its content, the sheet list is read, and the first
@@ -10,18 +11,28 @@
 //! drops the shown one before the next is read, on the background executor.
 //! The workbook moves into that read and comes back with the result, and a
 //! switch made meanwhile is read once it is back.
+//!
+//! The pending edits of a sheet leave with it: switching sheets lifts them
+//! off the table and keeps them, already turned into the patcher's edits, and
+//! lays them back onto the table when the sheet is shown again. Editing and
+//! saving are in the `editing` and `save` modules.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use dbflux_byte_source::ByteSource;
+use dbflux_components::components::data_table::model::KeyedPendingEdits;
 use dbflux_components::components::data_table::{DataTable, DataTableEvent, DataTableState};
-use dbflux_spreadsheet::{SheetInfo, SheetKind, SpreadsheetError, Workbook};
+use dbflux_spreadsheet::{SheetInfo, SheetKind, SpreadsheetError, SpreadsheetFormat, Workbook};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
-use super::grid_model::{FormulaReadout, SheetModel, cell_address};
+use super::grid_model::{BLANK_SHEET_COLUMNS, FormulaReadout, SheetModel, cell_address};
+use super::input::SheetChanges;
 use crate::dedup::FileDocumentKey;
-use crate::file_source::{FileLocation, LocationSource, StorageError, open_source};
+use crate::file_edit_lifecycle::FileEditLifecycle;
+use crate::file_source::{FileLocation, LocationSource, SourceVersion, StorageError, open_source};
 use crate::handle::DocumentEvent;
 use crate::types::{DocumentId, DocumentState};
 
@@ -29,7 +40,7 @@ use crate::types::{DocumentId, DocumentState};
 /// reads an xlsx or ods package again to find where appended rows go.
 type SheetSource = Arc<LocationSource>;
 
-type OpenWorkbook = Workbook<SheetSource>;
+pub(super) type OpenWorkbook = Workbook<SheetSource>;
 
 /// Why a spreadsheet could not be opened.
 #[derive(Debug)]
@@ -68,6 +79,12 @@ impl From<SpreadsheetError> for OpenError {
 pub(super) struct OpenedWorkbook {
     workbook: OpenWorkbook,
 
+    /// The version of the file that was read, which a save checks.
+    version: SourceVersion,
+
+    /// The length of that version.
+    source_length: u64,
+
     /// The first sheet shown and what reading it gave. `None` when the
     /// workbook has no worksheet.
     first_sheet: Option<(usize, Result<SheetModel, SpreadsheetError>)>,
@@ -79,36 +96,66 @@ pub(super) enum SheetPhase {
     NoWorksheet,
     Reading,
     Failed(String),
-    /// The sheet holds no value or formula.
+    /// The sheet holds no value or formula, and rows cannot be appended to
+    /// it: its format has no writer. An empty sheet that can be edited is
+    /// shown as a table of blank columns instead.
     Empty,
     Shown(Box<ShownSheet>),
 }
 
 /// The resident sheet and the table that shows it.
 pub(super) struct ShownSheet {
-    model: SheetModel,
-    table_state: Entity<DataTableState>,
+    pub(super) model: SheetModel,
+    pub(super) table_state: Entity<DataTableState>,
     table: Entity<DataTable>,
     _subscription: Subscription,
+
+    /// A staged edit emits no event, so the dirty state is worked out again
+    /// whenever the table notifies.
+    _observation: Subscription,
+}
+
+/// The pending edits of a sheet that is not shown.
+pub(super) struct StoredSheetEdits {
+    /// The edits as the table held them, laid back onto it when the sheet
+    /// is shown again.
+    pub(super) table_edits: KeyedPendingEdits,
+
+    /// The same edits as the patcher takes them.
+    pub(super) changes: SheetChanges,
 }
 
 /// An opened workbook.
 pub(super) struct LoadedWorkbook {
     /// The reader. `None` while a sheet is being read: the background read
     /// has it and hands it back.
-    workbook: Option<OpenWorkbook>,
+    pub(super) workbook: Option<OpenWorkbook>,
 
-    sheets: Vec<SheetInfo>,
+    pub(super) sheets: Vec<SheetInfo>,
+
+    pub(super) format: SpreadsheetFormat,
+
+    /// The version of the file the workbook was read from.
+    pub(super) version: SourceVersion,
+
+    /// The length of that version.
+    pub(super) source_length: u64,
 
     /// The sheet selected in the tabs. `None` when the workbook has no
     /// worksheet.
-    active_sheet: Option<usize>,
+    pub(super) active_sheet: Option<usize>,
 
-    sheet: SheetPhase,
+    pub(super) sheet: SheetPhase,
 
     /// Counts the sheet switches. A read carries the count it was started
     /// at, and its result is dropped when another sheet was chosen meanwhile.
     read_generation: u64,
+
+    /// The pending edits of the sheets that are not shown, by sheet index.
+    pub(super) stored_edits: BTreeMap<usize, StoredSheetEdits>,
+
+    /// Whether any sheet has pending edits.
+    pub(super) is_dirty: bool,
 }
 
 pub(super) enum SpreadsheetPhase {
@@ -117,17 +164,23 @@ pub(super) enum SpreadsheetPhase {
     Loaded(Box<LoadedWorkbook>),
 }
 
-/// A spreadsheet file opened read-only, one sheet at a time.
+/// A spreadsheet file, one sheet at a time.
 pub struct SpreadsheetDocument {
     id: DocumentId,
     focus_handle: FocusHandle,
     file: FileDocumentKey,
-    location: FileLocation,
-    phase: SpreadsheetPhase,
+    pub(super) location: FileLocation,
+    pub(super) phase: SpreadsheetPhase,
 
     /// Set when a sheet arrives, so the next render hands the keyboard to
     /// the table if a notice held it.
     pending_table_focus: bool,
+
+    /// Whether a save runs.
+    pub(super) saving: bool,
+
+    /// What the close and quit flows asked of the next save.
+    pub(super) lifecycle: FileEditLifecycle,
 }
 
 impl EventEmitter<DocumentEvent> for SpreadsheetDocument {}
@@ -145,6 +198,8 @@ impl SpreadsheetDocument {
             location,
             phase: SpreadsheetPhase::Loading,
             pending_table_focus: false,
+            saving: false,
+            lifecycle: FileEditLifecycle::default(),
         };
 
         document.start_open(cx);
@@ -175,6 +230,10 @@ impl SpreadsheetDocument {
     }
 
     pub fn state(&self) -> DocumentState {
+        if self.is_dirty() {
+            return DocumentState::Modified;
+        }
+
         match &self.phase {
             SpreadsheetPhase::Loading => DocumentState::Loading,
             SpreadsheetPhase::Failed(_) => DocumentState::Error,
@@ -208,10 +267,11 @@ impl SpreadsheetDocument {
         dbflux_app::keymap::ContextId::Results
     }
 
-    /// Table navigation runs inside the embedded `DataTable` through its own
-    /// key context. The commands of the document are the next and the
-    /// previous sheet (`NextResultTab` and `PrevResultTab`), which skip chart
-    /// sheets and wrap around.
+    /// Table navigation and cell editing run inside the embedded `DataTable`
+    /// through its own key context. The commands of the document are the
+    /// next and the previous sheet (`NextResultTab` and `PrevResultTab`),
+    /// which skip chart sheets and wrap around, appending a row
+    /// (`ResultsAddRow`) and saving (`SaveRow`, `SaveQuery`).
     pub fn dispatch_command(
         &mut self,
         command: dbflux_app::keymap::Command,
@@ -228,6 +288,16 @@ impl SpreadsheetDocument {
 
             Command::PrevResultTab if self.loaded().is_some() => {
                 self.step_sheet(false, window, cx);
+                true
+            }
+
+            Command::ResultsAddRow if self.is_editable_format() => {
+                self.append_row(cx);
+                true
+            }
+
+            Command::SaveRow | Command::SaveQuery if self.is_editable_format() => {
+                self.save(cx);
                 true
             }
 
@@ -275,7 +345,8 @@ impl SpreadsheetDocument {
         self.shown_sheet().map(|shown| &shown.table_state)
     }
 
-    /// Whether the selected sheet was read and holds nothing.
+    /// Whether the selected sheet was read, holds nothing, and is shown as a
+    /// notice because rows cannot be appended to it.
     pub fn is_empty_sheet(&self) -> bool {
         self.loaded()
             .is_some_and(|loaded| matches!(loaded.sheet, SheetPhase::Empty))
@@ -289,14 +360,21 @@ impl SpreadsheetDocument {
 
     /// The address of the selected cell and what the formula readout says
     /// about it. `None` while no sheet is shown or no cell is selected.
+    ///
+    /// A cell with a staged value shows the formula typed into it, or no
+    /// formula when the value replaces one.
     pub(super) fn selected_formula(&self, cx: &App) -> Option<(String, FormulaReadout)> {
         let shown = self.shown_sheet()?;
-        let active = shown.table_state.read(cx).selection().active?;
+        let state = shown.table_state.read(cx);
+        let active = state.selection().active?;
 
-        Some((
-            cell_address(active.row, active.col),
-            shown.model.formula_at(active.row, active.col),
-        ))
+        let readout = match super::input::staged_text(state.edit_buffer(), active.row, active.col) {
+            Some(text) if text.starts_with('=') => FormulaReadout::Formula(text.into()),
+            Some(_) => FormulaReadout::NoFormula,
+            None => shown.model.formula_at(active.row, active.col),
+        };
+
+        Some((cell_address(active.row, active.col), readout))
     }
 
     /// The sheet count, the shown sheet's size and that it is held in
@@ -344,21 +422,27 @@ impl SpreadsheetDocument {
         std::mem::take(&mut self.pending_table_focus)
     }
 
-    fn loaded(&self) -> Option<&LoadedWorkbook> {
+    /// Whether the workbook's format has a writer: xlsx, xlsm and ods.
+    pub(super) fn is_editable_format(&self) -> bool {
+        self.loaded()
+            .is_some_and(|loaded| loaded.format != SpreadsheetFormat::Xls)
+    }
+
+    pub(super) fn loaded(&self) -> Option<&LoadedWorkbook> {
         match &self.phase {
             SpreadsheetPhase::Loaded(loaded) => Some(loaded),
             _ => None,
         }
     }
 
-    fn loaded_mut(&mut self) -> Option<&mut LoadedWorkbook> {
+    pub(super) fn loaded_mut(&mut self) -> Option<&mut LoadedWorkbook> {
         match &mut self.phase {
             SpreadsheetPhase::Loaded(loaded) => Some(loaded),
             _ => None,
         }
     }
 
-    fn shown_sheet(&self) -> Option<&ShownSheet> {
+    pub(super) fn shown_sheet(&self) -> Option<&ShownSheet> {
         match &self.loaded()?.sheet {
             SheetPhase::Shown(shown) => Some(shown),
             _ => None,
@@ -378,7 +462,7 @@ impl SpreadsheetDocument {
 
         let task = cx
             .background_executor()
-            .spawn(async move { open_workbook(&location) });
+            .spawn(async move { open_workbook(&location, None) });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -400,28 +484,7 @@ impl SpreadsheetDocument {
         cx: &mut Context<Self>,
     ) {
         match result {
-            Ok(opened) => {
-                let OpenedWorkbook {
-                    workbook,
-                    first_sheet,
-                } = opened;
-
-                let mut loaded = LoadedWorkbook {
-                    sheets: workbook.sheets().to_vec(),
-                    workbook: Some(workbook),
-                    active_sheet: None,
-                    sheet: SheetPhase::NoWorksheet,
-                    read_generation: 0,
-                };
-
-                if let Some((index, sheet)) = first_sheet {
-                    loaded.active_sheet = Some(index);
-                    self.phase = SpreadsheetPhase::Loaded(Box::new(loaded));
-                    self.show_sheet_outcome(sheet, cx);
-                } else {
-                    self.phase = SpreadsheetPhase::Loaded(Box::new(loaded));
-                }
-            }
+            Ok(opened) => self.install_workbook(opened, cx),
 
             Err(error) => {
                 let summary = crate::labels::spreadsheet_open_failed_message(&self.title());
@@ -435,6 +498,38 @@ impl SpreadsheetDocument {
 
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
+    }
+
+    /// Shows an opened workbook, replacing whatever the document showed,
+    /// pending edits included.
+    pub(super) fn install_workbook(&mut self, opened: OpenedWorkbook, cx: &mut Context<Self>) {
+        let OpenedWorkbook {
+            workbook,
+            version,
+            source_length,
+            first_sheet,
+        } = opened;
+
+        let mut loaded = LoadedWorkbook {
+            sheets: workbook.sheets().to_vec(),
+            format: workbook.format(),
+            version,
+            source_length,
+            workbook: Some(workbook),
+            active_sheet: None,
+            sheet: SheetPhase::NoWorksheet,
+            read_generation: 0,
+            stored_edits: BTreeMap::new(),
+            is_dirty: false,
+        };
+
+        if let Some((index, sheet)) = first_sheet {
+            loaded.active_sheet = Some(index);
+            self.phase = SpreadsheetPhase::Loaded(Box::new(loaded));
+            self.show_sheet_outcome(sheet, cx);
+        } else {
+            self.phase = SpreadsheetPhase::Loaded(Box::new(loaded));
+        }
     }
 
     // -- Sheets --------------------------------------------------------------
@@ -473,14 +568,19 @@ impl SpreadsheetDocument {
         }
     }
 
-    /// Shows the sheet at `index`: the shown sheet is dropped and the new one
-    /// is read on the background executor. Does nothing for the sheet already
-    /// selected and for a sheet without cells.
+    /// Shows the sheet at `index`: the pending edits of the shown sheet are
+    /// kept, the sheet is dropped and the new one is read on the background
+    /// executor. Does nothing for the sheet already selected, for a sheet
+    /// without cells, and while a save runs, which reads the file again.
     ///
     /// The keyboard moves to the document while the sheet is read, and to
     /// the new table once it arrives.
     pub fn select_sheet(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(loaded) = self.loaded_mut() else {
+        if self.saving {
+            return;
+        }
+
+        let Some(loaded) = self.loaded() else {
             return;
         };
 
@@ -492,6 +592,12 @@ impl SpreadsheetDocument {
         if !selectable || loaded.active_sheet == Some(index) {
             return;
         }
+
+        self.store_shown_edits(cx);
+
+        let Some(loaded) = self.loaded_mut() else {
+            return;
+        };
 
         loaded.active_sheet = Some(index);
         loaded.sheet = SheetPhase::Reading;
@@ -573,6 +679,10 @@ impl SpreadsheetDocument {
     /// Shows a sheet read for the selected sheet, or its failure. This is the
     /// first place a failed sheet read is caught, so it is reported here and
     /// only here.
+    ///
+    /// An empty sheet of a format with a writer is shown as a table of
+    /// [`BLANK_SHEET_COLUMNS`] blank columns, so rows can be appended to it.
+    /// A sheet that holds values keeps its own width.
     fn show_sheet_outcome(
         &mut self,
         result: Result<SheetModel, SpreadsheetError>,
@@ -581,12 +691,23 @@ impl SpreadsheetDocument {
         let title = self.title();
         let sheet_name = self.active_sheet_name().unwrap_or_default().to_string();
 
+        let editable = self.is_editable_format();
+
         let sheet = match result {
-            Ok(model) if model.is_empty() => SheetPhase::Empty,
+            Ok(model) if model.is_empty() => match model.append_row() {
+                Some(append_row) if editable => {
+                    self.pending_table_focus = true;
+                    let blank =
+                        SheetModel::blank(model.row_count(), BLANK_SHEET_COLUMNS, append_row);
+                    SheetPhase::Shown(Box::new(Self::build_shown(blank, editable, cx)))
+                }
+
+                _ => SheetPhase::Empty,
+            },
 
             Ok(model) => {
                 self.pending_table_focus = true;
-                SheetPhase::Shown(Box::new(Self::build_shown(model, cx)))
+                SheetPhase::Shown(Box::new(Self::build_shown(model, editable, cx)))
             }
 
             Err(error) => {
@@ -605,33 +726,49 @@ impl SpreadsheetDocument {
         if let Some(loaded) = self.loaded_mut() {
             loaded.sheet = sheet;
         }
+
+        self.restore_stored_edits(cx);
+        self.refresh_dirty(cx);
     }
 
-    fn build_shown(model: SheetModel, cx: &mut Context<Self>) -> ShownSheet {
+    /// Builds the table of `model`, editable by position when `editable`.
+    fn build_shown(model: SheetModel, editable: bool, cx: &mut Context<Self>) -> ShownSheet {
         let table_model = model.table_model();
-        let table_state = cx.new(|cx| DataTableState::new(table_model, cx));
+        let table_state = cx.new(|cx| {
+            let mut state = DataTableState::new(table_model, cx);
+            state.set_positional_editing(editable);
+            state.set_insertable(editable);
+            state
+        });
         let table = cx.new(|cx| DataTable::new("spreadsheet-table", table_state.clone(), cx));
         let subscription = Self::subscribe_to_table(&table_state, cx);
+        let observation = cx.observe(&table_state, |this, _, cx| {
+            this.refresh_dirty(cx);
+            cx.notify();
+        });
 
         ShownSheet {
             model,
             table_state,
             table,
             _subscription: subscription,
+            _observation: observation,
         }
     }
 
     /// The rows are the sheet's rows in sheet order, which is what their
     /// addresses mean, so sorting them is refused: a header click sets the
     /// sort indicator before it reports the change, and the indicator is
-    /// cleared again here. A selection change redraws the formula readout.
+    /// cleared again here. A selection change redraws the formula readout,
+    /// and the row operations and saves the table asks for are the
+    /// document's.
     fn subscribe_to_table(
         table_state: &Entity<DataTableState>,
         cx: &mut Context<Self>,
     ) -> Subscription {
         cx.subscribe(
             table_state,
-            |_this, table_state, event: &DataTableEvent, cx| match event {
+            |this, table_state, event: &DataTableEvent, cx| match event {
                 DataTableEvent::SortChanged(Some(_)) => {
                     table_state.update(cx, |state, cx| {
                         state.clear_sort_without_emit();
@@ -641,7 +778,7 @@ impl SpreadsheetDocument {
 
                 DataTableEvent::SelectionChanged(_) => cx.notify(),
 
-                _ => {}
+                event => this.handle_table_event(event, cx),
             },
         )
     }
@@ -658,23 +795,38 @@ fn first_sheet(sheets: &[SheetInfo]) -> Option<usize> {
         .or_else(|| sheets.iter().position(is_worksheet))
 }
 
-/// Opens the workbook at `location` and reads its first shown sheet. Blocks
-/// on file I/O and on decoding the sheet.
-fn open_workbook(location: &FileLocation) -> Result<OpenedWorkbook, OpenError> {
-    let (source, _version) = open_source(location)?;
+/// Opens the workbook at `location` and reads one sheet: the worksheet at
+/// `preferred` when there is one, or else the first shown sheet. Blocks on
+/// file I/O and on decoding the sheet.
+pub(super) fn open_workbook(
+    location: &FileLocation,
+    preferred: Option<usize>,
+) -> Result<OpenedWorkbook, OpenError> {
+    let (source, version) = open_source(location)?;
+    let source_length = source.byte_length().map_err(StorageError::Read)?;
     let mut workbook = dbflux_spreadsheet::open(Arc::new(source))?;
 
-    let first_sheet = first_sheet(workbook.sheets())
+    let preferred = preferred.filter(|&index| {
+        workbook
+            .sheets()
+            .get(index)
+            .is_some_and(|sheet| sheet.kind == SheetKind::Worksheet)
+    });
+
+    let first_sheet = preferred
+        .or_else(|| first_sheet(workbook.sheets()))
         .map(|index| (index, workbook.read_sheet(index).map(SheetModel::new)));
 
     Ok(OpenedWorkbook {
         workbook,
+        version,
+        source_length,
         first_sheet,
     })
 }
 
 /// The user-facing error of a failed open. `summary` names the file.
-fn open_error_to_user_facing(error: &OpenError, summary: String) -> UserFacingError {
+pub(super) fn open_error_to_user_facing(error: &OpenError, summary: String) -> UserFacingError {
     match error {
         OpenError::Storage(_) => {
             UserFacingError::new(ErrorKind::Storage, summary).with_cause(error.to_string())

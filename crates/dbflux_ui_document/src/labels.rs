@@ -3132,6 +3132,27 @@ pub(crate) fn spreadsheet_loading_label(file_name: &str) -> String {
     dbflux_i18n::t!("document.spreadsheet.loading", name = file_name)
 }
 
+/// Summary of the error reported when a save of a spreadsheet did not
+/// replace the file.
+pub(crate) fn spreadsheet_save_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.error.save_failed", name = file_name)
+}
+
+/// Summary of a spreadsheet's unsaved edits, for the tab's dirty-dot
+/// tooltip and the unsaved-changes dialog.
+pub(crate) fn spreadsheet_unsaved_summary(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.unsaved_summary", name = file_name)
+}
+
+/// The warning shown while pending edits replace formula cells with values.
+pub(crate) fn spreadsheet_formula_warning(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.spreadsheet.formula_warning.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.formula_warning.many", count = count)
+    }
+}
+
 /// Notice shown while one sheet of a spreadsheet is read.
 pub(crate) fn spreadsheet_reading_sheet_label(sheet: &str) -> String {
     dbflux_i18n::t!("document.spreadsheet.reading_sheet", sheet = sheet)
@@ -8163,6 +8184,17 @@ mod tests {
             "document.spreadsheet.summary.columns.one",
             "document.spreadsheet.summary.columns.many",
             "document.spreadsheet.summary.in_memory",
+            "document.spreadsheet.unsaved_summary",
+            "document.spreadsheet.formula_warning.one",
+            "document.spreadsheet.formula_warning.many",
+            "document.spreadsheet.read_only.xls",
+            "document.spreadsheet.action.append_row",
+            "document.spreadsheet.action.save",
+            "document.spreadsheet.action.saving",
+            "document.spreadsheet.error.save_failed",
+            "document.spreadsheet.error.rows_only_at_end",
+            "document.spreadsheet.error.save_while_reading",
+            "document.spreadsheet.error.input.a1_reference",
             "document.spreadsheet.tab.hidden",
             "document.spreadsheet.tab.chart",
             "document.spreadsheet.tab.chart_tooltip",

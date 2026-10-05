@@ -2034,7 +2034,22 @@ document:
     warning:
       cannot_save_in_place: Este archivo no informa fecha de modificación ni etiqueta de contenido, por lo que no se puede guardar en su ubicación.
   spreadsheet:
+    unsaved_summary: "Cambios sin guardar en %{name}"
+    formula_warning:
+      one: "%{count} celda con fórmula se reemplazará por un valor"
+      many: "%{count} celdas con fórmula se reemplazarán por valores"
+    read_only:
+      xls: "Este archivo .xls es de solo lectura: DBFlux no puede escribir el formato .xls. Guárdalo como .xlsx para editarlo."
+    action:
+      append_row: "Agregar fila"
+      save: "Guardar"
+      saving: "Guardando…"
     error:
+      save_failed: "No se pudo guardar %{name}"
+      rows_only_at_end: "Solo se pueden agregar filas al final de una hoja. Insertar o eliminar una fila dentro de una hoja movería las celdas a las que apuntan fórmulas, gráficos y rangos, así que solo se puede eliminar una fila agregada que aún no se guardó."
+      save_while_reading: "Se está leyendo una hoja. Vuelve a guardar cuando se muestre."
+      input:
+        a1_reference: "La celda %{cell} de la hoja %{sheet} tiene una fórmula con una referencia de estilo A1. Un archivo ods usa referencias OpenFormula como [.A1] o [.A1:.B3]. Corrige la fórmula o empieza el valor con ' para guardarlo como texto."
       write:
         malformed: "El archivo no es un paquete de hoja de cálculo que DBFlux pueda editar en su lugar, así que no se guardó nada."
         sheet_out_of_range: "La hoja que se estaba guardando ya no está en el archivo. Recarga el archivo y vuelve a editarlo."

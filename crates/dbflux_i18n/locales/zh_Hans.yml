@@ -2034,7 +2034,22 @@ document:
     warning:
       cannot_save_in_place: 此文件未提供修改时间或内容标签，因此无法原地保存。
   spreadsheet:
+    unsaved_summary: "%{name} 有未保存的编辑"
+    formula_warning:
+      one: "%{count} 个公式单元格将被替换为值"
+      many: "%{count} 个公式单元格将被替换为值"
+    read_only:
+      xls: "此 .xls 文件为只读：DBFlux 无法写入 .xls 格式。请将其另存为 .xlsx 后再编辑。"
+    action:
+      append_row: "追加行"
+      save: "保存"
+      saving: "正在保存…"
     error:
+      save_failed: "无法保存 %{name}"
+      rows_only_at_end: "只能在工作表末尾添加行。在工作表中间插入或删除行会移动公式、图表和区域所指向的单元格，因此只能删除已追加但尚未保存的行。"
+      save_while_reading: "正在读取工作表。工作表显示后请再次保存。"
+      input:
+        a1_reference: "工作表 %{sheet} 的单元格 %{cell} 中的公式含有 A1 样式的引用。ods 文件使用 [.A1] 或 [.A1:.B3] 这样的 OpenFormula 引用。请修改公式，或在值前加上 ' 以文本形式保存。"
       write:
         malformed: "该文件不是 DBFlux 能原地编辑的电子表格包，因此未保存任何内容。"
         sheet_out_of_range: "要保存的工作表已不在文件中。请重新加载文件并重新编辑。"

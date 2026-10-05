@@ -37,7 +37,7 @@ impl Workspace {
                 self.open_parquet_file(file, cx);
             }
 
-            // Read-only in this release, and local files only.
+            // Local files only, so nothing is told of a save to an object.
             Some(FileDocumentFormat::Spreadsheet) => {
                 self.open_spreadsheet_file(file, cx);
             }

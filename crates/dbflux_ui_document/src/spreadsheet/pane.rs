@@ -1,7 +1,9 @@
 //! `PaneHandle` constructor for `SpreadsheetDocument`.
 //!
-//! The document is read-only, so the pane has no save, quit or pending-input
-//! hooks, and it does not take part in the workspace session yet.
+//! The pane carries the close and quit hooks of an editable file: the save
+//! of an interrupted close, the commit of a value still in the cell editor,
+//! the quit check, the save and discard of a confirmed quit, and the save of
+//! the shutdown flush. It does not take part in the workspace session yet.
 
 use super::document::SpreadsheetDocument;
 use crate::dedup::DocumentKey;
@@ -15,7 +17,7 @@ impl SpreadsheetDocument {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::Spreadsheet,
             // render
@@ -60,7 +62,7 @@ impl SpreadsheetDocument {
                 let entity = entity.clone();
                 Box::new(move |cx| entity.read(cx).title())
             },
-            // can_close — nothing is ever unsaved
+            // can_close — unsaved edits are asked about by the workspace
             Box::new(|_cx| true),
             // connection_id — the profile of an object, `None` for a local file
             {
@@ -72,8 +74,11 @@ impl SpreadsheetDocument {
                 let entity = entity.clone();
                 Box::new(move |cx| entity.read(cx).active_context())
             },
-            // change_summary — read-only, never dirty
-            Box::new(|_cx| None),
+            // change_summary — `Some` while there are unsaved edits
+            {
+                let entity = entity.clone();
+                Box::new(move |cx| entity.read(cx).change_summary())
+            },
             // refresh_policy
             {
                 let entity = entity.clone();
@@ -107,6 +112,53 @@ impl SpreadsheetDocument {
                     })
                 })
             },
-        )
+        );
+
+        // The interrupted-close save: the tab closes once the save lands.
+        pane.save_for_close = Some({
+            let entity = entity.clone();
+            Box::new(move |_window, cx| {
+                entity.update(cx, |document, cx| document.save_for_close(cx))
+            })
+        });
+
+        // A value still in the cell editor, committed before a close or a
+        // shutdown reads the pending edits.
+        pane.commit_pending_input = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| entity.update(cx, |document, cx| document.commit_pending_input(cx)))
+        });
+
+        // The quit check, the save and the discard of a confirmed quit, and
+        // the save the shutdown flush runs.
+        pane.quit_disposition = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| entity.read(cx).quit_disposition(cx))
+        });
+
+        pane.save_for_quit = Some({
+            let entity = entity.clone();
+            Box::new(move |_window, cx| {
+                entity.update(cx, |document, cx| document.save_for_quit(cx))
+            })
+        });
+
+        pane.discard_for_quit = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| entity.update(cx, |document, cx| document.discard_for_quit(cx)))
+        });
+
+        pane.flush_for_shutdown = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| entity.update(cx, |document, cx| document.flush_for_shutdown(cx)))
+        });
+
+        // Append row, which the pane actions menu reaches from the keyboard.
+        pane.pane_actions = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| entity.read(cx).pane_actions(&entity))
+        });
+
+        pane
     }
 }
