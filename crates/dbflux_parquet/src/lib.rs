@@ -21,8 +21,10 @@
 mod cells;
 mod decode;
 mod error;
+mod estimate;
 mod footer;
 mod nested;
+mod stats;
 mod window;
 
 pub use cells::{
@@ -31,7 +33,11 @@ pub use cells::{
 };
 pub use decode::{UNINDEXED_CHUNK_BUDGET, WindowRows, read_window, window_byte_ranges};
 pub use error::ParquetError;
+pub use estimate::{ReadEstimate, read_estimate, whole_file_read_estimate};
 pub use footer::{MAX_FOOTER_BYTES, ParquetFile, TAIL_READ_BYTES, open};
+pub use stats::{
+    ColumnStatistics, FileStatistics, MIXED_CODECS, ValueRange, column_statistics, file_statistics,
+};
 pub use window::RowWindow;
 
 #[cfg(test)]
@@ -40,5 +46,7 @@ mod cells_tests;
 mod decode_tests;
 #[cfg(test)]
 mod footer_tests;
+#[cfg(test)]
+mod stats_tests;
 #[cfg(test)]
 mod test_support;
