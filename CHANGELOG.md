@@ -27,6 +27,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Chart time axis on monthly and yearly data** — When a chart's time axis spans more than a week per tick, its ticks now fall on the first day of a month, every one, three or six months and labelled like `2025-03`, or on the first day of a year, labelled like `2025`. Before, they were placed every 30 days counted from 1970, so twelve monthly points showed ticks such as `2025-01-12` and `2025-02-11` that matched none of the points.
 * **Sorted set scores with decimals were not grouped by thousands** — The score column of a sorted set in the key-value browser now groups the digits of decimal scores the same way as whole ones, so 48210.5 shows as 48,210.5 next to 41,875. Before, only whole-number scores were grouped.
 * **Multi-select lists ignored mouse clicks on their items** — Clicking an item in a multi-select list, such as the Category, Level and Outcome filters of the audit viewer, now toggles it and keeps the list open. Before, pressing the mouse button on an item closed the list before the click registered, so items could only be toggled with the keyboard.
+* **Whole numbers in chart tooltips** — The chart tooltip and the point inspector no longer pad values with zeros: a count of 21 reads `21` instead of `21.000`, zero reads `0`, and 1.5 reads `1.5`. Values keep up to three decimals.
 
 ## [0.8.6] - 2026-10-02
 
