@@ -212,7 +212,8 @@ parquet = { version = "59.3", default-features = false, features = [
 arrow-array = "59.3"
 arrow-schema = "59.3"
 # Spreadsheet reading. `zip` matches calamine's own zip dependency, so format
-# detection adds no second copy; `rust_xlsxwriter` only builds test fixtures.
+# detection adds no second copy; `rust_xlsxwriter` writes xls values into a new
+# xlsx and builds test fixtures.
 calamine = "0.36"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 rust_xlsxwriter = "0.99"

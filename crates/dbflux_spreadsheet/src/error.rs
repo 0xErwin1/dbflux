@@ -208,6 +208,40 @@ pub enum SheetWriteError {
     },
 }
 
+/// A failure to write the values of a workbook into a new xlsx package with
+/// [`crate::write_values_xlsx`].
+///
+/// After any of these the sink may hold a partial package.
+#[derive(Debug, thiserror::Error)]
+pub enum ValuesWriteError {
+    /// Reading a sheet of the workbook failed.
+    #[error("cannot read sheet `{sheet}`: {source}")]
+    Read {
+        sheet: String,
+        #[source]
+        source: SpreadsheetError,
+    },
+
+    /// The xlsx format refuses the sheet's name; the message is the
+    /// writer's own.
+    #[error("sheet `{sheet}` cannot be written to xlsx: {message}")]
+    Sheet { sheet: String, message: String },
+
+    /// The xlsx format refuses a cell's value, such as text longer than a
+    /// cell holds or a date before 1900; the message is the writer's own.
+    #[error("{sheet}!{cell} cannot be written to xlsx: {message}")]
+    Cell {
+        sheet: String,
+        cell: String,
+        message: String,
+    },
+
+    /// Writing the package to the sink failed; the message is the writer's
+    /// own.
+    #[error("cannot write the xlsx file: {message}")]
+    Write { message: String },
+}
+
 /// A formula whose result fills a range of cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormulaRangeKind {

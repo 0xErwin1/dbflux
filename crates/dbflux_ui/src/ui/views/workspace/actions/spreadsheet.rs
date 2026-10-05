@@ -1,6 +1,7 @@
 use super::*;
 use crate::ui::document::{DocumentKey, FileDocumentKey, ObjectSavedCallback, SpreadsheetDocument};
 use crate::ui::labels::{NoActiveConnectionKind, documents_no_active_connection_message};
+use dbflux_core::LogErr;
 
 impl Workspace {
     /// Opens a spreadsheet one sheet at a time in its own tab, or focuses the
@@ -18,6 +19,10 @@ impl Workspace {
     /// whether to download it whole, and closes when the user declines.
     /// `on_object_saved` is told the object's key after each save that
     /// replaces it.
+    ///
+    /// Save as .xlsx of an xls file picks its target through the app state's
+    /// save target override when one is set, and the file it writes opens
+    /// in its own tab through this same method.
     ///
     /// The keyboard moves to the new tab on the next render, so callers
     /// without a window can open one.
@@ -97,6 +102,20 @@ impl Workspace {
                 })
             }
         };
+        let save_target_override = self.app_state.read(cx).save_target_override();
+        let workspace = cx.entity().downgrade();
+
+        document.update(cx, |document, _| {
+            document.set_save_target_override(save_target_override);
+            document.set_on_saved_as(move |path, cx| {
+                workspace
+                    .update(cx, |workspace, cx| {
+                        workspace.open_spreadsheet_file(FileDocumentKey::Local { path }, None, cx);
+                    })
+                    .log_err();
+            });
+        });
+
         let pane = SpreadsheetDocument::into_pane(document, cx);
 
         self.tab_manager.update(cx, |manager, cx| {
@@ -112,6 +131,7 @@ impl Workspace {
 mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
+    use crate::keymap::Command;
     use crate::ui::document::{DocumentKind, DocumentState, FileDocumentKey};
     use crate::ui::views::workspace::Workspace;
     use crate::ui::views::workspace::actions::delimited::tests::{
@@ -121,8 +141,12 @@ mod tests {
         close_every_tab, new_workspace, open_path, recent_paths, tab_kinds, tab_states, tab_titles,
         toast_count,
     };
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     /// The bytes of a workbook checked in under
     /// `dbflux_spreadsheet/tests/fixtures/`.
@@ -164,6 +188,49 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.directory).ok();
         }
+    }
+
+    /// A workspace whose Save As always picks `target` instead of opening
+    /// the file dialog.
+    fn new_workspace_saving_to(
+        cx: &mut TestAppContext,
+        target: PathBuf,
+    ) -> (Entity<Workspace>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        let picker: SaveTargetProvider = Arc::new(move |_request| {
+            gpui::Task::ready(SaveTargetOutcome::Selected {
+                path: target.clone(),
+                used_fallback: false,
+            })
+        });
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+                    .with_save_target_override(picker)
+            })
+        });
+
+        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
+        let workspace_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+            workspace_ref.replace(Some(workspace.clone()));
+            gpui_component::Root::new(workspace, window, cx)
+        });
+
+        let workspace = holder
+            .borrow()
+            .clone()
+            .expect("workspace should be created");
+        (workspace, window)
     }
 
     /// Opens `file` the way the object browser and every other caller of the
@@ -278,5 +345,58 @@ mod tests {
 
         assert!(tab_titles(window, &workspace).is_empty());
         assert_eq!(toast_count(window), 1);
+    }
+
+    #[gpui::test]
+    fn save_as_writes_a_new_file_and_opens_it(cx: &mut TestAppContext) {
+        let directory =
+            std::env::temp_dir().join(format!("dbflux-save-as-xlsx-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).expect("the test directory must be creatable");
+        let source = directory.join("in.xls");
+        std::fs::write(&source, fixture("in.xls")).expect("the test file must be writable");
+        let target = directory.join("in.xlsx");
+
+        let (workspace, window) = new_workspace_saving_to(cx, target.clone());
+        open(
+            window,
+            &workspace,
+            FileDocumentKey::Local {
+                path: source.clone(),
+            },
+        );
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.dispatch_active(Command::SaveFileAs, window, cx);
+                });
+            });
+        });
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        assert!(!target.exists(), "nothing is written before confirming");
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        assert!(target.exists(), "the new file is written");
+        assert_eq!(
+            std::fs::read(&source).expect("the source stays"),
+            fixture("in.xls")
+        );
+        assert_eq!(tab_titles(window, &workspace), ["in.xls", "in.xlsx"]);
+        assert_eq!(
+            tab_kinds(window, &workspace),
+            [DocumentKind::Spreadsheet, DocumentKind::Spreadsheet]
+        );
+        assert_eq!(
+            tab_states(window, &workspace),
+            [DocumentState::Clean, DocumentState::Clean]
+        );
+        assert_eq!(active_title(window, &workspace).as_deref(), Some("in.xlsx"));
+        assert_eq!(toast_count(window), 1, "the new file is reported");
+
+        std::fs::remove_dir_all(&directory).ok();
     }
 }

@@ -404,13 +404,29 @@ impl SpreadsheetDocument {
     }
 
     /// The append-row entry of the pane actions menu, for a workbook whose
-    /// format has a writer.
+    /// format has a writer, and Save as .xlsx for xls.
     pub(super) fn pane_actions(&self, this: &Entity<Self>) -> Vec<PaneAction> {
+        let target = this.downgrade();
+
+        if self.offers_save_as() {
+            return vec![
+                PaneAction::callback(
+                    "spreadsheet-save-as",
+                    dbflux_i18n::t!("document.spreadsheet.save_as.action"),
+                    move |_window, cx| {
+                        if let Some(document) = target.upgrade() {
+                            document.update(cx, |document, cx| document.save_as_xlsx(cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Save)
+                .enabled(self.can_save_as_xlsx()),
+            ];
+        }
+
         if !self.is_editable_format() {
             return Vec::new();
         }
-
-        let target = this.downgrade();
 
         vec![
             PaneAction::callback(

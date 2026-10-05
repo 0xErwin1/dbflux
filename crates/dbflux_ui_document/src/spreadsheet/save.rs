@@ -323,13 +323,20 @@ impl SpreadsheetDocument {
     /// The table's save key, taken before the table sees it: the table asks
     /// for a save only when the shown sheet has an edit, so a document whose
     /// edits are all on other sheets saves here. A clean document lets the
-    /// key through.
+    /// key through. For xls, which has no writer, the key opens Save as
+    /// .xlsx.
     pub(super) fn take_save_key(
         &mut self,
         _: &dbflux_components::components::data_table::actions::SaveRow,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.offers_save_as() {
+            cx.stop_propagation();
+            self.save_as_xlsx(cx);
+            return;
+        }
+
         if !self.is_dirty() {
             return;
         }

@@ -789,6 +789,9 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
 /// the table's add-row key (`a a`) and a pane action, and Save is the table's
 /// save key.
 ///
+/// For xls, Save as .xlsx is the table's save key (`SaveRow`) and a pane
+/// action; its prompt (`Modal`) goes on with Enter and cancels with Escape.
+///
 /// An object read whole is downloaded after a prompt (`Modal`): Enter
 /// downloads and Escape declines.
 pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
@@ -811,6 +814,18 @@ pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsAddRow),
         ),
         ("spreadsheet-save", KeyboardPath::Command(Command::SaveRow)),
+        (
+            "spreadsheet-save-as",
+            KeyboardPath::Command(Command::SaveRow),
+        ),
+        (
+            "spreadsheet-save-as-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "spreadsheet-save-as-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
         (
             "spreadsheet-download-confirm",
             KeyboardPath::Command(Command::Execute),

@@ -33,12 +33,13 @@ use dbflux_components::components::data_table::{DataTable, DataTableEvent, DataT
 use dbflux_components::modals::ModalFocus;
 use dbflux_core::Connection;
 use dbflux_spreadsheet::{SheetInfo, SheetKind, SpreadsheetError, SpreadsheetFormat, Workbook};
-use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+use dbflux_ui_base::{AppStateEntity, SaveTargetProvider};
 use gpui::*;
 
 use super::grid_model::{BLANK_SHEET_COLUMNS, FormulaReadout, SheetModel, cell_address};
 use super::input::SheetChanges;
+use super::save_as::{SaveAsPrompt, SavedAsCallback};
 use crate::dedup::FileDocumentKey;
 use crate::file_edit_lifecycle::FileEditLifecycle;
 use crate::file_source::{
@@ -239,6 +240,20 @@ pub struct SpreadsheetDocument {
 
     /// What the close and quit flows asked of the next save.
     pub(super) lifecycle: FileEditLifecycle,
+
+    /// The prompt that says what Save as .xlsx does not keep, while it is
+    /// open.
+    pub(super) save_as_prompt: Option<SaveAsPrompt>,
+
+    /// Whether a Save as .xlsx runs, from the file dialog to the write.
+    pub(super) saving_as: bool,
+
+    /// Chooses where Save as .xlsx writes instead of the file dialog. `None`
+    /// uses the dialog.
+    pub(super) save_target_override: Option<SaveTargetProvider>,
+
+    /// Told the path of each file Save as .xlsx wrote, to open it.
+    pub(super) on_saved_as: Option<SavedAsCallback>,
 }
 
 impl EventEmitter<DocumentEvent> for SpreadsheetDocument {}
@@ -303,6 +318,10 @@ impl SpreadsheetDocument {
             pending_table_focus: false,
             saving: false,
             lifecycle: FileEditLifecycle::default(),
+            save_as_prompt: None,
+            saving_as: false,
+            save_target_override: None,
+            on_saved_as: None,
         };
 
         document.start_open(cx);
@@ -382,7 +401,8 @@ impl SpreadsheetDocument {
     /// through its own key context. The commands of the document are the
     /// next and the previous sheet (`NextResultTab` and `PrevResultTab`),
     /// which skip chart sheets and wrap around, appending a row
-    /// (`ResultsAddRow`) and saving (`SaveRow`, `SaveQuery`).
+    /// (`ResultsAddRow`) and saving (`SaveRow`, `SaveQuery`). For xls, which
+    /// has no writer, the save commands and `SaveFileAs` open Save as .xlsx.
     pub fn dispatch_command(
         &mut self,
         command: dbflux_app::keymap::Command,
@@ -402,6 +422,13 @@ impl SpreadsheetDocument {
                 true
             }
 
+            Command::SaveRow | Command::SaveQuery | Command::SaveFileAs
+                if self.offers_save_as() =>
+            {
+                self.save_as_xlsx(cx);
+                true
+            }
+
             Command::ResultsAddRow if self.is_editable_format() => {
                 self.append_row(cx);
                 true
@@ -416,10 +443,15 @@ impl SpreadsheetDocument {
         }
     }
 
-    /// Gives the keyboard to the download prompt while it is open, to the
-    /// table of the shown sheet, or to the document while a notice takes its
-    /// place.
+    /// Gives the keyboard to the Save as .xlsx or the download prompt while
+    /// one is open, to the table of the shown sheet, or to the document while
+    /// a notice takes its place.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(prompt) = &mut self.save_as_prompt {
+            prompt.focus_mut().focus(None, window, cx);
+            return;
+        }
+
         if let Some(prompt) = &mut self.download_prompt {
             prompt.focus.focus(None, window, cx);
             return;
@@ -1174,7 +1206,7 @@ pub(super) fn open_error_to_user_facing(error: &OpenError, summary: String) -> U
 /// The user-facing error of a failed read of a workbook or one of its
 /// sheets. A sheet past the size limit is the user's to avoid; everything
 /// else is a file that could not be read.
-fn spreadsheet_error_to_user_facing(
+pub(super) fn spreadsheet_error_to_user_facing(
     error: &SpreadsheetError,
     summary: String,
     cause: String,

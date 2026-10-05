@@ -2098,6 +2098,25 @@ document:
       no_selection: "选择一个单元格以查看其公式。"
       none: "无公式"
       unavailable: ".xls 文件不提供公式"
+    save_as:
+      action: "另存为 .xlsx"
+      title: "另存为新的 .xlsx 文件？"
+      body: "DBFlux 会将 %{name} 中所有工作表的值写入一个可编辑的新 .xlsx 文件。新文件不保留公式（由于 DBFlux 无法读取 .xls 公式，每个公式都会变成其显示的值）、格式、日期以外的数字格式、合并单元格、列宽、图表、图片和宏。%{name} 不会被修改。"
+      chart_sheets: "图表工作表没有单元格，不会写入：%{sheets}。"
+      object: "新文件仅保存在这台电脑上，不会上传到存储桶。"
+      confirm: "选择文件…"
+      cancel: "取消"
+      dialog_title: "另存为 .xlsx"
+      dialog_title_object: "在这台电脑上另存一份 .xlsx 副本"
+      dialog_filter: "Excel 工作簿"
+      saved: "已保存 %{name}"
+      error:
+        failed: "无法将 %{name} 另存为 .xlsx"
+        replaces_source: "新文件会替换原始 .xls 文件，而原始文件永远不会被修改。请选择其他名称或文件夹。"
+        dialog_unavailable: "没有可用的文件对话框：%{error}"
+        sheet: "工作表 %{sheet} 无法以此名称写入 .xlsx 文件。"
+        cell: "工作表 %{sheet} 的单元格 %{cell} 无法写入 .xlsx 文件。"
+        write: "写入 .xlsx 文件失败。"
   parquet:
     loading: "正在加载 %{name}…"
     empty:
