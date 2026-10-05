@@ -11,6 +11,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
+use parquet::schema::types::TypePtr;
 
 use crate::footer::read_exact;
 use crate::window::{RowGroupSlice, row_group_slices};
@@ -26,6 +27,10 @@ pub const UNINDEXED_CHUNK_BUDGET: u64 = 64 * 1024 * 1024;
 pub struct WindowRows {
     window: RowWindow,
     schema: SchemaRef,
+    /// The Parquet types of the selected top-level fields, in the same order
+    /// as [`Self::schema`]. The Arrow types alone cannot tell INT96 from an
+    /// INT64 timestamp, nor a UUID from any 16-byte value.
+    parquet_fields: Vec<TypePtr>,
     batches: Vec<RecordBatch>,
 }
 
@@ -49,6 +54,10 @@ impl WindowRows {
 
     pub fn into_batches(self) -> Vec<RecordBatch> {
         self.batches
+    }
+
+    pub(crate) fn parquet_fields(&self) -> &[TypePtr] {
+        &self.parquet_fields
     }
 }
 
@@ -103,6 +112,7 @@ pub(crate) fn read_window_with_budget<S: ByteSource + ?Sized>(
         return Ok(WindowRows {
             window: plan.window,
             schema: plan.schema,
+            parquet_fields: plan.parquet_fields,
             batches: Vec::new(),
         });
     }
@@ -127,6 +137,7 @@ pub(crate) fn read_window_with_budget<S: ByteSource + ?Sized>(
     Ok(WindowRows {
         window: plan.window,
         schema: plan.schema,
+        parquet_fields: plan.parquet_fields,
         batches,
     })
 }
@@ -169,6 +180,7 @@ fn decode_row_group<S: ByteSource + ?Sized>(
 struct WindowPlan {
     window: RowWindow,
     schema: SchemaRef,
+    parquet_fields: Vec<TypePtr>,
     mask: ProjectionMask,
     row_groups: Vec<PlannedRowGroup>,
 }
@@ -220,6 +232,16 @@ fn plan_window(
             .project(&ordered_columns)
             .map_err(|error| ParquetError::malformed(error.to_string()))?,
     );
+
+    let root_fields = schema_descriptor.root_schema().get_fields();
+
+    let parquet_fields = ordered_columns
+        .iter()
+        .map(|&index| root_fields.get(index).cloned())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            ParquetError::malformed("the Parquet schema has fewer fields than the Arrow schema")
+        })?;
 
     let mask = ProjectionMask::roots(schema_descriptor, ordered_columns.iter().copied());
 
@@ -273,6 +295,7 @@ fn plan_window(
     Ok(WindowPlan {
         window,
         schema,
+        parquet_fields,
         mask,
         row_groups,
     })

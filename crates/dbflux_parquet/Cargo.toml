@@ -16,9 +16,11 @@ path = "src/lib.rs"
 arrow-array.workspace = true
 arrow-schema.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 dbflux_byte_source.workspace = true
 parquet.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true
