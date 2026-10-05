@@ -132,6 +132,11 @@ pub use data::{
     StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest,
     ZSetRemoveRequest, decode, decode_as, detect, probe_message_pack,
 };
+pub use data::{
+    ColumnBadge, ColumnProfile, ColumnProjection, DEFAULT_PAGE_ROWS,
+    DEFAULT_PROJECTION_BUDGET_BYTES, DEFAULT_PROJECTION_MAX_COLUMNS, EstimateScope, PartUnit,
+    ProfileSource, ReadEstimate, TableProfile, ValueRange, default_projection,
+};
 
 pub use data::{
     KeyBulkDeleteRequest, KeyMetadata, KeyMetadataRequest, KeyValueFeatures, KeyValuePrefixRequest,

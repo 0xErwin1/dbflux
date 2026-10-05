@@ -1,3 +1,4 @@
+pub(crate) mod column_profile;
 pub(crate) mod crud;
 pub(crate) mod document_aggregate;
 pub(crate) mod document_edit;
@@ -6,6 +7,11 @@ pub(crate) mod key_value;
 pub(crate) mod value_decoder;
 pub(crate) mod view;
 
+pub use column_profile::{
+    ColumnBadge, ColumnProfile, ColumnProjection, DEFAULT_PAGE_ROWS,
+    DEFAULT_PROJECTION_BUDGET_BYTES, DEFAULT_PROJECTION_MAX_COLUMNS, EstimateScope, PartUnit,
+    ProfileSource, ReadEstimate, TableProfile, ValueRange, default_projection,
+};
 pub use crud::{
     ColumnAssignment, CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
     MutationRequest, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
