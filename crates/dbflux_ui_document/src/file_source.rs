@@ -401,8 +401,11 @@ impl ByteSource for LocationSource {
 /// The copy is a snapshot: nothing read from it asks the store again. The
 /// version returned is the one `head_object` reported right before the
 /// download, which a later [`read_version`] is compared with. An object
-/// replaced between the two calls only makes that comparison report a change
-/// that is already in the copy.
+/// replaced between the two calls makes that comparison report a change that
+/// is already in the copy, and one that arrives larger than `in_memory_limit`
+/// is moved to the temporary file instead of staying in memory. The store
+/// cannot read part of an object, so its bytes are still held in memory while
+/// they arrive.
 #[allow(clippy::result_large_err)]
 pub fn download_whole_object(
     connection: &dyn Connection,
@@ -421,25 +424,41 @@ pub fn download_whole_object(
             .get_object(bucket, key)
             .map_err(|error| StorageError::object_store(bucket, key, error))?;
 
-        return Ok((LocationSource::Memory(MemorySource::new(bytes)), version));
+        let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+
+        if length <= in_memory_limit {
+            return Ok((LocationSource::Memory(MemorySource::new(bytes)), version));
+        }
+
+        let path = create_download_file(&std::env::temp_dir())?;
+        let written =
+            std::fs::write(&path, &bytes).map_err(|error| StorageError::local_io(&path, error));
+        drop(bytes);
+
+        return Ok((downloaded_source(path, written)?, version));
     }
 
     let path = create_download_file(&std::env::temp_dir())?;
 
     let downloaded = api
         .download_object(bucket, key, &path)
-        .map_err(|error| StorageError::object_store(bucket, key, error))
-        .and_then(|_| open_local_file(&path));
+        .map(drop)
+        .map_err(|error| StorageError::object_store(bucket, key, error));
 
-    match downloaded {
-        Ok((file, _metadata)) => {
-            let source = LocationSource::Downloaded(DownloadedFile {
-                source: Some(FileSource::new(file)),
-                path,
-            });
+    Ok((downloaded_source(path, downloaded)?, version))
+}
 
-            Ok((source, version))
-        }
+/// The copy of an object written to `path`, or `written`'s error after the
+/// file is removed.
+fn downloaded_source(
+    path: PathBuf,
+    written: Result<(), StorageError>,
+) -> Result<LocationSource, StorageError> {
+    match written.and_then(|()| open_local_file(&path)) {
+        Ok((file, _metadata)) => Ok(LocationSource::Downloaded(DownloadedFile {
+            source: Some(FileSource::new(file)),
+            path,
+        })),
 
         Err(error) => {
             remove_download_file(&path);

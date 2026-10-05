@@ -1017,6 +1017,9 @@ pub(super) mod tests {
         /// How many times the store sent a whole object: `get_object`, which
         /// the trait's default range read also calls, and `download_object`.
         full_reads: std::sync::atomic::AtomicUsize,
+        /// The size `head_object` reports instead of the stored length, as
+        /// when another writer replaces the object right after it.
+        reported_size: std::sync::Mutex<Option<u64>>,
     }
 
     impl ObjectStoreFake {
@@ -1043,7 +1046,13 @@ pub(super) mod tests {
                 ),
                 range_reads,
                 full_reads: std::sync::atomic::AtomicUsize::new(0),
+                reported_size: std::sync::Mutex::new(None),
             })
+        }
+
+        /// Makes `head_object` report `size` bytes for every object.
+        pub(in crate::ui::views::workspace::actions) fn report_size(&self, size: u64) {
+            *self.reported_size.lock().expect("the reported size") = Some(size);
         }
 
         /// How many times the store sent a whole object.
@@ -1101,10 +1110,11 @@ pub(super) mod tests {
             key: &str,
         ) -> Result<dbflux_core::ObjectMetadata, dbflux_core::DbError> {
             let bytes = self.bytes(bucket, key)?;
+            let reported_size = *self.reported_size.lock().expect("the reported size");
 
             Ok(dbflux_core::ObjectMetadata {
                 key: key.to_string(),
-                size_bytes: bytes.len() as u64,
+                size_bytes: reported_size.unwrap_or(bytes.len() as u64),
                 content_type: None,
                 last_modified: None,
                 etag: Some("\"one\"".to_string()),

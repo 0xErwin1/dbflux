@@ -470,7 +470,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn object_without_range_reads_asks_before_download(cx: &mut TestAppContext) {
+    fn an_object_of_a_store_without_ranged_reads_opens_one_tab_and_reads_nothing(
+        cx: &mut TestAppContext,
+    ) {
         let (workspace, window) = new_workspace(cx);
         let bytes = cities_parquet();
         let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
@@ -480,8 +482,20 @@ mod tests {
 
         assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
         assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
+        assert_eq!(store.full_reads(), 0, "nothing is read before confirming");
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn object_without_range_reads_asks_before_download(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
 
         let document = open_object_tab(window, &workspace, profile_id, OBJECT_KEY);
+        assert_eq!(tab_titles(window, &workspace), ["cities.parquet"]);
+
         let message = prompt_message(window, &document).expect("the prompt is open");
         let size = dbflux_components::components::column_facts::format_bytes(bytes.len() as u64);
 
@@ -644,6 +658,42 @@ mod tests {
         assert_eq!(store.full_reads(), 2);
 
         drop(on_disk);
+
+        assert!(!path.exists(), "the temporary copy is removed");
+    }
+
+    #[gpui::test]
+    fn an_object_larger_than_its_reported_size_does_not_stay_in_memory(cx: &mut TestAppContext) {
+        let (workspace, window) = new_workspace(cx);
+        let bytes = cities_parquet();
+        let store = ObjectStoreFake::with_objects(&[(OBJECT_KEY, &bytes)]);
+        store.report_size(1);
+        let profile_id = connect_object_store(window, &workspace, store.clone());
+
+        let connection = window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.connection.clone())
+                .expect("the profile is connected")
+        });
+
+        let limit = bytes.len() as u64 - 1;
+        let (source, _version) =
+            download_whole_object(connection.as_ref(), BUCKET, OBJECT_KEY, limit)
+                .expect("the download succeeds");
+        let LocationSource::Downloaded(file) = &source else {
+            panic!("an object that arrives over the limit is kept in a file");
+        };
+        let path = file.path().to_path_buf();
+
+        assert_eq!(std::fs::read(&path).expect("the copy reads"), bytes);
+        assert_eq!(store.full_reads(), 1, "the object is read once");
+
+        drop(source);
 
         assert!(!path.exists(), "the temporary copy is removed");
     }
