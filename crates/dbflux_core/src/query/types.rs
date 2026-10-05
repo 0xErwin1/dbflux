@@ -108,8 +108,8 @@ pub enum ReadOnlyEnforcement {
     #[default]
     None,
 
-    /// The request must run in a mode where the database refuses every write,
-    /// or not run at all. See [`QueryRequest::read_only`].
+    /// The request must run where every write is refused before it reaches
+    /// storage, or not run at all. See [`QueryRequest::read_only`].
     Required,
 }
 
@@ -186,14 +186,17 @@ pub struct QueryRequest {
     /// `Read`/`Metadata` script, or the editor's auto-refresh of a read
     /// query. It is never derived from document content.
     ///
-    /// With `Required`, a driver applies a mode the database enforces (a
-    /// read-only transaction, a query-only session flag, a per-request
+    /// With `Required`, a driver either applies a mode the database enforces
+    /// (a read-only transaction, a query-only session flag, a per-request
     /// setting) inside the same locked session call that runs the SQL, never
     /// as a separate execution another caller could interleave with, and
-    /// removes it before returning. A driver that cannot do that, or that finds
-    /// the session inside a transaction it must not end, refuses the whole
-    /// request with [`DbError::NotSupported`](crate::DbError::NotSupported)
-    /// before anything runs. Drivers that honour it declare
+    /// removes it before returning; or classifies every typed operation it is
+    /// about to send and refuses any write or unknown operation before it
+    /// reaches the server. Matching keywords in the query text never
+    /// qualifies. A driver that cannot do either, or that finds the session
+    /// inside a transaction it must not end, refuses the whole request with
+    /// [`DbError::NotSupported`](crate::DbError::NotSupported) before anything
+    /// runs. Drivers that honour it declare
     /// [`TransactionCapabilities::supports_read_only`](crate::TransactionCapabilities::supports_read_only).
     pub read_only: ReadOnlyEnforcement,
 }
