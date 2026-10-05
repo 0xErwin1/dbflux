@@ -373,20 +373,19 @@ impl ChartShell {
         &self.host
     }
 
-    /// Compute the `DataPointRef` for the current hover position.
+    /// Compute the `DataPointRef` of the point the pointer or the keyboard
+    /// highlights, the same point `ChartView::hovered_point` describes.
     ///
     /// Returns `None` when the cursor is outside the chart, no chart view exists,
     /// or the focused series has no usable decimated points. This is called during
     /// render to decide whether to show the PointInspector.
     pub fn hovered_data_point(&self, cx: &gpui::App) -> Option<DataPointRef> {
         let chart_entity = self.chart_view.as_ref()?;
-        let chart = chart_entity.read(cx);
-        let series_idx = chart.focused_series_idx();
-        let cursor_data_x = chart.hover_data_x()?;
-        let point_idx_in_series = chart.nearest_point_idx(series_idx, cursor_data_x)?;
+        let point = chart_entity.read(cx).hovered_point()?;
+
         Some(DataPointRef {
-            series_idx,
-            point_idx_in_series,
+            series_idx: point.series_idx,
+            point_idx_in_series: point.point_idx_in_series,
         })
     }
 
@@ -925,6 +924,75 @@ mod tests {
             (domain.0 as f64, domain.1 as f64),
             "retained domain must be reapplied after a shell rebuild"
         );
+    }
+
+    /// With two rows at the same X, the keyboard highlight on the second one
+    /// must resolve to that point, not to the first point sharing its X.
+    #[gpui::test]
+    fn hovered_data_point_follows_the_keyboard_point_on_duplicate_x(cx: &mut gpui::TestAppContext) {
+        let shell_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartShell>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, visual) = cx.add_window_view({
+            let shell_holder = shell_holder.clone();
+            move |_window, cx| {
+                let shell = cx.new(ChartShell::new_standalone);
+                shell_holder.replace(Some(shell.clone()));
+                DomainHarness { shell }
+            }
+        });
+
+        let shell = shell_holder.borrow().clone().expect("shell entity");
+        let result = QueryResult::table(
+            vec![
+                make_col("ts", ColumnKind::Timestamp),
+                make_col("value", ColumnKind::Float),
+            ],
+            vec![
+                vec![Value::Int(0), Value::Float(1.0)],
+                vec![Value::Int(1000), Value::Float(2.0)],
+                vec![Value::Int(1000), Value::Float(3.0)],
+                vec![Value::Int(2000), Value::Float(4.0)],
+            ],
+            None,
+            Duration::ZERO,
+        );
+
+        visual.update(|_, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.set_result(&result, false, cx);
+                shell.ensure_chart_view(&result, cx);
+            });
+        });
+
+        let view = visual.update(|_, cx| {
+            shell
+                .read(cx)
+                .chart_view()
+                .cloned()
+                .expect("chart view must be built")
+        });
+        visual.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                assert!(view.step_keyboard_point(1, cx));
+                assert!(view.step_keyboard_point(1, cx));
+                assert!(view.step_keyboard_point(1, cx));
+            });
+        });
+
+        let (keyboard_point, hovered) = visual.update(|_, cx| {
+            (
+                view.read(cx).keyboard_point(),
+                shell.read(cx).hovered_data_point(cx),
+            )
+        });
+        assert_eq!(
+            keyboard_point,
+            Some(DataPointRef {
+                series_idx: 0,
+                point_idx_in_series: 2,
+            })
+        );
+        assert_eq!(hovered, keyboard_point);
     }
 
     fn shell_bounds(
