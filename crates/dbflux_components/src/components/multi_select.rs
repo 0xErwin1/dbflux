@@ -419,6 +419,7 @@ impl MultiSelect {
             .text_size(FontSizes::BASE)
             .shadow_lg()
             .occlude()
+            .on_mouse_down_out(cx.listener(Self::handle_mouse_down_out))
             .child(
                 Chamfer::new(ChamferCut::OVERLAY)
                     .fill(theme.secondary)
@@ -517,7 +518,10 @@ impl Render for MultiSelect {
                 .size(Fields::CHEVRON)
                 .color(theme.muted_foreground),
             )
-            .when(!is_empty, |el| {
+            // While open, the menu's on_mouse_down_out owns dismissal: a press
+            // on the trigger lands outside the deferred menu and closes it, so
+            // a trigger on_click would reopen the list on release.
+            .when(!is_empty && !self.open, |el| {
                 el.on_click(cx.listener(|this, _event, _window, cx| {
                     this.toggle_open(cx);
                 }))
@@ -531,7 +535,7 @@ impl Render for MultiSelect {
             .child(trigger)
             .child(self.render_menu(cx));
 
-        let mut container = div()
+        div()
             .id(self.id.clone())
             .key_context(ContextId::Dropdown.as_gpui_context())
             .when_some(self.focus_handle.as_ref(), |element, handle| {
@@ -539,13 +543,7 @@ impl Render for MultiSelect {
             })
             .on_action(cx.listener(Self::handle_run_command))
             .w_full()
-            .child(trigger_wrap);
-
-        if self.open {
-            container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
-        }
-
-        container
+            .child(trigger_wrap)
     }
 }
 
@@ -695,6 +693,185 @@ mod tests {
             assert!(!open, "Escape closes the list");
             assert!(owner_focused, "Escape hands focus back");
             assert_eq!(changes, 3, "every toggle reports the new selection");
+        }
+    }
+
+    /// Pointer tests that press and release the mouse on the rendered
+    /// elements, located through the window's accessibility frame.
+    mod pointer {
+        use std::sync::{Arc, Mutex};
+
+        use super::super::{MultiSelect, MultiSelectChanged};
+        use crate::controls::DropdownItem;
+        use gpui::{
+            AccessibilityFrame, AppContext as _, Context, Entity, FrameObserver, IntoElement,
+            Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render, SharedString,
+            Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+        };
+
+        /// Keeps the latest rendered accessibility frame of the window it observes.
+        #[derive(Default)]
+        struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+        impl FrameObserver for FrameCapture {
+            fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+                *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+            }
+        }
+
+        struct Owner {
+            multi_select: Entity<MultiSelect>,
+            changes: Vec<Vec<SharedString>>,
+            _subscription: gpui::Subscription,
+        }
+
+        impl Render for Owner {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .child(div().w(px(200.0)).child(self.multi_select.clone()))
+            }
+        }
+
+        fn setup(
+            cx: &mut TestAppContext,
+        ) -> (Arc<FrameCapture>, Entity<Owner>, &mut VisualTestContext) {
+            cx.update(gpui_component::init);
+
+            let capture = Arc::new(FrameCapture::default());
+            let capture_for_window = capture.clone();
+            let (owner, window) = cx.add_window_view(move |window, cx| {
+                window.observe_frames(&capture_for_window);
+                window.refresh();
+
+                let multi_select = cx.new(|cx| {
+                    let mut multi_select = MultiSelect::new("pointer-multi-select");
+                    multi_select.set_items(
+                        vec![
+                            DropdownItem::new("One"),
+                            DropdownItem::new("Two"),
+                            DropdownItem::new("Three"),
+                        ],
+                        cx,
+                    );
+                    multi_select
+                });
+
+                let subscription = cx.subscribe_in(
+                    &multi_select,
+                    window,
+                    |this: &mut Owner, _, event: &MultiSelectChanged, _window, _cx| {
+                        this.changes.push(event.selected_values.clone());
+                    },
+                );
+
+                Owner {
+                    multi_select,
+                    changes: Vec::new(),
+                    _subscription: subscription,
+                }
+            });
+            window.run_until_parked();
+
+            (capture, owner, window)
+        }
+
+        /// Redraw the window so the next frame reflects the latest state.
+        fn settle_frame(window: &mut VisualTestContext) {
+            window.update(|window, _| window.refresh());
+            window.run_until_parked();
+        }
+
+        fn center_of(capture: &FrameCapture, id: &str) -> Point<Pixels> {
+            let guard = capture.0.lock().expect("frame capture lock");
+            let frame = guard.as_ref().expect("the window rendered a frame");
+
+            let found = frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds().center());
+
+            found.unwrap_or_else(|| {
+                let ids: Vec<&str> = frame.nodes().map(|(_, node)| node.id()).collect();
+                panic!("element {id} is not rendered; frame holds {ids:?}")
+            })
+        }
+
+        fn press_and_release(window: &mut VisualTestContext, position: Point<Pixels>) {
+            window.simulate_mouse_down(position, MouseButton::Left, Modifiers::none());
+            window.run_until_parked();
+            window.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+            settle_frame(window);
+        }
+
+        fn is_open(owner: &Entity<Owner>, window: &mut VisualTestContext) -> bool {
+            window.update(|_, cx| owner.read(cx).multi_select.read(cx).is_open())
+        }
+
+        fn open_menu(
+            capture: &FrameCapture,
+            owner: &Entity<Owner>,
+            window: &mut VisualTestContext,
+        ) {
+            let trigger = center_of(capture, "ms-trigger");
+            press_and_release(window, trigger);
+            assert!(
+                is_open(owner, window),
+                "a click on the trigger opens the list"
+            );
+        }
+
+        #[gpui::test]
+        fn clicking_a_row_toggles_it_and_keeps_the_list_open(cx: &mut TestAppContext) {
+            let (capture, owner, window) = setup(cx);
+            open_menu(&capture, &owner, window);
+
+            let row = center_of(&capture, "ms-menu-rows.ms-item-1");
+            press_and_release(window, row);
+
+            let (values, changes) = window.update(|_, cx| {
+                let owner = owner.read(cx);
+                (
+                    owner.multi_select.read(cx).selected_values(),
+                    owner.changes.clone(),
+                )
+            });
+            assert_eq!(values, vec![SharedString::from("Two")]);
+            assert_eq!(changes, vec![vec![SharedString::from("Two")]]);
+            assert!(
+                is_open(&owner, window),
+                "the list stays open after a toggle"
+            );
+        }
+
+        #[gpui::test]
+        fn pressing_outside_the_list_closes_it(cx: &mut TestAppContext) {
+            let (capture, owner, window) = setup(cx);
+            open_menu(&capture, &owner, window);
+
+            let viewport = window.update(|window, _| window.viewport_size());
+            let outside = point(viewport.width * 0.95, viewport.height * 0.95);
+            press_and_release(window, outside);
+
+            assert!(!is_open(&owner, window), "a press outside closes the list");
+        }
+
+        #[gpui::test]
+        fn clicking_the_trigger_while_open_closes_the_list(cx: &mut TestAppContext) {
+            let (capture, owner, window) = setup(cx);
+            open_menu(&capture, &owner, window);
+
+            let trigger = center_of(&capture, "ms-trigger");
+            press_and_release(window, trigger);
+
+            assert!(
+                !is_open(&owner, window),
+                "a second trigger click closes the list"
+            );
         }
     }
 
