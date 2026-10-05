@@ -348,27 +348,51 @@ impl DbFluxServer {
 ///
 /// `Path::starts_with` compares components without resolving `..`, so a lexical
 /// prefix check alone lets `../outside` through. Only plain components are
-/// accepted, and an existing path must still lie inside the root once symlinks
-/// are followed.
+/// accepted, and the path must then pass [`ensure_resolves_inside_root`].
 fn resolve_in_scripts_root(root: &Path, relative: &str) -> Result<PathBuf, String> {
-    let outside_root = || "Path is outside scripts root".to_string();
-
     let has_only_plain_components = Path::new(relative)
         .components()
         .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
 
     if !has_only_plain_components {
-        return Err(outside_root());
+        return Err(OUTSIDE_SCRIPTS_ROOT.to_string());
     }
 
     let full_path = root.join(relative);
+    ensure_resolves_inside_root(root, &full_path)?;
 
-    match std::fs::canonicalize(&full_path) {
-        Ok(resolved) if resolved.starts_with(root) => Ok(full_path),
-        Ok(_) => Err(outside_root()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(full_path),
-        Err(error) => Err(format!("Failed to resolve script path: {}", error)),
+    Ok(full_path)
+}
+
+const OUTSIDE_SCRIPTS_ROOT: &str = "Path is outside scripts root";
+
+/// Checks that the deepest part of `path` that exists on disk lies inside
+/// `root` once symlinks are followed, so a path that does not exist yet is
+/// judged by the folder it would be created in.
+///
+/// An entry that exists but cannot be resolved is a dangling symlink, and is
+/// refused because writing through it creates its target, wherever that is.
+fn ensure_resolves_inside_root(root: &Path, path: &Path) -> Result<(), String> {
+    let resolve_error = |error: std::io::Error| format!("Failed to resolve script path: {}", error);
+
+    for candidate in path.ancestors() {
+        match std::fs::symlink_metadata(candidate) {
+            Ok(_) => {
+                return match std::fs::canonicalize(candidate) {
+                    Ok(resolved) if resolved.starts_with(root) => Ok(()),
+                    Ok(_) => Err(OUTSIDE_SCRIPTS_ROOT.to_string()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        Err(OUTSIDE_SCRIPTS_ROOT.to_string())
+                    }
+                    Err(error) => Err(resolve_error(error)),
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(resolve_error(error)),
+        }
     }
+
+    Err(OUTSIDE_SCRIPTS_ROOT.to_string())
 }
 
 /// Rejects a script name or extension that is not a single plain path segment,
@@ -510,6 +534,16 @@ impl DbFluxServer {
         let parent = folder
             .map(|folder_path| resolve_in_scripts_root(&root, folder_path))
             .transpose()?;
+
+        // Mirrors the file name `ScriptsDirectory::create_file` builds, so a
+        // dangling symlink with that name is refused before it is written through.
+        let file_name = if name.contains('.') {
+            name.to_string()
+        } else {
+            format!("{}.{}", name, extension)
+        };
+        let target_dir = parent.as_deref().unwrap_or(&root);
+        ensure_resolves_inside_root(&root, &target_dir.join(file_name))?;
 
         // Create the file
         let created_path = scripts_dir
@@ -764,6 +798,40 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("escape.sql")).expect("create symlink");
 
         assert!(resolve_in_scripts_root(&root, "escape.sql").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_missing_path_below_a_symlink_that_leads_out_of_the_root() {
+        let (parent, root) = scripts_root();
+        let outside = parent.path().join("outside");
+        fs::create_dir(&outside).expect("create outside dir");
+        std::os::unix::fs::symlink(&outside, root.join("escape")).expect("create symlink");
+
+        assert!(resolve_in_scripts_root(&root, "escape/new-folder").is_err());
+        assert!(resolve_in_scripts_root(&root, "escape/new-folder/new.sql").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_dangling_symlink() {
+        let (parent, root) = scripts_root();
+        let missing_target = parent.path().join("created-outside.sql");
+        std::os::unix::fs::symlink(&missing_target, root.join("dangling.sql"))
+            .expect("create symlink");
+
+        assert!(resolve_in_scripts_root(&root, "dangling.sql").is_err());
+    }
+
+    #[test]
+    fn accepts_a_missing_path_below_an_existing_folder() {
+        let (_parent, root) = scripts_root();
+        fs::create_dir(root.join("reports")).expect("create folder");
+
+        let resolved =
+            resolve_in_scripts_root(&root, "reports/new/weekly.sql").expect("inside root");
+
+        assert_eq!(resolved, root.join("reports/new/weekly.sql"));
     }
 
     #[test]
