@@ -238,7 +238,7 @@ resuelve las ejecuciones pendientes, en la UI de DBFlux.
 `execute_script` deriva su clase del cuerpo del script. Un script clasificado
 `read` o `metadata` se ejecuta con aplicación de solo lectura: el driver lo
 ejecuta en una sesión donde la propia base de datos rechaza la modificación de
-datos, y la llamada se gobierna y se audita como `read` o `metadata`.
+datos (en MongoDB la rechaza DBFlux, como muestra la tabla), y la llamada se gobierna y se audita como `read` o `metadata`.
 
 | Driver               | Cómo la sesión queda en solo lectura                                                                                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -246,9 +246,10 @@ datos, y la llamada se gobierna y se audita como `read` o `metadata`.
 | MySQL, MariaDB       | `START TRANSACTION READ ONLY`, revertida al terminar. Un script con un comentario ejecutable (`/*! */`, `/*M! */`) o `INTO`, o que se ejecuta cuando puede haber una transacción o un bloqueo de `LOCK TABLES` abierto, no se ejecuta en solo lectura y se gobierna como `write` |
 | SQLite               | `PRAGMA query_only`                                                                                                                                                                                     |
 | ClickHouse           | El ajuste por petición `readonly = 2`                                                                                                                                                                   |
+| MongoDB              | MongoDB no tiene sesión de solo lectura, así que DBFlux la aplica: cada operación se clasifica antes de enviarse y se rechaza por encima de `read`, incluidos `runCommand`, `adminCommand` y un `aggregate` con una etapa `$out` o `$merge`. Se rechazan las operaciones que DBFlux no reconoce |
 
-SQL Server, Turso, los drivers externos por IPC, MongoDB, Redis, DynamoDB,
-CloudWatch e InfluxDB no pueden aplicar solo lectura. En esas conexiones, y en
+SQL Server, Turso, los drivers externos por IPC, Redis, DynamoDB, CloudWatch e
+InfluxDB no pueden aplicar solo lectura. En esas conexiones, y en
 cualquier conexión cuya sesión ya tenga una transacción abierta, el script se
 gobierna como `write`: se aplica la decisión de la policy para `write` (Allow,
 Ask o Deny), y el audit registra `write`.

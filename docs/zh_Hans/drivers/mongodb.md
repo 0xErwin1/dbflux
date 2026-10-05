@@ -71,7 +71,8 @@
 - 不支持 `RETURNING`；变更能力在能力层面也报告不支持批量插入、批量更新与批量删除（`supports_batch`、`supports_bulk_update`、`supports_bulk_delete` 均为 `false`），即便生成器能生成 `updateMany`/`deleteMany` 文本。
 - 解析器的覆盖范围有意限定在上面列出的受支持方法集，而非完整的交互式 shell 语言；`distinct` 未作为查询能力呈现（`supports_distinct: false`）。
 - 在查询能力层面不支持 join、子查询、union、CTE、窗口函数与 `EXPLAIN`。
-- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务、只读事务与可延迟（deferrable）事务。
+- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务与可延迟（deferrable）事务。
+- 只读强制由 DBFlux 而非服务器实现，因为 MongoDB 没有只读会话模式。DBFlux 作为读取无人值守运行的请求（被归类为 `Read` 或 `Metadata` 的 MCP `execute_script` 脚本）在 `Read` 上限下运行：每个操作（无论在脚本中还是单条语句中）都会在发送前分类，超过上限时被拒绝。插入、更新、替换、删除、drop、`createCollection`、任何 `runCommand`/`adminCommand`，以及在任意深度包含 `$out` 或 `$merge` 阶段的 `aggregate` 都会被拒绝；解析器无法识别的操作（`findOneAndUpdate`、`bulkWrite`、`mapReduce`、`createIndex`、`renameCollection`、`getSiblingDB`、`distinct` 等）同样会被拒绝。读取中的服务器端 JavaScript（`$where`、`$function`）仍会运行，最小权限的凭据仍然是真正的边界。
 - DDL 非事务性（`transactional_ddl: false`）；不支持创建数据库、创建集合、alter、视图与触发器。
 - 聚合视图每次运行最多显示 1,000 个结果文档；在服务器上失败的阶段（未知运算符、`$merge` 写入用户无权写入的目标）会作为驱动错误报告，不会事先校验。运行前只检查阶段的形态：一个 JSON 数组，其中每个元素都指定一个 `$` 运算符。
 - 嵌入文档的字段按键名排序返回，而不是按存储顺序：值模型用有序映射保存嵌入文档。顶层字段保留文档顺序。
