@@ -4,7 +4,7 @@ use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
-use dbflux_components::tokens::{Fields, Spacing};
+use dbflux_components::tokens::{Fields, ui};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -1362,7 +1362,7 @@ impl GeneralSection {
             .appearance(false)
             .h_full()
             .px(Fields::PADDING_X)
-            .py(Spacing::XS)
+            .py(ui(4.0))
             .font_family(dbflux_components::fonts::ui_family(cx))
             .text_size(Fields::TEXT)
             .icon(AppIcon::ChevronDown)
