@@ -19,6 +19,9 @@
 //! | `radius_sm`        |  0 px      |  2 px      |
 //! | `radius_md`        |  0 px      |  2 px      |
 //! | `radius_lg`        |  0 px      |  3 px      |
+//!
+//! Font sizes are the values above multiplied by `fonts::ui_scale`, which is
+//! 1.0 at the default 13 px interface size.
 
 use dbflux_core::AppStyle;
 use gpui::{App, Global, Pixels, px};
@@ -60,58 +63,72 @@ pub fn active_style(cx: &App) -> AppStyle {
 
 /// Section label font: 11 px (Default) / 10 px (Compact).
 pub fn font_label(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(11.0),
         AppStyle::Compact => px(10.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 /// Extra-small font: 12 px (Default) / 11 px (Compact).
 pub fn font_xs(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(12.0),
         AppStyle::Compact => px(11.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 /// Small font: 13 px (Default) / 12 px (Compact).
 pub fn font_sm(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(13.0),
         AppStyle::Compact => px(12.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 /// Base font: 13 px (Default) / 12 px (Compact).
 pub fn font_base(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(13.0),
         AppStyle::Compact => px(12.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 /// Large font: 15 px (Default) / 14 px (Compact).
 pub fn font_lg(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(15.0),
         AppStyle::Compact => px(14.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 /// Extra-large font: 18 px (Default) / 16 px (Compact).
 pub fn font_xl(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(18.0),
         AppStyle::Compact => px(16.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 /// Title font: 20 px (Default) / 18 px (Compact).
 pub fn font_title(cx: &App) -> Pixels {
-    match active_style(cx) {
+    let size = match active_style(cx) {
         AppStyle::Default => px(20.0),
         AppStyle::Compact => px(18.0),
-    }
+    };
+
+    crate::fonts::scaled(cx, size)
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +227,29 @@ mod tests {
             set_style(cx, AppStyle::Compact);
             assert_eq!(active_style(cx), AppStyle::Compact);
             assert_eq!(font_xs(cx), px(11.0));
+        });
+    }
+
+    #[gpui::test]
+    fn ui_font_scale_applies_to_font_accessors_only(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(cx, AppStyle::Default);
+            crate::fonts::init(
+                cx,
+                crate::fonts::FontSettings {
+                    ui_size: 26.0,
+                    ..crate::fonts::FontSettings::default()
+                },
+            );
+
+            assert_eq!(font_label(cx), px(22.0));
+            assert_eq!(font_sm(cx), px(26.0));
+            assert_eq!(font_title(cx), px(40.0));
+            assert_eq!(radius_sm(cx), px(0.0));
+
+            set_style(cx, AppStyle::Compact);
+            assert_eq!(font_xs(cx), px(22.0));
+            assert_eq!(radius_lg(cx), px(3.0));
         });
     }
 }

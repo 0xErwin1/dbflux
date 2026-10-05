@@ -46,6 +46,38 @@ fn apply_vim_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
     crate::keymap::set_vim_leader(leader, cx);
 }
 
+/// Publishes the font settings now and after every app-state change. When
+/// the resolved fonts change, the theme takes the new families and sizes and
+/// every open window re-renders with them.
+pub fn publish_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_font_settings(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_font_settings(&app_state, cx);
+    })
+    .detach();
+}
+
+/// Resolves persisted font settings against the fonts installed on this
+/// machine.
+pub fn resolve_font_settings(
+    settings: &dbflux_core::GeneralSettings,
+    cx: &gpui::App,
+) -> dbflux_components::fonts::FontSettings {
+    let installed = dbflux_components::fonts::installed_font_names(cx);
+
+    dbflux_components::fonts::FontSettings::from_general(settings, &installed)
+}
+
+fn apply_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let fonts = resolve_font_settings(app_state.read(cx).general_settings(), cx);
+
+    if dbflux_components::fonts::set(cx, fonts) {
+        dbflux_components::theme::apply_fonts(cx);
+        cx.refresh_windows();
+    }
+}
+
 /// Drains startup hook-load diagnostics into safe, actionable user-facing errors.
 ///
 /// The durable row remains protected by the configuration loader; this boundary
@@ -702,5 +734,67 @@ mod vim_setting_tests {
         assert_eq!(vim_leader(), default_vim_leader());
 
         cx.update(|cx| set_vim_leader(default_vim_leader(), cx));
+    }
+}
+
+#[cfg(test)]
+mod font_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_font_settings};
+    use dbflux_components::fonts::{self, FontSettings};
+    use dbflux_components::typography::AppFonts;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, SharedString, TestAppContext, px};
+    use gpui_component::theme::Theme;
+
+    /// The font global starts from the saved settings and follows every
+    /// later save, and the theme carries the new fonts.
+    #[gpui::test]
+    fn font_settings_are_published_and_reach_the_theme(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_font_settings(&app_state, cx));
+        assert_eq!(cx.update(|cx| fonts::current(cx)), FontSettings::default());
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.ui_font_size = 15.6;
+                settings.editor_font_family = Some(AppFonts::INTERFACE.to_string());
+                settings.editor_font_size = 18.0;
+                settings.grid_font_size = 99.0;
+                state.update_general_settings(settings);
+                cx.emit(AppStateChanged);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let current = fonts::current(cx);
+            assert_eq!(current.ui_size, 15.6);
+            assert_eq!(
+                current.editor_family,
+                SharedString::from(AppFonts::INTERFACE)
+            );
+            assert_eq!(current.grid_family, SharedString::from(AppFonts::INTERFACE));
+            assert_eq!(current.grid_size, 32.0);
+
+            let theme = Theme::global(cx);
+            assert_eq!(theme.font_size, px(16.0 * 15.6 / 13.0));
+            assert_eq!(
+                theme.mono_font_family,
+                SharedString::from(AppFonts::INTERFACE)
+            );
+            assert_eq!(theme.mono_font_size, px(18.0));
+            assert_eq!(theme.dark_theme.font_size, Some(16.0 * 15.6 / 13.0));
+            assert_eq!(theme.light_theme.mono_font_size, Some(18.0));
+        });
     }
 }

@@ -9,6 +9,7 @@
 
 pub mod actions;
 pub mod density;
+pub mod fonts;
 pub mod helpers;
 pub mod icon;
 pub mod semantic;
