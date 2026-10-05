@@ -187,7 +187,7 @@ MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `appro
 | MySQL, MariaDB | `START TRANSACTION READ ONLY`, 실행 후 롤백. 실행 가능한 주석(`/*! */`, `/*M! */`)이나 `INTO`가 있는 스크립트, 또는 열린 트랜잭션이나 `LOCK TABLES` 잠금이 있을 수 있을 때 실행되는 스크립트는 읽기 전용으로 실행되지 않고 `write`로 통제됩니다 |
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 요청별 설정 `readonly = 2` |
-| MongoDB | MongoDB에는 읽기 전용 세션이 없으므로 DBFlux가 강제합니다: 모든 작업은 전송 전에 분류되며 `read`보다 높으면 거부됩니다. `runCommand`, `adminCommand`, `$out` 또는 `$merge` 스테이지가 있는 `aggregate`도 포함됩니다. DBFlux가 인식하지 못하는 작업도 거부됩니다 |
+| MongoDB | MongoDB에는 읽기 전용 세션이 없으므로 DBFlux가 작업마다 강제합니다: 모든 작업은 전송 전에 분류되며 스크립트 클래스(`read` 또는 `metadata`)보다 높으면 거부됩니다. `runCommand`, `adminCommand`, `$out` 또는 `$merge` 스테이지가 있는 `aggregate`도 포함됩니다. 변경 스트림과 DBFlux가 인식하지 못하는 작업도 거부됩니다 |
 
 SQL Server, Turso, 외부 IPC 드라이버, Redis, DynamoDB, CloudWatch, InfluxDB는 읽기 전용을 강제할 수 없습니다. 이러한 연결과, 세션에 이미 열린 트랜잭션이 있는 모든 연결에서는 스크립트가 `write`로 통제됩니다: 정책의 `write` 결정(Allow, Ask 또는 Deny)이 적용되고, 감사에는 `write`가 기록됩니다.
 

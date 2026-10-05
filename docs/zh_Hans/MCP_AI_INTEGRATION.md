@@ -189,7 +189,7 @@ MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_e
 | MySQL、MariaDB | `START TRANSACTION READ ONLY`，结束后回滚。包含可执行注释（`/*! */`、`/*M! */`）或 `INTO` 的脚本，或在可能存在未结束的事务或 `LOCK TABLES` 锁时运行的脚本，不会以只读方式运行，而是按 `write` 进行治理 |
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 按请求设置 `readonly = 2` |
-| MongoDB | MongoDB 没有只读会话，因此由 DBFlux 强制：每个操作在发送前分类，高于 `read` 的会被拒绝，包括 `runCommand`、`adminCommand` 以及包含 `$out` 或 `$merge` 阶段的 `aggregate`。DBFlux 无法识别的操作也会被拒绝 |
+| MongoDB | MongoDB 没有只读会话，因此由 DBFlux 按操作强制：每个操作在发送前分类，高于脚本类别（`read` 或 `metadata`）的会被拒绝，包括 `runCommand`、`adminCommand` 以及包含 `$out` 或 `$merge` 阶段的 `aggregate`。变更流和 DBFlux 无法识别的操作也会被拒绝 |
 
 SQL Server、Turso、外部 IPC 驱动程序、Redis、DynamoDB、CloudWatch 和 InfluxDB 无法强制只读。在这些连接上，以及在会话中已有未结束事务的任何连接上，脚本按 `write` 进行治理：适用策略对 `write` 的决定（Allow、Ask 或 Deny），审计记录为 `write`。
 

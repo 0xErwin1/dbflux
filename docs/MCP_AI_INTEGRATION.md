@@ -189,7 +189,7 @@ MCP clients can never approve or reject: `approve_execution` and `reject_executi
 | MySQL, MariaDB | `START TRANSACTION READ ONLY`, rolled back afterwards. A script with an executable comment (`/*! */`, `/*M! */`) or `INTO`, or one that runs while a transaction or a `LOCK TABLES` lock may be open, does not run read-only and is governed as `write` |
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | The per-request setting `readonly = 2` |
-| MongoDB | MongoDB has no read-only session, so DBFlux enforces it: every operation is classified before it is sent and refused above `read`, including `runCommand`, `adminCommand` and an `aggregate` with a `$out` or `$merge` stage. Operations DBFlux does not recognise are refused |
+| MongoDB | MongoDB has no read-only session, so DBFlux enforces it per operation: every operation is classified before it is sent and refused above the script's class (`read` or `metadata`), including `runCommand`, `adminCommand` and an `aggregate` with a `$out` or `$merge` stage. Change streams and operations DBFlux does not recognise are refused |
 
 SQL Server, Turso, external IPC drivers, Redis, DynamoDB, CloudWatch and InfluxDB cannot enforce read-only. On those connections, and on any connection whose session already has an open transaction, the script is governed as `write`: the policy's decision for `write` applies (Allow, Ask or Deny), and the audit records `write`.
 

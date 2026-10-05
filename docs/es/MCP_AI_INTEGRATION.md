@@ -246,7 +246,7 @@ datos (en MongoDB la rechaza DBFlux, como muestra la tabla), y la llamada se gob
 | MySQL, MariaDB       | `START TRANSACTION READ ONLY`, revertida al terminar. Un script con un comentario ejecutable (`/*! */`, `/*M! */`) o `INTO`, o que se ejecuta cuando puede haber una transacción o un bloqueo de `LOCK TABLES` abierto, no se ejecuta en solo lectura y se gobierna como `write` |
 | SQLite               | `PRAGMA query_only`                                                                                                                                                                                     |
 | ClickHouse           | El ajuste por petición `readonly = 2`                                                                                                                                                                   |
-| MongoDB              | MongoDB no tiene sesión de solo lectura, así que DBFlux la aplica: cada operación se clasifica antes de enviarse y se rechaza por encima de `read`, incluidos `runCommand`, `adminCommand` y un `aggregate` con una etapa `$out` o `$merge`. Se rechazan las operaciones que DBFlux no reconoce |
+| MongoDB              | MongoDB no tiene sesión de solo lectura, así que DBFlux la aplica por operación: cada operación se clasifica antes de enviarse y se rechaza por encima de la clase del script (`read` o `metadata`), incluidos `runCommand`, `adminCommand` y un `aggregate` con una etapa `$out` o `$merge`. Se rechazan los change streams y las operaciones que DBFlux no reconoce |
 
 SQL Server, Turso, los drivers externos por IPC, Redis, DynamoDB, CloudWatch e
 InfluxDB no pueden aplicar solo lectura. En esas conexiones, y en

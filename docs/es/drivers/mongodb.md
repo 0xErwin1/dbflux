@@ -125,17 +125,19 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 - Las transacciones se anuncian a nivel de capacidad (`supports_transactions:
   true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas ni
   soporte deferrable.
-- La aplicación de solo lectura la hace DBFlux, no el servidor, porque MongoDB
-  no tiene un modo de sesión de solo lectura. Una solicitud que DBFlux ejecuta
-  sin supervisión como lectura (scripts de MCP `execute_script` clasificados
-  `Read` o `Metadata`) se ejecuta con un techo `Read`: cada operación, en un
+- La aplicación de solo lectura la hace DBFlux por operación, no el servidor,
+  porque MongoDB no tiene un modo de sesión de solo lectura. Una solicitud que
+  DBFlux ejecuta sin supervisión como lectura (scripts de MCP `execute_script`
+  clasificados `Read` o `Metadata`) se ejecuta con el techo de su clase, nunca
+  por encima de `Read`: cada operación, en un
   script o en una sentencia única, se clasifica antes de enviarse y se rechaza
   cuando supera el techo. Se rechazan inserts, updates, replaces, deletes,
   drops, `createCollection`, cualquier `runCommand`/`adminCommand` y un
   `aggregate` con una etapa `$out` o `$merge` a cualquier profundidad; también
   se rechazan las operaciones que los parsers no reconocen (`findOneAndUpdate`,
   `bulkWrite`, `mapReduce`, `createIndex`, `renameCollection`, `getSiblingDB`,
-  `distinct`, …). El JavaScript del servidor dentro de una lectura (`$where`,
+  `distinct`, `watch`, …). También se rechaza un `aggregate` que abre un change
+  stream (`$changeStream`), porque nunca termina. El JavaScript del servidor dentro de una lectura (`$where`,
   `$function`) sigue ejecutándose, y las credenciales con privilegios mínimos
   siguen siendo el límite real.
 - El DDL no es transaccional (`transactional_ddl: false`); create-database,
