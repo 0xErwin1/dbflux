@@ -3872,9 +3872,8 @@ impl DataGridPanel {
     }
 }
 
-/// Float cell as the point inspector lists it: up to three decimals with
-/// trailing zeros and a bare decimal point trimmed. A value that rounds to
-/// zero reads `0`, never `-0`.
+/// A small negative value rounds to `-0` once trailing zeros are trimmed, so
+/// zero is normalized explicitly.
 fn format_inspector_float(value: f64) -> String {
     let formatted = format!("{:.3}", value);
     let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
