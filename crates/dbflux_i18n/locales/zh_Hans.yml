@@ -71,7 +71,7 @@ chart:
     hovered_point: 悬停点
     time: 时间
     value: 取值
-    source_doc: 来源文档
+    source_row: 来源行
     quick_actions: 快捷操作
     show_in_tree: 在树中显示
 common:

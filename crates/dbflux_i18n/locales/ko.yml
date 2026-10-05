@@ -71,7 +71,7 @@ chart:
     hovered_point: 가리킨 지점
     time: 시간
     value: 값
-    source_doc: 원본 문서
+    source_row: 원본 행
     quick_actions: 빠른 작업
     show_in_tree: 트리에 표시
 common:
