@@ -425,6 +425,23 @@ impl ChartShell {
         cx.notify();
     }
 
+    /// Add (`checked`) or remove a Y column from the bindings and keep the Y
+    /// picker open, since it is a checklist where several columns are picked
+    /// in a row. Otherwise behaves like `apply_bindings`.
+    pub fn toggle_y_column(&mut self, col_idx: usize, checked: bool, cx: &mut Context<Self>) {
+        let mut bindings = self.active_bindings();
+        if checked {
+            if !bindings.y.contains(&col_idx) {
+                bindings.y.push(col_idx);
+            }
+        } else {
+            bindings.y.retain(|&index| index != col_idx);
+        }
+
+        self.apply_bindings(bindings, cx);
+        self.axis_open_pill = Some(AxisPill::Y);
+    }
+
     /// The currently selected chart kind.
     pub fn chart_kind(&self) -> ChartKind {
         self.chart_kind
@@ -1007,6 +1024,41 @@ mod tests {
                 .expect("chart view must be built");
             view.read(cx).data_x_bounds()
         })
+    }
+
+    /// The Y picker is a checklist: toggling a column with the mouse applies
+    /// the new binding and leaves the picker open for the next column, while
+    /// other bindings still close it.
+    #[gpui::test]
+    fn toggling_a_y_column_keeps_the_y_picker_open(cx: &mut gpui::TestAppContext) {
+        let shell = cx.new(ChartShell::new_standalone);
+        let result = two_series_result();
+
+        shell.update(cx, |shell, cx| {
+            shell.set_result(&result, false, cx);
+            shell.ensure_chart_view(&result, cx);
+            shell.toggle_axis_pill(AxisPill::Y, cx);
+            let y_before = shell.active_bindings().y;
+
+            shell.toggle_y_column(2, !y_before.contains(&2), cx);
+
+            assert_eq!(shell.axis_open_pill, Some(AxisPill::Y));
+            assert_ne!(shell.active_bindings().y, y_before, "the column toggled");
+
+            shell.toggle_y_column(2, y_before.contains(&2), cx);
+
+            assert_eq!(shell.axis_open_pill, Some(AxisPill::Y));
+            assert_eq!(shell.active_bindings().y, y_before, "toggled back");
+
+            let mut bindings = shell.active_bindings();
+            bindings.x = 0;
+            shell.apply_bindings(bindings, cx);
+
+            assert_eq!(
+                shell.axis_open_pill, None,
+                "other bindings close the picker"
+            );
+        });
     }
 
     struct DomainHarness {

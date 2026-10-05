@@ -239,17 +239,7 @@ fn render_bindings_row(
         });
     };
     let on_y = move |col_idx: usize, checked: bool, _w: &mut gpui::Window, cx: &mut gpui::App| {
-        panel_for_y.update(cx, |doc, cx| {
-            let mut b = doc.active_bindings(cx);
-            if checked {
-                if !b.y.contains(&col_idx) {
-                    b.y.push(col_idx);
-                }
-            } else {
-                b.y.retain(|&i| i != col_idx);
-            }
-            doc.apply_binding_spec(b, cx);
-        });
+        panel_for_y.update(cx, |doc, cx| doc.toggle_y_column(col_idx, checked, cx));
     };
     let on_group = move |group_col: Option<usize>, _w: &mut gpui::Window, cx: &mut gpui::App| {
         panel_for_group.update(cx, |doc, cx| {

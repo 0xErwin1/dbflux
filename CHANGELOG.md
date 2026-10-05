@@ -30,6 +30,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Whole numbers in chart tooltips** — The chart tooltip and the point inspector no longer pad values with zeros: a count of 21 reads `21` instead of `21.000`, zero reads `0`, and 1.5 reads `1.5`. Values keep up to three decimals.
 * **Chart tooltip names the hovered point** — The tooltip that follows the pointer over a time chart now opens with the time of the point being read: a date such as `2025-03-01` for daily or monthly data, the date and time of day when a chart spanning several days has points within the day, and the time of day alone on charts shorter than a day. Before, it showed the time of day under the pointer followed by the minutes since the start of the chart, so monthly data read `00:00 UTC · t+172800m`.
 * **Point inspector while hovering a chart** — While the pointer is over a chart point, the point inspector's Time now shows that point's time and its Series names the series whose value it shows. Before, Time showed the pointer's position between points, such as `2025-05-03 22:11:54`, and Series could name another series than the one the pointer was on, because it only followed the keyboard.
+* **Chart Y-axis picker stays open** — Clicking a column in the Y-axis picker of a chart, in a result, a chart tab or a dashboard panel's configuration, now leaves the picker open so several columns can be checked or unchecked in a row, as Space already did from the keyboard. Before, it closed after every click.
 
 ## [0.8.6] - 2026-10-02
 
