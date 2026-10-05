@@ -2536,84 +2536,6 @@ impl Connection for PostgresConnection {
         sql
     }
 
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quoted_table, cols, placeholders_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-
-        let set_parts: Vec<String> = set
-            .iter()
-            .enumerate()
-            .map(|(i, (col, _))| format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), i + 1))
-            .collect();
-        let set_str = set_parts.join(", ");
-
-        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-        if let Some(f) = filter {
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let mut sql = format!("DELETE FROM {}", quoted_table);
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
     fn build_upsert_sql(
         &self,
         table: &str,
@@ -2659,21 +2581,6 @@ impl Connection for PostgresConnection {
         (sql, values.to_vec())
     }
 
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        sql
-    }
-
     fn build_truncate_sql(&self, table: &str) -> String {
         let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
         format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
@@ -2699,10 +2606,6 @@ impl Connection for PostgresConnection {
 
     fn supports_transactional_ddl(&self) -> bool {
         true
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter))
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
@@ -6025,25 +5928,6 @@ fn translate_filter_to_sql(filter: &Value) -> String {
             s.clone()
         }
         _ => String::new(),
-    }
-}
-
-/// Collect all Value items from a filter expression into a vector for parameterized queries.
-fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    if let Value::Document(doc) = filter {
-        for value in doc.values() {
-            match value {
-                Value::Array(arr) => {
-                    for item in arr {
-                        if !matches!(item, Value::Null) {
-                            params.push(item.clone());
-                        }
-                    }
-                }
-                Value::Null => {}
-                _ => params.push(value.clone()),
-            }
-        }
     }
 }
 

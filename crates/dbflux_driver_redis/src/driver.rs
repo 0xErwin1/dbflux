@@ -1753,31 +1753,6 @@ impl Connection for RedisConnection {
         "SELECT * FROM key WHERE filter LIMIT offset".to_string()
     }
 
-    fn build_insert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-    ) -> (String, Vec<Value>) {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        ("SET key value".to_string(), Vec::new())
-    }
-
-    fn build_update_sql(
-        &self,
-        _table: &str,
-        _set: &[(String, Value)],
-        _filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        ("SET key value".to_string(), Vec::new())
-    }
-
-    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        ("DEL key".to_string(), Vec::new())
-    }
-
     fn build_upsert_sql(
         &self,
         _table: &str,
@@ -1788,11 +1763,6 @@ impl Connection for RedisConnection {
     ) -> (String, Vec<Value>) {
         // Redis doesn't use SQL - this is for SQL-based drivers
         ("SET key value".to_string(), Vec::new())
-    }
-
-    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        "DBSIZE".to_string()
     }
 
     fn build_truncate_sql(&self, _table: &str) -> String {
@@ -1817,13 +1787,6 @@ impl Connection for RedisConnection {
 
     fn supports_transactional_ddl(&self) -> bool {
         false
-    }
-
-    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
-        // Redis doesn't use SQL WHERE clauses
-        Err(DbError::NotSupported(
-            "translate_filter is not applicable to Redis - it uses key-based access and commands, not SQL".to_string(),
-        ))
     }
 }
 

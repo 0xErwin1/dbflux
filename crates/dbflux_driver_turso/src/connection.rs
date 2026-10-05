@@ -27,9 +27,8 @@ use turso_serverless::{
 };
 
 use crate::dialect::{
-    TURSO_CODE_GENERATOR, TURSO_DIALECT, collect_filter_values, escape_string,
-    generate_create_table, kind_from_decltype, kind_from_values, quote_ident,
-    translate_filter_to_sql, value_from_turso, value_to_param,
+    TURSO_CODE_GENERATOR, TURSO_DIALECT, escape_string, generate_create_table, kind_from_decltype,
+    kind_from_values, quote_ident, translate_filter_to_sql, value_from_turso, value_to_param,
 };
 use crate::driver::METADATA;
 use crate::session::TursoSessionFactory;
@@ -1066,70 +1065,6 @@ impl Connection for TursoConnection {
         sql
     }
 
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let cols = columns
-            .iter()
-            .map(|c| quote_ident(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let placeholders = vec!["?"; values.len()].join(", ");
-        (
-            format!(
-                "INSERT INTO {} ({cols}) VALUES ({placeholders})",
-                quote_ident(table)
-            ),
-            values.to_vec(),
-        )
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let set_str = set
-            .iter()
-            .map(|(col, _)| format!("{} = ?", quote_ident(col)))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut sql = format!("UPDATE {} SET {set_str}", quote_ident(table));
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let mut sql = format!("DELETE FROM {}", quote_ident(table));
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
     fn build_upsert_sql(
         &self,
         table: &str,
@@ -1164,17 +1099,6 @@ impl Connection for TursoConnection {
         )
     }
 
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quote_ident(table));
-        if let Some(where_clause) = filter.map(translate_filter_to_sql)
-            && !where_clause.is_empty()
-        {
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        }
-        sql
-    }
-
     fn build_truncate_sql(&self, table: &str) -> String {
         format!("DELETE FROM {}", quote_ident(table))
     }
@@ -1198,10 +1122,6 @@ impl Connection for TursoConnection {
 
     fn supports_transactional_ddl(&self) -> bool {
         true
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter))
     }
 }
 
