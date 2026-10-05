@@ -1341,6 +1341,7 @@ mod tests {
             "settings.general.grid_font_size.error",
             "settings.general.font_family.option.not_installed",
             "settings.general.font_family.search_placeholder",
+            "settings.general.font_family.no_matches",
         ];
 
         for key in keys {
@@ -1355,6 +1356,204 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Opens the General section under a `Root`, with "Missing Sans" saved as
+    /// the interface family so its select has a known entry at index 1.
+    fn open_font_select_section(
+        cx: &mut TestAppContext,
+    ) -> (Entity<GeneralSection>, &mut gpui::VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let mut state = AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test app state");
+                let mut settings = state.general_settings().clone();
+                settings.ui_font_family = Some("Missing Sans".to_string());
+                state.update_general_settings(settings);
+                state
+            })
+        });
+
+        let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<GeneralSection>>>> =
+            std::rc::Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                slot.replace(Some(section.clone()));
+                gpui_component::Root::new(section, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("the section is built");
+        (section, window)
+    }
+
+    fn open_ui_family_select(
+        section: &Entity<GeneralSection>,
+        window: &mut gpui::VisualTestContext,
+    ) {
+        window.update(|window, cx| {
+            let select = section.read(cx).select_ui_font_family.clone();
+            select.update(cx, |select, cx| select.focus(window, cx));
+        });
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+    }
+
+    /// The value of the open font search field, read from the window's
+    /// accessibility tree; `None` while no select is open.
+    fn font_search_value(window: &mut gpui::VisualTestContext) -> Option<String> {
+        let capture = Arc::new(FrameCapture::default());
+        window.update(|window, _| {
+            window.observe_frames(&capture);
+            window.refresh();
+        });
+        window.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+        let search_label = dbflux_i18n::t!("settings.general.font_family.search_placeholder");
+
+        frame.nodes().find_map(|(_, node)| {
+            let accessible = frame.accessibility_node(node)?;
+            (accessible.role() == gpui::Role::TextInput
+                && accessible.label() == Some(search_label.as_str()))
+            .then(|| accessible.value().unwrap_or_default().to_owned())
+        })
+    }
+
+    fn ui_family_cursor(
+        section: &Entity<GeneralSection>,
+        window: &mut gpui::VisualTestContext,
+    ) -> Option<gpui_component::IndexPath> {
+        window.update(|_, cx| {
+            let select = section.read(cx).select_ui_font_family.clone();
+            select.read(cx).selected_index(cx)
+        })
+    }
+
+    fn ui_family_value(
+        section: &Entity<GeneralSection>,
+        window: &mut gpui::VisualTestContext,
+    ) -> Option<Option<gpui::SharedString>> {
+        window.update(|_, cx| {
+            let select = section.read(cx).select_ui_font_family.clone();
+            select.read(cx).selected_value().cloned()
+        })
+    }
+
+    #[gpui::test]
+    fn escape_after_searching_keeps_the_saved_family_and_its_full_list_position(
+        cx: &mut TestAppContext,
+    ) {
+        let (section, window) = open_font_select_section(cx);
+        let saved = Some(Some(gpui::SharedString::from("Missing Sans")));
+        assert_eq!(ui_family_value(&section, window), saved);
+        assert_eq!(
+            ui_family_cursor(&section, window),
+            Some(gpui_component::IndexPath::new(1))
+        );
+
+        open_ui_family_select(&section, window);
+        window.simulate_input("default");
+        window.run_until_parked();
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(ui_family_value(&section, window), saved);
+        assert_eq!(
+            ui_family_cursor(&section, window),
+            Some(gpui_component::IndexPath::new(1)),
+            "the cursor returns to the saved family in the unfiltered list"
+        );
+    }
+
+    #[gpui::test]
+    fn reopening_after_a_search_starts_from_the_full_list(cx: &mut TestAppContext) {
+        let (section, window) = open_font_select_section(cx);
+
+        open_ui_family_select(&section, window);
+        window.simulate_input("zzzz");
+        window.run_until_parked();
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        open_ui_family_select(&section, window);
+
+        assert_eq!(
+            font_search_value(window).as_deref(),
+            Some(""),
+            "the search field starts empty on every open"
+        );
+        assert_eq!(
+            ui_family_cursor(&section, window),
+            Some(gpui_component::IndexPath::new(1)),
+            "a query left from the last open would hide the saved family"
+        );
+    }
+
+    #[gpui::test]
+    fn enter_after_searching_selects_the_highlighted_family(cx: &mut TestAppContext) {
+        let (section, window) = open_font_select_section(cx);
+
+        open_ui_family_select(&section, window);
+        window.simulate_input("default");
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        assert_eq!(ui_family_value(&section, window), Some(None));
+        assert_eq!(
+            window.update(|_, cx| section.read(cx).gen_settings.ui_font_family.clone()),
+            None,
+            "choosing the default entry clears the saved family"
+        );
+        assert_eq!(
+            ui_family_cursor(&section, window),
+            Some(gpui_component::IndexPath::new(0))
+        );
+    }
+
+    #[gpui::test]
+    fn an_invalid_size_shows_its_error_under_the_field(cx: &mut TestAppContext) {
+        let (section, window) = open_font_select_section(cx);
+
+        window.update(|window, cx| {
+            section.update(cx, |section, cx| {
+                section
+                    .input_grid_font_size
+                    .update(cx, |input, cx| input.set_value("40", window, cx));
+                section.save_general_settings(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let field = window
+            .debug_bounds("general-grid-font-size-control")
+            .expect("the grid size field renders");
+        let error = window
+            .debug_bounds("general-grid-font-size-error")
+            .expect("the error renders in the settings window");
+
+        assert!(
+            error.origin.y >= field.origin.y + field.size.height,
+            "the error sits under the field: field {field:?}, error {error:?}"
+        );
     }
 
     #[test]

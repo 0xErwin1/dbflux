@@ -3692,6 +3692,7 @@ settings:
       option:
         not_installed: "%{family} (no instalada)"
       search_placeholder: "Buscar fuentes"
+      no_matches: "Ninguna fuente coincide"
     editor:
       group: "Editor"
     vim_mode:

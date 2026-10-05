@@ -60,6 +60,14 @@ pub use self::section_trait::{SettingsSection, SettingsSectionId};
 const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = crate::tokens::SettingsMetrics::NAV_WIDTH;
 const SETTINGS_SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SETTINGS_SIDEBAR_MAX_WIDTH: Pixels = px(420.0);
+
+/// The navigation's starting width at the current interface size: its labels
+/// and search field grow with the interface font, so the default width grows
+/// with them. A width the user drags stays where they put it.
+fn scaled_default_sidebar_width(cx: &App) -> Pixels {
+    (SETTINGS_SIDEBAR_DEFAULT_WIDTH * dbflux_components::fonts::ui_scale(cx))
+        .clamp(SETTINGS_SIDEBAR_MIN_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH)
+}
 /// The desk gap between the navigation and content islands doubles as the
 /// resize grip of the navigation.
 const SETTINGS_SIDEBAR_GRIP_WIDTH: Pixels = dbflux_components::tokens::IslandMetrics::GAP;

@@ -375,7 +375,7 @@ impl Fields {
     /// Gap between the parts of a field: icon, value, suffix. (8 px)
     pub const GAP: Pixels = px(8.0);
     /// Value text size inside a text field or select trigger. (12.5 px)
-    pub const TEXT: Pixels = px(12.5);
+    pub const TEXT: Rems = ui(12.5);
     /// Select trigger chevron size. (12 px)
     pub const CHEVRON: Rems = ui(12.0);
     /// Icon before the label of a select trigger. (14 px)

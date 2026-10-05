@@ -19,6 +19,13 @@ const MIN_WIDTH: Pixels = px(200.0);
 const MAX_WIDTH: Pixels = px(800.0);
 const GRIP_WIDTH: Pixels = px(7.0);
 
+/// The starting width at the current interface size: the sidebar's rows and
+/// header grow with the interface font, so its default width grows with them.
+/// A width the user drags stays where they put it.
+fn scaled_default_width(cx: &App) -> Pixels {
+    (DEFAULT_EXPANDED_WIDTH * dbflux_components::fonts::ui_scale(cx)).clamp(MIN_WIDTH, MAX_WIDTH)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidebarState {
     #[default]
@@ -46,6 +53,7 @@ pub struct SidebarDock {
 impl SidebarDock {
     pub fn new(sidebar: Entity<Sidebar>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&sidebar, |dock, _, cx| dock.dismiss_if_idle(cx));
+        let default_width = scaled_default_width(cx);
         Self {
             sidebar,
             _sidebar_subscription: subscription,
@@ -55,8 +63,8 @@ impl SidebarDock {
             sidebar_focused: false,
             hover_deadline: None,
             hover_generation: 0,
-            width: DEFAULT_EXPANDED_WIDTH,
-            last_expanded_width: DEFAULT_EXPANDED_WIDTH,
+            width: default_width,
+            last_expanded_width: default_width,
             is_resizing: false,
             resize_start_x: None,
             resize_start_width: None,

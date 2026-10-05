@@ -4,6 +4,7 @@ use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
+use dbflux_components::tokens::Fields;
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -1356,12 +1357,24 @@ impl GeneralSection {
             ),
         };
 
-        let control = Select::new(select)
+        let select = Select::new(select)
             .id(id)
+            .appearance(false)
+            .font_family(dbflux_components::fonts::ui_family(cx))
+            .text_size(Fields::TEXT)
+            .icon(AppIcon::ChevronDown)
             .accessibility_label(label.clone())
             .search_placeholder(dbflux_i18n::t!(
                 "settings.general.font_family.search_placeholder"
-            ));
+            ))
+            .empty(|_, _| {
+                div()
+                    .p(Fields::PADDING_X)
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "settings.general.font_family.no_matches"
+                    )))
+            });
+        let control = dbflux_components::composites::control_shell(select, cx);
 
         self.render_gen_dropdown(label, Some(help), control, row, cx)
     }

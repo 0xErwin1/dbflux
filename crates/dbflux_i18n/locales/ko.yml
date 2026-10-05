@@ -3692,6 +3692,7 @@ settings:
       option:
         not_installed: "%{family} (설치되지 않음)"
       search_placeholder: "글꼴 검색"
+      no_matches: "일치하는 글꼴이 없습니다"
     editor:
       group: "편집기"
     vim_mode:

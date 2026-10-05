@@ -3692,6 +3692,7 @@ settings:
       option:
         not_installed: "%{family}（未安装）"
       search_placeholder: "搜索字体"
+      no_matches: "没有匹配的字体"
     editor:
       group: "编辑器"
     vim_mode:

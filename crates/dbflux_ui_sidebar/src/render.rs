@@ -43,12 +43,18 @@ impl Sidebar {
             .h(ShellMetrics::SIDEBAR_HEADER_HEIGHT)
             .pl(HeaderMetrics::PANEL_PADDING_LEFT)
             .pr(HeaderMetrics::PANEL_PADDING_RIGHT)
-            .child(sidebar_header_label(
-                self.active_tab,
-                self.connections_focused,
-                tint,
-            ))
-            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(sidebar_header_label(
+                        self.active_tab,
+                        self.connections_focused,
+                        tint,
+                    )),
+            )
             .child(
                 Button::new("sidebar-add", add_label)
                     .icon(AppIcon::Plus)

@@ -227,7 +227,7 @@ pub(crate) fn check_row(checkbox: impl IntoElement, description: Option<SharedSt
                             .flex_shrink_0()
                             .w(dbflux_components::tokens::Fields::CHECKBOX_SIZE),
                     )
-                    .child(help_text(description)),
+                    .child(div().flex_1().min_w_0().child(help_text(description))),
             )
         })
 }
