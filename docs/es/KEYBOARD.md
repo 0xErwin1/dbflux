@@ -191,6 +191,7 @@ de estado del espacio de trabajo.
 | Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
 | Normal | `i` | Insertar antes del cursor |
 | Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
+| Normal | `o` / `O` | Abrir una línea nueva debajo / encima de la línea del cursor con la misma indentación e insertar allí |
 | Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
@@ -201,6 +202,8 @@ de estado del espacio de trabajo.
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
+| Normal | `p` / `P` / `Np` | Pegar el portapapeles del sistema después / antes del cursor; un contador lo pega esa cantidad de veces |
+| Normal | `Ctrl+Shift+V` | Pegar el portapapeles del sistema antes del cursor, como `P` |
 | Normal | `u` | Deshacer |
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
 | Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
@@ -209,6 +212,7 @@ de estado del espacio de trabajo.
 | Visual / Visual Línea / Visual Bloque | `d` / `x` / `y` | Borrar la selección (`d` / `x`) o copiarla al portapapeles del sistema (`y`) |
 | Visual / Visual Línea / Visual Bloque | `Escape` | Borrar la selección y volver al modo Normal |
 | Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
+| Insertar / Reemplazar | `Ctrl+Shift+V` | Insertar el portapapeles del sistema en el cursor, reemplazando la selección |
 | Reemplazar | Caracteres escritos | Sobrescribir el carácter bajo el cursor; al final de una línea se agregan |
 | Reemplazar | `Backspace` | Restaurar el carácter que sobrescribió esta sesión de Reemplazar; si no hay ninguno, moverse a la izquierda |
 | Reemplazar | `Escape` | Volver al modo Normal |
@@ -268,7 +272,7 @@ Todo lo demás en modo Normal:
 | `Space` | Inicia una secuencia de líder (ver **Tecla líder** más abajo); sola, nada |
 | `Tab` / `Shift+Tab` | Mover el foco al panel siguiente / anterior, igual que fuera del editor (también en los modos Visual); no indenta |
 | `Ctrl+v` | Entrar en Visual Bloque (no pegar) |
-| Pegar (`Cmd+v` o el menú contextual) | Nada |
+| Pegar (`Cmd+v` o el menú contextual) | Nada; use `p`, `P` o `Ctrl+Shift+V` |
 | Composición y confirmación del método de entrada (IME) | Se descartan |
 | `Backspace` / `Delete` | Nada |
 | `Escape` | Su significado habitual: cancelar una query en curso o salir del editor |
@@ -279,7 +283,8 @@ línea. Al salir del modo Insertar retrocede un carácter, como en Vim. En una
 línea vacía `x` no hace nada, así que nunca une líneas.
 
 En modo Insertar el editor se comporta igual que con el modo Vim desactivado,
-incluido pegar con `Ctrl+v`, salvo por `Escape`. Con un menú de autocompletado o de acciones de código
+incluido pegar con `Ctrl+v`, salvo por `Escape`. `Ctrl+Shift+V` también pega
+allí, y en modo Reemplazar inserta el portapapeles sin sobrescribir. Con un menú de autocompletado o de acciones de código
 abierto, `Escape` cierra el menú y se queda en modo Insertar; si no, vuelve al
 modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
@@ -294,6 +299,8 @@ Visual `c` por caracteres o líneas cambia la selección inclusiva mediante edic
 **Reemplazar.** `r{car}` reemplaza el carácter bajo el cursor y deja el cursor sobre él. Con contador, `3rx` reemplaza los tres caracteres siguientes de la línea por `x`; si quedan menos antes del final de la línea, no cambia nada. Nunca reemplaza un salto de línea y en una línea vacía no hace nada. `r` seguido de `Enter` reemplaza los caracteres por un solo salto de línea que conserva la indentación de la línea; `r` seguido de `Tab` escribe tabulaciones. `Escape`, `Backspace`, `Delete`, las flechas o salir del editor cancelan `r` sin editar; un atajo con `Ctrl`, `Alt` o `Cmd` lo cancela y luego se ejecuta como siempre. `r` acepta un carácter compuesto con un método de entrada (IME). El reemplazo es un solo paso de deshacer.
 
 `R` entra en modo Reemplazar. Cada carácter escrito sobrescribe el carácter bajo el cursor; al final de una línea se agrega en lugar de reemplazar el salto de línea. `Backspace` restaura en orden inverso los caracteres sobrescritos en esta sesión de Reemplazar y, si no queda ninguno, solo mueve el cursor a la izquierda. `Enter` inserta un salto de línea y `Tab` indenta, como en modo Insertar. `Escape` vuelve al modo Normal y retrocede el cursor un carácter. Toda la sesión de Reemplazar es un solo paso de deshacer. Se ignora un contador antes de `R`.
+
+**Abrir línea y pegar.** `o` / `O` abren una línea nueva debajo / encima de la línea lógica del cursor, conservan sus espacios y tabulaciones iniciales y su fin de línea LF o CRLF, y entran en modo Insertar después de la indentación. La línea nueva y el texto escrito antes de `Escape` forman un solo paso de deshacer. Se ignora un contador antes de `o` / `O`. `p` / `P` pegan el portapapeles del sistema en modo Normal y se quedan en él. Las líneas completas van debajo / encima de la línea del cursor, con el cursor en el primer carácter no blanco de la primera línea nueva; el resto del texto va después del carácter bajo el cursor / en el cursor, con el cursor en el último carácter insertado. Un contador pega el texto esa cantidad de veces (`3p`). Cada pegado es un solo paso de deshacer, y un portapapeles vacío no pega nada.
 
 Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
@@ -331,7 +338,7 @@ la tecla líder se guarda la propia líder, mostrada como `Leader`, así que el
 atajo sigue a la tecla líder cuando esta cambia.
 
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
-movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
+movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `o`, `O`, `p`, `P`, `Ctrl+Shift+V`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
 no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
@@ -348,6 +355,12 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   No se admiten otras marcas, objetos de texto, registros,
   macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
   completo.
+- No hay registros: `p` / `P` pegan el portapapeles del sistema. El texto que
+  DBFlux copió o borró por última vez conserva su tipo (líneas completas con
+  `yy`, `dd`, los movimientos `j` / `k` y `gg` / `G`, y Visual Línea;
+  caracteres en los demás casos, incluido Visual Bloque). Cualquier otro texto
+  del portapapeles se pega como líneas completas si termina en un salto de
+  línea, y como caracteres si no.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
   que una letra escrita con un acento combinante separado requiere dos pulsaciones.
 - El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace

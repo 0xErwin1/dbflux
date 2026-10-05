@@ -93,6 +93,17 @@ fn in_dialog(window: &Window) -> bool {
         .any(|context| context.contains(crate::modals::MODAL_KEY_CONTEXT))
 }
 
+/// `Ctrl+Shift+V` and no other modifier, Vim's paste shortcut.
+fn is_clipboard_put_key(keystroke: &gpui::Keystroke) -> bool {
+    let modifiers = keystroke.modifiers;
+    modifiers.control
+        && modifiers.shift
+        && !modifiers.alt
+        && !modifiers.platform
+        && !modifiers.function
+        && keystroke.key.eq_ignore_ascii_case("v")
+}
+
 /// Which history action a Normal-mode undo shortcut runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HistoryStep {
@@ -134,12 +145,20 @@ pub struct VimBinding {
     block_change: Option<BlockChange>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
+    /// The last text Vim wrote to the clipboard, so `p` puts it with the kind
+    /// it was yanked or deleted with while the clipboard still holds it.
+    last_yank: Option<YankedText>,
     /// The key interceptor `r` and Replace mode need, registered the first
     /// time either starts so idle editors add nothing to every key press.
     keystroke_interceptor: Option<Subscription>,
     _focus_out: Subscription,
     _input_changes: Subscription,
     _setting: Option<Subscription>,
+}
+
+struct YankedText {
+    text: String,
+    linewise: bool,
 }
 
 struct PendingReplace {
@@ -213,6 +232,7 @@ impl VimBinding {
             block_change: None,
             visual_anchor: None,
             visual_cursor: None,
+            last_yank: None,
             keystroke_interceptor: None,
             _focus_out: focus_out,
             _input_changes: input_changes,
@@ -858,6 +878,10 @@ impl VimBinding {
             return true;
         }
 
+        if is_clipboard_put_key(&event.keystroke) && self.put_shortcut(window, cx) {
+            return true;
+        }
+
         let modifiers = event.keystroke.modifiers;
         let key = VimKey {
             key: event.keystroke.key.as_str(),
@@ -1155,6 +1179,12 @@ impl VimBinding {
                     .update(cx, |state, cx| state.open_search(false, cx));
             }
             VimCommand::RepeatSearch(reverse) => self.repeat_native_search(reverse, count, cx),
+            VimCommand::OpenLineBelow | VimCommand::OpenLineAbove => {
+                self.open_line(command == VimCommand::OpenLineBelow, window, cx);
+            }
+            VimCommand::PutAfter | VimCommand::PutBefore => {
+                self.put_clipboard(command == VimCommand::PutAfter, count, window, cx);
+            }
             VimCommand::DeleteChar
             | VimCommand::ReplaceOnce
             | VimCommand::EnterReplace
@@ -1465,7 +1495,8 @@ impl VimBinding {
         self.input.update(cx, |state, cx| {
             state.set_selected_range(anchor..anchor, cx);
         });
-        self.apply_change(range, clipboard, window, cx);
+        let linewise = self.mode == VimMode::VisualLine;
+        self.apply_change(range, clipboard, linewise, window, cx);
         self.visual_anchor = None;
         self.visual_cursor = None;
         self.schedule_editor_refocus(window, cx);
@@ -1505,7 +1536,7 @@ impl VimBinding {
         self.change_group = Some(group);
         self.vertical_goal = None;
         if !clipboard.is_empty() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(clipboard));
+            self.write_yank(clipboard, false, cx);
         }
 
         self.input.update(cx, |state, cx| {
@@ -1619,7 +1650,7 @@ impl VimBinding {
         };
         let has_selection = !selected.is_empty();
         if has_selection {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+            self.write_yank(selected, mode == VimMode::VisualLine, cx);
         }
         if delete && has_selection {
             self.input.update(cx, |state, cx| {
@@ -1680,7 +1711,7 @@ impl VimBinding {
                 };
                 (start..end.saturating_sub(terminator).max(start), selected)
             };
-            self.apply_change(range.0, Some(range.1), window, cx);
+            self.apply_change(range.0, Some(range.1), true, window, cx);
             return;
         }
         let range = {
@@ -1698,7 +1729,7 @@ impl VimBinding {
         if operator == 'd' && self.host_read_only {
             return;
         }
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+        self.write_yank(selected, true, cx);
         if operator == 'd' {
             let delete_range = {
                 let state = self.input.read(cx);
@@ -1747,12 +1778,13 @@ impl VimBinding {
             self.apply_change(
                 delete_range,
                 (!selected.is_empty()).then_some(selected),
+                linewise,
                 window,
                 cx,
             );
             return;
         }
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+        self.write_yank(selected, linewise, cx);
         if operator == 'd' {
             let delete_range = if linewise {
                 machine::line_delete_range(self.input.read(cx).text(), range)
@@ -1792,7 +1824,7 @@ impl VimBinding {
                 }
             };
             if let Some(range) = range {
-                self.apply_change(range, None, window, cx);
+                self.apply_change(range, None, false, window, cx);
             }
             return;
         }
@@ -1813,7 +1845,7 @@ impl VimBinding {
             };
             (range, selected.to_string())
         };
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+        self.write_yank(selected, false, cx);
         if operator == 'd' {
             self.vertical_goal = None;
             self.input.update(cx, |state, cx| {
@@ -1828,6 +1860,7 @@ impl VimBinding {
         &mut self,
         range: std::ops::Range<usize>,
         clipboard: Option<String>,
+        linewise: bool,
         window: &mut Window,
         cx: &mut Context<H>,
     ) {
@@ -1846,9 +1879,11 @@ impl VimBinding {
             return;
         }
         if !selected.is_empty() || clipboard.is_some() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            self.write_yank(
                 clipboard.unwrap_or_else(|| selected.to_string()),
-            ));
+                linewise,
+                cx,
+            );
         }
         self.change_group = Some(group);
         self.vertical_goal = None;
@@ -1859,6 +1894,124 @@ impl VimBinding {
             });
         }
         self.set_vim_mode(VimMode::Insert, cx);
+    }
+
+    /// Writes yanked or deleted text to the system clipboard and remembers
+    /// whether it was whole lines, for `p`.
+    fn write_yank<H: VimHost>(&mut self, text: String, linewise: bool, cx: &mut Context<H>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+        self.last_yank = Some(YankedText { text, linewise });
+    }
+
+    /// `o` / `O`: opens a line below or above the cursor's line with its indent
+    /// and enters Insert there. The new line and the text typed before Insert
+    /// ends are one undo step. A count is ignored.
+    fn open_line<H: VimHost>(&mut self, below: bool, window: &mut Window, cx: &mut Context<H>) {
+        if self.host_read_only {
+            return;
+        }
+
+        let insertion = {
+            let state = self.input.read(cx);
+            machine::open_line(state.text(), state.cursor(), below)
+        };
+
+        let group = NEXT_CHANGE_GROUP.fetch_add(1, Ordering::Relaxed);
+        let started = self
+            .input
+            .update(cx, |state, _| state.begin_edit_group(group));
+        if !started {
+            return;
+        }
+        self.change_group = Some(group);
+        self.vertical_goal = None;
+
+        self.input.update(cx, |state, cx| {
+            state.set_selected_range(insertion.offset..insertion.offset, cx);
+            state.replace(insertion.text, window, cx);
+            state.set_selected_range(insertion.cursor..insertion.cursor, cx);
+        });
+        self.set_vim_mode(VimMode::Insert, cx);
+    }
+
+    /// `p` / `P`: puts the system clipboard after or before the cursor,
+    /// `count` times, as one undo step. Whole lines or characters follow
+    /// [`machine::put_is_linewise`].
+    fn put_clipboard<H: VimHost>(
+        &mut self,
+        after: bool,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        if self.host_read_only {
+            return;
+        }
+        let Some(clipboard) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+
+        let linewise = machine::put_is_linewise(
+            &clipboard,
+            self.last_yank
+                .as_ref()
+                .map(|yank| (yank.text.as_str(), yank.linewise)),
+        );
+        let insertion = {
+            let state = self.input.read(cx);
+            machine::put(
+                state.text(),
+                state.cursor(),
+                &clipboard,
+                linewise,
+                after,
+                count,
+            )
+        };
+        let Some(insertion) = insertion else {
+            return;
+        };
+
+        self.vertical_goal = None;
+        self.input.update(cx, |state, cx| {
+            state.set_selected_range(insertion.offset..insertion.offset, cx);
+            state.replace(insertion.text, window, cx);
+        });
+        self.set_editor_cursor(insertion.cursor, cx);
+        self.clamp_cursor_for_normal(cx);
+    }
+
+    /// `Ctrl+Shift+V`: in Normal mode puts the clipboard at the cursor as `P`
+    /// does, with its count; in Insert and Replace mode inserts it over the
+    /// selection and stays in the mode. Read-only editors take the key and
+    /// change nothing. Returns false in the Visual modes, which leave the key
+    /// to the editor.
+    fn put_shortcut<H: VimHost>(&mut self, window: &mut Window, cx: &mut Context<H>) -> bool {
+        match self.mode {
+            VimMode::Normal => {
+                let count = self.count.take().unwrap_or(1);
+                self.clear_vim_count_and_notify(cx);
+                self.put_clipboard(false, count, window, cx);
+                true
+            }
+            VimMode::Insert | VimMode::Replace => {
+                if self.host_read_only {
+                    return true;
+                }
+                let Some(clipboard) = cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .filter(|text| !text.is_empty())
+                else {
+                    return true;
+                };
+
+                self.input
+                    .update(cx, |state, cx| state.replace(clipboard, window, cx));
+                true
+            }
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => false,
+        }
     }
 
     fn close_change_group_on_blur<H: VimHost>(&mut self, cx: &mut Context<H>) {

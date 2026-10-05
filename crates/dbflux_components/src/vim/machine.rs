@@ -75,6 +75,10 @@ pub enum VimCommand {
     OpenSearch,
     RepeatSearch(bool),
     EnterReplace,
+    OpenLineBelow,
+    OpenLineAbove,
+    PutAfter,
+    PutBefore,
 }
 
 /// The parts of a keystroke the machine needs.
@@ -131,6 +135,8 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                     "b" => Some(VimCommand::WordBackward(true)),
                     "g" => Some(VimCommand::LastLine),
                     "n" if !visual => Some(VimCommand::RepeatSearch(true)),
+                    "o" if !visual => Some(VimCommand::OpenLineAbove),
+                    "p" if !visual => Some(VimCommand::PutBefore),
                     _ => None,
                 };
             }
@@ -164,6 +170,8 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 "c" if !visual => Some(VimCommand::Operator('c')),
                 "y" if !visual => Some(VimCommand::Operator('y')),
                 "u" if !visual => Some(VimCommand::Undo),
+                "o" if !visual => Some(VimCommand::OpenLineBelow),
+                "p" if !visual => Some(VimCommand::PutAfter),
                 _ => None,
             }
         }
@@ -173,7 +181,9 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
 /// The mode a command leaves the editor in.
 pub fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
     match command {
-        VimCommand::EnterInsert => VimMode::Insert,
+        VimCommand::EnterInsert | VimCommand::OpenLineBelow | VimCommand::OpenLineAbove => {
+            VimMode::Insert
+        }
         VimCommand::EnterReplace => VimMode::Replace,
         VimCommand::LeaveInsert | VimCommand::LeaveVisual => VimMode::Normal,
         VimCommand::EnterVisual => VimMode::Visual,
@@ -325,11 +335,9 @@ pub fn is_editing_key(key: &str) -> bool {
     )
 }
 
-/// The line break `r<CR>` inserts: the line's own terminator (on an unterminated
-/// last line, the buffer's first CRLF or else LF), then the line's leading
-/// whitespace, as Vim's autoindent keeps it.
-pub fn line_break_with_indent(text: &Rope, offset: usize) -> String {
-    let line = Line::containing(text, offset);
+/// The line's own terminator, or on an unterminated last line the buffer's
+/// first CRLF or else LF.
+fn line_terminator(text: &Rope, line: &Line) -> &'static str {
     let content = text.to_string();
     let after = content
         .get(line.start + line.content.len()..)
@@ -339,13 +347,143 @@ pub fn line_break_with_indent(text: &Rope, offset: usize) -> String {
     } else {
         after.starts_with("\r\n")
     };
-    let indent: String = line
-        .content
+
+    if crlf { "\r\n" } else { "\n" }
+}
+
+/// The line's leading spaces and tabs, as Vim's autoindent keeps them.
+fn line_indent(line: &Line) -> String {
+    line.content
         .chars()
         .take_while(|character| matches!(character, ' ' | '\t'))
-        .collect();
+        .collect()
+}
 
-    format!("{}{indent}", if crlf { "\r\n" } else { "\n" })
+/// The line break `r<CR>` inserts: the line's own terminator (on an unterminated
+/// last line, the buffer's first CRLF or else LF), then the line's leading
+/// whitespace, as Vim's autoindent keeps it.
+pub fn line_break_with_indent(text: &Rope, offset: usize) -> String {
+    let line = Line::containing(text, offset);
+    format!("{}{}", line_terminator(text, &line), line_indent(&line))
+}
+
+/// Text inserted at one offset, and where the cursor goes once it is in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Insertion {
+    pub offset: usize,
+    pub text: String,
+    pub cursor: usize,
+}
+
+/// The new line `o` (below) or `O` (above) opens next to the cursor's logical
+/// line: the line's terminator and its indent, with the cursor after the indent.
+pub fn open_line(text: &Rope, offset: usize, below: bool) -> Insertion {
+    let line = Line::containing(text, offset);
+    let terminator = line_terminator(text, &line);
+    let indent = line_indent(&line);
+
+    if below {
+        let at = line.start + line.content.len();
+        let inserted = format!("{terminator}{indent}");
+        Insertion {
+            offset: at,
+            cursor: at + inserted.len(),
+            text: inserted,
+        }
+    } else {
+        Insertion {
+            offset: line.start,
+            cursor: line.start + indent.len(),
+            text: format!("{indent}{terminator}"),
+        }
+    }
+}
+
+/// Upper bound on a put count, so a mistyped count cannot exhaust memory.
+const MAX_PUT_COUNT: usize = 10_000;
+
+/// Whether `p` puts `clipboard` as whole lines. Text Vim itself last wrote to
+/// the clipboard keeps the kind it was yanked or deleted with; any other text
+/// is linewise when it ends with a line break.
+pub fn put_is_linewise(clipboard: &str, remembered: Option<(&str, bool)>) -> bool {
+    match remembered {
+        Some((text, linewise)) if text == clipboard => linewise,
+        _ => clipboard.ends_with('\n'),
+    }
+}
+
+/// What `p` (`after`) or `P` puts for `register`, repeated `count` times.
+///
+/// Linewise text goes below or above the cursor's logical line, with the cursor
+/// on the first non-blank character of the first put line. Text without a final
+/// line break gets the buffer's, and below an unterminated last line the
+/// separator moves to the front so no empty line is left behind. Characterwise
+/// text goes after or at the cursor, with the cursor on its last character.
+/// An empty register puts nothing.
+pub fn put(
+    text: &Rope,
+    offset: usize,
+    register: &str,
+    linewise: bool,
+    after: bool,
+    count: usize,
+) -> Option<Insertion> {
+    if register.is_empty() {
+        return None;
+    }
+
+    let count = count.clamp(1, MAX_PUT_COUNT);
+    if !linewise {
+        let at = if after {
+            append_after(text, offset)
+        } else {
+            offset
+        };
+        let inserted = register.repeat(count);
+        let last_width = inserted.chars().next_back().map_or(0, char::len_utf8);
+
+        return Some(Insertion {
+            offset: at,
+            cursor: at + inserted.len() - last_width,
+            text: inserted,
+        });
+    }
+
+    let line = Line::containing(text, offset);
+    let terminator = line_terminator(text, &line);
+    let body = if register.ends_with('\n') {
+        register.to_string()
+    } else {
+        format!("{register}{terminator}")
+    }
+    .repeat(count);
+
+    let first_line = body.split('\n').next().unwrap_or_default();
+    let first_nonblank = first_line
+        .trim_end_matches('\r')
+        .char_indices()
+        .find(|(_, character)| !character.is_whitespace())
+        .map_or(0, |(column, _)| column);
+
+    let (at, inserted, first_line_start) = if !after {
+        (line.start, body, line.start)
+    } else if line.row + 1 < text.lines_len() {
+        let next = text.line_start_offset(line.row + 1);
+        (next, body, next)
+    } else {
+        let at = line.start + line.content.len();
+        let trimmed = body
+            .strip_suffix("\r\n")
+            .or_else(|| body.strip_suffix('\n'))
+            .unwrap_or(&body);
+        (at, format!("{terminator}{trimmed}"), at + terminator.len())
+    };
+
+    Some(Insertion {
+        offset: at,
+        text: inserted,
+        cursor: first_line_start + first_nonblank,
+    })
 }
 
 pub fn append_after(text: &Rope, offset: usize) -> usize {
@@ -860,9 +998,144 @@ mod tests {
             );
         }
 
-        for name in ["o", "p", "escape", "backspace", "space", "tab"] {
+        for name in ["escape", "backspace", "space", "tab"] {
             assert_eq!(command_for(VimMode::Normal, key(name)), None, "{name}");
         }
+    }
+
+    #[test]
+    fn open_line_and_put_are_normal_mode_only() {
+        for (name, plain, shifted_command) in [
+            ("o", VimCommand::OpenLineBelow, VimCommand::OpenLineAbove),
+            ("p", VimCommand::PutAfter, VimCommand::PutBefore),
+        ] {
+            assert_eq!(command_for(VimMode::Normal, key(name)), Some(plain));
+            assert_eq!(
+                command_for(VimMode::Normal, shifted(name)),
+                Some(shifted_command)
+            );
+
+            for mode in [
+                VimMode::Visual,
+                VimMode::VisualLine,
+                VimMode::VisualBlock,
+                VimMode::Insert,
+                VimMode::Replace,
+            ] {
+                assert_eq!(command_for(mode, key(name)), None, "{mode:?} {name}");
+                assert_eq!(command_for(mode, shifted(name)), None, "{mode:?} {name}");
+            }
+        }
+
+        for command in [VimCommand::OpenLineBelow, VimCommand::OpenLineAbove] {
+            assert_eq!(mode_after(VimMode::Normal, command), VimMode::Insert);
+        }
+        for command in [VimCommand::PutAfter, VimCommand::PutBefore] {
+            assert_eq!(mode_after(VimMode::Normal, command), VimMode::Normal);
+        }
+    }
+
+    fn insertion(offset: usize, text: &str, cursor: usize) -> Insertion {
+        Insertion {
+            offset,
+            text: text.to_string(),
+            cursor,
+        }
+    }
+
+    #[test]
+    fn open_line_keeps_indent_and_the_line_terminator() {
+        let text = Rope::from("  ab\r\ncd");
+        assert_eq!(open_line(&text, 2, true), insertion(4, "\r\n  ", 8));
+        assert_eq!(open_line(&text, 2, false), insertion(0, "  \r\n", 2));
+        assert_eq!(open_line(&text, 7, true), insertion(8, "\r\n", 10));
+        assert_eq!(open_line(&text, 7, false), insertion(6, "\r\n", 6));
+
+        let unterminated = Rope::from("\tab");
+        assert_eq!(open_line(&unterminated, 1, true), insertion(3, "\n\t", 5));
+        assert_eq!(open_line(&unterminated, 1, false), insertion(0, "\t\n", 1));
+
+        let trailing = Rope::from("ab\n");
+        assert_eq!(open_line(&trailing, 0, true), insertion(2, "\n", 3));
+        assert_eq!(open_line(&trailing, 3, true), insertion(3, "\n", 4));
+
+        let empty = Rope::from("");
+        assert_eq!(open_line(&empty, 0, true), insertion(0, "\n", 1));
+        assert_eq!(open_line(&empty, 0, false), insertion(0, "\n", 0));
+    }
+
+    #[test]
+    fn put_kind_prefers_the_remembered_yank() {
+        assert!(put_is_linewise("two", Some(("two", true))));
+        assert!(!put_is_linewise("ab\n", Some(("ab\n", false))));
+        assert!(!put_is_linewise("zz", Some(("two", true))));
+        assert!(put_is_linewise("line\n", Some(("other", false))));
+        assert!(put_is_linewise("line\r\n", None));
+        assert!(!put_is_linewise("word", None));
+    }
+
+    #[test]
+    fn linewise_put_inserts_whole_lines_below_or_above() {
+        let text = Rope::from("one\n  two");
+        assert_eq!(
+            put(&text, 0, "one\n", true, true, 1),
+            Some(insertion(4, "one\n", 4))
+        );
+        assert_eq!(
+            put(&text, 6, "  x\n", true, false, 1),
+            Some(insertion(4, "  x\n", 6))
+        );
+        assert_eq!(
+            put(&text, 6, "two", true, true, 2),
+            Some(insertion(9, "\ntwo\ntwo", 10))
+        );
+        assert_eq!(
+            put(&text, 0, "two", true, false, 1),
+            Some(insertion(0, "two\n", 0))
+        );
+
+        let crlf = Rope::from("one\r\ntwo");
+        assert_eq!(
+            put(&crlf, 5, "two", true, true, 1),
+            Some(insertion(8, "\r\ntwo", 10))
+        );
+        assert_eq!(
+            put(&crlf, 5, "x\r\n", true, true, 1),
+            Some(insertion(8, "\r\nx", 10))
+        );
+
+        let trailing = Rope::from("ab\n");
+        assert_eq!(
+            put(&trailing, 0, "x\n", true, true, 1),
+            Some(insertion(3, "x\n", 3))
+        );
+    }
+
+    #[test]
+    fn characterwise_put_lands_on_the_last_inserted_character() {
+        let text = Rope::from("ab\n\ncd");
+        assert_eq!(
+            put(&text, 0, "ab ", false, true, 1),
+            Some(insertion(1, "ab ", 3))
+        );
+        assert_eq!(
+            put(&text, 0, "ab ", false, false, 1),
+            Some(insertion(0, "ab ", 2))
+        );
+        assert_eq!(
+            put(&text, 3, "中", false, true, 1),
+            Some(insertion(3, "中", 3))
+        );
+        assert_eq!(
+            put(&text, 0, "yz", false, true, 3),
+            Some(insertion(1, "yzyzyz", 6))
+        );
+        assert_eq!(put(&text, 0, "", false, true, 1), None);
+        assert_eq!(put(&text, 0, "", true, true, 1), None);
+        assert_eq!(
+            put(&text, 0, "x", false, true, usize::MAX).map(|insertion| insertion.text.len()),
+            Some(MAX_PUT_COUNT)
+        );
     }
 
     #[test]
