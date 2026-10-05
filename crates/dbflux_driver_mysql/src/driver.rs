@@ -1336,6 +1336,7 @@ impl MysqlDriver {
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
+                table_locks_possible: false,
             }),
             ssh_catalog_tunnel: None,
             ssh_query_tunnel: None,
@@ -1417,6 +1418,7 @@ impl MysqlDriver {
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
+                table_locks_possible: false,
             }),
             ssh_catalog_tunnel: None,
             ssh_query_tunnel: None,
@@ -1554,6 +1556,7 @@ impl MysqlDriver {
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
+                table_locks_possible: false,
             }),
             ssh_catalog_tunnel: Some(ssh_catalog_tunnel),
             ssh_query_tunnel: Some(ssh_query_tunnel),
@@ -1760,6 +1763,9 @@ fn inject_password_into_mysql_uri(base_uri: &str, password: Option<&str>) -> Str
 struct QueryConnState {
     conn: Conn,
     current_database: Option<String>,
+    /// Whether a statement this driver ran may have left `LOCK TABLES` (or a
+    /// global read lock) held on the session. See [`table_locks_after`].
+    table_locks_possible: bool,
 }
 
 pub struct MysqlConnection {
@@ -2192,6 +2198,12 @@ impl Connection for MysqlConnection {
         let statements = QueryLanguage::Sql.split_statements(&req.sql);
 
         if req.read_only.is_required() {
+            if state.table_locks_possible {
+                return Err(DbError::NotSupported(
+                    "MySQL/MariaDB: read-only execution cannot run while this session may hold LOCK TABLES locks, which START TRANSACTION would release; run UNLOCK TABLES first. The request was rejected before execution".to_string(),
+                ));
+            }
+
             return mysql_execute_read_only(
                 &mut state.conn,
                 &req.sql,
@@ -2222,6 +2234,9 @@ impl Connection for MysqlConnection {
         } else {
             mysql_execute_request(&mut state.conn, &req.sql, start, &self.cancelled, req.limit)
         };
+
+        state.table_locks_possible =
+            table_locks_after(state.table_locks_possible, &statements, result.is_ok());
 
         result.map_err(|error| {
             settle_failed_transaction(&mut state.conn, in_transaction_before, error)
@@ -3097,18 +3112,113 @@ fn has_executable_comment(statement: &str) -> bool {
 /// DUMPFILE` in all of them, at the cost of refusing `INTO @variable` and the
 /// word inside literals.
 fn contains_into_word(statement: &str) -> bool {
+    contains_word(statement, "INTO")
+}
+
+/// Whether `word` appears in `statement` as a whole identifier-like token,
+/// ignoring case, quotes and comments.
+fn contains_word(statement: &str, word: &str) -> bool {
     statement
         .split(|character: char| {
             !(character.is_ascii_alphanumeric() || character == '_' || character == '$')
         })
-        .any(|word| word.eq_ignore_ascii_case("INTO"))
+        .any(|token| token.eq_ignore_ascii_case(word))
+}
+
+/// Whether the session may hold table locks after running `statements`.
+///
+/// `START TRANSACTION` releases `LOCK TABLES` locks and the session state is
+/// not visible to the client, so the driver tracks the statements it runs on
+/// this connection. A statement that may take such a lock marks the session
+/// whether or not the request succeeded; only a plain `UNLOCK TABLES` in a
+/// request that succeeded clears the mark. Unknown prepared statements and
+/// executable comments that mention `LOCK` mark it too.
+fn table_locks_after(previous: bool, statements: &[String], succeeded: bool) -> bool {
+    let mut possible = previous;
+
+    for statement in statements {
+        if may_take_table_locks(statement) {
+            possible = true;
+        } else if succeeded && is_plain_unlock_tables(statement) {
+            possible = false;
+        }
+    }
+
+    possible
+}
+
+fn may_take_table_locks(statement: &str) -> bool {
+    let stripped = dbflux_core::strip_leading_comments(statement).trim_start();
+    let first_word = stripped
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+
+    match first_word.as_str() {
+        "LOCK" | "EXECUTE" => true,
+        "FLUSH" | "PREPARE" => contains_word(statement, "LOCK"),
+        _ => has_executable_comment(statement) && contains_word(statement, "LOCK"),
+    }
+}
+
+fn is_plain_unlock_tables(statement: &str) -> bool {
+    if has_executable_comment(statement) {
+        return false;
+    }
+
+    let stripped = dbflux_core::strip_leading_comments(statement);
+    let words: Vec<String> = stripped
+        .trim()
+        .trim_end_matches(';')
+        .split_whitespace()
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    matches!(
+        words.as_slice(),
+        [unlock, tables] if unlock == "UNLOCK" && (tables == "TABLES" || tables == "TABLE")
+    )
+}
+
+fn open_transaction_refusal() -> DbError {
+    DbError::NotSupported(
+        "MySQL/MariaDB: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string(),
+    )
+}
+
+/// Interprets the result of `SET TRANSACTION READ ONLY`, run to prove that no
+/// transaction is open.
+///
+/// MySQL and MariaDB refuse `SET TRANSACTION` without `GLOBAL` or `SESSION`
+/// with error 1568 while a transaction is active, including one that
+/// `autocommit = 0` opened implicitly, so only an accepted statement proves
+/// the session is outside one. Any other failure leaves the state unknown,
+/// and the request is refused as well.
+fn set_transaction_probe_verdict(result: Result<(), mysql::Error>) -> Result<(), DbError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(mysql::Error::MySqlError(server_error))
+            if server_error.code == mysql::ServerError::ER_CANT_CHANGE_TX_ISOLATION as u16 =>
+        {
+            Err(open_transaction_refusal())
+        }
+        Err(error) => Err(DbError::NotSupported(format!(
+            "MySQL/MariaDB: read-only execution could not confirm that no transaction is open ({error}); the request was rejected before execution"
+        ))),
+    }
 }
 
 /// Runs a request that requires read-only enforcement inside `START
 /// TRANSACTION READ ONLY` and always rolls it back.
 ///
 /// `START TRANSACTION` implicitly commits a transaction that is already open,
-/// so the request is refused unless the session is provably outside one.
+/// so the request is refused unless the server proves the session is outside
+/// one. `@@in_transaction` (MariaDB) is checked when it is readable; the proof
+/// is `SET TRANSACTION READ ONLY`, which the server refuses inside a
+/// transaction, and whose one-shot access mode the `START TRANSACTION READ
+/// ONLY` that follows consumes. `performance_schema` is not trusted here: with
+/// its transaction instrumentation off it reports no transaction.
 fn mysql_execute_read_only(
     conn: &mut Conn,
     sql: &str,
@@ -3117,19 +3227,11 @@ fn mysql_execute_read_only(
     cancelled: &AtomicBool,
     limit: Option<u32>,
 ) -> Result<QueryResult, DbError> {
-    match probe_in_transaction(conn) {
-        Some(false) => {}
-        Some(true) => {
-            return Err(DbError::NotSupported(
-                "MySQL/MariaDB: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string(),
-            ));
-        }
-        None => {
-            return Err(DbError::NotSupported(
-                "MySQL/MariaDB: read-only execution needs to confirm that no transaction is open, and neither @@in_transaction nor performance_schema.events_transactions_current could be read; the request was rejected before execution".to_string(),
-            ));
-        }
+    if matches!(read_in_transaction_variable(conn), Ok(true)) {
+        return Err(open_transaction_refusal());
     }
+
+    set_transaction_probe_verdict(conn.query_drop("SET TRANSACTION READ ONLY"))?;
 
     conn.query_drop("START TRANSACTION READ ONLY")
         .map_err(|error| format_mysql_query_error(&error))?;
@@ -4780,6 +4882,7 @@ mod tests {
                 query_conn: Mutex::new(QueryConnState {
                     conn: query_conn,
                     current_database: Some("testdb".to_string()),
+                    table_locks_possible: false,
                 }),
                 ssh_catalog_tunnel: None,
                 ssh_query_tunnel: None,
@@ -5692,8 +5795,91 @@ mod picker_tests {
 
 #[cfg(test)]
 mod read_only_tests {
-    use super::ensure_read_only_statements;
+    use super::{ensure_read_only_statements, set_transaction_probe_verdict, table_locks_after};
     use dbflux_core::{DbError, QueryLanguage};
+
+    fn server_error(code: u16) -> mysql::Error {
+        mysql::Error::MySqlError(mysql::MySqlError {
+            state: "25001".to_string(),
+            message: "server error".to_string(),
+            code,
+        })
+    }
+
+    fn statements(sql: &str) -> Vec<String> {
+        QueryLanguage::Sql.split_statements(sql)
+    }
+
+    #[test]
+    fn only_an_accepted_set_transaction_proves_no_transaction_is_open() {
+        assert!(set_transaction_probe_verdict(Ok(())).is_ok());
+
+        let open = set_transaction_probe_verdict(Err(server_error(1568)));
+        assert!(
+            matches!(open, Err(DbError::NotSupported(ref message)) if message.contains("open transaction")),
+            "{open:?}"
+        );
+
+        let unknown = set_transaction_probe_verdict(Err(server_error(1064)));
+        assert!(
+            matches!(unknown, Err(DbError::NotSupported(_))),
+            "{unknown:?}"
+        );
+    }
+
+    #[test]
+    fn statements_that_may_take_table_locks_mark_the_session() {
+        for sql in [
+            "LOCK TABLES t READ",
+            "lock table t write",
+            "/*!40000 LOCK TABLES t WRITE */",
+            "FLUSH TABLES WITH READ LOCK",
+            "UNLOCK TABLES; LOCK TABLES t READ",
+        ] {
+            assert!(table_locks_after(false, &statements(sql), true), "{sql}");
+            assert!(
+                table_locks_after(false, &statements(sql), false),
+                "{sql} failed"
+            );
+        }
+
+        assert!(!table_locks_after(false, &statements("SELECT 1"), true));
+        assert!(!table_locks_after(
+            false,
+            &statements("SELECT * FROM t LOCK IN SHARE MODE"),
+            true
+        ));
+        assert!(table_locks_after(false, &statements("EXECUTE stmt"), true));
+        assert!(table_locks_after(
+            false,
+            &statements("PREPARE stmt FROM 'LOCK TABLES t READ'"),
+            true
+        ));
+        assert!(table_locks_after(true, &statements("SELECT 1"), true));
+    }
+
+    #[test]
+    fn only_a_successful_plain_unlock_clears_the_mark() {
+        assert!(!table_locks_after(true, &statements("UNLOCK TABLES"), true));
+        assert!(!table_locks_after(true, &statements("unlock table"), true));
+        assert!(!table_locks_after(
+            false,
+            &statements("LOCK TABLES t READ; SELECT 1; UNLOCK TABLES"),
+            true
+        ));
+
+        assert!(table_locks_after(true, &statements("UNLOCK TABLES"), false));
+        assert!(table_locks_after(
+            true,
+            &statements("/*!UNLOCK TABLES*/"),
+            true
+        ));
+        assert!(table_locks_after(
+            true,
+            &statements("UNLOCK TABLES t"),
+            true
+        ));
+    }
 
     fn check(sql: &str) -> Result<(), DbError> {
         ensure_read_only_statements(&QueryLanguage::Sql.split_statements(sql))
