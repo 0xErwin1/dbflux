@@ -16,6 +16,9 @@ path = "src/lib.rs"
 calamine.workspace = true
 chrono.workspace = true
 dbflux_byte_source.workspace = true
+# The version calamine already uses, so patching xlsx parts adds no other copy;
+# the workspace `quick-xml` entry is an older version kept for other crates.
+quick-xml = "0.41"
 thiserror.workspace = true
 zip.workspace = true
 

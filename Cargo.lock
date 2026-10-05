@@ -3465,6 +3465,7 @@ dependencies = [
  "calamine",
  "chrono",
  "dbflux_byte_source",
+ "quick-xml 0.41.0",
  "rust_xlsxwriter",
  "thiserror 2.0.20",
  "zip",
