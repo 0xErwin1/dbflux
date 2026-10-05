@@ -11,21 +11,32 @@
 //! source moves into the read and comes back with the result, so no other
 //! window can be asked for meanwhile. Before each window the version of the
 //! file is read again: rows of another version never join the ones shown.
+//!
+//! The columns read are the applied projection, which the column picker of
+//! the Data view and the eye toggles of the Columns view change. A change
+//! reads the file again from its first row with the new columns. Every change
+//! counts as a new read generation: a window started under an older one is
+//! dropped when it arrives, and the read of the latest projection starts as
+//! soon as the source is back.
 
 use std::fmt;
 use std::sync::Arc;
 
 use dbflux_byte_source::SourceError;
+use dbflux_components::components::column_profile_view::ColumnProfileView;
+use dbflux_components::components::column_projection::{ColumnProjectionPicker, ProjectionChanged};
 use dbflux_components::components::data_table::{
-    DataTable, DataTableEvent, DataTableState, HeaderAnnotation,
+    DataTable, DataTableEvent, DataTableState, HeaderAnnotation, ModelSwap,
 };
+use dbflux_components::components::read_estimate_bar::ReadEstimateBar;
 use dbflux_core::{
-    Connection, DEFAULT_PAGE_ROWS, DEFAULT_PROJECTION_BUDGET_BYTES, DEFAULT_PROJECTION_MAX_COLUMNS,
-    DbError, ProfileSource, TableProfile, default_projection,
+    ColumnProjection, Connection, DEFAULT_PAGE_ROWS, DEFAULT_PROJECTION_BUDGET_BYTES,
+    DEFAULT_PROJECTION_MAX_COLUMNS, DbError, EstimateScope, PartUnit, ProfileSource, ReadEstimate,
+    TableProfile, default_projection,
 };
 use dbflux_parquet::{
-    CellPage, ParquetError, ParquetFile, RowWindow, cells_of, column_statistics, read_estimate,
-    read_window,
+    CellPage, ParquetError, ParquetFile, ReadEstimate as FileReadEstimate, RowWindow, cells_of,
+    column_statistics, file_statistics, read_estimate, read_window,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -112,11 +123,10 @@ pub(super) struct OpenedRows {
     version: SourceVersion,
     source: LocationSource,
     file: ParquetFile,
+    /// What the footer says about the file and each of its columns.
+    profile: TableProfile,
     /// The top-level columns shown, in schema order.
     columns: Vec<usize>,
-    /// The second header line of each shown column.
-    annotations: Vec<Option<HeaderAnnotation>>,
-    total_columns: usize,
     page_model: ParquetPageModel,
 }
 
@@ -130,9 +140,33 @@ pub(super) struct LoadedFile {
     source: Option<LocationSource>,
 
     file: ParquetFile,
+    profile: Arc<TableProfile>,
+
+    /// The top-level columns the table shows, in schema order.
     columns: Vec<usize>,
+
+    /// The projection the picker and the Columns view show. It differs from
+    /// `columns` while the file is read again with it.
+    projection: ColumnProjection,
+
     total_columns: usize,
     page_model: ParquetPageModel,
+
+    /// Counts the projections applied. A window carries the count it was
+    /// read at, and is dropped when another projection was applied meanwhile.
+    read_generation: u64,
+
+    /// Set when the applied projection still has to be read. The read
+    /// starts once the source is back from the window being read.
+    reread_pending: bool,
+
+    /// What the next window of the shown columns costs, and its strip.
+    /// `None` once every row is loaded.
+    estimate: Option<ReadEstimate>,
+    estimate_bar: Option<ReadEstimateBar>,
+
+    /// "M columns · R rows · size", formatted once.
+    summary: SharedString,
 
     /// Set when a window found the file changed: no further window is read
     /// until the file is opened again.
@@ -140,6 +174,79 @@ pub(super) struct LoadedFile {
 
     table_state: Entity<DataTableState>,
     table: Entity<DataTable>,
+
+    /// The column picker and the Columns view. They need a window to be
+    /// built, so the first render after the file is loaded builds them.
+    picker: Option<Entity<ColumnProjectionPicker>>,
+    profile_view: Option<Entity<ColumnProfileView>>,
+}
+
+impl LoadedFile {
+    /// Works out what the next window of the shown columns costs and formats
+    /// its strip. A footer the estimate cannot be read from shows no strip:
+    /// the window read reports the same problem when it is asked for.
+    fn refresh_estimate(&mut self) {
+        self.estimate = match next_window_estimate(&self.file, &self.page_model, &self.columns) {
+            Ok(estimate) => estimate,
+            Err(error) => {
+                log::warn!("Could not estimate the next Parquet window: {error}");
+                None
+            }
+        };
+
+        self.estimate_bar = self
+            .estimate
+            .as_ref()
+            .map(|estimate| ReadEstimateBar::new(estimate, &self.profile));
+    }
+
+    /// Shows the projection applied in the picker and the Columns view.
+    fn sync_projection_controls(&self, cx: &mut App) {
+        if let Some(picker) = &self.picker {
+            let projection = self.projection.clone();
+            picker.update(cx, |picker, cx| picker.set_applied(projection, cx));
+        }
+
+        if let Some(profile_view) = &self.profile_view {
+            let projection = self.projection.clone();
+            profile_view.update(cx, |view, cx| view.set_applied(projection, cx));
+        }
+    }
+
+    /// Makes the shown columns the applied projection again, after the read
+    /// of another projection failed.
+    fn revert_projection(&mut self, cx: &mut App) {
+        self.projection = ColumnProjection::from_indices(self.total_columns, &self.columns);
+        self.reread_pending = false;
+        self.sync_projection_controls(cx);
+    }
+
+    /// Replaces the table with the first window of `columns`, dropping the
+    /// cursor and the selection, which pointed at the old columns.
+    fn show_columns(&mut self, columns: Vec<usize>, page: CellPage, cx: &mut App) {
+        self.page_model = ParquetPageModel::new(page, self.page_model.total_rows());
+
+        let annotations = header_annotations(&self.profile, &columns);
+        let model = self.page_model.table_model();
+
+        self.table_state.update(cx, |state, cx| {
+            state.set_model(model, ModelSwap::ResetCursor, cx);
+            state.set_header_annotations(annotations, cx);
+        });
+
+        self.columns = columns;
+        self.refresh_estimate();
+    }
+}
+
+/// The view of a loaded file the document shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ParquetView {
+    /// The rows of the shown columns.
+    #[default]
+    Data,
+    /// One row per column with what the footer says about it.
+    Columns,
 }
 
 pub(super) enum ParquetPhase {
@@ -161,6 +268,8 @@ pub struct ParquetDocument {
     app_state: Option<Entity<AppStateEntity>>,
 
     phase: ParquetPhase,
+
+    view: ParquetView,
 
     /// Counts the opens of the file. An open carries the count it was started
     /// at, and its result is dropped when a reload started another meanwhile.
@@ -223,6 +332,7 @@ impl ParquetDocument {
             location,
             app_state,
             phase: ParquetPhase::Loading,
+            view: ParquetView::Data,
             open_generation: 0,
             pending_table_focus: false,
             _subscriptions: Vec::new(),
@@ -291,22 +401,59 @@ impl ParquetDocument {
     }
 
     /// Table navigation runs inside the embedded `DataTable` through its own
-    /// key context. The commands of the document are the next window and the
-    /// reload (`RefreshSchema`), which opens the file again.
+    /// key context, and the column picker and the Columns view handle the
+    /// keys of their lists. The commands of the document are the next window,
+    /// the reload (`RefreshSchema`), which opens the file again, the switch
+    /// between Data and Columns (`CycleDocumentView`), the column picker
+    /// (`FocusToolbar`, in Data), and the sort and the filter of the Columns
+    /// view (`CycleResultView` and `FocusSearch`, in Columns).
     pub fn dispatch_command(
         &mut self,
         command: dbflux_app::keymap::Command,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        use dbflux_app::keymap::Command;
+
+        let loaded = self.loaded().is_some();
+
         match command {
-            dbflux_app::keymap::Command::ResultsNextPage if self.loaded().is_some() => {
+            Command::ResultsNextPage if loaded => {
                 self.load_more(cx);
                 true
             }
 
-            dbflux_app::keymap::Command::RefreshSchema if self.can_reload() => {
+            Command::RefreshSchema if self.can_reload() => {
                 self.reload(cx);
+                true
+            }
+
+            Command::CycleDocumentView if loaded => {
+                let next = match self.view {
+                    ParquetView::Data => ParquetView::Columns,
+                    ParquetView::Columns => ParquetView::Data,
+                };
+
+                self.show_view(next, window, cx);
+                true
+            }
+
+            Command::FocusToolbar if loaded && self.view == ParquetView::Data => {
+                self.open_column_picker(window, cx)
+            }
+
+            Command::FocusToolbar | Command::FocusSearch
+                if loaded && self.view == ParquetView::Columns =>
+            {
+                self.focus_column_filter(window, cx)
+            }
+
+            Command::CycleResultView if loaded && self.view == ParquetView::Columns => {
+                let Some(profile_view) = self.column_profile_view().cloned() else {
+                    return false;
+                };
+
+                profile_view.update(cx, |view, cx| view.cycle_sort(cx));
                 true
             }
 
@@ -314,9 +461,18 @@ impl ParquetDocument {
         }
     }
 
+    /// Gives the keyboard to the view that is shown: the table, or the rows
+    /// of the Columns view.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match &self.phase {
             ParquetPhase::Loaded(loaded) => {
+                if self.view == ParquetView::Columns
+                    && let Some(profile_view) = loaded.profile_view.clone()
+                {
+                    profile_view.update(cx, |view, cx| view.focus(window, cx));
+                    return;
+                }
+
                 let handle = loaded.table_state.read(cx).focus_handle().clone();
                 handle.focus(window, cx);
             }
@@ -418,6 +574,142 @@ impl ParquetDocument {
 
     pub(super) fn phase(&self) -> &ParquetPhase {
         &self.phase
+    }
+
+    pub(super) fn view(&self) -> ParquetView {
+        self.view
+    }
+
+    /// What the footer says about the file, once it is loaded.
+    #[cfg(test)]
+    pub(super) fn profile(&self) -> Option<&Arc<TableProfile>> {
+        self.loaded().map(|loaded| &loaded.profile)
+    }
+
+    /// The projection the picker and the Columns view show, once loaded.
+    #[cfg(test)]
+    pub(super) fn applied_projection(&self) -> Option<&ColumnProjection> {
+        self.loaded().map(|loaded| &loaded.projection)
+    }
+
+    pub(super) fn projection_picker(&self) -> Option<&Entity<ColumnProjectionPicker>> {
+        self.loaded().and_then(|loaded| loaded.picker.as_ref())
+    }
+
+    pub(super) fn column_profile_view(&self) -> Option<&Entity<ColumnProfileView>> {
+        self.loaded()
+            .and_then(|loaded| loaded.profile_view.as_ref())
+    }
+
+    /// What the next window of the shown columns costs. `None` once every
+    /// row is loaded.
+    #[cfg(test)]
+    pub(super) fn next_read_estimate(&self) -> Option<&ReadEstimate> {
+        self.loaded().and_then(|loaded| loaded.estimate.as_ref())
+    }
+
+    pub(super) fn estimate_bar(&self) -> Option<&ReadEstimateBar> {
+        self.loaded()
+            .and_then(|loaded| loaded.estimate_bar.as_ref())
+    }
+
+    /// "M columns · R rows · size" of a loaded file.
+    pub(super) fn summary(&self) -> Option<&SharedString> {
+        self.loaded().map(|loaded| &loaded.summary)
+    }
+
+    /// Shows `view`. Leaving Data throws away a draft of the column picker,
+    /// which is not drawn in Columns.
+    pub(super) fn show_view(
+        &mut self,
+        view: ParquetView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view == view || self.loaded().is_none() {
+            return;
+        }
+
+        if let Some(picker) = self.projection_picker().cloned() {
+            picker.update(cx, |picker, cx| picker.discard(window, cx));
+        }
+
+        self.view = view;
+        self.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Opens the column picker with the keyboard on its list.
+    fn open_column_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(picker) = self.projection_picker().cloned() else {
+            return false;
+        };
+
+        picker.update(cx, |picker, cx| picker.open(window, cx));
+        true
+    }
+
+    fn focus_column_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(profile_view) = self.column_profile_view().cloned() else {
+            return false;
+        };
+
+        profile_view.update(cx, |view, cx| view.focus_filter(window, cx));
+        true
+    }
+
+    /// Builds the column picker and the Columns view of a loaded file that
+    /// has none yet. They need the window, which the load does not have.
+    pub(super) fn ensure_projection_controls(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(loaded) = self.loaded() else {
+            return;
+        };
+
+        if loaded.picker.is_some() {
+            return;
+        }
+
+        let profile = loaded.profile.clone();
+        let projection = loaded.projection.clone();
+
+        let picker = cx.new(|cx| {
+            ColumnProjectionPicker::new(
+                "parquet-column-picker",
+                profile.clone(),
+                projection.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let profile_view = cx.new(|cx| {
+            let mut view = ColumnProfileView::new(window, cx);
+            view.set_profile(profile, projection, cx);
+            view
+        });
+
+        self._subscriptions.push(cx.subscribe(
+            &picker,
+            |this, _picker, event: &ProjectionChanged, cx| {
+                this.apply_projection(event.0.clone(), cx);
+            },
+        ));
+
+        self._subscriptions.push(cx.subscribe(
+            &profile_view,
+            |this, _view, event: &ProjectionChanged, cx| {
+                this.apply_projection(event.0.clone(), cx);
+            },
+        ));
+
+        if let Some(loaded) = self.loaded_mut() {
+            loaded.picker = Some(picker);
+            loaded.profile_view = Some(profile_view);
+        }
     }
 
     pub(super) fn table(&self) -> Option<&Entity<DataTable>> {
@@ -534,11 +826,21 @@ impl ParquetDocument {
             version,
             source,
             file,
+            profile,
             columns,
-            annotations,
-            total_columns,
             page_model,
         } = opened;
+
+        let total_columns = profile.columns.len();
+        let projection = ColumnProjection::from_indices(total_columns, &columns);
+        let summary = crate::labels::parquet_summary(
+            total_columns,
+            page_model.total_rows(),
+            profile.total_compressed_bytes,
+        )
+        .into();
+        let profile = Arc::new(profile);
+        let annotations = header_annotations(&profile, &columns);
 
         let model = page_model.table_model();
 
@@ -552,17 +854,29 @@ impl ParquetDocument {
 
         let table = cx.new(|cx| DataTable::new("parquet-table", table_state.clone(), cx));
 
-        LoadedFile {
+        let mut loaded = LoadedFile {
             version,
             source: Some(source),
             file,
+            profile,
             columns,
+            projection,
             total_columns,
             page_model,
+            read_generation: 0,
+            reread_pending: false,
+            estimate: None,
+            estimate_bar: None,
+            summary,
             source_changed: false,
             table_state,
             table,
-        }
+            picker: None,
+            profile_view: None,
+        };
+
+        loaded.refresh_estimate();
+        loaded
     }
 
     /// The rows are the file's rows in file order and only some of them are
@@ -624,6 +938,7 @@ impl ParquetDocument {
         let version = loaded.version.clone();
         let file = loaded.file.clone();
         let columns = loaded.columns.clone();
+        let read_generation = loaded.read_generation;
         let window = RowWindow::new(loaded.page_model.loaded_rows(), DEFAULT_PAGE_ROWS);
 
         let task = cx.background_executor().spawn(async move {
@@ -637,7 +952,15 @@ impl ParquetDocument {
 
             cx.update(|cx| {
                 this.update(cx, |document, cx| {
-                    document.apply_window_outcome(generation, source, result, cx);
+                    document.apply_window_outcome(
+                        WindowGeneration {
+                            open: generation,
+                            read: read_generation,
+                        },
+                        source,
+                        result,
+                        cx,
+                    );
                 })
                 .ok();
             });
@@ -653,17 +976,18 @@ impl ParquetDocument {
     /// they are; a file found changed reads no further window until it is
     /// opened again.
     ///
-    /// `generation` is the open the window was read for. When the file was
-    /// opened again meanwhile, the window belongs to rows no longer shown and
-    /// is dropped without a report.
+    /// `generation` is the open and the projection the window was read for.
+    /// When the file was opened again, or another projection was applied
+    /// meanwhile, the window belongs to rows no longer shown and is dropped
+    /// without a report; the read of the applied projection starts instead.
     fn apply_window_outcome(
         &mut self,
-        generation: u64,
+        generation: WindowGeneration,
         source: LocationSource,
         result: Result<CellPage, OpenError>,
         cx: &mut Context<Self>,
     ) {
-        if generation != self.open_generation {
+        if generation.open != self.open_generation {
             return;
         }
 
@@ -675,6 +999,12 @@ impl ParquetDocument {
 
         loaded.source = Some(source);
 
+        if generation.read != loaded.read_generation {
+            self.start_pending_reread(cx);
+            cx.notify();
+            return;
+        }
+
         match result {
             Ok(page) => {
                 loaded.page_model.append(page);
@@ -682,12 +1012,10 @@ impl ParquetDocument {
                 let model = loaded.page_model.table_model();
 
                 loaded.table_state.update(cx, |state, cx| {
-                    state.set_model(
-                        model,
-                        dbflux_components::components::data_table::ModelSwap::KeepCursor,
-                        cx,
-                    );
+                    state.set_model(model, ModelSwap::KeepCursor, cx);
                 });
+
+                loaded.refresh_estimate();
             }
 
             Err(error) => {
@@ -701,6 +1029,162 @@ impl ParquetDocument {
             }
         }
 
+        cx.notify();
+    }
+
+    // -- Projection ----------------------------------------------------------
+
+    /// Makes `projection` the applied one and reads the file again from its
+    /// first row with its columns, which the reader returns in schema order.
+    /// Does nothing for a projection without columns, of another file, or
+    /// equal to the applied one. Once the file was found changed nothing is
+    /// read until it is opened again: the picker and the Columns view go back
+    /// to the shown columns.
+    ///
+    /// A window being read meanwhile is dropped when it arrives, and the read
+    /// starts then, with the source it hands back.
+    pub fn apply_projection(&mut self, projection: ColumnProjection, cx: &mut Context<Self>) {
+        let Some(loaded) = self.loaded_mut() else {
+            return;
+        };
+
+        if !projection.is_applicable()
+            || projection.total_count() != loaded.total_columns
+            || projection == loaded.projection
+        {
+            return;
+        }
+
+        if loaded.source_changed {
+            loaded.sync_projection_controls(cx);
+            cx.notify();
+            return;
+        }
+
+        loaded.projection = projection;
+        loaded.read_generation += 1;
+        loaded.reread_pending = true;
+        loaded.sync_projection_controls(cx);
+
+        self.start_pending_reread(cx);
+        cx.notify();
+    }
+
+    /// Starts the read of the applied projection when one is pending and the
+    /// source is not out with another read.
+    fn start_pending_reread(&mut self, cx: &mut Context<Self>) {
+        let ready = self
+            .loaded()
+            .is_some_and(|loaded| loaded.reread_pending && loaded.source.is_some());
+
+        if !ready {
+            return;
+        }
+
+        let summary = crate::labels::parquet_projection_failed_message(&self.title());
+
+        let Ok(connection) = self.use_live_connection(summary, cx) else {
+            if let Some(loaded) = self.loaded_mut() {
+                loaded.revert_projection(cx);
+            }
+
+            return;
+        };
+
+        let location = self.location.clone();
+        let open_generation = self.open_generation;
+
+        let Some(loaded) = self.loaded_mut() else {
+            return;
+        };
+        let Some(mut source) = loaded.source.take() else {
+            return;
+        };
+
+        loaded.reread_pending = false;
+
+        if let Some(connection) = connection {
+            source.use_connection(connection);
+        }
+
+        let generation = WindowGeneration {
+            open: open_generation,
+            read: loaded.read_generation,
+        };
+        let version = loaded.version.clone();
+        let file = loaded.file.clone();
+        let columns = loaded.projection.selected_indices();
+
+        let task = cx.background_executor().spawn(async move {
+            let window = RowWindow::new(0, DEFAULT_PAGE_ROWS);
+            let result = read_next_window(&location, &version, &source, &file, window, &columns);
+
+            (source, columns, result)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let (source, columns, result) = task.await;
+
+            cx.update(|cx| {
+                this.update(cx, |document, cx| {
+                    document.apply_reread_outcome(generation, source, columns, result, cx);
+                })
+                .ok();
+            });
+        })
+        .detach();
+    }
+
+    /// Takes the source back and shows the first window of `columns`. This
+    /// is the first place a failure of the read is caught, so it is reported
+    /// here and only here; the table keeps the columns it showed and the
+    /// projection goes back to them.
+    ///
+    /// A read of a projection replaced meanwhile is dropped without a report,
+    /// and the read of the applied one starts instead.
+    fn apply_reread_outcome(
+        &mut self,
+        generation: WindowGeneration,
+        source: LocationSource,
+        columns: Vec<usize>,
+        result: Result<CellPage, OpenError>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation.open != self.open_generation {
+            return;
+        }
+
+        let title = self.title();
+
+        let Some(loaded) = self.loaded_mut() else {
+            return;
+        };
+
+        loaded.source = Some(source);
+
+        if generation.read != loaded.read_generation {
+            self.start_pending_reread(cx);
+            cx.notify();
+            return;
+        }
+
+        match result {
+            Ok(page) => loaded.show_columns(columns, page, cx),
+
+            Err(error) => {
+                if matches!(error, OpenError::SourceChanged) {
+                    loaded.source_changed = true;
+                }
+
+                loaded.revert_projection(cx);
+
+                let summary = crate::labels::parquet_projection_failed_message(&title);
+
+                report_error(open_error_to_user_facing(&error, summary), cx);
+            }
+        }
+
+        cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
 
@@ -752,6 +1236,13 @@ impl ParquetDocument {
 /// The profile of an object is not connected, which was reported.
 struct ConnectionUnavailable;
 
+/// The open and the projection a window was read for.
+#[derive(Clone, Copy)]
+struct WindowGeneration {
+    open: u64,
+    read: u64,
+}
+
 /// Opens the file at `location`, reads its footer and statistics, picks the
 /// default projection and reads the first window of `page_rows` rows of it.
 /// Blocks on file or network I/O.
@@ -769,22 +1260,10 @@ pub(super) fn open_first_window(
         return Ok(OpenedFile::Empty);
     }
 
-    let total_columns = file.schema().fields().len();
-
-    let statistics = column_statistics(&file)?;
-    let profiles: Vec<_> = statistics.iter().map(column_profile).collect();
+    let profile = table_profile(&file)?;
 
     let window = RowWindow::new(0, page_rows);
-    let columns = default_columns(&file, &profiles, window)?;
-
-    let annotations = columns
-        .iter()
-        .map(|&column| {
-            profiles
-                .get(column)
-                .map(|profile| header_annotation(profile, file.row_count()))
-        })
-        .collect();
+    let columns = default_columns(&file, &profile, window)?;
 
     let rows = read_window(&file, &source, window, &columns)?;
     let first_page = cells_of(&rows)?;
@@ -795,11 +1274,73 @@ pub(super) fn open_first_window(
         version,
         source,
         file,
+        profile,
         columns,
-        annotations,
-        total_columns,
         page_model,
     })))
+}
+
+/// The profile of `file` from its footer: each top-level column in schema
+/// order, the row count and the sizes of the whole file.
+fn table_profile(file: &ParquetFile) -> Result<TableProfile, ParquetError> {
+    let columns = column_statistics(file)?
+        .iter()
+        .map(column_profile)
+        .collect();
+    let totals = file_statistics(file)?;
+
+    Ok(TableProfile {
+        columns,
+        row_count: Some(totals.row_count),
+        total_compressed_bytes: Some(totals.compressed_bytes),
+        total_uncompressed_bytes: Some(totals.uncompressed_bytes),
+        source_label: ProfileSource::FileFooter,
+    })
+}
+
+/// The second header line of each of `columns`, in the order given.
+fn header_annotations(profile: &TableProfile, columns: &[usize]) -> Vec<Option<HeaderAnnotation>> {
+    let row_count = profile.row_count.unwrap_or(0);
+
+    columns
+        .iter()
+        .map(|&column| {
+            profile
+                .columns
+                .get(column)
+                .map(|column| header_annotation(column, row_count))
+        })
+        .collect()
+}
+
+/// What reading the window after the rows `page_model` holds costs, for
+/// `columns`. `None` once every row is loaded.
+fn next_window_estimate(
+    file: &ParquetFile,
+    page_model: &ParquetPageModel,
+    columns: &[usize],
+) -> Result<Option<ReadEstimate>, ParquetError> {
+    if page_model.is_fully_loaded() {
+        return Ok(None);
+    }
+
+    let window = RowWindow::new(page_model.loaded_rows(), DEFAULT_PAGE_ROWS);
+    let estimate = read_estimate(file, window, columns)?;
+
+    Ok(Some(core_estimate(estimate)))
+}
+
+/// The reader's estimate as the generic model the estimate strip shows.
+fn core_estimate(estimate: FileReadEstimate) -> ReadEstimate {
+    ReadEstimate {
+        total_bytes: estimate.total_bytes,
+        per_column: estimate.per_column,
+        scope: EstimateScope::Parts {
+            touched: estimate.row_groups_touched,
+            total: estimate.row_group_count,
+            unit: PartUnit::RowGroups,
+        },
+    }
 }
 
 /// The leading columns in schema order whose bytes for `window` stay within
@@ -807,10 +1348,10 @@ pub(super) fn open_first_window(
 /// footer.
 fn default_columns(
     file: &ParquetFile,
-    profiles: &[dbflux_core::ColumnProfile],
+    profile: &TableProfile,
     window: RowWindow,
 ) -> Result<Vec<usize>, ParquetError> {
-    let column_count = profiles.len();
+    let column_count = profile.columns.len();
     let every_column: Vec<usize> = (0..column_count).collect();
 
     let estimate = read_estimate(file, window, &every_column)?;
@@ -823,16 +1364,8 @@ fn default_columns(
         }
     }
 
-    let profile = TableProfile {
-        columns: profiles.to_vec(),
-        row_count: Some(file.row_count()),
-        total_compressed_bytes: None,
-        total_uncompressed_bytes: None,
-        source_label: ProfileSource::FileFooter,
-    };
-
     let projection = default_projection(
-        &profile,
+        profile,
         &window_bytes,
         DEFAULT_PROJECTION_BUDGET_BYTES,
         DEFAULT_PROJECTION_MAX_COLUMNS,

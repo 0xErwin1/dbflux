@@ -2053,9 +2053,20 @@ document:
           many: "%{count} linhas"
         of_total: "%{loaded} de %{total} linhas carregadas"
       columns: "%{shown} de %{total} colunas exibidas"
+    view:
+      data: "Dados"
+      columns: "Colunas"
+    summary:
+      columns:
+        one: "%{count} coluna"
+        many: "%{count} colunas"
+      rows:
+        one: "%{count} linha"
+        many: "%{count} linhas"
     error:
       open_failed: "Não foi possível abrir %{name}"
       load_more_failed: "Não foi possível carregar mais de %{name}"
+      projection_failed: "Não foi possível ler as colunas escolhidas de %{name}"
       source_changed: "O arquivo mudou desde que foi aberto, então nenhuma linha a mais foi lida. Recarregue-o para ver o novo conteúdo."
       object_without_range_reads: "Este serviço de armazenamento não consegue ler parte de um objeto, então abrir um objeto Parquet dele baixaria o objeto inteiro. Baixe o arquivo e abra-o localmente."
       short_read: "O arquivo retornou menos bytes do que o pedido. Ele pode ter mudado enquanto era lido."

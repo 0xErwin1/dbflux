@@ -2978,6 +2978,32 @@ pub(crate) fn parquet_row_count_status(loaded: u64, total: u64) -> String {
     }
 }
 
+/// The summary of a Parquet file in its header: its columns, its rows and
+/// its size on disk, which the footer may not know.
+pub(crate) fn parquet_summary(columns: usize, rows: u64, compressed_bytes: Option<u64>) -> String {
+    let columns = if columns == 1 {
+        dbflux_i18n::t!("document.parquet.summary.columns.one", count = columns)
+    } else {
+        dbflux_i18n::t!("document.parquet.summary.columns.many", count = columns)
+    };
+
+    let rows = if rows == 1 {
+        dbflux_i18n::t!("document.parquet.summary.rows.one", count = rows)
+    } else {
+        dbflux_i18n::t!("document.parquet.summary.rows.many", count = rows)
+    };
+
+    let size = dbflux_components::components::column_facts::format_optional_bytes(compressed_bytes);
+
+    format!("{columns} · {rows} · {size}")
+}
+
+/// The summary of the error shown when the chosen columns of a Parquet file
+/// could not be read.
+pub(crate) fn parquet_projection_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.error.projection_failed", name = file_name)
+}
+
 /// The columns of a Parquet file shown against all of its columns.
 pub(crate) fn parquet_column_count_status(shown: usize, total: usize) -> String {
     dbflux_i18n::t!(
@@ -7649,6 +7675,13 @@ mod tests {
             "document.parquet.status.rows.all.many",
             "document.parquet.status.rows.of_total",
             "document.parquet.status.columns",
+            "document.parquet.view.data",
+            "document.parquet.view.columns",
+            "document.parquet.summary.columns.one",
+            "document.parquet.summary.columns.many",
+            "document.parquet.summary.rows.one",
+            "document.parquet.summary.rows.many",
+            "document.parquet.error.projection_failed",
             "document.parquet.error.open_failed",
             "document.parquet.error.load_more_failed",
             "document.parquet.error.source_changed",
