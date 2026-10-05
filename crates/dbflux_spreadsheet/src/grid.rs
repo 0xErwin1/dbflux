@@ -16,9 +16,9 @@ pub const MAX_GRID_CELLS: usize = 10_000_000;
 /// `(row, column)` counted from A1, both zero-based.
 ///
 /// The grid ends at the last row and column that hold a value or a formula,
-/// or for xlsx and xlsm at [`SheetGrid::append_row`] when that is further
-/// down: merged ranges and tables can reach past the last value, and the
-/// grid is padded with empty rows to cover them.
+/// or for xlsx, xlsm and ods at [`SheetGrid::append_row`] when that is
+/// further down: merged ranges, tables and anchored drawings can reach past
+/// the last value, and the grid is padded with empty rows to cover them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetGrid {
     row_count: usize,
@@ -36,11 +36,18 @@ impl SheetGrid {
         self.column_count
     }
 
-    /// The zero-based row where appended rows go: one past the last row that
-    /// holds a cell, a merged range or a table, so an appended row never
-    /// lands inside one of them. `Some` for xlsx and xlsm worksheets, where
-    /// [`crate::patch_xlsx`] writes appended rows, unless the worksheet's
-    /// part could not be scanned for it, and `None` for the other formats.
+    /// The zero-based row where appended rows go, so an appended row never
+    /// lands inside existing content. `Some` for xlsx and xlsm worksheets,
+    /// where [`crate::patch_xlsx`] writes appended rows, and for ods sheets,
+    /// where [`crate::patch_ods`] does, unless the sheet's part could not be
+    /// scanned for it; `None` for xls.
+    ///
+    /// For xlsx and xlsm it is one past the last row that holds a cell, a
+    /// merged range or a table. For ods it is one past the last row that
+    /// holds a non-empty cell (a value, a formula, text, a note or an
+    /// anchored drawing), a covered cell or the end of a merged range; the
+    /// empty filler rows LibreOffice writes down to the last row of the sheet
+    /// do not count.
     pub fn append_row(&self) -> Option<usize> {
         self.append_row
     }
@@ -341,7 +348,7 @@ fn parse_iso_date(text: &str) -> Option<NaiveDateTime> {
 
 /// Shows a date as `2024-01-31`, adding the time of day only when it is not
 /// midnight and the milliseconds only when there are some.
-fn display_date(date: NaiveDateTime) -> String {
+pub(crate) fn display_date(date: NaiveDateTime) -> String {
     if date.time() == NaiveTime::MIN {
         return date.format("%Y-%m-%d").to_string();
     }

@@ -303,7 +303,7 @@ pub(crate) fn rebuild_tag(
 
 /// Replaces byte ranges of `input`, given in increasing order and not
 /// overlapping, with new text.
-pub(crate) fn splice(input: &[u8], replacements: &[(Range<usize>, String)]) -> Vec<u8> {
+pub(crate) fn splice<T: AsRef<[u8]>>(input: &[u8], replacements: &[(Range<usize>, T)]) -> Vec<u8> {
     let mut output = Vec::with_capacity(input.len());
     let mut copied = 0;
 
@@ -311,7 +311,7 @@ pub(crate) fn splice(input: &[u8], replacements: &[(Range<usize>, String)]) -> V
         if let Some(bytes) = input.get(copied..range.start) {
             output.extend_from_slice(bytes);
         }
-        output.extend_from_slice(text.as_bytes());
+        output.extend_from_slice(text.as_ref());
         copied = copied.max(range.end);
     }
 

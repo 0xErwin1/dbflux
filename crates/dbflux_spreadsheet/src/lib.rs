@@ -6,7 +6,8 @@
 //! padded to A1, where each cell carries its value, the text to show for it,
 //! and its formula when the format exposes one.
 //!
-//! [`patch_xlsx`] writes cell edits into an xlsx package in place.
+//! [`patch_xlsx`] and [`patch_ods`] write cell edits into an xlsx or ods
+//! package in place.
 //!
 //! ```
 //! use dbflux_byte_source::MemorySource;
@@ -20,15 +21,19 @@
 //! ));
 //! ```
 
+mod edits;
 mod error;
 mod grid;
+mod ods_patch;
 mod workbook;
 mod xlsx_patch;
 
+pub use edits::{CellEdit, SheetEdits};
 pub use error::{FormulaRangeKind, SheetWriteError, SpreadsheetError};
 pub use grid::{CellErrorCode, CellFormula, CellValue, MAX_GRID_CELLS, SheetCell, SheetGrid};
+pub use ods_patch::patch_ods;
 pub use workbook::{SheetInfo, SheetKind, SpreadsheetFormat, Workbook, open};
-pub use xlsx_patch::{CellEdit, XlsxEdits, patch_xlsx};
+pub use xlsx_patch::patch_xlsx;
 
 #[cfg(test)]
 mod grid_tests;

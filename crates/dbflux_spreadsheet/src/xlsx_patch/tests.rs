@@ -12,10 +12,13 @@ use dbflux_byte_source::MemorySource;
 use rust_xlsxwriter::{Chart, ChartType, Format, Formula, Note, Table};
 use zip::write::SimpleFileOptions;
 
-use crate::test_support::{fixture, fixture_path, open_bytes, xlsx_bytes};
+use crate::test_support::{
+    assert_entries_unchanged, fixture, fixture_path, open_bytes, xlsx_bytes,
+};
 use crate::{CellFormula, CellValue, FormulaRangeKind, SheetWriteError};
 
-use super::{CellEdit, XlsxEdits, patch_xlsx};
+use super::patch_xlsx;
+use crate::{CellEdit, SheetEdits};
 
 const MAIN_NAMESPACE: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const RELATIONSHIP_NAMESPACE: &str =
@@ -27,14 +30,14 @@ const CALC_CHAIN_TYPE: &str =
 const CALC_CHAIN_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml";
 
-fn patch(bytes: &[u8], edits: &XlsxEdits) -> Result<Vec<u8>, SheetWriteError> {
+fn patch(bytes: &[u8], edits: &SheetEdits) -> Result<Vec<u8>, SheetWriteError> {
     let mut sink = Cursor::new(Vec::new());
     patch_xlsx(MemorySource::new(bytes.to_vec()), edits, &mut sink)?;
     Ok(sink.into_inner())
 }
 
-fn edits(sheet: usize, cells: &[(usize, usize, CellEdit)]) -> XlsxEdits {
-    let mut edits = XlsxEdits::new();
+fn edits(sheet: usize, cells: &[(usize, usize, CellEdit)]) -> SheetEdits {
+    let mut edits = SheetEdits::new();
     for (row, column, edit) in cells {
         edits.set(sheet, *row, *column, edit.clone());
     }
@@ -206,38 +209,6 @@ fn one_sheet_with(sheet_data: &str, after_sheet_data: &str) -> Vec<u8> {
             worksheet_with(sheet_data, after_sheet_data),
         )],
     )
-}
-
-/// Asserts that every entry but `changed` is stored exactly as before, in
-/// the same order.
-fn assert_entries_unchanged(original: &[u8], patched: &[u8], changed: &[&str]) {
-    let mut before_archive = zip::ZipArchive::new(Cursor::new(original)).unwrap();
-    let mut after_archive = zip::ZipArchive::new(Cursor::new(patched)).unwrap();
-    assert_eq!(before_archive.len(), after_archive.len());
-
-    for index in 0..before_archive.len() {
-        let mut before = before_archive.by_index_raw(index).unwrap();
-        let mut after = after_archive.by_index_raw(index).unwrap();
-        assert_eq!(before.name(), after.name(), "entry order");
-
-        if changed.contains(&before.name()) {
-            continue;
-        }
-
-        assert_eq!(
-            before.compression(),
-            after.compression(),
-            "{}",
-            before.name()
-        );
-        assert_eq!(before.crc32(), after.crc32(), "{}", before.name());
-
-        let mut before_raw = Vec::new();
-        let mut after_raw = Vec::new();
-        before.read_to_end(&mut before_raw).unwrap();
-        after.read_to_end(&mut after_raw).unwrap();
-        assert_eq!(before_raw, after_raw, "{}", before.name());
-    }
 }
 
 fn entry_names(bytes: &[u8]) -> Vec<String> {
@@ -704,7 +675,7 @@ fn calc_chain_removed_with_rel_and_override() {
     }
     .build();
 
-    let unchanged = patch(&bytes, &XlsxEdits::new()).unwrap();
+    let unchanged = patch(&bytes, &SheetEdits::new()).unwrap();
     assert_entries_unchanged(&bytes, &unchanged, &[]);
 
     let patched = patch(&bytes, &edits(0, &[(0, 0, CellEdit::Number(5.0))])).unwrap();

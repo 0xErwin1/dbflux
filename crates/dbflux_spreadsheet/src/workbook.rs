@@ -6,7 +6,8 @@ use dbflux_byte_source::{ByteSource, ByteSourceReader};
 
 use crate::error::SpreadsheetError;
 use crate::grid::{FormulaSource, SheetGrid, build_grid};
-use crate::xlsx_patch::sheet_append_row;
+use crate::ods_patch;
+use crate::xlsx_patch;
 
 const ZIP_LOCAL_HEADER: &[u8] = b"PK\x03\x04";
 const ZIP_EMPTY_ARCHIVE: &[u8] = b"PK\x05\x06";
@@ -56,7 +57,7 @@ pub struct Workbook<S> {
     sheets: Vec<SheetInfo>,
     date_1904: bool,
     reader: FormatReader<S>,
-    /// The source of an xlsx or xlsm package, read again to find where
+    /// The source of an xlsx, xlsm or ods package, read again to find where
     /// appended rows go, which calamine does not report.
     package_source: Option<S>,
 }
@@ -110,8 +111,7 @@ pub fn open<S: ByteSource + Clone>(source: S) -> Result<Workbook<S>, Spreadsheet
 
 fn open_zip_package<S: ByteSource + Clone>(source: S) -> Result<Workbook<S>, SpreadsheetError> {
     let format = zip_package_format(source.clone())?;
-    let package_source =
-        matches!(format, SpreadsheetFormat::Xlsx | SpreadsheetFormat::Xlsm).then(|| source.clone());
+    let package_source = Some(source.clone());
 
     let reader = ByteSourceReader::new(source);
     let reader = match format {
@@ -254,7 +254,7 @@ impl<S: ByteSource> Workbook<S> {
     /// The whole sheet is decoded into memory; calamine has no row stream.
     /// xls formula text is never read, because calamine decodes it with wrong
     /// references and loses shared formulas; see [`crate::CellFormula`].
-    /// For xlsx and xlsm the sheet's part is scanned once more to find
+    /// For xlsx, xlsm and ods the sheet's part is scanned once more to find
     /// [`SheetGrid::append_row`], which calamine does not report. That scan
     /// is stricter than calamine, which reads cells without the table parts,
     /// so a scan that fails still returns the cells, without an append row:
@@ -281,7 +281,12 @@ impl<S: ByteSource> Workbook<S> {
             return Ok(grid);
         };
 
-        match sheet_append_row(source, index) {
+        let append_row = match self.format {
+            SpreadsheetFormat::Ods => ods_patch::sheet_append_row(source, index),
+            _ => xlsx_patch::sheet_append_row(source, index),
+        };
+
+        match append_row {
             Ok(Some(append_row)) => grid.with_append_row(append_row),
             Ok(None) | Err(_) => Ok(grid),
         }
