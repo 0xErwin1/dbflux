@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use uuid::Uuid;
 
-/// Where a delimited text file opened as a document lives: the identity
-/// behind [`DocumentKey::Delimited`].
+/// Where a data file opened as a document lives: the identity behind
+/// [`DocumentKey::FileDocument`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DelimitedFileKey {
+pub enum FileDocumentKey {
     /// A file on the local file system.
     Local { path: PathBuf },
 
@@ -142,10 +142,10 @@ pub enum DocumentKey {
     /// second time focuses the existing tab.
     DumpAnalysis { path: PathBuf },
 
-    /// A delimited text file (CSV or TSV) opened as a table. Distinct from
+    /// A data file (for example CSV or TSV) opened as a table. Distinct from
     /// `File` and `ObjectEditor`, which open the same path or object as text.
     /// Deduplicated by the local `path`, or by `(profile_id, bucket, key)`.
-    Delimited(DelimitedFileKey),
+    FileDocument(FileDocumentKey),
 
     /// The MCP approvals queue (singleton — at most one open at a time).
     McpApprovals,
@@ -348,26 +348,26 @@ mod tests {
         ));
     }
 
-    /// `DocumentKey::Delimited` must construct and round-trip through clone
+    /// `DocumentKey::FileDocument` must construct and round-trip through clone
     /// and debug, and its identity is equal only for the same local path or
     /// the same `(profile_id, bucket, key)`.
     #[test]
-    fn delimited_key_constructs_clones_and_compares_by_location() {
+    fn file_document_key_constructs_clones_and_compares_by_location() {
         let profile_id = Uuid::new_v4();
 
-        let local = DelimitedFileKey::Local {
+        let local = FileDocumentKey::Local {
             path: PathBuf::from("/tmp/cities.csv"),
         };
-        let object = DelimitedFileKey::Object {
+        let object = FileDocumentKey::Object {
             profile_id,
             bucket: "reports".to_string(),
             key: "2026/cities.csv".to_string(),
         };
 
-        let key = DocumentKey::Delimited(local.clone());
+        let key = DocumentKey::FileDocument(local.clone());
         let cloned = key.clone();
         let _ = format!("{:?}", cloned);
-        assert!(matches!(key, DocumentKey::Delimited(file) if file == local));
+        assert!(matches!(key, DocumentKey::FileDocument(file) if file == local));
 
         assert_eq!(local, local.clone());
         assert_eq!(object, object.clone());
@@ -375,13 +375,13 @@ mod tests {
 
         assert_ne!(
             local,
-            DelimitedFileKey::Local {
+            FileDocumentKey::Local {
                 path: PathBuf::from("/tmp/other.csv"),
             }
         );
         assert_ne!(
             object,
-            DelimitedFileKey::Object {
+            FileDocumentKey::Object {
                 profile_id,
                 bucket: "reports".to_string(),
                 key: "2026/other.csv".to_string(),
@@ -389,7 +389,7 @@ mod tests {
         );
         assert_ne!(
             object,
-            DelimitedFileKey::Object {
+            FileDocumentKey::Object {
                 profile_id,
                 bucket: "archive".to_string(),
                 key: "2026/cities.csv".to_string(),
@@ -397,7 +397,7 @@ mod tests {
         );
         assert_ne!(
             object,
-            DelimitedFileKey::Object {
+            FileDocumentKey::Object {
                 profile_id: Uuid::new_v4(),
                 bucket: "reports".to_string(),
                 key: "2026/cities.csv".to_string(),

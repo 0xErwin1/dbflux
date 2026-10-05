@@ -1143,7 +1143,7 @@ impl Workspace {
                 }
                 SidebarEvent::OpenScript { path } => {
                     if dbflux_core::is_openable_script(path)
-                        || crate::ui::document::delimited::is_delimited_path(path)
+                        || crate::ui::document::file_format::file_document_format(path).is_some()
                     {
                         this.open_script_from_path(path.clone(), cx);
                     } else {

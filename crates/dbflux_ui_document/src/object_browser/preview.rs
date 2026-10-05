@@ -291,7 +291,7 @@ impl ObjectBrowserDocument {
     /// offered whatever its size.
     pub(super) fn offers_open_in_editor(&self, key: &str) -> bool {
         self.editor_for(key).is_some()
-            || crate::delimited::is_delimited_path(std::path::Path::new(key))
+            || crate::file_format::file_document_format(std::path::Path::new(key)).is_some()
     }
 
     fn render_preview_header(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {

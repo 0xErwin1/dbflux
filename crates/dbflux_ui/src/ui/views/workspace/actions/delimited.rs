@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::document::{DelimitedDocument, DelimitedFileKey, DocumentKey, ObjectSavedCallback};
+use crate::ui::document::{DelimitedDocument, DocumentKey, FileDocumentKey, ObjectSavedCallback};
 use crate::ui::labels::{NoActiveConnectionKind, documents_no_active_connection_message};
 
 impl Workspace {
@@ -21,29 +21,29 @@ impl Workspace {
     /// without a window can open one.
     pub(in crate::ui::views::workspace) fn open_delimited_file(
         &mut self,
-        file: DelimitedFileKey,
+        file: FileDocumentKey,
         on_object_saved: Option<ObjectSavedCallback>,
         cx: &mut Context<Self>,
     ) {
         let file = match file {
-            DelimitedFileKey::Local { path } => match std::fs::canonicalize(&path) {
+            FileDocumentKey::Local { path } => match std::fs::canonicalize(&path) {
                 Ok(resolved) => {
                     self.app_state.update(cx, |state, cx| {
                         state.record_recent_file(resolved.clone());
                         cx.emit(AppStateChanged);
                     });
 
-                    DelimitedFileKey::Local { path: resolved }
+                    FileDocumentKey::Local { path: resolved }
                 }
-                Err(_) => DelimitedFileKey::Local { path },
+                Err(_) => FileDocumentKey::Local { path },
             },
-            object @ DelimitedFileKey::Object { .. } => object,
+            object @ FileDocumentKey::Object { .. } => object,
         };
 
         let existing_id = self
             .tab_manager
             .read(cx)
-            .find_by_key(&DocumentKey::Delimited(file.clone()), cx);
+            .find_by_key(&DocumentKey::FileDocument(file.clone()), cx);
 
         if let Some(id) = existing_id {
             self.tab_manager.update(cx, |mgr, cx| {
@@ -53,11 +53,9 @@ impl Workspace {
         }
 
         let doc = match file {
-            DelimitedFileKey::Local { path } => {
-                cx.new(|cx| DelimitedDocument::open_local(path, cx))
-            }
+            FileDocumentKey::Local { path } => cx.new(|cx| DelimitedDocument::open_local(path, cx)),
 
-            DelimitedFileKey::Object {
+            FileDocumentKey::Object {
                 profile_id,
                 bucket,
                 key,
@@ -149,7 +147,7 @@ impl Workspace {
             return;
         }
 
-        let key = DocumentKey::Delimited(DelimitedFileKey::Local { path: path.clone() });
+        let key = DocumentKey::FileDocument(FileDocumentKey::Local { path: path.clone() });
 
         if self.tab_manager.read(cx).find_by_key(&key, cx).is_some() {
             return;
@@ -560,7 +558,7 @@ mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
     use crate::ui::document::{
-        DelimitedDocument, DelimitedFileKey, DocumentId, DocumentKind, DocumentState, Tab,
+        DelimitedDocument, DocumentId, DocumentKind, DocumentState, FileDocumentKey, Tab,
     };
     use crate::ui::overlays::modals::UnsavedChangesOutcome;
     use crate::ui::views::workspace::{QuitConfirmed, Workspace};
@@ -619,8 +617,8 @@ mod tests {
             Self { directory, path }
         }
 
-        fn key(&self) -> DelimitedFileKey {
-            DelimitedFileKey::Local {
+        fn key(&self) -> FileDocumentKey {
+            FileDocumentKey::Local {
                 path: self.path.clone(),
             }
         }
@@ -632,7 +630,7 @@ mod tests {
         }
     }
 
-    fn open(window: &mut VisualTestContext, workspace: &Entity<Workspace>, file: DelimitedFileKey) {
+    fn open(window: &mut VisualTestContext, workspace: &Entity<Workspace>, file: FileDocumentKey) {
         window.update(|_, cx| {
             workspace.update(cx, |workspace, cx| {
                 workspace.open_delimited_file(file, None, cx);
@@ -711,7 +709,7 @@ mod tests {
         open(
             window,
             &workspace,
-            DelimitedFileKey::Object {
+            FileDocumentKey::Object {
                 profile_id: uuid::Uuid::new_v4(),
                 bucket: "reports".to_string(),
                 key: "2026/cities.csv".to_string(),
@@ -733,8 +731,8 @@ mod tests {
         std::os::unix::fs::symlink(&file.path, &link).expect("the test link must be creatable");
 
         open(window, &workspace, file.key());
-        open(window, &workspace, DelimitedFileKey::Local { path: dotted });
-        open(window, &workspace, DelimitedFileKey::Local { path: link });
+        open(window, &workspace, FileDocumentKey::Local { path: dotted });
+        open(window, &workspace, FileDocumentKey::Local { path: link });
 
         assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
         assert_eq!(toast_count(window), 0);
@@ -748,11 +746,7 @@ mod tests {
         let file = TestFile::new("cities.csv");
         let missing = file.directory.join("absent.csv");
 
-        open(
-            window,
-            &workspace,
-            DelimitedFileKey::Local { path: missing },
-        );
+        open(window, &workspace, FileDocumentKey::Local { path: missing });
 
         assert_eq!(tab_titles(window, &workspace), ["absent.csv"]);
         assert_eq!(toast_count(window), 1);

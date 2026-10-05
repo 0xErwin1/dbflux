@@ -1,8 +1,8 @@
 //! `PaneHandle` constructor for `DelimitedDocument`.
 
 use super::document::DelimitedDocument;
-use crate::dedup::DelimitedFileKey;
 use crate::dedup::DocumentKey;
+use crate::dedup::FileDocumentKey;
 use crate::handle::DocumentEvent;
 use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
@@ -104,7 +104,7 @@ impl DelimitedDocument {
             {
                 let entity = entity.clone();
                 Box::new(move |key, cx| match key {
-                    DocumentKey::Delimited(file) => entity.read(cx).file() == file,
+                    DocumentKey::FileDocument(file) => entity.read(cx).file() == file,
                     _ => false,
                 })
             },
@@ -182,7 +182,7 @@ impl DelimitedDocument {
             Box::new(move |cx| {
                 let document = entity.read(cx);
 
-                let DelimitedFileKey::Local { path } = document.file() else {
+                let FileDocumentKey::Local { path } = document.file() else {
                     return None;
                 };
 

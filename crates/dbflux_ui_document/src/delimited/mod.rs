@@ -52,7 +52,7 @@ mod text_view_tests;
 #[cfg(test)]
 mod vim_tests;
 
-pub use document::{DelimitedDocument, DelimitedWarning, is_delimited_path};
+pub use document::{DelimitedDocument, DelimitedWarning};
 pub use page_model::{PageModel, PageModelError};
 pub use save::{SaveOutcome, save_edited};
 pub use source::{

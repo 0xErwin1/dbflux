@@ -25,7 +25,7 @@ use super::document::{
 use super::source::{DelimitedLocation, open_source};
 use super::tests::{BUCKET, FakeConnection, KEY, TestDirectory};
 use super::toolbar::encoding_choices;
-use crate::dedup::{DelimitedFileKey, DocumentKey};
+use crate::dedup::{DocumentKey, FileDocumentKey};
 use crate::keyboard_coverage::DELIMITED;
 use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
 use crate::pane::PaneActionRun;
@@ -703,7 +703,7 @@ fn the_pane_matches_only_the_key_of_its_own_file(cx: &mut TestAppContext) {
     window.run_until_parked();
 
     let object_key = |profile_id, key: &str| {
-        DocumentKey::Delimited(DelimitedFileKey::Object {
+        DocumentKey::FileDocument(FileDocumentKey::Object {
             profile_id,
             bucket: BUCKET.to_string(),
             key: key.to_string(),
@@ -714,8 +714,8 @@ fn the_pane_matches_only_the_key_of_its_own_file(cx: &mut TestAppContext) {
         let local_pane = DelimitedDocument::into_pane(local.clone(), cx);
         let object_pane = DelimitedDocument::into_pane(object.clone(), cx);
 
-        let same_path = DocumentKey::Delimited(DelimitedFileKey::Local { path: path.clone() });
-        let different_path = DocumentKey::Delimited(DelimitedFileKey::Local { path: other_path });
+        let same_path = DocumentKey::FileDocument(FileDocumentKey::Local { path: path.clone() });
+        let different_path = DocumentKey::FileDocument(FileDocumentKey::Local { path: other_path });
 
         assert!(local_pane.matches_dedup_key(&same_path, cx));
         assert!(!local_pane.matches_dedup_key(&different_path, cx));
@@ -965,23 +965,6 @@ fn the_extension_hint_is_the_text_after_the_last_dot() {
     assert_eq!(extension_hint("archive.tar.csv"), Some("csv"));
     assert_eq!(extension_hint("cities"), None);
     assert_eq!(extension_hint(".csv"), None);
-}
-
-#[test]
-fn only_a_csv_or_tsv_extension_in_any_letter_case_opens_as_delimited() {
-    use crate::delimited::is_delimited_path;
-    use std::path::Path;
-
-    assert!(is_delimited_path(Path::new("a.csv")));
-    assert!(is_delimited_path(Path::new("B.TSV")));
-    assert!(is_delimited_path(Path::new("/home/ana/Reports.Csv")));
-    assert!(is_delimited_path(Path::new("2026/q1/cities.tsv")));
-
-    assert!(!is_delimited_path(Path::new("notes.txt")));
-    assert!(!is_delimited_path(Path::new("cities.csv.gz")));
-    assert!(!is_delimited_path(Path::new("csv")));
-    assert!(!is_delimited_path(Path::new(".csv")));
-    assert!(!is_delimited_path(Path::new("reports/csv/")));
 }
 
 /// A header click has no action here, so the registry must not name a
