@@ -3145,9 +3145,6 @@ pub fn format_y_value(y: f64) -> String {
 
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
 ///
-/// Layout: top 18px fixed; left clamped so the panel stays inside the plot area.
-/// Min-width 200px; one header row (the hovered point's X) then one row per series.
-///
 /// `colors` is derived from `ChartColors::for_current(cx)` at the render call site
 /// so the overlay matches the active theme.
 fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
@@ -3186,7 +3183,6 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
                 .fill(colors.pill_bg)
                 .border(colors.pill_border),
         )
-        // Header: the hovered point's X, muted
         .child(
             div()
                 .flex()
@@ -3280,15 +3276,10 @@ mod tests {
             .timestamp_millis() as f64
     }
 
-    /// Readout header for a single time series hovered at `hover_fraction`
-    /// of a 1000px-wide plot that spans exactly the series' X range.
     fn readout_header(points: Vec<(f64, f64)>, hover_fraction: f32) -> String {
         readout_header_for(vec![points], 0, &[], hover_fraction)
     }
 
-    /// Readout header for several time series with `focused_idx` focused and
-    /// `hidden` series hidden, hovered at `hover_fraction` of a 1000px-wide
-    /// plot that spans the X range of every series.
     fn readout_header_for(
         series: Vec<Vec<(f64, f64)>>,
         focused_idx: usize,
@@ -3322,7 +3313,6 @@ mod tests {
         .to_string()
     }
 
-    /// Ten daily samples starting 2025-01-01, each `hour` hours past midnight.
     fn daily_series(hour: u32) -> Vec<(f64, f64)> {
         let start = utc_ms(2025, 1, 1, hour, 0);
 
