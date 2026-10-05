@@ -207,3 +207,13 @@ fn sequential_small_reads_use_one_request_per_block() {
     assert_eq!(collected, bytes);
     assert_eq!(reader.into_inner().requests.get(), 3);
 }
+
+#[test]
+fn a_shared_source_reads_like_the_source_it_holds() {
+    let shared: std::sync::Arc<dyn ByteSource> =
+        std::sync::Arc::new(MemorySource::new(b"abcdef".to_vec()));
+    let clone = std::sync::Arc::clone(&shared);
+
+    assert_eq!(clone.byte_length().unwrap(), 6);
+    assert_eq!(clone.read_range(2..4).unwrap(), b"cd".to_vec());
+}
