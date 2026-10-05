@@ -24,28 +24,30 @@ impl Workspace {
             let parquet_filter_label = dbflux_i18n::t!("scripts.dialog.filter.parquet");
             let all_files_filter_label = scripts_filter_all_files_label();
 
-            let file_handle = rfd::AsyncFileDialog::new()
-                .set_title(&dialog_title)
-                .add_filter(&sql_filter_label, &["sql"])
-                .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
-                .add_filter(&redis_filter_label, &["redis", "red"])
-                .add_filter(
-                    &delimited_filter_label,
-                    FileDocumentFormat::Delimited.extensions(),
-                )
-                .add_filter(
-                    &parquet_filter_label,
-                    FileDocumentFormat::Parquet.extensions(),
-                )
-                .add_filter(&all_files_filter_label, &["*"])
-                .pick_file()
-                .await;
+            let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async {
+                rfd::AsyncFileDialog::new()
+                    .set_title(&dialog_title)
+                    .add_filter(&sql_filter_label, &["sql"])
+                    .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
+                    .add_filter(&redis_filter_label, &["redis", "red"])
+                    .add_filter(
+                        &delimited_filter_label,
+                        FileDocumentFormat::Delimited.extensions(),
+                    )
+                    .add_filter(
+                        &parquet_filter_label,
+                        FileDocumentFormat::Parquet.extensions(),
+                    )
+                    .add_filter(&all_files_filter_label, &["*"])
+                    .pick_file()
+                    .await
+                    .map(|handle| handle.path().to_path_buf())
+            })
+            .await;
 
-            let Some(handle) = file_handle else {
+            let Some(path) = picked else {
                 return;
             };
-
-            let path = handle.path().to_path_buf();
 
             cx.update(|cx| {
                 this.update(cx, |ws, cx| {

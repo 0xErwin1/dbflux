@@ -2,6 +2,7 @@ use crate::*;
 use dbflux_ui_base::app_state_entity::{
     rescan_script_root_in_background, rescan_scripts_in_background,
 };
+use dbflux_ui_base::file_dialog;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 /// Reports a script file operation the user just triggered that failed, such as
@@ -156,18 +157,21 @@ impl Sidebar {
         let title = crate::labels::import_script_dialog_title();
         let filter_name = crate::labels::script_files_filter_label();
 
-        let task = cx.background_executor().spawn(async move {
-            let mut dialog = rfd::FileDialog::new().set_title(title.as_str());
-            for ext in &extensions {
-                dialog = dialog.add_filter(filter_name.as_str(), &[ext]);
-            }
-            dialog.pick_file()
-        });
-
         cx.spawn(async move |_this, cx| {
-            let source = match task.await {
-                Some(path) => path,
-                None => return,
+            let picked = file_dialog::pick_existing_file(cx, async move {
+                let mut dialog = rfd::AsyncFileDialog::new().set_title(title.as_str());
+                for ext in &extensions {
+                    dialog = dialog.add_filter(filter_name.as_str(), &[ext]);
+                }
+                dialog
+                    .pick_file()
+                    .await
+                    .map(|handle| handle.path().to_path_buf())
+            })
+            .await;
+
+            let Some(source) = picked else {
+                return;
             };
 
             cx.update(|cx| {
@@ -214,15 +218,17 @@ impl Sidebar {
         let app_state = self.app_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let Some(picked) = rfd::AsyncFileDialog::new()
-                .set_title(title.as_str())
-                .pick_folder()
-                .await
+            let Some(picked) = file_dialog::pick_existing_folder(cx, async {
+                rfd::AsyncFileDialog::new()
+                    .set_title(title.as_str())
+                    .pick_folder()
+                    .await
+                    .map(|handle| handle.path().to_path_buf())
+            })
+            .await
             else {
                 return;
             };
-
-            let picked = picked.path().to_path_buf();
             let validated = cx
                 .background_executor()
                 .spawn(async move {
