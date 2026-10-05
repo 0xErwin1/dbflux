@@ -18,15 +18,16 @@ pub enum StaticScanOutcome {
     Rejected { construct: &'static str },
 
     /// The scan proves the script cannot reach anything worse than a read —
-    /// no write/destructive method name appears anywhere in the source, and
-    /// no computed member access (`obj[expr]`) is present that could hide
+    /// no write/destructive method name or `$out`/`$merge` aggregation stage
+    /// appears anywhere in the source, and no computed member access (`obj[expr]`) is present that could hide
     /// one. No up-front confirmation is required.
     Read,
 
     /// The scan cannot prove the script is read-only. Either a write or
-    /// worse method name appears in the source (regardless of whether it
-    /// sits behind a loop or a conditional), or a computed member access is
-    /// present whose runtime value the scan cannot see. One up-front
+    /// worse method name or an output stage appears in the source
+    /// (regardless of whether it sits behind a loop or a conditional), or a
+    /// computed member access is present whose runtime value the scan cannot
+    /// see. One up-front
     /// confirmation is required before the script may run.
     RequiresConfirmation,
 }
@@ -53,6 +54,12 @@ const WRITE_OR_WORSE_METHOD_NAMES: &[&str] = &[
     "runCommand",
 ];
 
+/// Aggregation stages that write to a collection. `aggregate` itself is a
+/// read, so the scan must see the stage to flag the script; the engine
+/// classifies the dispatched pipeline the same way (see
+/// `engine::classify_operation`).
+const OUTPUT_STAGE_NAMES: &[&str] = &["$out", "$merge"];
+
 /// Constructs this engine rejects outright, in the order they are checked.
 const REJECTED_CONSTRUCTS: &[&str] = &["await", "require", "import"];
 
@@ -74,7 +81,8 @@ pub fn static_scan(source: &str) -> StaticScanOutcome {
 fn reachable_write_or_worse(source: &str) -> bool {
     WRITE_OR_WORSE_METHOD_NAMES
         .iter()
-        .any(|method| contains_word(source, method))
+        .chain(OUTPUT_STAGE_NAMES)
+        .any(|name| contains_word(source, name))
         || contains_computed_member_access(source)
 }
 
@@ -195,6 +203,21 @@ mod tests {
             static_scan("db.users.insertOne({name: 'a'});"),
             StaticScanOutcome::RequiresConfirmation
         );
+    }
+
+    #[test]
+    fn aggregate_output_stage_requires_confirmation() {
+        for script in [
+            r#"db.orders.aggregate([{ $merge: { into: "archive" } }]);"#,
+            r#"db.orders.aggregate([{ "$out": "archive" }]);"#,
+            r#"db.orders.aggregate([{ "$facet": { "a": [{ '$merge': "archive" }] } }]);"#,
+        ] {
+            assert_eq!(
+                static_scan(script),
+                StaticScanOutcome::RequiresConfirmation,
+                "{script}"
+            );
+        }
     }
 
     #[test]
