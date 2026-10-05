@@ -391,8 +391,8 @@ mod gutter_tests {
             assert_eq!(document.statement_count(), Some(2));
             assert_eq!(
                 editor.line_height(),
-                Some(EditorMetrics::CODE_LINE_HEIGHT),
-                "code rows are 22 px (AppByzEditor)"
+                Some(dbflux_components::fonts::editor_line_height(cx)),
+                "code rows follow the editor line height (22 px at the default size)"
             );
         });
     }

@@ -53,19 +53,25 @@ impl FontSettings {
     ///
     /// Sizes are clamped to the supported range. A family that is neither
     /// bundled nor in `installed` falls back to the bundled default, because
-    /// laying out text in a family the text system cannot find panics. A
-    /// grid without its own family uses the resolved editor family.
+    /// laying out text in a family the text system cannot find panics. The
+    /// grid uses the resolved editor family unless its own family is set and
+    /// loadable.
     pub fn from_general(settings: &GeneralSettings, installed: &[SharedString]) -> Self {
-        let editor_family = resolve_family(&settings.editor_font_family, AppFonts::MONO, installed);
-
+        let editor_family = resolve_family(
+            &settings.editor_font_family,
+            SharedString::from(AppFonts::MONO),
+            installed,
+        );
         let grid_family =
-            match GeneralSettings::normalize_font_family(settings.grid_font_family.clone()) {
-                Some(_) => resolve_family(&settings.grid_font_family, AppFonts::MONO, installed),
-                None => editor_family.clone(),
-            };
+            resolve_family(&settings.grid_font_family, editor_family.clone(), installed);
+        let ui_family = resolve_family(
+            &settings.ui_font_family,
+            SharedString::from(AppFonts::INTERFACE),
+            installed,
+        );
 
         Self {
-            ui_family: resolve_family(&settings.ui_font_family, AppFonts::INTERFACE, installed),
+            ui_family,
             ui_size: GeneralSettings::clamp_font_size(
                 settings.ui_font_size,
                 GeneralSettings::DEFAULT_UI_FONT_SIZE,
@@ -190,6 +196,12 @@ pub fn grid_record_row_height(cx: &App) -> Pixels {
     scaled_grid_height(cx, RECORD_ROW_HEIGHT)
 }
 
+/// Scales a grid measurement drawn for the default grid size, such as a
+/// header strip height, rounded to whole pixels.
+pub fn grid_scaled(cx: &App, value: Pixels) -> Pixels {
+    scaled_grid_height(cx, f32::from(value))
+}
+
 /// Advance of one grid cell character, in pixels.
 pub fn grid_char_advance(cx: &App) -> f32 {
     active(cx).grid_size * MONO_ADVANCE_EM
@@ -217,11 +229,11 @@ fn scaled_grid_height(cx: &App, default_height: f32) -> Pixels {
 /// The normalized `family` when the text system can load it, else `fallback`.
 fn resolve_family(
     family: &Option<String>,
-    fallback: &'static str,
+    fallback: SharedString,
     installed: &[SharedString],
 ) -> SharedString {
     let Some(family) = GeneralSettings::normalize_font_family(family.clone()) else {
-        return SharedString::from(fallback);
+        return fallback;
     };
 
     let bundled = BUNDLED_FONT_ASSETS
@@ -232,7 +244,7 @@ fn resolve_family(
     if bundled || is_installed {
         SharedString::from(family)
     } else {
-        SharedString::from(fallback)
+        fallback
     }
 }
 
@@ -297,6 +309,17 @@ mod tests {
         assert_eq!(resolved.ui_family, SharedString::from(AppFonts::INTERFACE));
         assert_eq!(resolved.editor_family, SharedString::from(AppFonts::MONO));
         assert_eq!(resolved.grid_family, SharedString::from(AppFonts::MONO));
+    }
+
+    #[test]
+    fn unknown_grid_family_falls_back_to_the_editor_family() {
+        let mut settings = general();
+        settings.editor_font_family = Some("Fira Code".to_string());
+        settings.grid_font_family = Some("Missing Grid".to_string());
+
+        let resolved = FontSettings::from_general(&settings, &installed(&["Fira Code"]));
+
+        assert_eq!(resolved.grid_family, SharedString::from("Fira Code"));
     }
 
     #[test]

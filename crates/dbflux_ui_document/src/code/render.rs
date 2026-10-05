@@ -2,6 +2,7 @@ use super::*;
 use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
 use dbflux_components::controls::Checkbox;
 use dbflux_components::controls::{Button, ButtonVariant};
+use dbflux_components::fonts;
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::modals::{modal_code, modal_lead};
@@ -613,8 +614,9 @@ impl CodeDocument {
                     self.vim
                         .editor(self.read_only)
                         .appearance(false)
-                        .text_size(EditorMetrics::CODE_FONT)
-                        .line_height(EditorMetrics::CODE_LINE_HEIGHT)
+                        .font_family(fonts::editor_family(cx))
+                        .text_size(fonts::editor_font_size(cx))
+                        .line_height(fonts::editor_line_height(cx))
                         .w_full()
                         .h_full(),
                 ),

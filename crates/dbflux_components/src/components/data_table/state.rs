@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use crate::controls::{InputEvent, InputState};
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
-    ScrollStrategy, Size, Subscription, UniformListScrollHandle, Window, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
+    ScrollHandle, ScrollStrategy, SharedString, Size, Subscription, UniformListScrollHandle,
+    Window, px,
 };
 
 use super::annotation::HeaderAnnotation;
@@ -14,10 +15,30 @@ use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
-    MIN_COLUMN_WIDTH, MONO_ADVANCE_EM, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
+    MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+use crate::fonts;
 use crate::tokens::GridMetrics;
+
+/// Grid face and glyph advances an auto-sized column width was estimated
+/// with. A change in any of them re-estimates the auto-sized columns.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct GridTextMetrics {
+    family: SharedString,
+    cell_char_advance: f32,
+    type_char_advance: f32,
+}
+
+impl GridTextMetrics {
+    pub(super) fn current(cx: &App) -> Self {
+        Self {
+            family: fonts::grid_family(cx),
+            cell_char_advance: fonts::grid_char_advance(cx),
+            type_char_advance: fonts::grid_type_char_advance(cx),
+        }
+    }
+}
 
 /// How a model swap treats the state that is scoped to the rows being replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +58,13 @@ pub struct DataTableState {
 
     /// Width of each column.
     column_widths: Vec<f32>,
+
+    /// Whether the user dragged each column to its width. Those widths stay
+    /// put when the grid font changes; the others are re-estimated.
+    manually_sized: Vec<bool>,
+
+    /// Metrics the auto-sized column widths were last estimated with.
+    auto_width_metrics: GridTextMetrics,
 
     /// Prefix sums of column widths for hit-testing: [0, w0, w0+w1, ...].
     column_offsets: Vec<f32>,
@@ -143,8 +171,9 @@ impl DataTableState {
     pub fn new(model: Arc<TableModel>, cx: &mut Context<Self>) -> Self {
         let col_count = model.col_count();
         let row_count = model.row_count();
+        let auto_width_metrics = GridTextMetrics::current(cx);
         let column_widths: Vec<f32> = (0..col_count)
-            .map(|ix| Self::initial_column_width(&model, ix))
+            .map(|ix| Self::initial_column_width(&model, ix, &auto_width_metrics))
             .collect();
         let column_offsets = Self::calculate_offsets(&column_widths);
 
@@ -154,6 +183,8 @@ impl DataTableState {
         Self {
             model,
             column_widths,
+            manually_sized: vec![false; col_count],
+            auto_width_metrics,
             column_offsets,
             sort: None,
             viewport_size: Size::default(),
@@ -230,11 +261,13 @@ impl DataTableState {
     }
 
     /// Height of the whole header, a column-group row included.
-    pub fn header_height(&self) -> Pixels {
+    pub fn header_height(&self, cx: &App) -> Pixels {
         match &self.document {
-            Some(document) => document.header_height(),
-            None if self.has_header_annotations() => super::theme::ANNOTATED_HEADER_HEIGHT,
-            None => super::theme::HEADER_HEIGHT,
+            Some(document) => document.header_height(cx),
+            None if self.has_header_annotations() => {
+                fonts::grid_scaled(cx, super::theme::ANNOTATED_HEADER_HEIGHT)
+            }
+            None => fonts::grid_header_height(cx),
         }
     }
 
@@ -259,14 +292,15 @@ impl DataTableState {
     /// wider than that still gets its full width.
     ///
     /// Text is measured by character count: header names and cells use the
-    /// monospace data face, whose advance is a fixed fraction of its size.
-    fn initial_column_width(model: &TableModel, col_ix: usize) -> f32 {
+    /// monospace data face, whose advance is a fixed fraction of its size,
+    /// taken from `metrics`.
+    fn initial_column_width(model: &TableModel, col_ix: usize, metrics: &GridTextMetrics) -> f32 {
         let Some(column) = model.columns.get(col_ix) else {
             return MIN_COLUMN_WIDTH;
         };
 
-        let cell_char = f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM;
-        let type_char = f32::from(GridMetrics::TYPE_FONT) * MONO_ADVANCE_EM;
+        let cell_char = metrics.cell_char_advance;
+        let type_char = metrics.type_char_advance;
         let padding = f32::from(CELL_PADDING_X) * 2.0;
         let gap = f32::from(GridMetrics::HEADER_GAP);
 
@@ -356,17 +390,20 @@ impl DataTableState {
         cx.notify();
     }
 
-    /// Width of every column, keyed by title so a reload can match columns
-    /// across models. Titles repeated within one model queue up, and a new
-    /// model consumes them in column order.
-    fn column_widths_by_title(&self) -> HashMap<Arc<str>, VecDeque<f32>> {
-        let mut widths: HashMap<Arc<str>, VecDeque<f32>> = HashMap::new();
-        for (column, width) in self.model.columns.iter().zip(&self.column_widths) {
+    /// Width of every column and whether the user set it, keyed by title so
+    /// a reload can match columns across models. Titles repeated within one
+    /// model queue up, and a new model consumes them in column order.
+    fn column_widths_by_title(&self) -> HashMap<Arc<str>, VecDeque<(f32, bool)>> {
+        let mut widths: HashMap<Arc<str>, VecDeque<(f32, bool)>> = HashMap::new();
+        let sized = self.column_widths.iter().zip(&self.manually_sized);
+
+        for (column, (width, manual)) in self.model.columns.iter().zip(sized) {
             widths
                 .entry(column.title.clone())
                 .or_default()
-                .push_back(*width);
+                .push_back((*width, *manual));
         }
+
         widths
     }
 
@@ -426,8 +463,8 @@ impl DataTableState {
             .collect();
     }
 
-    fn reload_column_widths(&mut self, mut previous: HashMap<Arc<str>, VecDeque<f32>>) {
-        self.column_widths = self
+    fn reload_column_widths(&mut self, mut previous: HashMap<Arc<str>, VecDeque<(f32, bool)>>) {
+        let (widths, manual): (Vec<f32>, Vec<bool>) = self
             .model
             .columns
             .iter()
@@ -436,9 +473,41 @@ impl DataTableState {
                 previous
                     .get_mut(&column.title)
                     .and_then(VecDeque::pop_front)
-                    .unwrap_or_else(|| Self::initial_column_width(&self.model, column_ix))
+                    .unwrap_or_else(|| {
+                        let width = Self::initial_column_width(
+                            &self.model,
+                            column_ix,
+                            &self.auto_width_metrics,
+                        );
+                        (width, false)
+                    })
             })
-            .collect();
+            .unzip();
+
+        self.column_widths = widths;
+        self.manually_sized = manual;
+        self.column_offsets = Self::calculate_offsets(&self.column_widths);
+    }
+
+    /// Re-estimates every column the user has not resized when the grid
+    /// face or size changed since the widths were last estimated.
+    ///
+    /// Called from `DataTable::render`, which reads the widths right after,
+    /// so it does not notify.
+    pub(super) fn sync_grid_text_metrics(&mut self, cx: &App) {
+        let metrics = GridTextMetrics::current(cx);
+        if metrics == self.auto_width_metrics {
+            return;
+        }
+
+        for (column_ix, width) in self.column_widths.iter_mut().enumerate() {
+            let manual = self.manually_sized.get(column_ix).copied().unwrap_or(false);
+            if !manual {
+                *width = Self::initial_column_width(&self.model, column_ix, &metrics);
+            }
+        }
+
+        self.auto_width_metrics = metrics;
         self.column_offsets = Self::calculate_offsets(&self.column_widths);
     }
 
@@ -503,6 +572,11 @@ impl DataTableState {
         if col < self.column_widths.len() {
             let min_width = super::theme::MIN_COLUMN_WIDTH;
             self.column_widths[col] = width.max(min_width);
+
+            if let Some(manual) = self.manually_sized.get_mut(col) {
+                *manual = true;
+            }
+
             self.column_offsets = Self::calculate_offsets(&self.column_widths);
             cx.notify();
         }
@@ -2637,7 +2711,8 @@ mod tests {
                 vec![
                     super::DataTableState::initial_column_width(
                         &model_of(&["name", "id", "email"], 1),
-                        0
+                        0,
+                        &default_metrics()
                     ),
                     210.0,
                     300.0,
@@ -2664,7 +2739,11 @@ mod tests {
             assert_eq!(
                 widths,
                 vec![
-                    super::DataTableState::initial_column_width(&model_of(&["id", "email"], 1), 0),
+                    super::DataTableState::initial_column_width(
+                        &model_of(&["id", "email"], 1),
+                        0,
+                        &default_metrics()
+                    ),
                     444.0
                 ],
                 "dropping a column must not shift another column's width into its place"
@@ -2694,12 +2773,14 @@ mod tests {
                 vec![
                     super::DataTableState::initial_column_width(
                         &model_of(&["id", "name", "extra"], 1),
-                        0
+                        0,
+                        &default_metrics()
                     ),
                     333.0,
                     super::DataTableState::initial_column_width(
                         &model_of(&["id", "name", "extra"], 1),
-                        2
+                        2,
+                        &default_metrics()
                     ),
                 ],
                 "a column the previous model did not have falls back to the heuristic"
@@ -2775,13 +2856,13 @@ mod tests {
 
         let (has_annotations, header_height) = cx.update(|cx| {
             let state = state.read(cx);
-            (state.has_header_annotations(), state.header_height())
+            (state.has_header_annotations(), state.header_height(cx))
         });
         assert!(
             !has_annotations,
             "a different column set drops every annotation, kept titles included"
         );
-        assert_eq!(header_height, super::super::theme::HEADER_HEIGHT);
+        assert_eq!(header_height, cx.update(|cx| fonts::grid_header_height(cx)));
     }
 
     #[gpui::test]
@@ -2829,7 +2910,21 @@ mod tests {
         );
     }
 
-    use super::{CELL_PADDING_X, GridMetrics, MAX_AUTO_COLUMN_WIDTH, MONO_ADVANCE_EM};
+    use super::{CELL_PADDING_X, GridTextMetrics, MAX_AUTO_COLUMN_WIDTH};
+    use crate::fonts::{self, FontSettings};
+
+    /// Advances of the bundled grid face at `grid_size`.
+    fn metrics_at(grid_size: f32) -> GridTextMetrics {
+        GridTextMetrics {
+            family: crate::typography::AppFonts::MONO.into(),
+            cell_char_advance: grid_size * 0.6,
+            type_char_advance: grid_size * 0.84 * 0.6,
+        }
+    }
+
+    fn default_metrics() -> GridTextMetrics {
+        metrics_at(12.5)
+    }
 
     fn model_with_values(title: &str, values: &[&str]) -> std::sync::Arc<TableModel> {
         let columns = vec![ColumnSpec {
@@ -2851,11 +2946,16 @@ mod tests {
 
     #[test]
     fn columns_open_wide_enough_for_their_values() {
-        let header_only =
-            super::DataTableState::initial_column_width(&model_with_values("title", &["E1"]), 0);
+        let metrics = default_metrics();
+        let header_only = super::DataTableState::initial_column_width(
+            &model_with_values("title", &["E1"]),
+            0,
+            &metrics,
+        );
         let with_content = super::DataTableState::initial_column_width(
             &model_with_values("title", &["E1", "E11 — Task 1117: notes"]),
             0,
+            &metrics,
         );
 
         assert!(
@@ -2864,8 +2964,7 @@ mod tests {
         );
 
         let value_chars = "E11 — Task 1117: notes".chars().count() as f32;
-        let value_width = value_chars * f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM
-            + f32::from(CELL_PADDING_X) * 2.0;
+        let value_width = value_chars * metrics.cell_char_advance + f32::from(CELL_PADDING_X) * 2.0;
         assert!(
             with_content >= value_width,
             "the value fits without being cut ({with_content} < {value_width})"
@@ -2878,9 +2977,96 @@ mod tests {
         let width = super::DataTableState::initial_column_width(
             &model_with_values("note", &[long_value.as_str()]),
             0,
+            &default_metrics(),
         );
 
         assert_eq!(width, MAX_AUTO_COLUMN_WIDTH.ceil());
+    }
+
+    #[test]
+    fn column_width_scales_with_the_grid_font_size() {
+        let model = model_with_values("title", &["medium value"]);
+
+        let default_width =
+            super::DataTableState::initial_column_width(&model, 0, &default_metrics());
+        let larger_width =
+            super::DataTableState::initial_column_width(&model, 0, &metrics_at(18.0));
+
+        let value_chars = "medium value".chars().count() as f32;
+        let expected_growth = value_chars * (18.0 - 12.5) * 0.6;
+
+        assert!(
+            larger_width - default_width >= expected_growth.floor(),
+            "a larger grid font widens the column by its glyph advance \
+             ({default_width} -> {larger_width}, expected at least +{expected_growth})"
+        );
+    }
+
+    #[gpui::test]
+    fn grid_font_change_resizes_auto_columns_and_keeps_manual_ones(cx: &mut gpui::TestAppContext) {
+        let model = model_of(&["title", "note"], 1);
+        let state = state_of(cx, model.clone());
+
+        let default_auto = cx.update(|cx| {
+            state.update(cx, |s, cx| s.set_column_width(1, 333.0, cx));
+            state.read(cx).column_widths()[0]
+        });
+
+        cx.update(|cx| {
+            fonts::set(
+                cx,
+                FontSettings {
+                    grid_size: 20.0,
+                    ..FontSettings::default()
+                },
+            );
+            state.update(cx, |s, cx| s.sync_grid_text_metrics(cx));
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            let expected = super::DataTableState::initial_column_width(
+                &model,
+                0,
+                &GridTextMetrics::current(cx),
+            );
+
+            assert!(widths[0] > default_auto, "the auto-sized column grows");
+            assert_eq!(widths[0], expected);
+            assert_eq!(widths[1], 333.0, "a width the user set survives");
+        });
+    }
+
+    #[gpui::test]
+    fn manual_width_carried_by_set_model_survives_a_font_change(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_column_width(1, 333.0, cx);
+                s.set_model(model_of(&["name", "id"], 1), ModelSwap::KeepCursor, cx);
+            });
+
+            fonts::set(
+                cx,
+                FontSettings {
+                    grid_size: 20.0,
+                    ..FontSettings::default()
+                },
+            );
+            state.update(cx, |s, cx| s.sync_grid_text_metrics(cx));
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            let expected_auto = super::DataTableState::initial_column_width(
+                &model_of(&["name", "id"], 1),
+                1,
+                &GridTextMetrics::current(cx),
+            );
+
+            assert_eq!(widths, vec![333.0, expected_auto]);
+        });
     }
 
     #[gpui::test]
