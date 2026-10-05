@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use dbflux_core::observability::{EventRecord, EventSink as CoreEventSink, EventSinkError};
+use dbflux_core::observability::{
+    EventActorType, EventRecord, EventSink as CoreEventSink, EventSinkError, EventSourceId,
+};
 use dbflux_storage::error::RepositoryError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -124,6 +126,7 @@ pub struct AuditService {
 
 const DEFAULT_MAX_DETAIL_BYTES: usize = 65_536;
 const UNKNOWN_ACTOR_ID: &str = "unknown";
+const LOCAL_ACTOR_ID: &str = "local";
 
 impl AuditService {
     pub fn new(store: SqliteAuditStore) -> Self {
@@ -521,7 +524,16 @@ impl AuditService {
         mut event: EventRecord,
     ) -> Result<EventRecord, AuditError> {
         if event.actor_id.is_none() {
-            event.actor_id = Some(UNKNOWN_ACTOR_ID.to_string());
+            let is_local_user =
+                event.actor_type == EventActorType::User && event.source_id == EventSourceId::Local;
+
+            let actor_id = if is_local_user {
+                LOCAL_ACTOR_ID
+            } else {
+                UNKNOWN_ACTOR_ID
+            };
+
+            event.actor_id = Some(actor_id.to_string());
         }
 
         if !self.capture_query_text() {
@@ -1004,6 +1016,52 @@ mod tests {
         };
 
         service.record(event).expect("record should succeed");
+    }
+
+    fn make_actorless_event(origin: dbflux_core::observability::EventOrigin) -> EventRecord {
+        use dbflux_core::observability::{EventCategory, EventOutcome, EventSeverity};
+
+        EventRecord::new(
+            1_000,
+            EventSeverity::Info,
+            EventCategory::System,
+            EventOutcome::Success,
+        )
+        .with_action("test_action")
+        .with_summary("test")
+        .with_origin(origin)
+    }
+
+    #[test]
+    fn local_user_event_without_actor_id_is_stored_as_local() {
+        let service = make_service("local_user_actor");
+
+        let stored = service
+            .record(make_actorless_event(
+                dbflux_core::observability::EventOrigin::local(),
+            ))
+            .expect("record should succeed");
+
+        assert_eq!(stored.actor_id.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn non_local_events_without_actor_id_keep_unknown_actor() {
+        use dbflux_core::observability::EventOrigin;
+
+        let service = make_service("non_local_actor");
+
+        for origin in [
+            EventOrigin::mcp(),
+            EventOrigin::system(),
+            EventOrigin::hook(),
+        ] {
+            let stored = service
+                .record(make_actorless_event(origin))
+                .expect("record should succeed");
+
+            assert_eq!(stored.actor_id.as_deref(), Some(UNKNOWN_ACTOR_ID));
+        }
     }
 
     // T-SVC-01: wide schema — bucket_ms column + one Integer column per distinct group value.
