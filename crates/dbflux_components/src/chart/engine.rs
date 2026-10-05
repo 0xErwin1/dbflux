@@ -2923,10 +2923,8 @@ struct SeriesReadoutEntry {
 
 /// Pre-computed content for the crosshair readout panel.
 struct HoverReadout {
-    /// Header: e.g. "11:34 UTC"
+    /// Header: the hovered point's X, e.g. "2025-03-01" or "11:34 UTC"
     header_time: SharedString,
-    /// Optional time-offset suffix: e.g. " · t+13m" (None when x_min is unavailable)
-    header_offset: Option<SharedString>,
     series: Vec<SeriesReadoutEntry>,
     focused_idx: usize,
     /// Cursor X relative to the plot origin (used to position the overlay).
@@ -2971,30 +2969,19 @@ fn build_readout(
 
     let cursor_data_x = x_min + (rel_x_f as f64 / plot_w_px as f64) * x_range;
 
-    // Build the time header: "HH:MM UTC" or raw value for non-time axes.
-    let header_time = if x_is_time {
-        let secs = (cursor_data_x / 1000.0).trunc() as i64;
-        let nsecs = ((cursor_data_x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
-        match dbflux_core::chrono::DateTime::from_timestamp(secs, nsecs) {
-            Some(dt) => SharedString::from(dt.format("%H:%M UTC").to_string()),
-            None => SharedString::from(format!("{:.3}", cursor_data_x)),
-        }
-    } else {
-        SharedString::from(format!("{:.3}", cursor_data_x))
-    };
+    // The header names the point the focused series snaps to, falling back to
+    // the first visible series when the focused one is hidden or empty.
+    let header_x = std::iter::once(focused_idx)
+        .chain(0..decimated.len())
+        .filter(|s_idx| !hidden.contains(s_idx))
+        .find_map(|s_idx| decimated.get(s_idx).filter(|pts| !pts.is_empty()))
+        .map_or(cursor_data_x, |pts| nearest_sample(pts, cursor_data_x).0);
 
-    // Optional t+N suffix (whole minutes since x_min).
-    let header_offset = if x_is_time {
-        let offset_ms = cursor_data_x - x_min;
-        let minutes = (offset_ms / 60_000.0).floor() as i64;
-        if minutes >= 0 {
-            Some(SharedString::from(format!(" · t+{}m", minutes)))
-        } else {
-            None
-        }
+    let header_time = SharedString::from(if x_is_time {
+        format_readout_time(header_x, x_range)
     } else {
-        None
-    };
+        format!("{:.3}", header_x)
+    });
 
     // Collect one entry per series.
     let mut entries: Vec<SeriesReadoutEntry> = Vec::with_capacity(decimated.len());
@@ -3030,13 +3017,43 @@ fn build_readout(
 
     Some(HoverReadout {
         header_time,
-        header_offset,
         series: entries,
         focused_idx,
         screen_x_relative: relative_x,
         plot_width: plot_w,
         plot_height: plot_h,
     })
+}
+
+/// Format a hovered point's timestamp for the readout header.
+///
+/// Spans of a day or more lead with the date and add the time of day only when
+/// the point is not at midnight, so daily and monthly data read `2025-03-01`
+/// while hourly data over several days keeps its hour. Shorter spans show the
+/// time of day alone. Seconds appear only when the point has them.
+fn format_readout_time(x_ms: f64, x_range_ms: f64) -> String {
+    use dbflux_core::chrono::Timelike;
+
+    let Some(datetime) = dbflux_core::chrono::DateTime::from_timestamp_millis(x_ms.round() as i64)
+    else {
+        return format!("{:.3}", x_ms);
+    };
+
+    let time_format = if datetime.second() == 0 {
+        "%H:%M UTC"
+    } else {
+        "%H:%M:%S UTC"
+    };
+
+    let format = if x_range_ms < 86_400_000.0 {
+        time_format.to_string()
+    } else if datetime.num_seconds_from_midnight() == 0 {
+        "%Y-%m-%d".to_string()
+    } else {
+        format!("%Y-%m-%d {time_format}")
+    };
+
+    datetime.format(&format).to_string()
 }
 
 /// Locate the sample in `points` whose X coordinate is closest to `target_x`.
@@ -3129,7 +3146,7 @@ pub fn format_y_value(y: f64) -> String {
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
 ///
 /// Layout: top 18px fixed; left clamped so the panel stays inside the plot area.
-/// Min-width 200px; one header row (time + optional offset) then one row per series.
+/// Min-width 200px; one header row (the hovered point's X) then one row per series.
 ///
 /// `colors` is derived from `ChartColors::for_current(cx)` at the render call site
 /// so the overlay matches the active theme.
@@ -3169,7 +3186,7 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
                 .fill(colors.pill_bg)
                 .border(colors.pill_border),
         )
-        // Header: time + optional offset, muted
+        // Header: the hovered point's X, muted
         .child(
             div()
                 .flex()
@@ -3177,8 +3194,7 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
                 .gap(gpui::px(6.0))
                 .pb(gpui::px(1.0))
                 .text_color(colors.label_fg)
-                .child(r.header_time)
-                .when_some(r.header_offset, |d, offset| d.child(offset)),
+                .child(r.header_time),
         )
         // One row per series; the focused row is bold.
         .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
@@ -3250,6 +3266,84 @@ mod tests {
         let pts = vec![(0.0, 1.0), (10.0, 2.0)];
         // Midpoint: implementation prefers the lower-x neighbour on ties.
         assert_eq!(nearest_sample(&pts, 5.0), (0.0, 1.0));
+    }
+
+    const DAY_MS: f64 = 86_400_000.0;
+
+    fn utc_ms(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> f64 {
+        use dbflux_core::chrono::TimeZone;
+
+        dbflux_core::chrono::Utc
+            .with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .single()
+            .expect("valid test date")
+            .timestamp_millis() as f64
+    }
+
+    /// Readout header for a single time series hovered at `hover_fraction`
+    /// of a 1000px-wide plot that spans exactly the series' X range.
+    fn readout_header(points: Vec<(f64, f64)>, hover_fraction: f32) -> String {
+        let x_min = points.first().map_or(0.0, |point| point.0);
+        let x_max = points.last().map_or(0.0, |point| point.0);
+        let bounds = Bounds {
+            origin: point(gpui::px(0.0), gpui::px(0.0)),
+            size: gpui::size(gpui::px(1000.0 + MARGIN_RIGHT), gpui::px(300.0)),
+        };
+
+        build_readout(
+            Some(gpui::px(1000.0 * hover_fraction)),
+            Some(&bounds),
+            &[points],
+            &[],
+            0,
+            &HashSet::new(),
+            &simple_spec(0, &[1]),
+            x_min,
+            x_max - x_min,
+            true,
+        )
+        .expect("pointer inside the plot yields a readout")
+        .header_time
+        .to_string()
+    }
+
+    #[test]
+    fn readout_header_shows_the_hovered_day_for_daily_data() {
+        let start = utc_ms(2025, 1, 1, 0, 0);
+        let points = (0..10)
+            .map(|day| (start + day as f64 * DAY_MS, day as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 0.42), "2025-01-05");
+    }
+
+    #[test]
+    fn readout_header_shows_the_hovered_month_start_for_monthly_data() {
+        let points = (1..=12)
+            .map(|month| (utc_ms(2025, month, 1, 0, 0), month as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 0.17), "2025-03-01");
+    }
+
+    #[test]
+    fn readout_header_keeps_the_time_of_day_on_multi_day_hourly_data() {
+        let start = utc_ms(2025, 1, 1, 0, 0);
+        let points = (0..72)
+            .map(|hour| (start + hour as f64 * 3_600_000.0, hour as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 29.0 / 71.0), "2025-01-02 05:00 UTC");
+    }
+
+    #[test]
+    fn readout_header_shows_the_hovered_time_for_sub_day_data() {
+        let start = utc_ms(2025, 1, 1, 10, 0);
+        let points = (0..13)
+            .map(|step| (start + step as f64 * 600_000.0, step as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 0.34), "10:40 UTC");
     }
 
     #[test]
