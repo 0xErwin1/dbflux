@@ -215,7 +215,9 @@ impl ColumnPlan {
     }
 }
 
-/// The type name a column header shows, cut like a nested value.
+/// A nested type spells out every field, so a wide STRUCT or MAP type name can
+/// run as long as a nested value and has no more room in a header than a value
+/// has in a cell; it is cut at the same limit.
 pub(crate) fn column_type_name(parquet_type: &Type, data_type: &DataType) -> Arc<str> {
     truncate_chars(type_name(parquet_type, data_type), NESTED_DISPLAY_CHARS).into()
 }
