@@ -1847,7 +1847,10 @@ mod tests {
         let header = visual
             .debug_bounds("table-header")
             .expect("the header is drawn");
-        assert_eq!(header.size.height, crate::tokens::GridMetrics::HEADER_HEIGHT);
+        assert_eq!(
+            header.size.height,
+            crate::tokens::GridMetrics::HEADER_HEIGHT
+        );
         assert!(visual.debug_bounds("table-header-annotation").is_none());
     }
 

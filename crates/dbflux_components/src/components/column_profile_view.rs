@@ -32,7 +32,6 @@ use crate::controls::{Button, Input, InputEvent, InputMoveDown, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Badge, BadgeTone, Icon, LoadingState, Spinner};
 use crate::tokens::{ChromeColors, Fields, FontSizes, GridMetrics, Spacing};
-use crate::typography::AppFonts;
 
 /// Height of the filter and sort row, and of the footer.
 const BAR_HEIGHT: Pixels = px(46.0);
@@ -617,7 +616,7 @@ impl ColumnProfileView {
                         .h(ROW_HEIGHT)
                         .border_b_1()
                         .border_color(palette.border)
-                        .font_family(AppFonts::MONO)
+                        .font_family(crate::fonts::editor_family(cx))
                         .text_size(GridMetrics::FONT)
                         .when(at_cursor, |row| row.bg(palette.cursor_wash))
                         .child(eye)
@@ -996,7 +995,7 @@ impl Render for ColumnProfileView {
             .flex()
             .flex_col()
             .size_full()
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_color(cx.theme().foreground)
             .child(self.render_body(cx))
     }

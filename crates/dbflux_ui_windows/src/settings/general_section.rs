@@ -10,11 +10,11 @@ use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus,
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::IndexPath;
+use gpui_component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use gpui_component::IndexPath;
-use gpui_component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
 
 /// The leader keys Settings > General offers, in the keymap's stored key
 /// form: Space, and Vim's usual alternatives, comma and backslash (Vim's own
