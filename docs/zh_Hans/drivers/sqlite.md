@@ -32,6 +32,7 @@
 - 仅支持 SQL 的驱动程序；不提供文档型或键值 API。
 - SQLite 的 Schema 模型没有服务端的多 schema 命名空间与之对应。
 - 没有 `TRUNCATE TABLE` 语句；数据传输引擎的 Truncate 装载选项对 SQLite 目标不可用（未设置 `DriverCapabilities::TRUNCATE_TABLE`）。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `PRAGMA query_only` 下运行，该设置在每条语句前都会检查，结束后恢复；在已打开的事务中会被拒绝。SQLite 会拒绝对数据库的写入，但不会阻止已加载扩展或应用定义函数的副作用；真正的边界仍是文件权限。
 
 ## DDL 能力
 

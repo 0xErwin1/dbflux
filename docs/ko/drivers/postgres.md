@@ -73,6 +73,7 @@ PostgreSQL 시스템 뷰에서 가져온 엄선된 실시간 서버 지표 집�
 - 루틴 편집과 실행은 지원되지 않습니다. 루틴 뷰어는 읽기 전용입니다.
 - 취소는 최선 노력이며 취소 시점의 서버/세션 상태에 따라 달라집니다.
 - 코드 생성은 지원되는 PostgreSQL 구문만 대상으로 합니다. 지원되지 않는 생성기 ID는 `NotSupported`를 반환합니다.
+- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `BEGIN READ ONLY` 안에서 실행된 뒤 롤백되며, 열린 트랜잭션 안에서는 거부됩니다. PostgreSQL은 세션의 데이터 변경을 거부하지만 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다.
 
 ## DDL 지원 범위
 

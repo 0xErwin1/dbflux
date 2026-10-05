@@ -63,6 +63,7 @@ Exposes tabular snapshots of running server state:
 - Code generation is scoped to supported MySQL/MariaDB constructs; unsupported generator IDs return `NotSupported`.
 - Routine listing covers only FUNCTION and PROCEDURE types. MySQL aggregate functions (registered via `CREATE AGGREGATE FUNCTION` UDF plugin) and window functions are not surfaced in `information_schema.ROUTINES` and are therefore not listed.
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` requires the `SHOW_ROUTINE` privilege (MySQL 8.0+) or ownership of the routine; without sufficient privileges the definition column returns `NULL` and the viewer displays a notice instead of the source.
+- Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs in `START TRANSACTION READ ONLY` and is rolled back. It may only contain `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE` and `VALUES` statements without executable comments (`/*! */`, `/*M! */`) or the word `INTO`, and it is refused unless the server proves that no transaction is open and the session may not hold `LOCK TABLES` locks. MySQL then rejects data modification in the session, but not functions with external effects such as `GET_LOCK` or user-defined functions; least-privilege database credentials remain the real boundary.
 
 ## DDL Capabilities
 

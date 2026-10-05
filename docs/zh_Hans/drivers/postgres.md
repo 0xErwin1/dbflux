@@ -73,6 +73,7 @@
 - 不支持例程的编辑与执行；例程查看器是只读的。
 - 取消是尽力而为的，取决于取消当时的服务器/会话状态。
 - 代码生成只针对受支持的 PostgreSQL 结构；不受支持的生成器 ID 会返回 `NotSupported`。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `BEGIN READ ONLY` 中运行并回滚，在已打开的事务中会被拒绝。PostgreSQL 会拒绝该会话中的数据修改，但不会阻止具有外部效果的函数，例如 `dblink_exec`、`COPY ... TO PROGRAM`、`lo_export`、`pg_terminate_backend` 或 advisory lock；真正的边界仍是最小权限的数据库凭据。
 
 ## DDL 能力
 

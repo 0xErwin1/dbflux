@@ -128,3 +128,4 @@ directamente sobre el cliente de wire protocol
   decodificador binario está cubierto por pruebas unitarias sobre payloads wire
   sintéticos; la fidelidad de extremo a extremo solo se valida contra un cluster
   real vía las pruebas de integración marcadas `#[ignore]`.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) también se ejecuta en `BEGIN READ ONLY` y se revierte, además del rechazo propio del driver a las sentencias que no son lecturas. Las funciones con efectos externos no se detienen; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.

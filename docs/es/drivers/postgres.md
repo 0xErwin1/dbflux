@@ -126,6 +126,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   momento de la cancelación.
 - La generación de código apunta solo a construcciones de PostgreSQL soportadas;
   los IDs de generador no soportados devuelven `NotSupported`.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta en `BEGIN READ ONLY` y se revierte, y se rechaza dentro de una transacción abierta. PostgreSQL rechaza entonces la modificación de datos en la sesión, pero no las funciones con efectos externos como `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` o los advisory locks; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
 
 ## Capacidades de DDL
 

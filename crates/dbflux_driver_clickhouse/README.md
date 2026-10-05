@@ -73,3 +73,4 @@ arrives fully structured rather than as raw text:
 - Named ClickHouse time zones are not interpreted client-side. ISO timestamps
   carrying an offset are handled accurately; timestamps without one are treated
   as UTC.
+- Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) is sent with the per-request setting `readonly = 2`, so ClickHouse rejects writes, DDL and attempts to change `readonly`. The setting does not limit what a read can reach; least-privilege database credentials remain the real boundary.

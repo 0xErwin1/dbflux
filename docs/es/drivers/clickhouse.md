@@ -106,3 +106,4 @@ texto crudo:
   cual apuntar en su lugar: `system.metrics`, `system.events` y
   `system.processes` son candidatos naturales para un futuro `InstanceCatalog`,
   así que esto está planeado y no excluido permanentemente.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se envía con el ajuste por petición `readonly = 2`, de modo que ClickHouse rechaza escrituras, DDL e intentos de cambiar `readonly`. El ajuste no limita lo que una lectura puede alcanzar; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
