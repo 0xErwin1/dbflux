@@ -1113,7 +1113,7 @@ impl Workspace {
 
         self.modal_delete_dashboard.update(cx, |modal, cx| {
             modal.open(
-                DeleteDashboardRequest {
+                DeleteConfirmRequest::Dashboard {
                     dashboard_id,
                     dashboard_name,
                 },
@@ -1122,7 +1122,7 @@ impl Workspace {
         });
     }
 
-    /// Called when `ModalDeleteDashboardConfirm` emits `Confirmed`.
+    /// Called when the dashboard delete confirmation emits `Confirmed`.
     ///
     /// Closes the open tab first, then deletes the dashboard row and panels,
     /// then triggers a sidebar rebuild.
@@ -1318,7 +1318,7 @@ impl Workspace {
 
         self.modal_delete_saved_chart.update(cx, |modal, cx| {
             modal.open(
-                DeleteSavedChartRequest {
+                DeleteConfirmRequest::SavedChart {
                     chart_id,
                     chart_name,
                     referencing_dashboards,
@@ -1328,7 +1328,7 @@ impl Workspace {
         });
     }
 
-    /// Called when `ModalDeleteSavedChartConfirm` emits `Confirmed`.
+    /// Called when the saved chart delete confirmation emits `Confirmed`.
     pub(in crate::ui::views::workspace) fn on_delete_saved_chart_confirmed(
         &mut self,
         chart_id: uuid::Uuid,

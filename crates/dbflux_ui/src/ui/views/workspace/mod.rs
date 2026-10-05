@@ -20,9 +20,8 @@ use dbflux_ui_base::app_state_entity::{
 };
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
-    DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
-    DeleteSavedChartRequest, ModalAddPanelPicker, ModalCreateDashboard,
-    ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
+    DeleteConfirmOutcome, DeleteConfirmRequest, DeleteTarget, ModalAddPanelPicker,
+    ModalCreateDashboard, ModalDeleteConfirm, ModalRenameItem, RenameItemOutcome,
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
 use dbflux_ui_base::{
@@ -363,8 +362,8 @@ pub struct Workspace {
     /// Dashboard / saved-chart management modals.
     modal_create_dashboard: Entity<ModalCreateDashboard>,
     modal_rename_item: Entity<ModalRenameItem>,
-    modal_delete_dashboard: Entity<ModalDeleteDashboardConfirm>,
-    modal_delete_saved_chart: Entity<ModalDeleteSavedChartConfirm>,
+    modal_delete_dashboard: Entity<ModalDeleteConfirm>,
+    modal_delete_saved_chart: Entity<ModalDeleteConfirm>,
     modal_add_panel: Entity<ModalAddPanelPicker>,
 
     /// In-app single-connection export modal (overlay, not an OS window).
@@ -523,8 +522,8 @@ impl Workspace {
 
         let modal_create_dashboard = cx.new(|cx| ModalCreateDashboard::new(window, cx));
         let modal_rename_item = cx.new(|cx| ModalRenameItem::new(window, cx));
-        let modal_delete_dashboard = cx.new(ModalDeleteDashboardConfirm::new);
-        let modal_delete_saved_chart = cx.new(ModalDeleteSavedChartConfirm::new);
+        let modal_delete_dashboard = cx.new(ModalDeleteConfirm::new);
+        let modal_delete_saved_chart = cx.new(ModalDeleteConfirm::new);
         let modal_add_panel = cx.new(|cx| ModalAddPanelPicker::new(window, cx));
 
         let export_modal = cx.new(|cx| {
@@ -876,24 +875,28 @@ impl Workspace {
         )
         .detach();
 
-        // Subscribe: ModalDeleteDashboardConfirm — on Confirmed, delete the dashboard.
+        // Subscribe: dashboard delete confirm — on Confirmed, delete the dashboard.
         cx.subscribe_in(
             &modal_delete_dashboard,
             window,
-            |this, _, outcome: &DeleteDashboardOutcome, window, cx| {
-                if let DeleteDashboardOutcome::Confirmed { dashboard_id } = *outcome {
+            |this, _, outcome: &DeleteConfirmOutcome, window, cx| {
+                if let DeleteConfirmOutcome::Confirmed(DeleteTarget::Dashboard { dashboard_id }) =
+                    *outcome
+                {
                     this.on_delete_dashboard_confirmed(dashboard_id, window, cx);
                 }
             },
         )
         .detach();
 
-        // Subscribe: ModalDeleteSavedChartConfirm — on Confirmed, delete the saved chart.
+        // Subscribe: saved chart delete confirm — on Confirmed, delete the saved chart.
         cx.subscribe_in(
             &modal_delete_saved_chart,
             window,
-            |this, _, outcome: &DeleteSavedChartOutcome, window, cx| {
-                if let DeleteSavedChartOutcome::Confirmed { chart_id } = *outcome {
+            |this, _, outcome: &DeleteConfirmOutcome, window, cx| {
+                if let DeleteConfirmOutcome::Confirmed(DeleteTarget::SavedChart { chart_id }) =
+                    *outcome
+                {
                     this.on_delete_saved_chart_confirmed(chart_id, window, cx);
                 }
             },
