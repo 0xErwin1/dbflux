@@ -682,4 +682,36 @@ fn the_spreadsheet_document_is_covered(cx: &mut TestAppContext) {
         !checked.iter().any(|id| id == "spreadsheet-sheet-3"),
         "a chart sheet's tab takes no click: {checked:?}"
     );
+
+    // The switch between the table and the text, drawn in both views.
+    for id in [
+        "segmented-spreadsheet-view-table",
+        "segmented-spreadsheet-view-text",
+    ] {
+        assert!(
+            checked.iter().any(|checked_id| checked_id == id),
+            "{checked:?}"
+        );
+    }
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.show_view(super::text_view::SheetView::Text, cx)
+        })
+    });
+    window.run_until_parked();
+    assert!(window.debug_bounds("spreadsheet-text-view").is_some());
+
+    let checked: Vec<String> = Coverage::new(SPREADSHEET)
+        .assert_covered(&capture.frame(window))
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect();
+
+    assert!(
+        checked
+            .iter()
+            .any(|id| id == "segmented-spreadsheet-view-table"),
+        "{checked:?}"
+    );
 }

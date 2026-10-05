@@ -794,11 +794,24 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
 ///
 /// An object read whole is downloaded after a prompt (`Modal`): Enter
 /// downloads and Escape declines.
+///
+/// `t` switches between the table and the read-only text of the sheet, in
+/// the tab's context: in the text view, Escape first takes the keyboard out
+/// of the text editor, whose context is `TextInput`.
 pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
     name: "spreadsheet file",
-    contexts: &[ContextId::Results, ContextId::DataTable, ContextId::Modal],
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::TextInput,
+        ContextId::Modal,
+    ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "segmented-spreadsheet-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
         (
             "header-col-*",
             KeyboardPath::MouseOnly(

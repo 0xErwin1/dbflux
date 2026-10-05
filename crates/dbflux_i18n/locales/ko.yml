@@ -2098,6 +2098,15 @@ document:
       no_selection: "수식을 보려면 셀을 선택하세요."
       none: "수식 없음"
       unavailable: ".xls 파일에서는 수식을 볼 수 없습니다"
+    view:
+      table: "표"
+      text: "텍스트"
+    text:
+      building: "시트를 CSV로 작성하는 중…"
+      cut:
+        one: "텍스트가 잘렸습니다: 전체 %{total}행 중 처음 %{shown}행을 표시합니다."
+        many: "텍스트가 잘렸습니다: 전체 %{total}행 중 처음 %{shown}행을 표시합니다."
+      render_failed: "시트를 CSV로 표시할 수 없습니다: %{cause}"
     save_as:
       action: ".xlsx로 저장"
       title: "새 .xlsx 파일로 저장할까요?"

@@ -2098,6 +2098,15 @@ document:
       no_selection: "Selecciona una celda para ver su fórmula."
       none: "Sin fórmula"
       unavailable: "La fórmula no está disponible en archivos .xls"
+    view:
+      table: "Tabla"
+      text: "Texto"
+    text:
+      building: "Escribiendo la hoja como CSV…"
+      cut:
+        one: "El texto se recortó: muestra las primeras %{shown} de %{total} fila."
+        many: "El texto se recortó: muestra las primeras %{shown} de %{total} filas."
+      render_failed: "La hoja no se pudo mostrar como CSV: %{cause}"
     save_as:
       action: "Guardar como .xlsx"
       title: "¿Guardar como un nuevo archivo .xlsx?"

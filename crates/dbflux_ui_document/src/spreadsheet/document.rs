@@ -40,6 +40,7 @@ use gpui::*;
 use super::grid_model::{BLANK_SHEET_COLUMNS, FormulaReadout, SheetModel, cell_address};
 use super::input::SheetChanges;
 use super::save_as::{SaveAsPrompt, SavedAsCallback};
+use super::text_view::SheetTextState;
 use crate::dedup::FileDocumentKey;
 use crate::file_edit_lifecycle::FileEditLifecycle;
 use crate::file_source::{
@@ -254,6 +255,9 @@ pub struct SpreadsheetDocument {
 
     /// Told the path of each file Save as .xlsx wrote, to open it.
     pub(super) on_saved_as: Option<SavedAsCallback>,
+
+    /// The view shown, the table or the text, and the text view's state.
+    pub(super) text: SheetTextState,
 }
 
 impl EventEmitter<DocumentEvent> for SpreadsheetDocument {}
@@ -325,6 +329,7 @@ impl SpreadsheetDocument {
             saving_as: false,
             save_target_override: None,
             on_saved_as: None,
+            text: SheetTextState::default(),
         };
 
         document.start_open(cx);
@@ -396,8 +401,14 @@ impl SpreadsheetDocument {
         // timer.
     }
 
+    /// `TextInput` while the text view's editor holds the keyboard, whose
+    /// keys are then the editor's, and `Results` otherwise.
     pub fn active_context(&self) -> dbflux_app::keymap::ContextId {
-        dbflux_app::keymap::ContextId::Results
+        if self.text_has_keyboard() {
+            dbflux_app::keymap::ContextId::TextInput
+        } else {
+            dbflux_app::keymap::ContextId::Results
+        }
     }
 
     /// Table navigation and cell editing run inside the embedded `DataTable`
@@ -406,6 +417,9 @@ impl SpreadsheetDocument {
     /// which skip chart sheets and wrap around, appending a row
     /// (`ResultsAddRow`) and saving (`SaveRow`, `SaveQuery`). For xls, which
     /// has no writer, the save commands and `SaveFileAs` open Save as .xlsx.
+    /// `CycleDocumentView` switches between the table and the text; in the
+    /// text view Escape hands the keyboard from the editor to the tab, so
+    /// that the `Results` keys reach it, and Enter hands it back.
     pub fn dispatch_command(
         &mut self,
         command: dbflux_app::keymap::Command,
@@ -415,6 +429,21 @@ impl SpreadsheetDocument {
         use dbflux_app::keymap::Command;
 
         match command {
+            Command::CycleDocumentView if self.can_switch_view() => {
+                self.toggle_view(cx);
+                true
+            }
+
+            Command::Cancel if self.text_has_keyboard() => {
+                self.release_text_keyboard(window, cx);
+                true
+            }
+
+            Command::Execute if self.can_take_text_keyboard() => {
+                self.focus(window, cx);
+                true
+            }
+
             Command::NextResultTab if self.loaded().is_some() => {
                 self.step_sheet(true, window, cx);
                 true
@@ -447,8 +476,9 @@ impl SpreadsheetDocument {
     }
 
     /// Gives the keyboard to the Save as .xlsx or the download prompt while
-    /// one is open, to the table of the shown sheet, or to the document while
-    /// a notice takes its place.
+    /// one is open, to the text view's editor while the text is shown, to the
+    /// table of the shown sheet, or to the document while a notice takes its
+    /// place.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(prompt) = &mut self.save_as_prompt {
             prompt.focus_mut().focus(None, window, cx);
@@ -457,6 +487,10 @@ impl SpreadsheetDocument {
 
         if let Some(prompt) = &mut self.download_prompt {
             prompt.focus.focus(None, window, cx);
+            return;
+        }
+
+        if self.focus_text(window, cx) {
             return;
         }
 
@@ -1061,6 +1095,7 @@ impl SpreadsheetDocument {
 
         self.restore_stored_edits(cx);
         self.refresh_dirty(cx);
+        self.mark_text_stale(cx);
     }
 
     /// Builds the table of `model`, editable by position when `editable`.
@@ -1076,6 +1111,7 @@ impl SpreadsheetDocument {
         let subscription = Self::subscribe_to_table(&table_state, cx);
         let observation = cx.observe(&table_state, |this, _, cx| {
             this.refresh_dirty(cx);
+            this.mark_text_stale(cx);
             cx.notify();
         });
 

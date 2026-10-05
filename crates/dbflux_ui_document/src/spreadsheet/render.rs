@@ -1,10 +1,12 @@
 //! Rendering of `SpreadsheetDocument`.
 //!
 //! Layout of an opened workbook, top to bottom: a header with the summary
-//! ("N sheets · R rows × C columns · the whole sheet is loaded in memory"),
-//! the edit bar (the formula replacement warning, Append row and Save) or,
-//! for xls, a banner saying the file is read-only, the formula readout of
-//! the selected cell, the table of the shown sheet, and the sheet tabs. A
+//! ("N sheets · R rows × C columns · the whole sheet is loaded in memory")
+//! and the Table | Text switch, the edit bar (the formula replacement
+//! warning, Append row and Save) or, for xls, a banner saying the file is
+//! read-only, the formula readout of the selected cell, the table of the
+//! shown sheet, and the sheet tabs. In the text view, the sheet's values as
+//! CSV take the place of the readout and the table (`text_view.rs`). A
 //! hidden sheet's tab says so; a sheet with pending edits ends its name with
 //! a dot; a chart sheet's tab is listed but takes no click, and its tooltip
 //! says why.
@@ -36,6 +38,7 @@ use gpui_component::tooltip::Tooltip;
 
 use super::document::{SheetPhase, SpreadsheetDocument, SpreadsheetPhase};
 use super::grid_model::FormulaReadout;
+use super::text_view::SheetView;
 use crate::chrome::document_bar;
 
 const DOWNLOAD_PROMPT_WIDTH: Pixels = px(440.0);
@@ -193,6 +196,7 @@ impl SpreadsheetDocument {
             .id("spreadsheet-header")
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
                     .truncate()
                     .font_family(dbflux_components::fonts::editor_family(cx))
@@ -200,6 +204,7 @@ impl SpreadsheetDocument {
                     .text_color(cx.theme().muted_foreground)
                     .children(self.summary()),
             )
+            .children(self.render_view_switch(cx))
             .into_any_element()
     }
 
@@ -425,11 +430,13 @@ impl SpreadsheetDocument {
     }
 
     /// The part between the header and the sheet tabs: the readout and the
-    /// table, or a notice about the selected sheet.
-    fn render_sheet_body(&self, cx: &Context<Self>) -> AnyElement {
+    /// table, the text view, or a notice about the selected sheet.
+    fn render_sheet_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let sheet_name = self.active_sheet_name().unwrap_or_default().to_string();
 
         match (self.table().cloned(), self.sheet_phase()) {
+            (Some(_), _) if self.view() == SheetView::Text => self.render_text_body(cx),
+
             (Some(table), _) => div()
                 .flex()
                 .flex_col()
@@ -489,6 +496,8 @@ impl Render for SpreadsheetDocument {
         if self.take_pending_table_focus() && self.focus_handle().is_focused(window) {
             self.focus(window, cx);
         }
+
+        self.prepare_view(window, cx);
 
         let title = self.title();
         let download_prompt = self.render_download_prompt(window, cx);

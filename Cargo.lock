@@ -3640,6 +3640,7 @@ dependencies = [
  "dbflux_test_support",
  "dbflux_transfer",
  "dbflux_ui_base",
+ "encoding_rs",
  "flate2",
  "gpui-base",
  "gpui-component",

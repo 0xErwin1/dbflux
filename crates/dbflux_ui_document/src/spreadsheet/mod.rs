@@ -8,6 +8,9 @@
 //! the data table's model and does no I/O. The document opens the file and
 //! reads each sheet on the background executor, and keeps one sheet in
 //! memory at a time.
+//!
+//! A Table | Text switch shows the sheet's values as read-only CSV instead
+//! of the table, pending edits included (`text_view.rs`).
 
 mod document;
 mod editing;
@@ -17,6 +20,7 @@ mod pane;
 mod render;
 mod save;
 mod save_as;
+mod text_view;
 
 #[cfg(test)]
 mod editing_tests;
@@ -26,5 +30,7 @@ mod object_tests;
 mod save_as_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_view_tests;
 
 pub use document::SpreadsheetDocument;
