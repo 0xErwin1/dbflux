@@ -1,6 +1,6 @@
 use crate::fonts::FontSettings;
 use crate::semantic::ThemeSettingGlobal;
-use crate::tokens::SyntaxColors;
+use crate::tokens::{BASE_REM, SyntaxColors};
 pub use crate::typography::AppFonts;
 use crate::typography::load_bundled_fonts;
 use dbflux_core::{AppStyle, ThemeSetting};
@@ -10,9 +10,6 @@ use gpui_component::{
     theme::{Theme, ThemeConfig, ThemeMode, ThemeTokens},
 };
 use std::{rc::Rc, sync::Arc};
-
-/// gpui-component's default rem size, kept at the default interface size.
-const BASE_REM_SIZE: f32 = 16.0;
 
 /// Structural separator between major UI regions; resolves to the palette line.
 pub fn ghost_border_color(theme: &Theme) -> Hsla {
@@ -212,8 +209,7 @@ fn rgb_to_hsla_alpha(hex: u32, alpha: f32) -> Hsla {
 /// gpui-component's 16 px at the default interface size and follows the
 /// interface scale.
 fn persist_font_config(theme: &mut Theme, fonts: &FontSettings) {
-    let rem_size =
-        BASE_REM_SIZE * fonts.ui_size / dbflux_core::GeneralSettings::DEFAULT_UI_FONT_SIZE;
+    let rem_size = BASE_REM * fonts.ui_size / dbflux_core::GeneralSettings::DEFAULT_UI_FONT_SIZE;
 
     let apply = |config: &mut ThemeConfig| {
         config.font_family = Some(fonts.ui_family.clone());

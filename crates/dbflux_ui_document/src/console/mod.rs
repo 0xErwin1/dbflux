@@ -871,6 +871,7 @@ impl NativeConsole {
                                 frameless_single_line_completion_editor_sized(
                                     &self.input,
                                     ConsoleMetrics::FONT,
+                                    cx,
                                 )
                                 .aria_label(dbflux_i18n::t!("document.console.title"))
                                 .w_full(),

@@ -11,9 +11,9 @@
 use std::sync::{Arc, LazyLock, OnceLock};
 
 use dbflux_core::GeneralSettings;
-use gpui::{App, Global, Pixels, SharedString, px};
+use gpui::{App, Global, Pixels, Rems, SharedString, px};
 
-use crate::tokens::{EditorMetrics, GridMetrics};
+use crate::tokens::{BASE_REM, EditorMetrics, GridMetrics};
 use crate::typography::{AppFonts, BUNDLED_FONT_ASSETS};
 
 /// Height of a record-mode field row at the default grid size.
@@ -145,6 +145,13 @@ pub fn scaled(cx: &App, value: Pixels) -> Pixels {
     value * ui_scale(cx)
 }
 
+/// Resolves an interface length in rems to pixels at the current interface
+/// size, for code that does pixel arithmetic outside layout. It matches the
+/// rem size `Root` applies to every window.
+pub fn ui_px(cx: &App, value: Rems) -> Pixels {
+    value.to_pixels(px(BASE_REM) * ui_scale(cx))
+}
+
 pub fn ui_family(cx: &App) -> SharedString {
     active(cx).ui_family.clone()
 }
@@ -251,6 +258,7 @@ fn resolve_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::ui;
     use gpui::TestAppContext;
 
     fn installed(names: &[&str]) -> Vec<SharedString> {
@@ -404,6 +412,30 @@ mod tests {
             assert_eq!(grid_record_row_height(cx), px(60.0));
             assert_eq!(grid_char_advance(cx), 25.0 * 0.6);
             assert_eq!(grid_type_char_advance(cx), 21.0 * 0.6);
+        });
+    }
+
+    #[gpui::test]
+    fn ui_px_resolves_rems_at_the_default_interface_size(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            assert_eq!(ui_px(cx, ui(30.0)), px(30.0));
+            assert_eq!(ui_px(cx, ui(13.0)), px(13.0));
+        });
+    }
+
+    #[gpui::test]
+    fn ui_px_follows_the_interface_scale(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(
+                cx,
+                FontSettings {
+                    ui_size: 26.0,
+                    ..FontSettings::default()
+                },
+            );
+
+            assert_eq!(ui_px(cx, ui(30.0)), px(60.0));
+            assert_eq!(ui_px(cx, ui(13.0)), px(26.0));
         });
     }
 

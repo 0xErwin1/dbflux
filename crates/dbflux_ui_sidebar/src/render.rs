@@ -586,7 +586,7 @@ mod tests {
             assert_eq!(inspection.variant, TextVariant::Label);
             assert_eq!(
                 inspection.size_override,
-                Some(ShellMetrics::SECTION_LABEL_FONT)
+                Some(ShellMetrics::SECTION_LABEL_FONT.into())
             );
             assert!(inspection.uses_role_default_color);
         }

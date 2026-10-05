@@ -21,10 +21,12 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 
-/// A document row: `height` tall, 14 px side padding, 8 px gap and a line
-/// along the bottom. The header, toolbar and filter rows of every document
-/// view start from this.
-pub(crate) fn document_bar(height: Pixels, cx: &App) -> Div {
+/// A document row: `height` tall (pixels or rems), 14 px side padding, 8 px
+/// gap and a line along the bottom. The header, toolbar and filter rows of
+/// every document view start from this.
+pub(crate) fn document_bar(height: impl Into<AbsoluteLength>, cx: &App) -> Div {
+    let height: AbsoluteLength = height.into();
+
     div()
         .flex()
         .flex_shrink_0()

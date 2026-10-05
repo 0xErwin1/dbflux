@@ -563,7 +563,10 @@ mod tests {
         let inspection = StatusBar::readout_text("SELECT 1 \u{b7} 12 ms").inspect();
 
         assert_eq!(inspection.family, AppFonts::MONO);
-        assert_eq!(inspection.size_override, Some(ShellMetrics::STATUS_FONT));
+        assert_eq!(
+            inspection.size_override,
+            Some(ShellMetrics::STATUS_FONT.into())
+        );
     }
 
     fn task(status: TaskStatus, description: &str, elapsed_secs: f64) -> TaskSnapshot {

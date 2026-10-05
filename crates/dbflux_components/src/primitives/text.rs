@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
+use gpui::{AbsoluteLength, App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
 use gpui_component::ActiveTheme;
 
 use crate::density;
@@ -86,7 +86,7 @@ impl TextColorSelection {
 pub struct TextRoleContract {
     pub family: &'static str,
     pub fallbacks: &'static [&'static str],
-    pub size: gpui::Pixels,
+    pub size: AbsoluteLength,
     pub weight: FontWeight,
     pub color: TextDefaultColor,
 }
@@ -98,7 +98,7 @@ pub struct TextInspection {
     pub variant: TextVariant,
     pub family: &'static str,
     pub fallbacks: &'static [&'static str],
-    pub size_override: Option<gpui::Pixels>,
+    pub size_override: Option<AbsoluteLength>,
     pub weight_override: Option<FontWeight>,
     pub color_selection: TextColorSelection,
     pub uses_role_default_color: bool,
@@ -114,7 +114,7 @@ pub struct Text {
     variant: TextVariant,
     content: SharedString,
     color_override: Option<TextColorSelection>,
-    size_override: Option<gpui::Pixels>,
+    size_override: Option<AbsoluteLength>,
     weight_override: Option<FontWeight>,
 }
 
@@ -212,9 +212,10 @@ impl Text {
         self
     }
 
-    /// Override the font size (replaces the role default).
-    pub fn font_size(mut self, size: gpui::Pixels) -> Self {
-        self.size_override = Some(size);
+    /// Override the font size (replaces the role default). Accepts pixels or
+    /// rems; a `tokens::ui` rem size follows the interface scale.
+    pub fn font_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.size_override = Some(size.into());
         self
     }
 
@@ -292,56 +293,56 @@ impl TextVariant {
             Self::Title => TextRoleContract {
                 family: AppFonts::INTERFACE,
                 fallbacks: INTERFACE,
-                size: FontSizes::TITLE,
+                size: FontSizes::TITLE.into(),
                 weight: FontWeight::BOLD,
                 color: TextDefaultColor::Strong,
             },
             Self::Heading => TextRoleContract {
                 family: AppFonts::INTERFACE,
                 fallbacks: INTERFACE,
-                size: FontSizes::XL,
+                size: FontSizes::XL.into(),
                 weight: FontWeight::BOLD,
                 color: TextDefaultColor::Strong,
             },
             Self::Body => TextRoleContract {
                 family: AppFonts::INTERFACE,
                 fallbacks: INTERFACE,
-                size: FontSizes::BASE,
+                size: FontSizes::BASE.into(),
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::BodySm => TextRoleContract {
                 family: AppFonts::INTERFACE,
                 fallbacks: INTERFACE,
-                size: FontSizes::XS,
+                size: FontSizes::XS.into(),
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::Label => TextRoleContract {
                 family: AppFonts::DISPLAY,
                 fallbacks: INTERFACE,
-                size: FontSizes::LABEL,
+                size: FontSizes::LABEL.into(),
                 weight: FontWeight::EXTRA_BOLD,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::Caption => TextRoleContract {
                 family: AppFonts::INTERFACE,
                 fallbacks: INTERFACE,
-                size: FontSizes::XS,
+                size: FontSizes::XS.into(),
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::Code => TextRoleContract {
                 family: AppFonts::MONO,
                 fallbacks: MONO,
-                size: FontSizes::SM,
+                size: FontSizes::SM.into(),
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::KeyHint => TextRoleContract {
                 family: AppFonts::MONO,
                 fallbacks: MONO,
-                size: FontSizes::XS,
+                size: FontSizes::XS.into(),
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
@@ -350,13 +351,13 @@ impl TextVariant {
 }
 
 impl RenderOnce for Text {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let contract = self.variant.role_contract();
 
         let size = self
             .size_override
-            .unwrap_or_else(|| self.variant.density_size(cx));
+            .unwrap_or_else(|| self.variant.density_size(cx).into());
         let weight = self.weight_override.unwrap_or(contract.weight);
         let color = self
             .color_override
@@ -383,7 +384,7 @@ impl RenderOnce for Text {
             .font_weight(weight)
             .text_color(color)
             .when(letter_spacing_em > 0.0, |el| {
-                el.letter_spacing(size * letter_spacing_em)
+                el.letter_spacing(size.to_pixels(window.rem_size()) * letter_spacing_em)
             })
             .child(self.content)
     }
@@ -416,8 +417,14 @@ mod tests {
             assert_eq!(contract.color, TextDefaultColor::Strong, "{role:?}");
         }
 
-        assert_eq!(TextVariant::Title.role_contract().size, FontSizes::TITLE);
-        assert_eq!(TextVariant::Heading.role_contract().size, FontSizes::XL);
+        assert_eq!(
+            TextVariant::Title.role_contract().size,
+            FontSizes::TITLE.into()
+        );
+        assert_eq!(
+            TextVariant::Heading.role_contract().size,
+            FontSizes::XL.into()
+        );
     }
 
     #[test]
@@ -428,7 +435,7 @@ mod tests {
         }
 
         let label = TextVariant::Label.role_contract();
-        assert_eq!(label.size, FontSizes::LABEL);
+        assert_eq!(label.size, FontSizes::LABEL.into());
         assert_eq!(label.weight, FontWeight::EXTRA_BOLD);
     }
 

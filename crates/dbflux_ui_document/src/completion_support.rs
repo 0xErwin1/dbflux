@@ -1,5 +1,5 @@
 use dbflux_components::tokens::{Borders, FontSizes};
-use gpui::{Entity, FontWeight, Pixels, Styled as _, px};
+use gpui::{AbsoluteLength, App, Entity, FontWeight, Pixels, Styled as _, px};
 use gpui_component::input::EditorState;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat,
@@ -193,12 +193,28 @@ pub(crate) fn single_line_completion_editor(
 pub(crate) fn frameless_single_line_completion_editor(
     state: &Entity<EditorState>,
 ) -> gpui_component::input::Editor {
-    frameless_single_line_completion_editor_sized(state, FontSizes::BASE)
+    frameless_single_line_completion_editor_at(state, FontSizes::BASE)
 }
 
 /// [`frameless_single_line_completion_editor`] at `text_size`, for hosts
 /// whose surrounding text is not `FontSizes::BASE` (the native console).
+///
+/// A rem size resolves at the current interface size, because the vertical
+/// padding mixes it with gpui-component's fixed pixel input padding.
 pub(crate) fn frameless_single_line_completion_editor_sized(
+    state: &Entity<EditorState>,
+    text_size: impl Into<AbsoluteLength>,
+    cx: &App,
+) -> gpui_component::input::Editor {
+    let text_size = match text_size.into() {
+        AbsoluteLength::Pixels(pixels) => pixels,
+        AbsoluteLength::Rems(rems) => dbflux_components::fonts::ui_px(cx, rems),
+    };
+
+    frameless_single_line_completion_editor_at(state, text_size)
+}
+
+fn frameless_single_line_completion_editor_at(
     state: &Entity<EditorState>,
     text_size: Pixels,
 ) -> gpui_component::input::Editor {

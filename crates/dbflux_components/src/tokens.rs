@@ -1,4 +1,18 @@
-use gpui::{BoxShadow, Hsla, Pixels, Point, px, rgb};
+use gpui::{BoxShadow, Hsla, Pixels, Point, Rems, px, rems, rgb};
+
+/// Rem size, in pixels, at the default interface font size.
+pub const BASE_REM: f32 = 16.0;
+
+/// An interface length drawn at `px` design pixels, expressed in rems.
+///
+/// Every window renders under gpui-component's `Root`, which sets the rem
+/// size from the theme font size, and the theme derives that size from the
+/// interface font size (`BASE_REM` at the default). A length built with this
+/// function keeps its design size at the default interface size and follows
+/// the interface scale without reading any setting at the call site.
+pub const fn ui(px: f32) -> Rems {
+    rems(px / BASE_REM)
+}
 
 pub struct Spacing;
 
@@ -2278,10 +2292,23 @@ impl Widths {
 #[cfg(test)]
 mod tests {
     use super::{
-        Borders, ChartGeometry, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes,
-        Radii, Shadows, Spacing,
+        BASE_REM, Borders, ChartGeometry, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole,
+        FontSizes, Radii, Shadows, Spacing, ui,
     };
-    use gpui::px;
+    use gpui::{px, rems};
+
+    #[test]
+    fn ui_expresses_design_pixels_in_rems_of_the_base_size() {
+        assert_eq!(BASE_REM, 16.0);
+        assert_eq!(ui(13.0), rems(0.8125));
+        assert_eq!(ui(30.0).to_pixels(px(BASE_REM)), px(30.0));
+    }
+
+    #[test]
+    fn ui_lengths_follow_the_rem_size() {
+        assert_eq!(ui(30.0).to_pixels(px(BASE_REM * 2.0)), px(60.0));
+        assert_eq!(ui(13.0).to_pixels(px(BASE_REM * 1.5)), px(19.5));
+    }
 
     // Static-constant baseline: matches AppStyle::Default (project's flat,
     // larger-text default). Style-aware sites use density::font_*/radius_*.

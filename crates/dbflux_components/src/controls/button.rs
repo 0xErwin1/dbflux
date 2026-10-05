@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, KeyUpEvent,
-    MouseButton, Pixels, SharedString, Window, div,
+    AbsoluteLength, App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent,
+    KeyUpEvent, MouseButton, Pixels, SharedString, Window, div,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::theme::Theme;
@@ -198,7 +198,7 @@ pub struct Button {
     variant: ButtonVariant,
     size: ButtonSize,
     icon: Option<IconSource>,
-    icon_size: Option<Pixels>,
+    icon_size: Option<AbsoluteLength>,
     icon_only: bool,
     trailing_icon: Option<IconSource>,
     kbd: Option<SharedString>,
@@ -286,8 +286,8 @@ impl Button {
 
     /// Overrides the icon size (by default 15 px beside a label and 16 px
     /// icon-only; 12 and 13 px inline).
-    pub fn icon_size(mut self, size: Pixels) -> Self {
-        self.icon_size = Some(size);
+    pub fn icon_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.icon_size = Some(size.into());
         self
     }
 
@@ -451,10 +451,12 @@ impl RenderOnce for Button {
                 .interactive("button-chamfer");
         }
 
-        let icon_size = icon_size.unwrap_or(if icon_only {
-            size.icon_only_icon()
-        } else {
-            size.icon()
+        let icon_size = icon_size.unwrap_or_else(|| {
+            if icon_only {
+                size.icon_only_icon().into()
+            } else {
+                size.icon().into()
+            }
         });
 
         let mut button = div()
