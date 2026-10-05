@@ -177,6 +177,23 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 
 MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `approve_execution`과 `reject_execution`은 정책과 관계없이 MCP로는 오류 코드 `self_approval_forbidden`과 함께 거부되며, 모든 시도가 감사됩니다. 대기 중인 실행은 DBFlux UI에서 사람만 처리합니다.
 
+### 읽기 스크립트는 읽기 전용으로 실행됩니다
+
+`execute_script`는 스크립트 본문에서 클래스를 도출합니다. `read` 또는 `metadata`로 분류된 스크립트는 읽기 전용 강제와 함께 실행됩니다: 드라이버는 데이터베이스 자체가 데이터 수정을 거부하는 세션에서 스크립트를 실행하며, 호출은 `read` 또는 `metadata`로 통제되고 감사됩니다.
+
+| 드라이버 | 세션을 읽기 전용으로 만드는 방법 |
+|----------|----------------------------------|
+| PostgreSQL, Redshift | `BEGIN READ ONLY`, 실행 후 롤백 |
+| MySQL, MariaDB | `START TRANSACTION READ ONLY`, 실행 후 롤백. 실행 가능한 주석(`/*! */`, `/*M! */`)과 `INTO`는 거부되며, 열린 트랜잭션이나 `LOCK TABLES` 잠금이 있을 수 있는 경우에도 스크립트가 거부됩니다 |
+| SQLite | `PRAGMA query_only` |
+| ClickHouse | 요청별 설정 `readonly = 2` |
+
+SQL Server, Turso, 외부 IPC 드라이버, MongoDB, Redis, DynamoDB, CloudWatch, InfluxDB는 읽기 전용을 강제할 수 없습니다. 이러한 연결과, 세션에 이미 열린 트랜잭션이 있는 모든 연결에서는 스크립트가 `write`로 통제됩니다: 정책의 `write` 결정(Allow, Ask 또는 Deny)이 적용되고, 감사에는 `write`가 기록됩니다.
+
+데이터베이스는 세션 안의 데이터 수정을 막을 뿐, 외부 효과가 있는 함수는 막지 않습니다. 예를 들어 PostgreSQL의 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock, 그리고 MySQL의 `GET_LOCK`과 사용자 정의 함수가 그렇습니다. 읽기 전용 MCP 클라이언트의 경우 최소 권한 데이터베이스 자격 증명이 여전히 실제 경계입니다.
+
+편집기의 자동 새로고침도 같은 강제를 사용합니다. 드라이버가 읽기 전용을 강제할 수 없는 연결에서는 자동 새로고침이 Manual로 돌아갑니다.
+
 ## 6. 내장 정책과 역할
 
 세 개의 정책과 세 개의 역할은 변경할 수 없는 내장 항목으로 제공됩니다. 디스크에 무엇이 저장되어 있든 항상 존재하며, 삭제하거나 수정할 수 없습니다.

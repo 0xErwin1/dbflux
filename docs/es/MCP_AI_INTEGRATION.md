@@ -233,6 +233,36 @@ Los clientes MCP nunca pueden aprobar ni rechazar: `approve_execution` y
 de error `self_approval_forbidden`, y cada intento se audita. Solo una persona
 resuelve las ejecuciones pendientes, en la UI de DBFlux.
 
+### Los scripts de lectura se ejecutan en solo lectura
+
+`execute_script` deriva su clase del cuerpo del script. Un script clasificado
+`read` o `metadata` se ejecuta con aplicación de solo lectura: el driver lo
+ejecuta en una sesión donde la propia base de datos rechaza la modificación de
+datos, y la llamada se gobierna y se audita como `read` o `metadata`.
+
+| Driver               | Cómo la sesión queda en solo lectura                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL, Redshift | `BEGIN READ ONLY`, revertida al terminar                                                                                                                                                                |
+| MySQL, MariaDB       | `START TRANSACTION READ ONLY`, revertida al terminar. Se rechazan los comentarios ejecutables (`/*! */`, `/*M! */`) y `INTO`, y también el script cuando puede haber una transacción o un bloqueo de `LOCK TABLES` abierto |
+| SQLite               | `PRAGMA query_only`                                                                                                                                                                                     |
+| ClickHouse           | El ajuste por petición `readonly = 2`                                                                                                                                                                   |
+
+SQL Server, Turso, los drivers externos por IPC, MongoDB, Redis, DynamoDB,
+CloudWatch e InfluxDB no pueden aplicar solo lectura. En esas conexiones, y en
+cualquier conexión cuya sesión ya tenga una transacción abierta, el script se
+gobierna como `write`: se aplica la decisión de la policy para `write` (Allow,
+Ask o Deny), y el audit registra `write`.
+
+La base de datos detiene la modificación de datos en la sesión, no las
+funciones con efectos externos, como `dblink_exec`, `COPY ... TO PROGRAM`,
+`lo_export`, `pg_terminate_backend` y los advisory locks en PostgreSQL, o
+`GET_LOCK` y las funciones definidas por el usuario en MySQL. Para un cliente
+MCP de solo lectura, las credenciales de base de datos con privilegios mínimos
+siguen siendo el límite real.
+
+El auto-refresh del editor usa la misma aplicación. En una conexión cuyo driver
+no puede aplicar solo lectura, el auto-refresh vuelve a Manual.
+
 ## 6. Policies y roles integrados
 
 Se incluyen tres policies y tres roles como built-ins inmutables. Siempre están

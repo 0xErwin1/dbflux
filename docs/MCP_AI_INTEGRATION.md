@@ -179,6 +179,23 @@ After a rejection, `get_pending_execution` returns `status: "rejected"` and a `r
 
 MCP clients can never approve or reject: `approve_execution` and `reject_execution` are denied over MCP whatever the policies say, with the error code `self_approval_forbidden`, and each attempt is audited. Only a person resolves pending executions, in the DBFlux UI.
 
+### Read scripts run read-only
+
+`execute_script` derives its class from the script body. A script classified `read` or `metadata` runs with read-only enforcement: the driver runs it in a session where the database itself rejects data modification, and the call is governed and audited as `read` or `metadata`.
+
+| Driver | How the session is made read-only |
+|--------|-----------------------------------|
+| PostgreSQL, Redshift | `BEGIN READ ONLY`, rolled back afterwards |
+| MySQL, MariaDB | `START TRANSACTION READ ONLY`, rolled back afterwards. Executable comments (`/*! */`, `/*M! */`) and `INTO` are refused, and so is the script when a transaction or a `LOCK TABLES` lock may be open |
+| SQLite | `PRAGMA query_only` |
+| ClickHouse | The per-request setting `readonly = 2` |
+
+SQL Server, Turso, external IPC drivers, MongoDB, Redis, DynamoDB, CloudWatch and InfluxDB cannot enforce read-only. On those connections, and on any connection whose session already has an open transaction, the script is governed as `write`: the policy's decision for `write` applies (Allow, Ask or Deny), and the audit records `write`.
+
+The database stops data modification in the session, not functions with external effects, such as PostgreSQL `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK` and user-defined functions. For a read-only MCP client, least-privilege database credentials remain the real boundary.
+
+The editor's auto-refresh uses the same enforcement. On a connection whose driver cannot enforce read-only, auto-refresh switches back to Manual.
+
 ## 6. Built-in Policies and Roles
 
 Three policies and three roles are shipped as immutable built-ins. They are always present regardless of what is persisted on disk, and cannot be deleted or modified.
