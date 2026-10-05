@@ -392,6 +392,75 @@ pub struct GeneralSettings {
     /// form (`space`, `,`, `\`). Space by default.
     #[serde(default = "default_vim_leader")]
     pub vim_leader: String,
+
+    // -- Fonts --
+    /// Interface font family. `None` uses the bundled interface font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_font_family: Option<String>,
+
+    /// Interface font size in pixels; every interface text size scales with it.
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: f32,
+
+    /// Code editor font family. `None` uses the bundled monospace font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_font_family: Option<String>,
+
+    /// Code editor font size in pixels.
+    #[serde(default = "default_editor_font_size")]
+    pub editor_font_size: f32,
+
+    /// Data grid font family. `None` uses the editor font family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_font_family: Option<String>,
+
+    /// Data grid font size in pixels.
+    #[serde(default = "default_grid_font_size")]
+    pub grid_font_size: f32,
+}
+
+impl GeneralSettings {
+    pub const DEFAULT_UI_FONT_SIZE: f32 = 13.0;
+    pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
+    pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
+    pub const MIN_FONT_SIZE: f32 = 8.0;
+    pub const MAX_FONT_SIZE: f32 = 32.0;
+
+    /// Clamps a font size to `[MIN_FONT_SIZE, MAX_FONT_SIZE]`. A non-finite
+    /// size (NaN or infinite) is replaced by `default`, since it carries no
+    /// usable intent.
+    pub fn clamp_font_size(size: f32, default: f32) -> f32 {
+        if size.is_finite() {
+            size.clamp(Self::MIN_FONT_SIZE, Self::MAX_FONT_SIZE)
+        } else {
+            default
+        }
+    }
+
+    /// Trims a font family name. A missing or blank name becomes `None`,
+    /// which selects the bundled font.
+    pub fn normalize_font_family(family: Option<String>) -> Option<String> {
+        let family = family?;
+        let trimmed = family.trim();
+
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+}
+
+fn default_ui_font_size() -> f32 {
+    GeneralSettings::DEFAULT_UI_FONT_SIZE
+}
+
+fn default_editor_font_size() -> f32 {
+    GeneralSettings::DEFAULT_EDITOR_FONT_SIZE
+}
+
+fn default_grid_font_size() -> f32 {
+    GeneralSettings::DEFAULT_GRID_FONT_SIZE
 }
 
 /// The Vim leader key of a new installation.
@@ -444,7 +513,75 @@ impl Default for GeneralSettings {
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
             vim_mode: false,
             vim_leader: default_vim_leader(),
+            ui_font_family: None,
+            ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
+            editor_font_family: None,
+            editor_font_size: Self::DEFAULT_EDITOR_FONT_SIZE,
+            grid_font_family: None,
+            grid_font_size: Self::DEFAULT_GRID_FONT_SIZE,
         }
+    }
+}
+
+#[cfg(test)]
+mod font_settings_tests {
+    use super::GeneralSettings;
+
+    #[test]
+    fn font_defaults_use_bundled_families_and_default_sizes() {
+        let settings = GeneralSettings::default();
+
+        assert_eq!(settings.ui_font_family, None);
+        assert_eq!(settings.ui_font_size, 13.0);
+        assert_eq!(settings.editor_font_family, None);
+        assert_eq!(settings.editor_font_size, 13.0);
+        assert_eq!(settings.grid_font_family, None);
+        assert_eq!(settings.grid_font_size, 12.5);
+
+        let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
+        assert_eq!(legacy, settings);
+    }
+
+    #[test]
+    fn clamp_font_size_bounds_finite_sizes_and_replaces_non_finite() {
+        let default = GeneralSettings::DEFAULT_GRID_FONT_SIZE;
+
+        assert_eq!(GeneralSettings::clamp_font_size(14.0, default), 14.0);
+        assert_eq!(GeneralSettings::clamp_font_size(8.0, default), 8.0);
+        assert_eq!(GeneralSettings::clamp_font_size(32.0, default), 32.0);
+        assert_eq!(GeneralSettings::clamp_font_size(2.0, default), 8.0);
+        assert_eq!(GeneralSettings::clamp_font_size(-5.0, default), 8.0);
+        assert_eq!(GeneralSettings::clamp_font_size(64.0, default), 32.0);
+        assert_eq!(GeneralSettings::clamp_font_size(f32::NAN, default), 12.5);
+        assert_eq!(
+            GeneralSettings::clamp_font_size(f32::INFINITY, default),
+            12.5
+        );
+        assert_eq!(
+            GeneralSettings::clamp_font_size(f32::NEG_INFINITY, default),
+            12.5
+        );
+    }
+
+    #[test]
+    fn normalize_font_family_trims_and_maps_blank_to_none() {
+        assert_eq!(GeneralSettings::normalize_font_family(None), None);
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some(String::new())),
+            None
+        );
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some("  \t ".to_string())),
+            None
+        );
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some("  Fira Code ".to_string())).as_deref(),
+            Some("Fira Code")
+        );
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some("Inter".to_string())).as_deref(),
+            Some("Inter")
+        );
     }
 }
 

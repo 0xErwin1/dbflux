@@ -40,6 +40,8 @@ impl GeneralSettingsRepository {
                        style, schema_snapshot_retention,
                        object_preview_size_limit_mib, language,
                        key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
+                       ui_font_family, ui_font_size, editor_font_family, editor_font_size,
+                       grid_font_family, grid_font_size,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -74,7 +76,13 @@ impl GeneralSettingsRepository {
                 vim_mode: row.get(20)?,
                 editor_row_limit: row.get(21)?,
                 vim_leader: row.get(22)?,
-                updated_at: row.get(23)?,
+                ui_font_family: row.get(23)?,
+                ui_font_size: row.get(24)?,
+                editor_font_family: row.get(25)?,
+                editor_font_size: row.get(26)?,
+                grid_font_family: row.get(27)?,
+                grid_font_size: row.get(28)?,
+                updated_at: row.get(29)?,
             })
         });
 
@@ -103,8 +111,10 @@ impl GeneralSettingsRepository {
                     style, schema_snapshot_retention,
                     object_preview_size_limit_mib, language,
                     key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
+                    ui_font_family, ui_font_size, editor_font_family, editor_font_size,
+                    grid_font_family, grid_font_size,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -128,6 +138,12 @@ impl GeneralSettingsRepository {
                     vim_mode = excluded.vim_mode,
                     editor_row_limit = excluded.editor_row_limit,
                     vim_leader = excluded.vim_leader,
+                    ui_font_family = excluded.ui_font_family,
+                    ui_font_size = excluded.ui_font_size,
+                    editor_font_family = excluded.editor_font_family,
+                    editor_font_size = excluded.editor_font_size,
+                    grid_font_family = excluded.grid_font_family,
+                    grid_font_size = excluded.grid_font_size,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -153,6 +169,12 @@ impl GeneralSettingsRepository {
                     settings.vim_mode,
                     settings.editor_row_limit,
                     settings.vim_leader,
+                    settings.ui_font_family,
+                    settings.ui_font_size,
+                    settings.editor_font_family,
+                    settings.editor_font_size,
+                    settings.grid_font_family,
+                    settings.grid_font_size,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -205,6 +227,18 @@ pub struct GeneralSettingsDto {
     /// The key that starts Vim leader sequences, in the keymap's stored key
     /// form (`space`, `,`).
     pub vim_leader: String,
+    /// Interface font family; `None` selects the bundled interface font.
+    pub ui_font_family: Option<String>,
+    /// Interface font size in pixels.
+    pub ui_font_size: f64,
+    /// Code editor font family; `None` selects the bundled monospace font.
+    pub editor_font_family: Option<String>,
+    /// Code editor font size in pixels.
+    pub editor_font_size: f64,
+    /// Data grid font family; `None` falls back to the editor family.
+    pub grid_font_family: Option<String>,
+    /// Data grid font size in pixels.
+    pub grid_font_size: f64,
     pub updated_at: String,
 }
 
@@ -262,6 +296,12 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
 
@@ -314,6 +354,12 @@ mod tests {
                 vim_mode: 0,
                 editor_row_limit: 10_000,
                 vim_leader: "space".to_string(),
+                ui_font_family: None,
+                ui_font_size: 13.0,
+                editor_font_family: None,
+                editor_font_size: 13.0,
+                grid_font_family: None,
+                grid_font_size: 12.5,
                 updated_at: String::new(),
             };
 
@@ -386,6 +432,12 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
 
@@ -472,6 +524,12 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
 
@@ -518,6 +576,12 @@ mod tests {
             vim_mode: 1,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
 
@@ -533,6 +597,103 @@ mod tests {
         .expect("should upsert the leader");
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.vim_leader, ",");
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn migrated_row_defaults_fonts_to_bundled_families_and_default_sizes() {
+        let path = temp_db("fonts_column_default");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+        let fetched = repo.get().expect("should get").expect("should exist");
+
+        assert_eq!(fetched.ui_font_family, None);
+        assert_eq!(fetched.ui_font_size, 13.0);
+        assert_eq!(fetched.editor_font_family, None);
+        assert_eq!(fetched.editor_font_size, 13.0);
+        assert_eq!(fetched.grid_font_family, None);
+        assert_eq!(fetched.grid_font_size, 12.5);
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn fonts_round_trip_through_upsert() {
+        let path = temp_db("fonts_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
+            vim_mode: 0,
+            editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
+            ui_font_family: Some("Inter".to_string()),
+            ui_font_size: 15.5,
+            editor_font_family: Some("JetBrains Mono".to_string()),
+            editor_font_size: 16.0,
+            grid_font_family: Some("Fira Code".to_string()),
+            grid_font_size: 14.0,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.ui_font_family.as_deref(), Some("Inter"));
+        assert_eq!(fetched.ui_font_size, 15.5);
+        assert_eq!(
+            fetched.editor_font_family.as_deref(),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(fetched.editor_font_size, 16.0);
+        assert_eq!(fetched.grid_font_family.as_deref(), Some("Fira Code"));
+        assert_eq!(fetched.grid_font_size, 14.0);
+
+        repo.upsert(&GeneralSettingsDto {
+            ui_font_family: None,
+            editor_font_family: None,
+            grid_font_family: None,
+            ..dto
+        })
+        .expect("should upsert cleared families");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.ui_font_family, None);
+        assert_eq!(fetched.editor_font_family, None);
+        assert_eq!(fetched.grid_font_family, None);
+        assert_eq!(fetched.grid_font_size, 14.0);
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");
