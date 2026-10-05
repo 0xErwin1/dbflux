@@ -8,6 +8,9 @@ pub const ROW_HEIGHT: Pixels = GridMetrics::ROW_HEIGHT;
 /// Height of the header row, its bottom edge included.
 pub const HEADER_HEIGHT: Pixels = GridMetrics::HEADER_HEIGHT;
 
+/// Height of the header row when a column shows facts on a second line.
+pub const ANNOTATED_HEADER_HEIGHT: Pixels = px(48.0);
+
 /// Horizontal padding inside cells.
 pub const CELL_PADDING_X: Pixels = GridMetrics::CELL_PADDING_X;
 

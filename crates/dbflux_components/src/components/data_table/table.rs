@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
-use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
+use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors, Spacing};
 use crate::typography::AppFonts;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
@@ -21,7 +21,7 @@ use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
-use super::theme::{CELL_PADDING_X, HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+use super::theme::{CELL_PADDING_X, ROW_HEIGHT, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -761,6 +761,8 @@ impl DataTable {
 
         let pk_cols = state.pk_columns().to_vec();
         let fk_cols = state.fk_columns().clone();
+        let annotated = state.has_header_annotations();
+        let header_height = state.header_height();
 
         let header_cells: Vec<_> = model
             .columns
@@ -784,6 +786,7 @@ impl DataTable {
                 };
 
                 let type_label: SharedString = col_spec.type_name.clone().into();
+                let annotation = state.header_annotation(col_ix).cloned();
 
                 let state_for_click = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
@@ -877,6 +880,37 @@ impl DataTable {
                             ),
                         )
                     })
+                    // An annotated header pins the name line to the top and
+                    // draws the facts along the bottom, so columns with and
+                    // without facts keep their names on the same line.
+                    .when(annotated, |d| d.items_start().pt(Spacing::SM))
+                    .when_some(annotation, |d, annotation| {
+                        d.child(
+                            div()
+                                .debug_selector(|| "table-header-annotation".to_string())
+                                .absolute()
+                                .left(CELL_PADDING_X)
+                                .right(CELL_PADDING_X)
+                                .bottom(Spacing::XXS)
+                                .flex()
+                                .justify_between()
+                                .gap(GridMetrics::HEADER_GAP)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_size(GridMetrics::TYPE_FONT)
+                                .text_color(theme.muted_foreground)
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(theme.foreground)
+                                        .child(annotation.leading),
+                                )
+                                .when_some(annotation.trailing, |line, trailing| {
+                                    line.child(div().flex_shrink_0().child(trailing))
+                                }),
+                        )
+                    })
                     // Resize handle: mouse-down starts the drag; move/up are
                     // handled on the DataTable root div so the drag survives
                     // the cursor leaving this 6px strip.
@@ -909,8 +943,9 @@ impl DataTable {
         // The phantom scroller owns the scroll handle; header just follows the offset.
         div()
             .id("table-header")
+            .debug_selector(|| "table-header".to_string())
             .flex_shrink_0()
-            .h(HEADER_HEIGHT)
+            .h(header_height)
             .overflow_hidden()
             .bg(theme.table_head)
             .border_b_1()
@@ -1761,5 +1796,63 @@ mod tests {
         set_editable(visual, &state, true);
         visual.dispatch_action(actions::Redo);
         assert_eq!(dirty_cells(visual, &state), 1, "redo runs");
+    }
+
+    fn header_harness(
+        cx: &mut TestAppContext,
+        annotations: Option<Vec<Option<super::super::HeaderAnnotation>>>,
+    ) -> &mut VisualTestContext {
+        cx.update(crate::theme::init);
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DataTableState::new(overflow_model(), cx);
+
+                if let Some(annotations) = annotations {
+                    state.set_header_annotations(annotations, cx);
+                }
+
+                state
+            });
+            let table = cx.new(|cx| DataTable::new("header-test-table", state, cx));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+
+        visual
+    }
+
+    #[gpui::test]
+    fn a_table_without_annotations_keeps_its_header_height(cx: &mut TestAppContext) {
+        let visual = header_harness(cx, None);
+
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("the header is drawn");
+        assert_eq!(header.size.height, super::super::theme::HEADER_HEIGHT);
+        assert!(visual.debug_bounds("table-header-annotation").is_none());
+    }
+
+    #[gpui::test]
+    fn annotations_add_a_second_header_line(cx: &mut TestAppContext) {
+        let visual = header_harness(
+            cx,
+            Some(vec![
+                None,
+                Some(super::super::HeaderAnnotation::new("9.7×  ·  9.8 GiB").trailing("0% null")),
+            ]),
+        );
+
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("the header is drawn");
+        assert_eq!(
+            header.size.height,
+            super::super::theme::ANNOTATED_HEADER_HEIGHT
+        );
+        assert!(
+            visual.debug_bounds("table-header-annotation").is_some(),
+            "the annotated column draws its facts"
+        );
     }
 }

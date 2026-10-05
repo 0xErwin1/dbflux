@@ -1,3 +1,4 @@
+mod annotation;
 pub mod clipboard;
 pub mod document;
 mod events;
@@ -8,6 +9,7 @@ mod state;
 mod table;
 mod theme;
 
+pub use annotation::HeaderAnnotation;
 pub use document::{ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation, GroupSpan};
 pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, FilterOperator, SortState};
 pub use model::TableModel;
