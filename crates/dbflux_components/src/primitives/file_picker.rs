@@ -1,6 +1,6 @@
 use crate::icon::IconSource;
 use crate::primitives::Icon;
-use crate::tokens::{FontSizes, Heights, Radii};
+use crate::tokens::{FontSizes, Heights, Radii, ui};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -99,7 +99,7 @@ impl RenderOnce for FilePicker {
             .hover(|d| d.bg(theme.list_hover))
             .child(
                 Icon::new(self.folder_icon.clone())
-                    .size(px(14.0))
+                    .size(ui(14.0))
                     .color(label_color),
             )
             .child(
@@ -133,7 +133,7 @@ impl RenderOnce for FilePicker {
                     .hover(|d| d.bg(theme.list_hover))
                     .child(
                         Icon::new(self.clear_icon.clone())
-                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                            .size(ui(12.0))
                             .color(theme.muted_foreground),
                     )
                     .when_some(clear_handler, |d, handler| {

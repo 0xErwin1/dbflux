@@ -15,7 +15,7 @@ pub use whats_new::WhatsNewDialog;
 use dbflux_app::updates::{self, ChangelogRelease, ChangelogSection, ReleaseHeading, SectionKind};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing, ui};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
@@ -24,13 +24,13 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::Scrollbar;
 
 /// Size of the icon in front of each changelog entry and column heading.
-const ENTRY_ICON_SIZE: Pixels = px(15.0);
+const ENTRY_ICON_SIZE: Rems = ui(15.0);
 
 /// Size of the icon in front of a changelog section label.
 const SECTION_ICON_SIZE: Rems = FontSizes::XS;
 
 /// Size of the Expanded section and column labels on the boards.
-const LABEL_SIZE: Pixels = px(10.0);
+const LABEL_SIZE: Rems = ui(10.0);
 
 /// Gap between a section icon and its label.
 const SECTION_HEADING_GAP: Pixels = px(7.0);
@@ -49,10 +49,10 @@ const HINT_GAP: Pixels = px(3.0);
 const PREFERENCE_PADDING_Y: Pixels = Spacing::XXS;
 
 /// Text size of the "Full changelog" link and the footer note.
-pub(crate) const LINK_TEXT_SIZE: Pixels = px(12.5);
+pub(crate) const LINK_TEXT_SIZE: Rems = ui(12.5);
 
 /// Size of the "Full changelog" link icon.
-const LINK_ICON_SIZE: Pixels = px(13.0);
+const LINK_ICON_SIZE: Rems = ui(13.0);
 
 /// Gap between the "Full changelog" link icon and its text.
 const LINK_GAP: Pixels = Spacing::XXS;

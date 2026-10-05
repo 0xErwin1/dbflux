@@ -22,7 +22,7 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Icon, SegmentedControl, SegmentedItem,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, DocumentMetrics, Fields, ObjectStoreMetrics, SyntaxColors,
+    ChamferCut, ChromeColors, DocumentMetrics, Fields, ObjectStoreMetrics, SyntaxColors, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::chrono::{DateTime, Utc};
@@ -37,7 +37,7 @@ const MODIFIED_WIDTH: Pixels = px(140.0);
 /// Width of the filter field in the header.
 const FILTER_WIDTH: Pixels = px(240.0);
 /// Height of the "Load more" row.
-const LOAD_MORE_HEIGHT: Pixels = px(38.0);
+const LOAD_MORE_HEIGHT: Rems = ui(38.0);
 
 /// Indentation applied per tree-mode depth level. Matches the connections
 /// sidebar so both trees read at the same rhythm.
@@ -46,7 +46,7 @@ const TREE_INDENT: Pixels = px(14.0);
 /// Width of the disclosure-chevron slot, reserved on every tree-mode row —
 /// including object rows, which have nothing to disclose — so names stay
 /// aligned within a level. Same slot the sidebar reserves.
-const CHEVRON_SLOT: Pixels = px(14.0);
+const CHEVRON_SLOT: Rems = ui(14.0);
 
 const UNKNOWN: &str = "—";
 

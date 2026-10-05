@@ -10,7 +10,7 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Kbd, Text,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
+    ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::VimBinding;
@@ -818,7 +818,7 @@ impl CodeDocument {
                         } else {
                             AppIcon::Maximize2
                         })
-                        .size(px(14.0))
+                        .size(ui(14.0))
                         .muted(),
                     ),
             )
@@ -835,7 +835,7 @@ impl CodeDocument {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.hide_results(cx);
                     }))
-                    .child(Icon::new(AppIcon::PanelBottomClose).size(px(14.0)).muted()),
+                    .child(Icon::new(AppIcon::PanelBottomClose).size(ui(14.0)).muted()),
             )
     }
 
@@ -870,12 +870,12 @@ impl CodeDocument {
                         this.layout = SqlQueryLayout::Split;
                         cx.notify();
                     }))
-                    .child(Icon::new(AppIcon::PanelBottomOpen).size(px(14.0)).muted()),
+                    .child(Icon::new(AppIcon::PanelBottomOpen).size(ui(14.0)).muted()),
             )
     }
 
     fn render_loading_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let icon = Icon::new(AppIcon::Loader).size(px(12.0)); // guardrail-allow: 12px icon size, no ICON_XS token
+        let icon = Icon::new(AppIcon::Loader).size(ui(12.0));
         div().p(Spacing::MD).size_full().child(
             BannerBlock::new(
                 BannerVariant::Info,

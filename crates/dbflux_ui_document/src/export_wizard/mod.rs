@@ -29,7 +29,7 @@ use dbflux_components::modals::{
     Modal, modal_form_row, modal_frame, modal_hint, modal_lead, modal_value_field,
 };
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
-use dbflux_components::tokens::{ChromeColors, ModalMetrics};
+use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{Connection, TableRef};
 use dbflux_transfer::FileFormat;
@@ -49,7 +49,7 @@ const EXPORT_WIZARD_WIDTH: Pixels = px(620.0);
 const SEGMENT_SIZE_INPUT_WIDTH: Pixels = px(120.0);
 
 /// Height of a selected-table row on the Tables step. (36 px)
-const TABLE_ROW_HEIGHT: Pixels = px(36.0);
+const TABLE_ROW_HEIGHT: Rems = ui(36.0);
 
 /// Tallest the selected-table list grows before it scrolls.
 const TABLE_LIST_MAX_HEIGHT: Pixels = px(240.0);

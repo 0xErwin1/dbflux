@@ -34,7 +34,7 @@ use dbflux_components::components::tree_nav::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing, ui};
 use dbflux_core::keymap_types::Command;
 use dbflux_core::{TableRef, transfer_compatible};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
@@ -1211,7 +1211,7 @@ impl SourceTargetPhase {
 /// `TreeNav` holds no checkbox state, so the wizard renders its own.
 fn checkbox_glyph(checked: bool, theme: &gpui_component::Theme) -> impl IntoElement {
     div()
-        .size(px(14.0))
+        .size(ui(14.0))
         .flex()
         .items_center()
         .justify_center()

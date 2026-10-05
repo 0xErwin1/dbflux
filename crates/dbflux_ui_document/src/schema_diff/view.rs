@@ -17,7 +17,7 @@ use dbflux_components::modals::{
     ModalMutationConfirmHard, MutationConfirmHardRequest, MutationConfirmOutcome,
 };
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
-use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Fields, FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     ConnectedProfile, Connection, EventSink, ExecutionClassification, MutationPolicy,
     QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange,
@@ -2525,7 +2525,7 @@ impl SchemaDiffDocument {
             .id(SharedString::from(format!(
                 "chk-{group_index}-{change_index}"
             )))
-            .size(px(16.0)) // guardrail-allow: 16px checkbox box, no checkbox-size token
+            .size(Fields::CHECKBOX_SIZE)
             .rounded(Radii::SM)
             .border_1()
             .border_color(border)
@@ -2534,7 +2534,7 @@ impl SchemaDiffDocument {
             .when(checked, |d| {
                 d.child(
                     Icon::new(AppIcon::Check)
-                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                        .size(Fields::CHECK_MARK)
                         .color(primary_foreground),
                 )
             })
@@ -2576,7 +2576,7 @@ impl SchemaDiffDocument {
 
                 let checkbox = div()
                     .id(SharedString::from(format!("chk-table-{group_index}")))
-                    .size(px(16.0)) // guardrail-allow: 16px checkbox box, no checkbox-size token
+                    .size(Fields::CHECKBOX_SIZE)
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(border)
@@ -2585,7 +2585,7 @@ impl SchemaDiffDocument {
                     .when(checked, |d| {
                         d.child(
                             Icon::new(AppIcon::Check)
-                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                .size(Fields::CHECK_MARK)
                                 .color(primary_foreground),
                         )
                     })

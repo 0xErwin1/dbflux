@@ -1,10 +1,10 @@
 use dbflux_components::primitives::{SurfaceRole, Text, surface};
 use gpui::prelude::*;
-use gpui::{Context, EventEmitter, Window, div, px};
+use gpui::{Context, EventEmitter, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
-use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing, ui};
 
 use dbflux_core::{PipelineState, StateWatcher};
 
@@ -156,7 +156,7 @@ impl Render for PipelineProgress {
                     .child(
                         gpui::svg()
                             .path(AppIcon::Loader.path())
-                            .size(px(14.0))
+                            .size(ui(14.0))
                             .text_color(ChromeColors::tint(theme)),
                     )
                     .child(Text::body(format!("Connecting: {}", self.profile_name))),
@@ -170,7 +170,7 @@ impl Render for PipelineProgress {
                     .child(
                         gpui::svg()
                             .path(AppIcon::CircleCheck.path())
-                            .size(px(12.0))
+                            .size(ui(12.0))
                             .text_color(theme.success),
                     )
                     .child(Text::caption(stage.clone()))
@@ -186,7 +186,7 @@ impl Render for PipelineProgress {
                         .child(
                             gpui::svg()
                                 .path(AppIcon::Loader.path())
-                                .size(px(12.0))
+                                .size(ui(12.0))
                                 .text_color(theme.info),
                         )
                         .child(Text::body(label).font_size(FontSizes::XS)),

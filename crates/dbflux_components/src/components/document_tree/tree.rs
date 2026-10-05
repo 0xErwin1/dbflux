@@ -2,7 +2,7 @@ use crate::controls::{GpuiInput as Input, InputEvent, InputState};
 use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing, ui};
 use crate::typography::AppFonts;
 use crate::vim::{VimBinding, VimHost};
 use gpui::prelude::FluentBuilder;
@@ -567,7 +567,7 @@ fn render_search_bar(
                         state.update(cx, |s, cx| s.close_search(cx));
                     }
                 })
-                .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
+                .child(Icon::new(AppIcon::X).size(ui(12.0)).muted()),
         )
 }
 
@@ -740,7 +740,7 @@ fn render_chevron(
         };
 
         chevron
-            .child(Icon::new(icon).size(px(12.0)).color(muted_color)) // guardrail-allow: 12px icon size, no ICON_XS token
+            .child(Icon::new(icon).size(ui(12.0)).color(muted_color))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, _, cx| {
