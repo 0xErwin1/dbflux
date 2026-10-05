@@ -106,21 +106,27 @@ pub(super) fn relative_bar_fraction(score: f64, top: f64, bottom: f64) -> f32 {
     fraction.clamp(0.0, 1.0) as f32
 }
 
-/// Score as the table shows it: grouped integers (`4,954`), otherwise up
-/// to four decimals.
+/// Score as the table shows it: the integer part grouped by thousands
+/// (`4,954`, `48,210.5`) and up to four decimals with trailing zeros trimmed.
 pub(super) fn format_score(score: f64) -> String {
-    if score.fract() == 0.0 && score.abs() < 1e15 {
-        let rounded = score.abs() as u64;
-        let grouped = super::key_tree::group_thousands(rounded);
+    let text = format!("{:.4}", score.abs());
+    let text = text.trim_end_matches('0').trim_end_matches('.');
 
-        if score < 0.0 {
-            format!("-{grouped}")
-        } else {
-            grouped
-        }
-    } else {
-        let text = format!("{score:.4}");
-        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    let (integer, fraction) = match text.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (text, None),
+    };
+
+    let grouped = integer
+        .parse::<u64>()
+        .map(super::key_tree::group_thousands)
+        .unwrap_or_else(|_| integer.to_string());
+
+    let sign = if score < 0.0 { "-" } else { "" };
+
+    match fraction {
+        Some(fraction) => format!("{sign}{grouped}.{fraction}"),
+        None => format!("{sign}{grouped}"),
     }
 }
 
@@ -978,6 +984,12 @@ mod tests {
         assert_eq!(format_score(-1200.0), "-1,200");
         assert_eq!(format_score(0.25), "0.25");
         assert_eq!(format_score(2.345_678_9), "2.3457");
+        assert_eq!(format_score(48_210.5), "48,210.5");
+        assert_eq!(format_score(31_004.75), "31,004.75");
+        assert_eq!(format_score(-12_345.678), "-12,345.678");
+        assert_eq!(format_score(999.5), "999.5");
+        assert_eq!(format_score(999.999_99), "1,000");
+        assert_eq!(format_score(0.0), "0");
     }
 
     #[test]
