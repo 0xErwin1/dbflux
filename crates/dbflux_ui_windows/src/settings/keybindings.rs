@@ -10,7 +10,7 @@ use dbflux_components::primitives::Text;
 use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, ChamferRing, Icon as FluxIcon, Kbd,
 };
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, Spacing, ui};
 use dbflux_ui_base::keymap::{
     binds_typed_text, chord_display_parts, default_keymap, key_sequence_label, validate_predicate,
 };
@@ -25,21 +25,24 @@ use super::keybindings_section::{
 };
 
 /// Height of a binding row. (36 px plus its 1 px divider)
-const KEYBINDING_ROW_HEIGHT: Pixels = px(37.0);
-
-/// Left padding of a binding row, which indents it under the context
-/// header's chevron. (22 px)
-const KEYBINDING_ROW_INDENT: Pixels = px(22.0);
+const KEYBINDING_ROW_HEIGHT: Rems = ui(37.0);
 
 /// Width of the trailing action column: the pencil, and the reset arrow of
 /// an overridden binding before it. (32 px each)
-const KEYBINDING_ACTION_WIDTH: Pixels = px(32.0);
+const KEYBINDING_ACTION_WIDTH: Rems = ui(32.0);
 
 /// Height of a context header. (38 px plus its 1 px line)
-const KEYBINDING_HEADER_HEIGHT: Pixels = px(39.0);
+const KEYBINDING_HEADER_HEIGHT: Rems = ui(39.0);
 
 /// Chevron of a context header. (14 px)
-const KEYBINDING_CHEVRON: Pixels = px(14.0);
+const KEYBINDING_CHEVRON: Rems = ui(14.0);
+
+/// Left padding of a binding row, which indents it under the context
+/// header's label: the chevron plus the header's gap. (22 px at the default
+/// interface size)
+fn keybinding_row_indent(cx: &App) -> Pixels {
+    dbflux_components::fonts::ui_px(cx, KEYBINDING_CHEVRON) + Spacing::SM
+}
 
 /// Width of the context filter next to the text filter. (170 px)
 const CONTEXT_FILTER_WIDTH: Pixels = px(170.0);
@@ -532,7 +535,7 @@ impl KeybindingsSection {
             .gap(Spacing::SM)
             .flex_shrink_0()
             .h(KEYBINDING_ROW_HEIGHT)
-            .pl(KEYBINDING_ROW_INDENT)
+            .pl(keybinding_row_indent(cx))
             .border_b_1()
             .border_color(row_divider)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -788,7 +791,7 @@ impl KeybindingsSection {
 
         div()
             .flex_shrink_0()
-            .pl(KEYBINDING_ROW_INDENT)
+            .pl(keybinding_row_indent(cx))
             .py(Spacing::XS)
             .child(
                 BannerBlock::new(
@@ -812,6 +815,8 @@ impl KeybindingsSection {
 
         let theme = cx.theme();
         let text = input.read(cx).value().to_string();
+        let message_indent =
+            dbflux_components::fonts::ui_px(cx, SettingsMetrics::FORM_LABEL_WIDTH) + Spacing::SM;
         let row_id = format!(
             "keybinding-context-{}-{}",
             slot.context.id(),
@@ -841,7 +846,7 @@ impl KeybindingsSection {
         div()
             .id(SharedString::from(row_id.clone()))
             .flex_shrink_0()
-            .pl(KEYBINDING_ROW_INDENT)
+            .pl(keybinding_row_indent(cx))
             .py(Spacing::SM)
             .flex()
             .flex_col()
@@ -899,7 +904,7 @@ impl KeybindingsSection {
             .when_some(message, |editor, (message, color)| {
                 editor.child(
                     div()
-                        .pl(SettingsMetrics::FORM_LABEL_WIDTH + Spacing::SM)
+                        .pl(message_indent)
                         .child(Text::caption(message).color(color)),
                 )
             })

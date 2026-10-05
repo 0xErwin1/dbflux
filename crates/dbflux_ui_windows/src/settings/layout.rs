@@ -172,7 +172,7 @@ pub(super) fn form_row(
 /// [`form_row`] with a custom label column width.
 pub(crate) fn form_row_with_label_width(
     label: impl Into<SharedString>,
-    label_width: Pixels,
+    label_width: impl Into<AbsoluteLength>,
     control: impl IntoElement,
     help: Option<SharedString>,
 ) -> Div {
@@ -183,7 +183,7 @@ pub(crate) fn form_row_with_label_width(
         .py(FormMetrics::ROW_PADDING_Y)
         .child(
             div()
-                .w(label_width)
+                .w(label_width.into())
                 .flex_shrink_0()
                 .pt(FormMetrics::LABEL_PADDING_TOP)
                 .child(Text::body(label)),
