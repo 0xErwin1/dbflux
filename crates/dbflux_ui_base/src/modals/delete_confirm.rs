@@ -3,7 +3,6 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::modal::{Modal, ModalFocus, ModalVariant};
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
@@ -155,7 +154,7 @@ impl Render for ModalDeleteDashboardConfirm {
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_color(theme.foreground)
                             .child(dashboard_name),
                     ),

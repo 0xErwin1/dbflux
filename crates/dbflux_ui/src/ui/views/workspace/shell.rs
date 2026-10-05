@@ -6,7 +6,6 @@ use crate::ui::document::DocumentIcon;
 use dbflux_components::composites::{ActivityRail, CommandSearch, ListRow, RailEntry};
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
 use dbflux_ui_base::platform;
 
@@ -412,7 +411,7 @@ impl Workspace {
                     .gap(ShellMetrics::EMPTY_TITLE_GAP)
                     .child(
                         div()
-                            .font_family(AppFonts::DISPLAY)
+                            .font_family(dbflux_components::fonts::display_family(cx))
                             .font_weight(FontWeight::BLACK)
                             .text_size(ShellMetrics::EMPTY_TITLE_FONT)
                             .text_color(dbflux_components::tokens::ChromeColors::strong(theme))
@@ -425,6 +424,9 @@ impl Workspace {
 
         let start_card = self.render_start_card(cx);
         let has_recent = !recent.is_empty();
+        let lone_card_width = (dbflux_components::fonts::ui_px(cx, ShellMetrics::EMPTY_WIDTH)
+            - ShellMetrics::EMPTY_HEAD_GAP)
+            / 2.0;
 
         let cards = div()
             .flex()
@@ -433,9 +435,7 @@ impl Workspace {
             .child(
                 div()
                     .when(has_recent, |card| card.flex_1())
-                    .when(!has_recent, |card| {
-                        card.w((ShellMetrics::EMPTY_WIDTH - ShellMetrics::EMPTY_HEAD_GAP) / 2.0)
-                    })
+                    .when(!has_recent, |card| card.w(lone_card_width))
                     .child(start_card),
             )
             .when(has_recent, |cards| {
@@ -564,7 +564,7 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ShellMetrics::RECENT_META_FONT)
                             .text_color(muted)
                             .child(row.folder),

@@ -118,7 +118,7 @@ impl DataGridPanel {
                     .relative()
                     .size_full()
                     .py(CollectionMetrics::PIPELINE_EDITOR_PADDING_Y)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(CollectionMetrics::SLOT_FONT)
                     .child(
                         aggregate
@@ -373,7 +373,7 @@ impl DataGridPanel {
                 .id("aggregate-results-json")
                 .size_full()
                 .bg(cx.theme().background)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .child(
                     Editor::new(&aggregate.json_viewer)
                         .bordered(false)
@@ -421,7 +421,7 @@ impl DataGridPanel {
                 footer.child(
                     div()
                         .flex_shrink_0()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .child(elapsed),
                 )
             })

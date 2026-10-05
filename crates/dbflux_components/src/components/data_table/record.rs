@@ -21,17 +21,15 @@ use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 
 use crate::controls::{GpuiInput as Input, InputState};
+use crate::fonts;
 use crate::primitives::{Chamfer, ChamferRing, Text};
-use crate::tokens::{ChromeColors, FontSizes, GridMetrics, RowColors, Spacing, SyntaxColors};
-use crate::typography::AppFonts;
+use crate::tokens::{ChromeColors, FontSizes, RowColors, Spacing, SyntaxColors};
 
 use super::events::DataTableEvent;
 use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
 use super::selection::CellCoord;
 use super::state::DataTableState;
-use super::theme::{
-    CELL_PADDING_X, HEADER_HEIGHT, RECORD_NAME_WIDTH, RECORD_ROW_HEIGHT, SCROLLBAR_WIDTH,
-};
+use super::theme::{CELL_PADDING_X, RECORD_NAME_WIDTH, SCROLLBAR_WIDTH};
 
 /// The row a record view is currently showing, together with the source it was
 /// resolved from. Pending inserts read from the edit buffer, base rows from the
@@ -138,7 +136,7 @@ pub(super) fn render_record(
         .child(
             div()
                 .absolute()
-                .top(HEADER_HEIGHT)
+                .top(fonts::grid_header_height(cx))
                 .right_0()
                 .bottom_0()
                 .w(SCROLLBAR_WIDTH)
@@ -155,7 +153,7 @@ fn render_record_header(visual_ix: usize, row_count: usize, cx: &App) -> AnyElem
         .flex()
         .flex_row()
         .items_center()
-        .h(HEADER_HEIGHT)
+        .h(fonts::grid_header_height(cx))
         .w_full()
         .flex_shrink_0()
         .bg(theme.table_head)
@@ -351,8 +349,8 @@ fn render_fields(
                         div()
                             .min_w_0()
                             .truncate()
-                            .font_family(AppFonts::MONO)
-                            .text_size(GridMetrics::FONT)
+                            .font_family(fonts::grid_family(cx))
+                            .text_size(fonts::grid_font_size(cx))
                             .text_color(if is_pending_delete || is_auto_generated {
                                 theme.muted_foreground
                             } else if is_null {
@@ -373,7 +371,7 @@ fn render_fields(
                 .flex()
                 .flex_row()
                 .w_full()
-                .h(RECORD_ROW_HEIGHT)
+                .h(fonts::grid_record_row_height(cx))
                 .border_b_1()
                 .border_color(theme.table_row_border)
                 .cursor_pointer()

@@ -12,7 +12,6 @@ use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, NavigationMetrics};
-use crate::typography::AppFonts;
 
 type SegmentClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -124,7 +123,9 @@ impl RenderOnce for Breadcrumb {
             let label = div()
                 .min_w_0()
                 .truncate()
-                .when(mono, |label| label.font_family(AppFonts::MONO))
+                .when(mono, |label| {
+                    label.font_family(crate::fonts::editor_family(cx))
+                })
                 .when(is_current, |label| {
                     label.text_color(strong).font_weight(FontWeight::BOLD)
                 })
@@ -150,7 +151,7 @@ impl RenderOnce for Breadcrumb {
                     .ml(NavigationMetrics::BREADCRUMB_META_MARGIN)
                     .px(NavigationMetrics::BREADCRUMB_META_PADDING_X)
                     .py(NavigationMetrics::BREADCRUMB_META_PADDING_Y)
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::editor_family(cx))
                     .text_size(NavigationMetrics::BREADCRUMB_META_FONT)
                     .font_weight(FontWeight::NORMAL)
                     .child(Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary))

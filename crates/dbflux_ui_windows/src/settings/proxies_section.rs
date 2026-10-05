@@ -243,7 +243,7 @@ impl ProxiesSection {
         input: &Entity<InputState>,
         field: ProxyFormField,
         label: String,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         mono: bool,
         suffix: Option<AnyElement>,
         cx: &mut Context<Self>,

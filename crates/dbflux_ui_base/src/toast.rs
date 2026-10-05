@@ -7,7 +7,6 @@ use crate::user_error::throttle::TokenBucket;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Chamfer, Icon};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, FontWeight, Global, Hsla, SharedString, Window};
 use gpui_component::ActiveTheme;
@@ -598,7 +597,7 @@ impl ToastHost {
                 el.child(
                     gpui::div()
                         .flex_shrink_0()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(Feedback::TOAST_META_FONT)
                         .text_color(muted)
                         .child(meta),
@@ -650,7 +649,7 @@ impl ToastHost {
                         .px(Spacing::SM)
                         .py(Spacing::XS)
                         .bg(well)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(FontSizes::XS)
                         .text_color(body_color)
                         .child(code.clone()),
@@ -682,7 +681,7 @@ impl ToastHost {
                     )
                     .child(
                         gpui::div()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(Feedback::TOAST_META_FONT)
                             .text_color(muted)
                             .child(percent_label),

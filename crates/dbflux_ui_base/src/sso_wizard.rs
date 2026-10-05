@@ -10,8 +10,7 @@ use dbflux_components::primitives::Icon;
 use dbflux_components::primitives::Text;
 #[cfg(feature = "aws")]
 use dbflux_components::tokens::PaletteMetrics;
-use dbflux_components::tokens::{ChromeColors, ModalMetrics};
-use dbflux_components::typography::AppFonts;
+use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
 use dbflux_core::keymap_types::ContextId;
 use dbflux_core::{AuthProfile, LogErr};
 use gpui::prelude::FluentBuilder;
@@ -25,7 +24,7 @@ use uuid::Uuid;
 const SSO_WIZARD_WIDTH: Pixels = px(560.0);
 
 /// Height of a discovered account or role row, and of a confirm row. (36 px)
-const SSO_LIST_ROW_HEIGHT: Pixels = px(36.0);
+const SSO_LIST_ROW_HEIGHT: Rems = ui(36.0);
 
 /// Width of the field names on the confirm step.
 const SSO_CONFIRM_LABEL_WIDTH: Pixels = px(120.0);
@@ -432,7 +431,7 @@ fn discovered_row(
             row.child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(ModalMetrics::LIST_DETAIL_FONT)
                     .text_color(theme.muted_foreground)
                     .child(detail),
@@ -531,7 +530,7 @@ impl SsoWizard {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(AppFonts::MONO)
+                                    .font_family(dbflux_components::fonts::editor_family(cx))
                                     .text_size(ModalMetrics::CODE_FONT)
                                     .text_color(ChromeColors::strong(theme))
                                     .child(input.read(cx).value().to_string()),

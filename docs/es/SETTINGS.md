@@ -41,6 +41,32 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Theme**    | Follow system, Dark, Light | Dark  |
 | **Density**  | Default, Compact         | Default |
 | **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
+| **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente del editor** | Predeterminada (JetBrains Mono) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
+| **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
+
+Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
+guardas; no hace falta reiniciar. La fuente del editor también define el texto
+monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
+fuente de interfaz personalizada también reemplaza la fuente expandida de las
+etiquetas de sección. Qué controla cada tamaño:
+
+- **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
+  controles y los íconos de la interfaz.
+- **Tamaño de fuente del editor** define el texto y la altura de línea del
+  editor de código, y el texto de la consola.
+- **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
+  altura de filas y encabezados, y el ancho automático de las columnas. Las
+  columnas que redimensionaste a mano conservan su ancho.
+
+Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
+cientos de fuentes. Una fuente guardada que ya no está instalada sigue
+seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente
+predeterminada hasta que se vuelva a instalar; la tabla de datos recurre a la
+fuente del editor.
 
 La lista de idiomas se deriva de los catálogos de traducción incluidos con
 DBFlux: English aparece primero, seguido de los demás idiomas en un orden

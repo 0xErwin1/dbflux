@@ -234,7 +234,8 @@ impl ObjectBrowserDocument {
 
         let position = Point {
             x: self.panel_origin.x + Spacing::LG,
-            y: self.panel_origin.y + ObjectStoreMetrics::OBJECT_ROW_HEIGHT * 3.0,
+            y: self.panel_origin.y
+                + dbflux_components::fonts::ui_px(cx, ObjectStoreMetrics::OBJECT_ROW_HEIGHT) * 3.0,
         };
         self.open_context_menu(target, position, cx);
         true

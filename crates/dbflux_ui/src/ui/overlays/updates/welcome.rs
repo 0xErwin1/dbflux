@@ -4,8 +4,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Chamfer, Icon, Text};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, FontSizes, Spacing};
-use dbflux_components::typography::AppFonts;
+use dbflux_components::tokens::{ChamferCut, ChromeColors, FontSizes, Spacing, ui};
 use dbflux_core::{LogErr, ReleaseChannel};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::updates::channel_label;
@@ -21,7 +20,7 @@ use super::{
 const DIALOG_WIDTH: Pixels = px(1000.0);
 const WHATS_NEW_COLUMN_WIDTH: Pixels = px(330.0);
 const MARK_SIZE: Pixels = px(56.0);
-const TITLE_SIZE: Pixels = px(24.0);
+const TITLE_SIZE: Rems = ui(24.0);
 const HEADER_GAP: Pixels = Spacing::LG;
 const HEADER_PADDING_X: Pixels = px(28.0);
 const HEADER_PADDING_TOP: Pixels = px(26.0);
@@ -33,8 +32,8 @@ const UPDATES_COLUMN_GAP: Pixels = Spacing::XXS;
 const FULL_CHANGELOG_PADDING_TOP: Pixels = px(10.0);
 const FOOTER_GAP: Pixels = px(10.0);
 const FOOTER_PADDING_Y: Pixels = px(14.0);
-const FOOTER_ICON_SIZE: Pixels = px(14.0);
-const BADGE_HEIGHT: Pixels = px(20.0);
+const FOOTER_ICON_SIZE: Rems = ui(14.0);
+const BADGE_HEIGHT: Rems = ui(20.0);
 const BADGE_PADDING_X: Pixels = px(7.0);
 
 /// Tint share of the version badge fill.
@@ -135,7 +134,7 @@ impl WelcomeDialog {
                     .gap(Spacing::XXS)
                     .child(
                         div()
-                            .font_family(AppFonts::DISPLAY)
+                            .font_family(dbflux_components::fonts::display_family(cx))
                             .font_weight(FontWeight::BLACK)
                             .text_size(TITLE_SIZE)
                             .text_color(ChromeColors::strong(theme))
@@ -157,7 +156,7 @@ impl WelcomeDialog {
                     .child(Chamfer::new(ChamferCut::KEYCAP).fill(tint.opacity(BADGE_FILL_OPACITY)))
                     .child(
                         div()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(FontSizes::LABEL)
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(tint)

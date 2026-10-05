@@ -1,5 +1,6 @@
-use dbflux_components::tokens::{Borders, FontSizes};
-use gpui::{Entity, FontWeight, Pixels, Styled as _, px};
+use dbflux_components::fonts::ui_px;
+use dbflux_components::tokens::{Borders, FontSizes, Heights};
+use gpui::{AbsoluteLength, App, Entity, FontWeight, Pixels, Styled as _, px};
 use gpui_component::input::EditorState;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat,
@@ -158,6 +159,7 @@ pub(crate) fn new_single_line_completion_state(
 /// underlying state is the `EditorState` the completion engine requires.
 pub(crate) fn single_line_completion_editor(
     state: &Entity<EditorState>,
+    cx: &App,
 ) -> gpui_component::input::Editor {
     // gpui-component builds every `Editor` frame as `Size::Medium` and gives a
     // multi-line code editor `Size::Medium::input_py()` of padding inside it.
@@ -172,14 +174,13 @@ pub(crate) fn single_line_completion_editor(
     // so a click just above or below the field still focuses it. The controls
     // sharing these rows sit beside the field, never over it, so the reachable
     // area stays inside the toolbar.
-    let leading = (dbflux_components::tokens::Heights::ROW_COMPACT
-        - FontSizes::SM * EDITOR_LINE_HEIGHT)
-        / 2.0;
+    let row_height = ui_px(cx, Heights::ROW_COMPACT);
+    let leading = (row_height - ui_px(cx, FontSizes::SM) * EDITOR_LINE_HEIGHT) / 2.0;
 
     gpui_component::input::Editor::new(state)
-        .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+        .h(row_height)
         .py(leading - EDITOR_INPUT_PADDING_Y - Borders::THIN)
-        .font_family(dbflux_components::typography::AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_size(FontSizes::SM)
 }
@@ -192,25 +193,34 @@ pub(crate) fn single_line_completion_editor(
 /// Text is regular weight at `FontSizes::BASE`; the host sets the color.
 pub(crate) fn frameless_single_line_completion_editor(
     state: &Entity<EditorState>,
+    cx: &App,
 ) -> gpui_component::input::Editor {
-    frameless_single_line_completion_editor_sized(state, FontSizes::BASE)
+    frameless_single_line_completion_editor_sized(state, FontSizes::BASE, cx)
 }
 
 /// [`frameless_single_line_completion_editor`] at `text_size`, for hosts
 /// whose surrounding text is not `FontSizes::BASE` (the native console).
+///
+/// Rem sizes resolve at the current interface size, because the vertical
+/// padding mixes them with gpui-component's fixed pixel input padding.
 pub(crate) fn frameless_single_line_completion_editor_sized(
     state: &Entity<EditorState>,
-    text_size: Pixels,
+    text_size: impl Into<AbsoluteLength>,
+    cx: &App,
 ) -> gpui_component::input::Editor {
-    let leading =
-        (dbflux_components::tokens::Heights::ROW_COMPACT - text_size * EDITOR_LINE_HEIGHT) / 2.0;
+    let text_size = match text_size.into() {
+        AbsoluteLength::Pixels(pixels) => pixels,
+        AbsoluteLength::Rems(rems) => ui_px(cx, rems),
+    };
+    let row_height = ui_px(cx, Heights::ROW_COMPACT);
+    let leading = (row_height - text_size * EDITOR_LINE_HEIGHT) / 2.0;
 
     gpui_component::input::Editor::new(state)
         .appearance(false)
-        .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+        .h(row_height)
         .py(leading - EDITOR_INPUT_PADDING_Y)
         .px(px(0.0))
-        .font_family(dbflux_components::typography::AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .font_weight(gpui::FontWeight::NORMAL)
         .text_size(text_size)
 }
@@ -241,14 +251,14 @@ mod single_line_editor_geometry_tests {
     }
 
     impl Render for GeometryHarness {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div().size_full().flex().flex_col().child(
                 div()
                     .id("completion-row")
                     .debug_selector(|| "completion-row".to_string())
                     .w(px(300.0))
                     .h(dbflux_components::tokens::Heights::ROW_COMPACT)
-                    .child(single_line_completion_editor(&self.state)),
+                    .child(single_line_completion_editor(&self.state, cx)),
             )
         }
     }

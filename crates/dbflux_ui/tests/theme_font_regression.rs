@@ -1,7 +1,8 @@
+use dbflux_components::fonts::{self, FontSettings};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{AppStyle, ThemeSetting};
 use dbflux_ui::theme;
-use gpui::{SharedString, TestAppContext, Window, hsla};
+use gpui::{SharedString, TestAppContext, Window, hsla, px};
 use gpui_component::theme::Theme;
 use std::fs;
 
@@ -46,6 +47,8 @@ fn rgb_to_hsla(hex: u32) -> gpui::Hsla {
 }
 
 fn assert_centralized_fonts(theme: &Theme) {
+    assert_eq!(theme.font_size, px(16.0));
+    assert_eq!(theme.mono_font_size, px(13.0));
     assert_eq!(theme.font_family, SharedString::from(AppFonts::INTERFACE));
     assert_eq!(theme.mono_font_family, SharedString::from(AppFonts::MONO));
     assert_eq!(
@@ -206,6 +209,62 @@ fn ghost_border_resolves_to_the_palette_line_in_both_variants(cx: &mut TestAppCo
             );
         });
     }
+}
+
+#[gpui::test]
+fn custom_font_settings_reach_the_theme_and_survive_a_palette_change(cx: &mut TestAppContext) {
+    cx.update(theme::init);
+
+    let custom = FontSettings {
+        ui_family: SharedString::from("Inter"),
+        ui_size: 15.6,
+        editor_family: SharedString::from("Fira Code"),
+        editor_size: 18.0,
+        ..FontSettings::default()
+    };
+
+    cx.update(|cx| {
+        theme::init_with_settings(ThemeSetting::Dark, AppStyle::Default, custom.clone(), cx)
+    });
+
+    let assert_custom_fonts = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+
+            assert_eq!(theme.font_family, SharedString::from("Inter"));
+            assert_eq!(theme.font_size, px(16.0 * 15.6 / 13.0));
+            assert_eq!(theme.mono_font_family, SharedString::from("Fira Code"));
+            assert_eq!(theme.mono_font_size, px(18.0));
+
+            for config in [&theme.dark_theme, &theme.light_theme] {
+                assert_eq!(config.font_family, Some(SharedString::from("Inter")));
+                assert_eq!(config.font_size, Some(16.0 * 15.6 / 13.0));
+                assert_eq!(
+                    config.mono_font_family,
+                    Some(SharedString::from("Fira Code"))
+                );
+                assert_eq!(config.mono_font_size, Some(18.0));
+            }
+        });
+    };
+
+    assert_custom_fonts(cx);
+
+    cx.update(|cx| {
+        theme::apply_theme(
+            ThemeSetting::Light,
+            AppStyle::Compact,
+            Option::<&mut Window>::None,
+            cx,
+        )
+    });
+    assert_custom_fonts(cx);
+
+    cx.update(|cx| {
+        fonts::set(cx, FontSettings::default());
+        theme::apply_fonts(cx);
+    });
+    cx.update(|cx| assert_centralized_fonts(Theme::global(cx)));
 }
 
 #[test]

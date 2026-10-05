@@ -15,4 +15,4 @@ pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, FilterOpera
 pub use model::TableModel;
 pub use state::{DataTableState, ModelSwap};
 pub use table::{CONTEXT, DataTable, actions, context_menu_keystroke};
-pub use theme::{HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH};
+pub use theme::ROW_NUMBER_WIDTH;

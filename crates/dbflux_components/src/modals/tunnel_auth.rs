@@ -3,7 +3,6 @@ use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{BannerBlock, BannerVariant, Icon};
 use crate::tokens::{ChromeColors, ModalMetrics, Spacing};
-use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Focusable, Pixels, Subscription, Window, div, px};
@@ -210,11 +209,11 @@ impl Render for ModalTunnelAuth {
                     .child(request.tunnel_name.clone()),
             )
             .child("\u{00B7}")
-            .child(div().font_family(AppFonts::MONO).child(tunnel_address(
-                &request.user,
-                &request.host,
-                request.port,
-            )));
+            .child(
+                div()
+                    .font_family(crate::fonts::editor_family(cx))
+                    .child(tunnel_address(&request.user, &request.host, request.port)),
+            );
 
         let (toggle_icon, toggle_label) = if show_passphrase {
             (

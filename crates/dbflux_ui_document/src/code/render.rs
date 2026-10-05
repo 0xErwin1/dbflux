@@ -2,6 +2,7 @@ use super::*;
 use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
 use dbflux_components::controls::Checkbox;
 use dbflux_components::controls::{Button, ButtonVariant};
+use dbflux_components::fonts;
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::modals::{modal_code, modal_lead};
@@ -9,7 +10,7 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Kbd, Text,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
+    ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::VimBinding;
@@ -407,7 +408,7 @@ impl CodeDocument {
                         .flex_shrink_0()
                         .items_center()
                         .gap(EditorMetrics::LAST_RUN_GAP)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(EditorMetrics::LAST_RUN_FONT)
                         .text_color(theme.muted_foreground)
                         .child(
@@ -426,7 +427,7 @@ impl CodeDocument {
                         .flex_shrink_0()
                         .items_center()
                         .gap(EditorMetrics::LAST_RUN_GAP)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(EditorMetrics::LAST_RUN_FONT)
                         .text_color(theme.success)
                         .child(
@@ -613,8 +614,9 @@ impl CodeDocument {
                     self.vim
                         .editor(self.read_only)
                         .appearance(false)
-                        .text_size(EditorMetrics::CODE_FONT)
-                        .line_height(EditorMetrics::CODE_LINE_HEIGHT)
+                        .font_family(fonts::editor_family(cx))
+                        .text_size(fonts::editor_font_size(cx))
+                        .line_height(fonts::editor_line_height(cx))
                         .w_full()
                         .h_full(),
                 ),
@@ -816,7 +818,7 @@ impl CodeDocument {
                         } else {
                             AppIcon::Maximize2
                         })
-                        .size(px(14.0))
+                        .size(ui(14.0))
                         .muted(),
                     ),
             )
@@ -833,7 +835,7 @@ impl CodeDocument {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.hide_results(cx);
                     }))
-                    .child(Icon::new(AppIcon::PanelBottomClose).size(px(14.0)).muted()),
+                    .child(Icon::new(AppIcon::PanelBottomClose).size(ui(14.0)).muted()),
             )
     }
 
@@ -868,12 +870,12 @@ impl CodeDocument {
                         this.layout = SqlQueryLayout::Split;
                         cx.notify();
                     }))
-                    .child(Icon::new(AppIcon::PanelBottomOpen).size(px(14.0)).muted()),
+                    .child(Icon::new(AppIcon::PanelBottomOpen).size(ui(14.0)).muted()),
             )
     }
 
     fn render_loading_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let icon = Icon::new(AppIcon::Loader).size(px(12.0)); // guardrail-allow: 12px icon size, no ICON_XS token
+        let icon = Icon::new(AppIcon::Loader).size(ui(12.0));
         div().p(Spacing::MD).size_full().child(
             BannerBlock::new(
                 BannerVariant::Info,

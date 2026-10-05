@@ -13,7 +13,6 @@ use gpui_component::ActiveTheme;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon, focus_underline};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
-use crate::typography::AppFonts;
 
 /// A single option within a `SegmentedControl`.
 #[derive(Debug, Clone)]
@@ -240,7 +239,7 @@ impl RenderOnce for SegmentedControl {
             .flex_none()
             .items_center()
             .p(Fields::SEGMENT_TRACK_PADDING)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_size(FontSizes::XS)
             .child(
                 Chamfer::new(ChamferCut::CONTROL)
@@ -256,6 +255,7 @@ impl RenderOnce for SegmentedControl {
 mod tests {
     use super::*;
     use crate::primitives::{FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR};
+    use crate::tokens::BASE_REM;
     use gpui::{
         Context, Entity, FocusHandle, Modifiers, Render, TestAppContext, VisualTestContext, point,
         px,
@@ -356,7 +356,10 @@ mod tests {
             .debug_bounds("segments")
             .expect("the control is laid out");
 
-        assert_eq!(track.size.height, Fields::HEIGHT);
+        assert_eq!(
+            track.size.height,
+            Fields::HEIGHT.to_pixels(gpui::px(BASE_REM))
+        );
     }
 
     #[gpui::test]

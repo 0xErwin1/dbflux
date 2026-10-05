@@ -24,12 +24,13 @@ pub fn tree_line_color(theme: &gpui_component::Theme) -> Hsla {
 /// row height through the middle of that ancestor's chevron column.
 ///
 /// `indent_px` is the width of one level and `row_height` the fixed row
-/// height. Set `skip_level_zero` for trees whose depth-0 rows are category
-/// headers without a chevron column (e.g. Settings sidebar groups).
+/// height, in pixels or rems. Set `skip_level_zero` for trees whose depth-0
+/// rows are category headers without a chevron column (e.g. Settings sidebar
+/// groups).
 pub fn render_gutter(
     depth: usize,
     indent_px: f32,
-    row_height: Pixels,
+    row_height: impl Into<AbsoluteLength>,
     line_color: Hsla,
     skip_level_zero: bool,
 ) -> AnyElement {
@@ -38,6 +39,7 @@ pub fn render_gutter(
     }
 
     let first_level = usize::from(skip_level_zero);
+    let row_height: AbsoluteLength = row_height.into();
 
     let guides = guide_offsets(depth, indent_px, first_level).map(|offset| {
         div()

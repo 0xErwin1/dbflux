@@ -29,7 +29,6 @@ use crate::controls::{
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Spacing};
-use crate::typography::AppFonts;
 
 /// Width of the open popover.
 const POPOVER_WIDTH: Pixels = px(380.0);
@@ -577,7 +576,7 @@ impl ColumnProjectionPicker {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .font_family(AppFonts::MONO)
+                                .font_family(crate::fonts::editor_family(cx))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(strong)
                                 .child(row.name.clone()),
@@ -587,7 +586,7 @@ impl ColumnProjectionPicker {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .font_family(AppFonts::MONO)
+                                .font_family(crate::fonts::editor_family(cx))
                                 .text_size(FontSizes::LABEL)
                                 .text_color(muted)
                                 .child(row.type_name.clone()),
@@ -595,7 +594,7 @@ impl ColumnProjectionPicker {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .font_family(AppFonts::MONO)
+                                .font_family(crate::fonts::editor_family(cx))
                                 .text_size(FontSizes::LABEL)
                                 .text_color(muted)
                                 .child(row.size.clone()),
@@ -697,7 +696,8 @@ impl ColumnProjectionPicker {
                 .into_any_element()
         } else {
             let row_count = self.visible.len();
-            let list_height = (Fields::MENU_ROW_HEIGHT * row_count as f32).min(LIST_MAX_HEIGHT);
+            let row_height = Fields::MENU_ROW_HEIGHT.to_pixels(window.rem_size());
+            let list_height = (row_height * row_count as f32).min(LIST_MAX_HEIGHT);
 
             uniform_list(
                 "column-projection-rows",
@@ -773,7 +773,7 @@ impl ColumnProjectionPicker {
             .flex()
             .flex_col()
             .w(POPOVER_WIDTH)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_size(FontSizes::BASE)
             .text_color(theme.foreground)
             .shadow_lg()

@@ -11,7 +11,6 @@ use gpui_component::ActiveTheme;
 
 use crate::primitives::Chamfer;
 use crate::tokens::{ChamferCut, ChromeColors, Fields, ModalMetrics};
-use crate::typography::AppFonts;
 
 /// Words drawn as keywords in a [`modal_code`] statement.
 const SQL_KEYWORDS: &[&str] = &[
@@ -106,7 +105,7 @@ pub fn modal_code(code: impl Into<SharedString>, cx: &App) -> Div {
         .w_full()
         .px(ModalMetrics::CODE_PADDING_X)
         .py(ModalMetrics::CODE_PADDING_Y)
-        .font_family(AppFonts::MONO)
+        .font_family(crate::fonts::editor_family(cx))
         .text_size(ModalMetrics::CODE_FONT)
         .text_color(ChromeColors::strong(theme))
         .child(
@@ -208,7 +207,7 @@ pub fn modal_value_field(
         .gap(Fields::GAP)
         .h(Fields::HEIGHT)
         .px(Fields::PADDING_X)
-        .font_family(AppFonts::MONO)
+        .font_family(crate::fonts::editor_family(cx))
         .text_size(Fields::TEXT)
         .text_color(if has_value {
             ChromeColors::strong(theme)
@@ -233,7 +232,7 @@ pub fn modal_value_field(
 /// Inline strong mono text, for a name quoted inside a sentence.
 pub fn inline_code(text: impl Into<SharedString>, cx: &App) -> AnyElement {
     div()
-        .font_family(AppFonts::MONO)
+        .font_family(crate::fonts::editor_family(cx))
         .text_color(ChromeColors::strong(cx.theme()))
         .child(text.into())
         .into_any_element()

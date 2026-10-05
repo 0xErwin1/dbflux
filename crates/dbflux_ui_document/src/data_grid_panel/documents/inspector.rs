@@ -201,7 +201,7 @@ impl DocumentInspectorContent {
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentInspectorMetrics::SIZE_FONT)
                     .text_color(theme.muted_foreground)
                     .child(self.size_label.clone()),
@@ -346,7 +346,7 @@ impl DocumentInspectorContent {
         cx: &mut Context<Self>,
     ) {
         let handle = self.scroll_handle.0.borrow().base_handle.clone();
-        crate::data_grid_panel::side_island::scroll_by(&handle, step);
+        crate::data_grid_panel::side_island::scroll_by(&handle, step, cx);
         cx.notify();
     }
 }
@@ -394,7 +394,7 @@ impl Render for DocumentInspectorContent {
                     .flex()
                     .flex_col()
                     .py(DocumentInspectorMetrics::BODY_PADDING_Y)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentInspectorMetrics::ROW_FONT)
                     .child(list),
             )

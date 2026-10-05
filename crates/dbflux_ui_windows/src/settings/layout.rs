@@ -172,7 +172,7 @@ pub(super) fn form_row(
 /// [`form_row`] with a custom label column width.
 pub(crate) fn form_row_with_label_width(
     label: impl Into<SharedString>,
-    label_width: Pixels,
+    label_width: impl Into<AbsoluteLength>,
     control: impl IntoElement,
     help: Option<SharedString>,
 ) -> Div {
@@ -183,7 +183,7 @@ pub(crate) fn form_row_with_label_width(
         .py(FormMetrics::ROW_PADDING_Y)
         .child(
             div()
-                .w(label_width)
+                .w(label_width.into())
                 .flex_shrink_0()
                 .pt(FormMetrics::LABEL_PADDING_TOP)
                 .child(Text::body(label)),
@@ -220,9 +220,14 @@ pub(crate) fn check_row(checkbox: impl IntoElement, description: Option<SharedSt
         .when_some(description, |row, description| {
             row.child(
                 div()
-                    .pl(dbflux_components::tokens::Fields::CHECKBOX_SIZE
-                        + dbflux_components::tokens::Fields::CHECKBOX_GAP)
-                    .child(help_text(description)),
+                    .flex()
+                    .gap(dbflux_components::tokens::Fields::CHECKBOX_GAP)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(dbflux_components::tokens::Fields::CHECKBOX_SIZE),
+                    )
+                    .child(div().flex_1().min_w_0().child(help_text(description))),
             )
         })
 }
@@ -245,7 +250,7 @@ pub(crate) fn cursor_ring(focused: bool, child: impl IntoElement, cx: &App) -> D
 /// `cursor` is set.
 pub(crate) fn field_frame(
     cursor: bool,
-    width: Option<Pixels>,
+    width: Option<Rems>,
     mono: bool,
     field: impl IntoElement,
     cx: &App,
@@ -260,7 +265,7 @@ pub(crate) fn field_frame(
     };
 
     frame.when(mono, |frame| {
-        frame.font_family(dbflux_components::typography::AppFonts::MONO)
+        frame.font_family(dbflux_components::fonts::editor_family(cx))
     })
 }
 

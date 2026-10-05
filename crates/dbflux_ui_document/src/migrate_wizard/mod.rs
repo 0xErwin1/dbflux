@@ -28,7 +28,7 @@ use dbflux_components::composites::{RailItem, render_wizard_rail};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{ChromeColors, ModalMetrics};
+use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
 use dbflux_core::{
     ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
     SchemaForeignKeyInfo, TableInfo, TableRef, TransferColumn, topological_order,
@@ -1540,13 +1540,13 @@ impl Render for MigrateWizard {
 struct MigrateChromeMetrics;
 
 impl MigrateChromeMetrics {
-    const HEADER_HEIGHT: Pixels = px(38.0);
+    const HEADER_HEIGHT: Rems = ui(38.0);
     const HEADER_PADDING_X: Pixels = px(14.0);
     const HEADER_GAP: Pixels = px(10.0);
-    const HEADER_ICON: Pixels = px(15.0);
-    const TITLE_FONT: Pixels = px(13.0);
-    const FOOTER_HEIGHT: Pixels = px(56.0);
-    const FOOTER_NOTE_FONT: Pixels = px(12.5);
+    const HEADER_ICON: Rems = ui(15.0);
+    const TITLE_FONT: Rems = ui(13.0);
+    const FOOTER_HEIGHT: Rems = ui(56.0);
+    const FOOTER_NOTE_FONT: Rems = ui(12.5);
 }
 
 impl MigrateWizard {

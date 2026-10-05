@@ -1,5 +1,7 @@
 use gpui::prelude::*;
-use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
+use gpui::{
+    AbsoluteLength, App, Font, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font,
+};
 use gpui_component::ActiveTheme;
 
 use crate::density;
@@ -86,7 +88,7 @@ impl TextColorSelection {
 pub struct TextRoleContract {
     pub family: &'static str,
     pub fallbacks: &'static [&'static str],
-    pub size: gpui::Pixels,
+    pub size: AbsoluteLength,
     pub weight: FontWeight,
     pub color: TextDefaultColor,
 }
@@ -98,7 +100,7 @@ pub struct TextInspection {
     pub variant: TextVariant,
     pub family: &'static str,
     pub fallbacks: &'static [&'static str],
-    pub size_override: Option<gpui::Pixels>,
+    pub size_override: Option<AbsoluteLength>,
     pub weight_override: Option<FontWeight>,
     pub color_selection: TextColorSelection,
     pub uses_role_default_color: bool,
@@ -114,7 +116,7 @@ pub struct Text {
     variant: TextVariant,
     content: SharedString,
     color_override: Option<TextColorSelection>,
-    size_override: Option<gpui::Pixels>,
+    size_override: Option<AbsoluteLength>,
     weight_override: Option<FontWeight>,
 }
 
@@ -212,9 +214,10 @@ impl Text {
         self
     }
 
-    /// Override the font size (replaces the role default).
-    pub fn font_size(mut self, size: gpui::Pixels) -> Self {
-        self.size_override = Some(size);
+    /// Override the font size (replaces the role default). Accepts pixels or
+    /// rems; a `tokens::ui` rem size follows the interface scale.
+    pub fn font_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.size_override = Some(size.into());
         self
     }
 
@@ -259,7 +262,7 @@ impl TextVariant {
     ///
     /// Unlike `role_contract().size` (always the Default-tier constant), this
     /// reads the density global and returns the Compact-tier value when active.
-    pub fn density_size(self, cx: &App) -> gpui::Pixels {
+    pub fn density_size(self, cx: &App) -> gpui::Rems {
         match self {
             Self::Title => density::font_title(cx),
             Self::Heading => density::font_xl(cx),
@@ -284,86 +287,11 @@ impl TextVariant {
         }
     }
 
-    pub fn role_contract(self) -> TextRoleContract {
-        const INTERFACE: &[&str] = &[];
-        const MONO: &[&str] = &[AppFonts::MONO_FALLBACK];
-
-        match self {
-            Self::Title => TextRoleContract {
-                family: AppFonts::INTERFACE,
-                fallbacks: INTERFACE,
-                size: FontSizes::TITLE,
-                weight: FontWeight::BOLD,
-                color: TextDefaultColor::Strong,
-            },
-            Self::Heading => TextRoleContract {
-                family: AppFonts::INTERFACE,
-                fallbacks: INTERFACE,
-                size: FontSizes::XL,
-                weight: FontWeight::BOLD,
-                color: TextDefaultColor::Strong,
-            },
-            Self::Body => TextRoleContract {
-                family: AppFonts::INTERFACE,
-                fallbacks: INTERFACE,
-                size: FontSizes::BASE,
-                weight: FontWeight::MEDIUM,
-                color: TextDefaultColor::Foreground,
-            },
-            Self::BodySm => TextRoleContract {
-                family: AppFonts::INTERFACE,
-                fallbacks: INTERFACE,
-                size: FontSizes::XS,
-                weight: FontWeight::MEDIUM,
-                color: TextDefaultColor::Foreground,
-            },
-            Self::Label => TextRoleContract {
-                family: AppFonts::DISPLAY,
-                fallbacks: INTERFACE,
-                size: FontSizes::LABEL,
-                weight: FontWeight::EXTRA_BOLD,
-                color: TextDefaultColor::MutedForeground,
-            },
-            Self::Caption => TextRoleContract {
-                family: AppFonts::INTERFACE,
-                fallbacks: INTERFACE,
-                size: FontSizes::XS,
-                weight: FontWeight::MEDIUM,
-                color: TextDefaultColor::MutedForeground,
-            },
-            Self::Code => TextRoleContract {
-                family: AppFonts::MONO,
-                fallbacks: MONO,
-                size: FontSizes::SM,
-                weight: FontWeight::MEDIUM,
-                color: TextDefaultColor::Foreground,
-            },
-            Self::KeyHint => TextRoleContract {
-                family: AppFonts::MONO,
-                fallbacks: MONO,
-                size: FontSizes::XS,
-                weight: FontWeight::MEDIUM,
-                color: TextDefaultColor::MutedForeground,
-            },
-        }
-    }
-}
-
-impl RenderOnce for Text {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let contract = self.variant.role_contract();
-
-        let size = self
-            .size_override
-            .unwrap_or_else(|| self.variant.density_size(cx));
-        let weight = self.weight_override.unwrap_or(contract.weight);
-        let color = self
-            .color_override
-            .unwrap_or(TextColorSelection::RoleDefault(contract.color))
-            .resolve(theme);
-
-        let mut text_font = font(contract.family);
+    /// The font this role renders with: the role's bundled family resolved
+    /// to the family chosen in Settings, with the role's fallbacks.
+    pub fn resolved_font(self, cx: &App) -> Font {
+        let contract = self.role_contract();
+        let mut text_font = font(crate::fonts::family_for(cx, contract.family));
 
         if !contract.fallbacks.is_empty() {
             text_font.fallbacks = Some(FontFallbacks::from_fonts(
@@ -375,6 +303,89 @@ impl RenderOnce for Text {
             ));
         }
 
+        text_font
+    }
+
+    pub fn role_contract(self) -> TextRoleContract {
+        const INTERFACE: &[&str] = &[];
+        const MONO: &[&str] = &[AppFonts::MONO_FALLBACK];
+
+        match self {
+            Self::Title => TextRoleContract {
+                family: AppFonts::INTERFACE,
+                fallbacks: INTERFACE,
+                size: FontSizes::TITLE.into(),
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Strong,
+            },
+            Self::Heading => TextRoleContract {
+                family: AppFonts::INTERFACE,
+                fallbacks: INTERFACE,
+                size: FontSizes::XL.into(),
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Strong,
+            },
+            Self::Body => TextRoleContract {
+                family: AppFonts::INTERFACE,
+                fallbacks: INTERFACE,
+                size: FontSizes::BASE.into(),
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::BodySm => TextRoleContract {
+                family: AppFonts::INTERFACE,
+                fallbacks: INTERFACE,
+                size: FontSizes::XS.into(),
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Label => TextRoleContract {
+                family: AppFonts::DISPLAY,
+                fallbacks: INTERFACE,
+                size: FontSizes::LABEL.into(),
+                weight: FontWeight::EXTRA_BOLD,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::Caption => TextRoleContract {
+                family: AppFonts::INTERFACE,
+                fallbacks: INTERFACE,
+                size: FontSizes::XS.into(),
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::Code => TextRoleContract {
+                family: AppFonts::MONO,
+                fallbacks: MONO,
+                size: FontSizes::SM.into(),
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::KeyHint => TextRoleContract {
+                family: AppFonts::MONO,
+                fallbacks: MONO,
+                size: FontSizes::XS.into(),
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForeground,
+            },
+        }
+    }
+}
+
+impl RenderOnce for Text {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let contract = self.variant.role_contract();
+
+        let size = self
+            .size_override
+            .unwrap_or_else(|| self.variant.density_size(cx).into());
+        let weight = self.weight_override.unwrap_or(contract.weight);
+        let color = self
+            .color_override
+            .unwrap_or(TextColorSelection::RoleDefault(contract.color))
+            .resolve(theme);
+
+        let text_font = self.variant.resolved_font(cx);
         let letter_spacing_em = self.variant.letter_spacing_em();
 
         div()
@@ -383,7 +394,7 @@ impl RenderOnce for Text {
             .font_weight(weight)
             .text_color(color)
             .when(letter_spacing_em > 0.0, |el| {
-                el.letter_spacing(size * letter_spacing_em)
+                el.letter_spacing(size.to_pixels(window.rem_size()) * letter_spacing_em)
             })
             .child(self.content)
     }
@@ -416,8 +427,14 @@ mod tests {
             assert_eq!(contract.color, TextDefaultColor::Strong, "{role:?}");
         }
 
-        assert_eq!(TextVariant::Title.role_contract().size, FontSizes::TITLE);
-        assert_eq!(TextVariant::Heading.role_contract().size, FontSizes::XL);
+        assert_eq!(
+            TextVariant::Title.role_contract().size,
+            FontSizes::TITLE.into()
+        );
+        assert_eq!(
+            TextVariant::Heading.role_contract().size,
+            FontSizes::XL.into()
+        );
     }
 
     #[test]
@@ -428,7 +445,7 @@ mod tests {
         }
 
         let label = TextVariant::Label.role_contract();
-        assert_eq!(label.size, FontSizes::LABEL);
+        assert_eq!(label.size, FontSizes::LABEL.into());
         assert_eq!(label.weight, FontWeight::EXTRA_BOLD);
     }
 
@@ -472,6 +489,39 @@ mod tests {
             Text::body("Connection details").content.as_ref(),
             "Connection details"
         );
+    }
+
+    #[gpui::test]
+    fn roles_render_with_the_families_chosen_in_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert_eq!(
+                TextVariant::Body.resolved_font(cx).family.as_ref(),
+                AppFonts::INTERFACE
+            );
+            assert_eq!(
+                TextVariant::Label.resolved_font(cx).family.as_ref(),
+                AppFonts::DISPLAY
+            );
+
+            crate::fonts::init(
+                cx,
+                crate::fonts::FontSettings {
+                    ui_family: "Inter".into(),
+                    editor_family: "Fira Code".into(),
+                    ..crate::fonts::FontSettings::default()
+                },
+            );
+
+            assert_eq!(TextVariant::Body.resolved_font(cx).family.as_ref(), "Inter");
+            assert_eq!(
+                TextVariant::Label.resolved_font(cx).family.as_ref(),
+                "Inter"
+            );
+
+            let code = TextVariant::Code.resolved_font(cx);
+            assert_eq!(code.family.as_ref(), "Fira Code");
+            assert!(code.fallbacks.is_some(), "mono roles keep their fallback");
+        });
     }
 
     #[test]

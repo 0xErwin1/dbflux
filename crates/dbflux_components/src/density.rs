@@ -3,7 +3,7 @@
 //! Call `density::init(cx, style)` once during app startup (after theme init)
 //! to register the current `AppStyle`. The accessor functions (`font_xs`,
 //! `font_sm`, …, `radius_sm`, …) read the registered style and return the
-//! appropriate `Pixels` value for the active density tier.
+//! value for the active density tier: font sizes in rems, radii in pixels.
 //!
 //! Two tiers are supported:
 //!
@@ -19,9 +19,15 @@
 //! | `radius_sm`        |  0 px      |  2 px      |
 //! | `radius_md`        |  0 px      |  2 px      |
 //! | `radius_lg`        |  0 px      |  3 px      |
+//!
+//! Font sizes are built with `tokens::ui`, so the values above hold at the
+//! default interface size and follow the rem size every `Root` sets from the
+//! interface font size.
 
 use dbflux_core::AppStyle;
-use gpui::{App, Global, Pixels, px};
+use gpui::{App, Global, Pixels, Rems, px};
+
+use crate::tokens::ui;
 
 /// GPUI global that stores the active `AppStyle`.
 ///
@@ -59,58 +65,58 @@ pub fn active_style(cx: &App) -> AppStyle {
 // ---------------------------------------------------------------------------
 
 /// Section label font: 11 px (Default) / 10 px (Compact).
-pub fn font_label(cx: &App) -> Pixels {
+pub fn font_label(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(11.0),
-        AppStyle::Compact => px(10.0),
+        AppStyle::Default => ui(11.0),
+        AppStyle::Compact => ui(10.0),
     }
 }
 
 /// Extra-small font: 12 px (Default) / 11 px (Compact).
-pub fn font_xs(cx: &App) -> Pixels {
+pub fn font_xs(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(12.0),
-        AppStyle::Compact => px(11.0),
+        AppStyle::Default => ui(12.0),
+        AppStyle::Compact => ui(11.0),
     }
 }
 
 /// Small font: 13 px (Default) / 12 px (Compact).
-pub fn font_sm(cx: &App) -> Pixels {
+pub fn font_sm(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(13.0),
-        AppStyle::Compact => px(12.0),
+        AppStyle::Default => ui(13.0),
+        AppStyle::Compact => ui(12.0),
     }
 }
 
 /// Base font: 13 px (Default) / 12 px (Compact).
-pub fn font_base(cx: &App) -> Pixels {
+pub fn font_base(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(13.0),
-        AppStyle::Compact => px(12.0),
+        AppStyle::Default => ui(13.0),
+        AppStyle::Compact => ui(12.0),
     }
 }
 
 /// Large font: 15 px (Default) / 14 px (Compact).
-pub fn font_lg(cx: &App) -> Pixels {
+pub fn font_lg(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(15.0),
-        AppStyle::Compact => px(14.0),
+        AppStyle::Default => ui(15.0),
+        AppStyle::Compact => ui(14.0),
     }
 }
 
 /// Extra-large font: 18 px (Default) / 16 px (Compact).
-pub fn font_xl(cx: &App) -> Pixels {
+pub fn font_xl(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(18.0),
-        AppStyle::Compact => px(16.0),
+        AppStyle::Default => ui(18.0),
+        AppStyle::Compact => ui(16.0),
     }
 }
 
 /// Title font: 20 px (Default) / 18 px (Compact).
-pub fn font_title(cx: &App) -> Pixels {
+pub fn font_title(cx: &App) -> Rems {
     match active_style(cx) {
-        AppStyle::Default => px(20.0),
-        AppStyle::Compact => px(18.0),
+        AppStyle::Default => ui(20.0),
+        AppStyle::Compact => ui(18.0),
     }
 }
 
@@ -149,6 +155,7 @@ pub fn radius_lg(cx: &App) -> Pixels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::BASE_REM;
     use dbflux_core::AppStyle;
     use gpui::{TestAppContext, px};
 
@@ -157,13 +164,13 @@ mod tests {
         cx.update(|cx| {
             init(cx, AppStyle::Default);
 
-            assert_eq!(font_label(cx), px(11.0));
-            assert_eq!(font_xs(cx), px(12.0));
-            assert_eq!(font_sm(cx), px(13.0));
-            assert_eq!(font_base(cx), px(13.0));
-            assert_eq!(font_lg(cx), px(15.0));
-            assert_eq!(font_xl(cx), px(18.0));
-            assert_eq!(font_title(cx), px(20.0));
+            assert_eq!(font_label(cx), ui(11.0));
+            assert_eq!(font_xs(cx), ui(12.0));
+            assert_eq!(font_sm(cx), ui(13.0));
+            assert_eq!(font_base(cx), ui(13.0));
+            assert_eq!(font_lg(cx), ui(15.0));
+            assert_eq!(font_xl(cx), ui(18.0));
+            assert_eq!(font_title(cx), ui(20.0));
 
             assert_eq!(radius_sm(cx), px(0.0));
             assert_eq!(radius_md(cx), px(0.0));
@@ -176,13 +183,13 @@ mod tests {
         cx.update(|cx| {
             init(cx, AppStyle::Compact);
 
-            assert_eq!(font_label(cx), px(10.0));
-            assert_eq!(font_xs(cx), px(11.0));
-            assert_eq!(font_sm(cx), px(12.0));
-            assert_eq!(font_base(cx), px(12.0));
-            assert_eq!(font_lg(cx), px(14.0));
-            assert_eq!(font_xl(cx), px(16.0));
-            assert_eq!(font_title(cx), px(18.0));
+            assert_eq!(font_label(cx), ui(10.0));
+            assert_eq!(font_xs(cx), ui(11.0));
+            assert_eq!(font_sm(cx), ui(12.0));
+            assert_eq!(font_base(cx), ui(12.0));
+            assert_eq!(font_lg(cx), ui(14.0));
+            assert_eq!(font_xl(cx), ui(16.0));
+            assert_eq!(font_title(cx), ui(18.0));
 
             assert_eq!(radius_sm(cx), px(2.0));
             assert_eq!(radius_md(cx), px(2.0));
@@ -196,7 +203,7 @@ mod tests {
             // Do not call init — global is absent.
             assert_eq!(active_style(cx), AppStyle::Default);
             // Accessors should still return Default-tier values.
-            assert_eq!(font_xs(cx), px(12.0));
+            assert_eq!(font_xs(cx), ui(12.0));
             assert_eq!(radius_sm(cx), px(0.0));
         });
     }
@@ -209,7 +216,24 @@ mod tests {
 
             set_style(cx, AppStyle::Compact);
             assert_eq!(active_style(cx), AppStyle::Compact);
-            assert_eq!(font_xs(cx), px(11.0));
+            assert_eq!(font_xs(cx), ui(11.0));
+        });
+    }
+
+    #[gpui::test]
+    fn font_accessors_follow_the_rem_size_and_radii_do_not(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(cx, AppStyle::Default);
+
+            let doubled_rem = px(BASE_REM * 2.0);
+            assert_eq!(font_label(cx).to_pixels(doubled_rem), px(22.0));
+            assert_eq!(font_sm(cx).to_pixels(doubled_rem), px(26.0));
+            assert_eq!(font_title(cx).to_pixels(doubled_rem), px(40.0));
+            assert_eq!(radius_sm(cx), px(0.0));
+
+            set_style(cx, AppStyle::Compact);
+            assert_eq!(font_xs(cx).to_pixels(doubled_rem), px(22.0));
+            assert_eq!(radius_lg(cx), px(3.0));
         });
     }
 }

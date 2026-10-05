@@ -4,7 +4,6 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::LogErr;
 use dbflux_core::keymap_types::ContextId;
@@ -664,7 +663,7 @@ impl Render for SqlPreviewModal {
                             .editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),

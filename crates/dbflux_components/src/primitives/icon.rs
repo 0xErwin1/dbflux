@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, Hsla, Pixels, Transformation, Window, svg};
+use gpui::{AbsoluteLength, App, Hsla, Transformation, Window, svg};
 use gpui_component::{ActiveTheme, IconNamed};
 
 use crate::icon::IconSource;
@@ -21,7 +21,7 @@ enum IconTone {
 #[derive(IntoElement)]
 pub struct Icon {
     source: IconSource,
-    size: Pixels,
+    size: AbsoluteLength,
     tone: Option<IconTone>,
     transformation: Option<Transformation>,
 }
@@ -34,15 +34,16 @@ impl Icon {
     pub fn new(source: impl Into<IconSource>) -> Self {
         Self {
             source: source.into(),
-            size: Heights::ICON_SM,
+            size: Heights::ICON_SM.into(),
             tone: None,
             transformation: None,
         }
     }
 
-    /// Override the icon size.
-    pub fn size(mut self, size: Pixels) -> Self {
-        self.size = size;
+    /// Override the icon size. Accepts pixels or rems; a `tokens::ui` rem
+    /// size follows the interface scale.
+    pub fn size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.size = size.into();
         self
     }
 

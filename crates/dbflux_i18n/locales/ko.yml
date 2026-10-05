@@ -3624,6 +3624,7 @@ settings:
     persist_error: "MCP 거버넌스를 저장하지 못했습니다: %{error}"
   general:
     unit:
+      pixels: "px"
       mebibytes: "MiB"
       seconds: "초"
       milliseconds: "ms"
@@ -3660,6 +3661,38 @@ settings:
       option:
         system: 시스템
       notice: "DBFlux를 다시 시작하면 적용됩니다."
+    ui_font_family:
+      label: "인터페이스 글꼴"
+      help: "메뉴, 레이블, 탭, 대화 상자에 쓰이는 글꼴입니다."
+      option:
+        default: "기본값 (%{family})"
+    ui_font_size:
+      label: "인터페이스 글꼴 크기"
+      help: "8~32 px. 인터페이스의 모든 텍스트, 행, 컨트롤 크기가 이 값에 맞춰 조정됩니다."
+      error: "인터페이스 글꼴 크기는 %{min}에서 %{max} 사이의 숫자여야 합니다"
+    editor_font_family:
+      label: "편집기 글꼴"
+      help: "코드 편집기에 쓰이는 글꼴입니다."
+      option:
+        default: "기본값 (%{family})"
+    editor_font_size:
+      label: "편집기 글꼴 크기"
+      help: "8~32 px. 줄 높이와 콘솔 텍스트가 이 값을 따릅니다."
+      error: "편집기 글꼴 크기는 %{min}에서 %{max} 사이의 숫자여야 합니다"
+    grid_font_family:
+      label: "데이터 그리드 글꼴"
+      help: "표 셀과 열 이름에 쓰이는 글꼴입니다."
+      option:
+        same_as_editor: "편집기와 동일"
+    grid_font_size:
+      label: "데이터 그리드 글꼴 크기"
+      help: "8~32 px. 행 높이, 헤더 높이, 자동 열 너비가 이 값을 따릅니다."
+      error: "데이터 그리드 글꼴 크기는 %{min}에서 %{max} 사이의 숫자여야 합니다"
+    font_family:
+      option:
+        not_installed: "%{family} (설치되지 않음)"
+      search_placeholder: "글꼴 검색"
+      no_matches: "일치하는 글꼴이 없습니다"
     editor:
       group: "편집기"
     vim_mode:

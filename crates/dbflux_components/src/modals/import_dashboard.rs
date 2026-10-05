@@ -5,7 +5,6 @@ use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
-use crate::typography::AppFonts;
 use crate::vim::{VimBinding, VimHost};
 use dbflux_core::LogErr;
 use dbflux_core::keymap_types::Command;
@@ -305,7 +304,7 @@ impl Render for ModalImportDashboard {
                             .editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),

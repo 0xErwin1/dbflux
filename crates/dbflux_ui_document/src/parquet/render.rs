@@ -25,7 +25,6 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{DocumentMetrics, FontSizes};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
@@ -210,7 +209,7 @@ impl ParquetDocument {
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(FontSizes::XS)
                     .text_color(cx.theme().muted_foreground)
                     .children(self.summary().cloned()),

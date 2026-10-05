@@ -427,7 +427,9 @@ fn render_filter_predicate(
                 "column",
                 div().w(BuilderMetrics::FILTER_COLUMN_WIDTH).flex_shrink_0(),
             )
-            .child(crate::completion_support::single_line_completion_editor(&col_state).w_full()),
+            .child(
+                crate::completion_support::single_line_completion_editor(&col_state, cx).w_full(),
+            ),
         );
     } else {
         let fallback = format!("{}.{}", pred.source_alias, pred.column);

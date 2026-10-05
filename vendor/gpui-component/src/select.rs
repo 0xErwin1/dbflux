@@ -14,9 +14,10 @@ use crate::{
     actions::Cancel,
     h_flex,
     input::{clear_button, input_style},
-    list::List,
+    list::{List, ListState},
     searchable_list::{
-        SearchableListChange, SearchableListDelegate, SearchableListItem, SearchableListState,
+        SearchableListAdapter, SearchableListChange, SearchableListDelegate, SearchableListItem,
+        SearchableListState,
     },
     v_flex,
 };
@@ -207,7 +208,25 @@ where
                         });
 
                         // Sync snapshot and fire on_confirm directly — same re-entrancy guard.
-                        if let Ok(new_selection) = new_selection {
+                        if let Ok(mut new_selection) = new_selection {
+                            let committed =
+                                new_selection.first().map(|(_, item)| item.value().clone());
+                            let committed_ix = Self::restore_list_to_selection(
+                                list_state,
+                                committed.as_ref(),
+                                window,
+                                cx,
+                            );
+
+                            if let (Some(ix), Some(first)) =
+                                (committed_ix, new_selection.first_mut())
+                            {
+                                first.0 = ix;
+                                _ = weak_confirm.update(cx, |this, _| {
+                                    this.state.selection = new_selection.clone();
+                                });
+                            }
+
                             list_state
                                 .delegate_mut()
                                 .update_selection_snapshot(new_selection.clone());
@@ -224,16 +243,38 @@ where
                 cx.defer_in(window, {
                     let weak_cancel = weak_cancel.clone();
                     move |list_state, window, cx| {
-                        let committed_ix = weak_cancel
-                            .upgrade()
-                            .and_then(|e| e.read(cx).state.selection.first().map(|(ix, _)| *ix));
+                        let committed = weak_cancel.upgrade().and_then(|e| {
+                            e.read(cx)
+                                .state
+                                .selection
+                                .first()
+                                .map(|(_, item)| item.value().clone())
+                        });
 
-                        list_state.set_selected_index(committed_ix, window, cx);
+                        let committed_ix = Self::restore_list_to_selection(
+                            list_state,
+                            committed.as_ref(),
+                            window,
+                            cx,
+                        );
 
-                        _ = weak_cancel.update(cx, |this, cx| {
+                        let selection = weak_cancel.update(cx, |this, cx| {
+                            if let (Some(ix), Some(first)) =
+                                (committed_ix, this.state.selection.first_mut())
+                            {
+                                first.0 = ix;
+                            }
+
                             this.set_open(false, cx);
                             this.focus(window, cx);
+                            this.state.selection.clone()
                         });
+
+                        if let Ok(selection) = selection {
+                            list_state
+                                .delegate_mut()
+                                .update_selection_snapshot(selection);
+                        }
                     }
                 });
             },
@@ -355,20 +396,77 @@ where
             return;
         }
 
-        let committed_ix = self.state.selection.first().map(|(ix, _)| *ix);
-        if self.selected_index(cx) != committed_ix {
-            self.state.list.update(cx, |list, cx| {
-                list.set_selected_index(committed_ix, window, cx);
-            });
-        }
-
+        self.reset_list(window, cx);
         self.set_open(false, cx);
         cx.notify();
+    }
+
+    /// Clears the search query and puts the list cursor on the committed value
+    /// of `list`. Returns the committed value's index in the unfiltered list.
+    ///
+    /// An index recorded while a query filtered the list points into the
+    /// filtered rows; resolving the value again after clearing the query keeps
+    /// the selection, the cursor and the next open on the full list.
+    fn restore_list_to_selection(
+        list: &mut ListState<SearchableListAdapter<D>>,
+        committed: Option<&<D::Item as SearchableListItem>::Value>,
+        window: &mut Window,
+        cx: &mut Context<ListState<SearchableListAdapter<D>>>,
+    ) -> Option<IndexPath> {
+        if !list.query_input.read(cx).value().is_empty() {
+            list.set_query("", window, cx);
+        }
+
+        let committed_ix = committed.and_then(|value| list.delegate().delegate.position(value));
+        list.set_selected_index(committed_ix, window, cx);
+
+        committed_ix
+    }
+
+    /// Highlights the first match when the open list has rows and no
+    /// highlight, so Enter picks a match right after a search that went from
+    /// no matches to some.
+    ///
+    /// The list decides the highlight for a new query from the rows it last
+    /// drew, which are none after a search that matched nothing.
+    fn highlight_first_match_if_unset(
+        list: &mut ListState<SearchableListAdapter<D>>,
+        window: &mut Window,
+        cx: &mut Context<ListState<SearchableListAdapter<D>>>,
+    ) {
+        if list.selected_index().is_some() {
+            return;
+        }
+
+        let delegate = &list.delegate().delegate;
+        let first_match = (0..delegate.sections_count(cx))
+            .find(|section| delegate.items_count(*section) > 0)
+            .map(|section| IndexPath::default().section(section));
+
+        if first_match.is_some() {
+            list.set_selected_index(first_match, window, cx);
+        }
+    }
+
+    /// [`Self::restore_list_to_selection`] for this select's list, keeping the
+    /// committed selection's index in step.
+    fn reset_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let committed = self.selected_value().cloned();
+        let committed_ix = self.state.list.update(cx, |list, cx| {
+            Self::restore_list_to_selection(list, committed.as_ref(), window, cx)
+        });
+
+        if let (Some(ix), Some(first)) = (committed_ix, self.state.selection.first_mut()) {
+            first.0 = ix;
+        }
+
+        self.state.sync_snapshot(cx);
     }
 
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
 
+        self.reset_list(window, cx);
         self.set_open(!self.state.open, cx);
 
         if self.state.open {
@@ -385,6 +483,7 @@ where
         }
 
         cx.stop_propagation();
+        self.reset_list(window, cx);
         self.set_open(false, cx);
         self.focus(window, cx);
         cx.notify();
@@ -411,27 +510,18 @@ where
                 .unwrap_or_else(|| t!("Select.placeholder").into()),
         );
 
-        let Some(selected_index) = self.selected_index(cx) else {
-            return default_title;
-        };
-
-        let Some(title) = self
-            .state
-            .list
-            .read(cx)
-            .delegate()
-            .delegate
-            .item(selected_index)
-            .map(|item| {
+        // The committed selection, not the list cursor: while a search filters
+        // the list the cursor moves over the matches, and the trigger must keep
+        // showing the saved value.
+        let Some(title) = self.state.selection.first().map(|(_, item)| {
                 if let Some(el) = item.display_title() {
                     el
                 } else if let Some(prefix) = self.title_prefix.as_ref() {
                     format!("{}{}", prefix, item.title()).into_any_element()
-                } else {
-                    item.title().into_any_element()
-                }
-            })
-        else {
+            } else {
+                item.title().into_any_element()
+            }
+        }) else {
             return default_title;
         };
 
@@ -474,9 +564,14 @@ where
 
         let (bg, fg) = input_style(self.state.disabled, cx);
 
+        let is_open = self.state.open;
         self.state.list.update(cx, |list, cx| {
             list.set_searchable(searchable, cx);
             list.delegate_mut().size = self.state.size;
+
+            if is_open {
+                Self::highlight_first_match_if_unset(list, window, cx);
+            }
         });
 
         div().size_full().relative().child(
@@ -802,8 +897,11 @@ where
             .focus_handle(&focus_handle)
             .content_focus_handle(&content_focus_handle)
             .accessibility_value(accessibility_value)
-            .on_open_change(move |open, _, cx| {
-                open_state.update(cx, |state, cx| state.set_open(open, cx));
+            .on_open_change(move |open, window, cx| {
+                open_state.update(cx, |state, cx| {
+                    state.reset_list(window, cx);
+                    state.set_open(open, cx);
+                });
             })
             .size_full()
             .child(self.state)

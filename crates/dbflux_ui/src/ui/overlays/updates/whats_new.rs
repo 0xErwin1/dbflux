@@ -4,7 +4,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Chamfer, Icon, Text};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, ModalMetrics, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, ModalMetrics, Spacing, ui};
 use dbflux_core::LogErr;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
@@ -24,7 +24,7 @@ const CHANGELOG_GAP: Pixels = px(2.0);
 const RELEASE_DIVIDER_TOP: Pixels = Spacing::MD;
 const RELEASE_DIVIDER_BOTTOM: Pixels = Spacing::SM;
 const RANGE_GAP: Pixels = px(10.0);
-const RANGE_ICON_SIZE: Pixels = px(13.0);
+const RANGE_ICON_SIZE: Rems = ui(13.0);
 
 /// Element id of the scrolling changelog list.
 const CHANGELOG_ID: &str = "whats-new-changelog";

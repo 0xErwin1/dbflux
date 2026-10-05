@@ -39,6 +39,28 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Theme** | Follow system, Dark, Light | Dark |
 | **Density** | Default, Compact | Default |
 | **Language** | System, then every language with a shipped translation catalog | System |
+| **Interface font** | Default (Archivo), or any installed font | Default |
+| **Interface font size** | 8 to 32 px, decimals allowed | 13 |
+| **Editor font** | Default (JetBrains Mono), or any installed font | Default |
+| **Editor font size** | 8 to 32 px, decimals allowed | 13 |
+| **Data grid font** | Same as editor, or any installed font | Same as editor |
+| **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
+
+Font changes apply to every open window as soon as you save; no restart is
+needed. The editor font also sets the monospace text in the interface
+(metadata, key hints, console), and a custom interface font also replaces the
+expanded display face of section labels. What each size controls:
+
+- **Interface font size** scales all interface text, rows, controls and icons.
+- **Editor font size** sets the code editor text and line height, and the
+  console text.
+- **Data grid font size** sets cell text, row and header height, and the
+  automatic column widths. Columns you resized by hand keep their width.
+
+The font lists have a search field, since a system can have hundreds of fonts.
+A saved font that is no longer installed stays selected, marked
+"(not installed)", and DBFlux draws with the default until it is installed
+again; the data grid falls back to the editor font.
 
 The language list is derived from DBFlux's shipped translation catalogs: English
 appears first, followed by the remaining languages in deterministic order and

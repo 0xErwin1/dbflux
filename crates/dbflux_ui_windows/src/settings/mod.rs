@@ -60,6 +60,14 @@ pub use self::section_trait::{SettingsSection, SettingsSectionId};
 const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = crate::tokens::SettingsMetrics::NAV_WIDTH;
 const SETTINGS_SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SETTINGS_SIDEBAR_MAX_WIDTH: Pixels = px(420.0);
+
+/// The navigation's default width at the current interface size: its labels
+/// and search field grow with the interface font, so the default width grows
+/// with them.
+fn scaled_default_sidebar_width(cx: &App) -> Pixels {
+    (SETTINGS_SIDEBAR_DEFAULT_WIDTH * dbflux_components::fonts::ui_scale(cx))
+        .clamp(SETTINGS_SIDEBAR_MIN_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH)
+}
 /// The desk gap between the navigation and content islands doubles as the
 /// resize grip of the navigation.
 const SETTINGS_SIDEBAR_GRIP_WIDTH: Pixels = dbflux_components::tokens::IslandMetrics::GAP;
@@ -473,6 +481,9 @@ pub struct SettingsCoordinator {
     pending_section_confirm: Option<SettingsSectionId>,
     pending_focus_return: bool,
     sidebar_width: Pixels,
+    /// Set once the user drags the navigation; until then its width follows
+    /// the default width at the current interface size.
+    sidebar_user_resized: bool,
     sidebar_is_resizing: bool,
     sidebar_resize_start_x: Option<Pixels>,
     sidebar_resize_start_width: Option<Pixels>,

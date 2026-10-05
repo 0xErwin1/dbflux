@@ -14,7 +14,6 @@ use crate::components::column_facts::format_bytes;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Spacing};
-use crate::typography::AppFonts;
 
 /// Columns named by a chip; the rest are counted in "+N more".
 const MAX_CHIPS: usize = 4;
@@ -165,7 +164,7 @@ impl RenderOnce for ReadEstimateBar {
             .gap(Spacing::MD)
             .min_w_0()
             .overflow_hidden()
-            .font_family(AppFonts::MONO)
+            .font_family(crate::fonts::editor_family(cx))
             .text_size(FontSizes::LABEL)
             .children(self.chips.iter().map(|chip| {
                 div()

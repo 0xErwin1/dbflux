@@ -3624,6 +3624,7 @@ settings:
     persist_error: "持久化 MCP 治理失败：%{error}"
   general:
     unit:
+      pixels: "px"
       mebibytes: "MiB"
       seconds: "秒"
       milliseconds: "毫秒"
@@ -3660,6 +3661,38 @@ settings:
       option:
         system: 跟随系统
       notice: "重启 DBFlux 后生效。"
+    ui_font_family:
+      label: "界面字体"
+      help: "菜单、标签、标签页和对话框使用的字体。"
+      option:
+        default: "默认（%{family}）"
+    ui_font_size:
+      label: "界面字号"
+      help: "8 到 32 px。界面中的所有文字、行和控件都会随之缩放。"
+      error: "界面字号必须是 %{min} 到 %{max} 之间的数字"
+    editor_font_family:
+      label: "编辑器字体"
+      help: "代码编辑器使用的字体。"
+      option:
+        default: "默认（%{family}）"
+    editor_font_size:
+      label: "编辑器字号"
+      help: "8 到 32 px。行高和控制台文字随之变化。"
+      error: "编辑器字号必须是 %{min} 到 %{max} 之间的数字"
+    grid_font_family:
+      label: "数据表格字体"
+      help: "单元格和列名使用的字体。"
+      option:
+        same_as_editor: "与编辑器相同"
+    grid_font_size:
+      label: "数据表格字号"
+      help: "8 到 32 px。行高、表头高度和自动列宽随之变化。"
+      error: "数据表格字号必须是 %{min} 到 %{max} 之间的数字"
+    font_family:
+      option:
+        not_installed: "%{family}（未安装）"
+      search_placeholder: "搜索字体"
+      no_matches: "没有匹配的字体"
     editor:
       group: "编辑器"
     vim_mode:

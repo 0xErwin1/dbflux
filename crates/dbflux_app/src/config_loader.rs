@@ -103,6 +103,12 @@ pub fn save_general_settings(
         vim_mode: if settings.vim_mode { 1 } else { 0 },
         editor_row_limit,
         vim_leader: settings.vim_leader.clone(),
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: f64::from(settings.ui_font_size),
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_font_size: f64::from(settings.editor_font_size),
+        grid_font_family: settings.grid_font_family.clone(),
+        grid_font_size: f64::from(settings.grid_font_size),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1091,7 +1097,28 @@ fn load_general_settings(
             .filter(|value| *value > 0)
             .unwrap_or(10_000),
         vim_leader: dto.vim_leader,
+        ui_font_family: GeneralSettings::normalize_font_family(dto.ui_font_family),
+        ui_font_size: font_size_from_storage(
+            dto.ui_font_size,
+            GeneralSettings::DEFAULT_UI_FONT_SIZE,
+        ),
+        editor_font_family: GeneralSettings::normalize_font_family(dto.editor_font_family),
+        editor_font_size: font_size_from_storage(
+            dto.editor_font_size,
+            GeneralSettings::DEFAULT_EDITOR_FONT_SIZE,
+        ),
+        grid_font_family: GeneralSettings::normalize_font_family(dto.grid_font_family),
+        grid_font_size: font_size_from_storage(
+            dto.grid_font_size,
+            GeneralSettings::DEFAULT_GRID_FONT_SIZE,
+        ),
     }
+}
+
+/// Converts a stored font size to the clamped `f32` the settings carry.
+/// Values beyond `f32` range become infinite and fall back to `default`.
+fn font_size_from_storage(size: f64, default: f32) -> f32 {
+    GeneralSettings::clamp_font_size(size as f32, default)
 }
 
 fn general_settings_theme_to_storage(theme: dbflux_core::ThemeSetting) -> &'static str {
@@ -2470,6 +2497,12 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
 
@@ -2558,6 +2591,12 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
         runtime
@@ -2754,6 +2793,79 @@ mod tests {
     }
 
     #[test]
+    fn fonts_default_to_bundled_and_round_trip_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.ui_font_family, None);
+        assert_eq!(loaded.general_settings.ui_font_size, 13.0);
+        assert_eq!(loaded.general_settings.editor_font_family, None);
+        assert_eq!(loaded.general_settings.editor_font_size, 13.0);
+        assert_eq!(loaded.general_settings.grid_font_family, None);
+        assert_eq!(loaded.general_settings.grid_font_size, 12.5);
+
+        let settings = GeneralSettings {
+            ui_font_family: Some("Inter".to_string()),
+            ui_font_size: 15.0,
+            editor_font_family: Some("JetBrains Mono".to_string()),
+            editor_font_size: 18.0,
+            grid_font_family: Some("Fira Code".to_string()),
+            grid_font_size: 14.5,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save font settings");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.ui_font_family.as_deref(),
+            Some("Inter")
+        );
+        assert_eq!(loaded.general_settings.ui_font_size, 15.0);
+        assert_eq!(
+            loaded.general_settings.editor_font_family.as_deref(),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(loaded.general_settings.editor_font_size, 18.0);
+        assert_eq!(
+            loaded.general_settings.grid_font_family.as_deref(),
+            Some("Fira Code")
+        );
+        assert_eq!(loaded.general_settings.grid_font_size, 14.5);
+    }
+
+    #[test]
+    fn out_of_range_font_sizes_and_blank_families_are_normalized_on_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut dto = runtime
+            .general_settings()
+            .get()
+            .expect("load dto")
+            .expect("general settings row");
+        dto.ui_font_family = Some("   ".to_string());
+        dto.ui_font_size = 2.0;
+        dto.editor_font_family = Some("  JetBrains Mono  ".to_string());
+        dto.editor_font_size = 99.0;
+        dto.grid_font_family = Some(String::new());
+        dto.grid_font_size = f64::INFINITY;
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("upsert out-of-range fonts");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.ui_font_family, None);
+        assert_eq!(loaded.general_settings.ui_font_size, 8.0);
+        assert_eq!(
+            loaded.general_settings.editor_font_family.as_deref(),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(loaded.general_settings.editor_font_size, 32.0);
+        assert_eq!(loaded.general_settings.grid_font_family, None);
+        assert_eq!(loaded.general_settings.grid_font_size, 12.5);
+    }
+
+    #[test]
     fn unknown_style_string_in_db_falls_back_to_default() {
         use dbflux_core::AppStyle;
 
@@ -2784,6 +2896,12 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
             updated_at: String::new(),
         };
         runtime

@@ -13,7 +13,7 @@ use dbflux_components::controls::{Button, Checkbox, Dropdown, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon};
-use dbflux_components::tokens::{ChromeColors, Fields};
+use dbflux_components::tokens::{ChromeColors, Fields, ui};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
@@ -1285,13 +1285,13 @@ impl DriversSection {
 }
 
 /// Driver logo in the detail header. (28 px)
-const DRIVER_LOGO_SIZE: Pixels = px(28.0);
+const DRIVER_LOGO_SIZE: Rems = ui(28.0);
 
 /// Width of the "global: ..." caption column of the override rows. (160 px)
-const OVERRIDE_CAPTION_WIDTH: Pixels = px(160.0);
+const OVERRIDE_CAPTION_WIDTH: Rems = ui(160.0);
 
 /// Width of the value column of the override rows. (160 px)
-const OVERRIDE_CONTROL_WIDTH: Pixels = px(160.0);
+const OVERRIDE_CONTROL_WIDTH: Rems = ui(160.0);
 
 #[cfg(test)]
 mod tests {

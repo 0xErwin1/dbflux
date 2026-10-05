@@ -30,7 +30,7 @@ use dbflux_components::primitives::{
 };
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{
-    ChromeColors, Fields, FontSizes, Heights, Radii, ResultMetrics, Spacing, TableViewMetrics,
+    ChromeColors, Fields, FontSizes, Heights, Radii, ResultMetrics, Spacing, TableViewMetrics, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
@@ -791,7 +791,7 @@ impl DataGridPanel {
                             .gap(Spacing::SM)
                             .child(
                                 Icon::new(AppIcon::Loader)
-                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                    .size(ui(12.0))
                                     .color(theme.muted_foreground),
                             )
                             .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
@@ -1105,9 +1105,12 @@ impl DataGridPanel {
                 }),
             )
             .child(
-                crate::completion_support::frameless_single_line_completion_editor(filter_input)
-                    .text_color(theme.accent_foreground)
-                    .flex_1(),
+                crate::completion_support::frameless_single_line_completion_editor(
+                    filter_input,
+                    cx,
+                )
+                .text_color(theme.accent_foreground)
+                .flex_1(),
             );
 
         let limit_value = div()
@@ -2287,7 +2290,7 @@ impl DataGridPanel {
                     .px(Spacing::XS)
                     .py(px(2.0))
                     .rounded(Radii::SM)
-                    .text_size(px(10.0))
+                    .text_size(ui(10.0))
                     .text_color(chart_colors.label_fg)
                     .bg(chart_colors.hover_bg)
                     .child(chip_label)
@@ -2314,7 +2317,7 @@ impl DataGridPanel {
                     .gap(Spacing::SM)
                     .child(
                         Icon::new(AppIcon::CircleAlert)
-                            .size(px(20.0))
+                            .size(ui(20.0))
                             .color(gpui::Hsla {
                                 a: 0.8,
                                 ..ChromeColors::tint(cx.theme())
@@ -2342,7 +2345,7 @@ impl DataGridPanel {
                     .gap(Spacing::XS)
                     .child(
                         div()
-                            .text_size(px(10.0))
+                            .text_size(ui(10.0))
                             .text_color(chart_colors.muted_fg)
                             .child(shape_label),
                     )
@@ -2735,7 +2738,7 @@ impl DataGridPanel {
     /// Renders uppercase tracked muted 10px text, optionally prefixed by an icon.
     fn dock_header(label: &str, chart_colors: &ChartColors) -> impl IntoElement {
         div()
-            .text_size(px(10.0))
+            .text_size(ui(10.0))
             .text_color(chart_colors.muted_fg)
             .font_weight(gpui::FontWeight::BOLD)
             .mb(Spacing::XXS)
@@ -2754,11 +2757,11 @@ impl DataGridPanel {
                 div()
                     .w(px(96.0))
                     .flex_shrink_0()
-                    .text_size(px(10.0))
+                    .text_size(ui(10.0))
                     .text_color(chart_colors.muted_fg)
                     .child(SharedString::from(k.to_string())),
             )
-            .child(div().flex_1().text_size(px(11.0)).child(v))
+            .child(div().flex_1().text_size(ui(11.0)).child(v))
     }
 
     #[allow(dead_code)]
@@ -2861,7 +2864,7 @@ impl DataGridPanel {
                     ))
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(ui(11.0))
                             .text_color(theme.muted_foreground)
                             .child(SharedString::from(why_text)),
                     ),
@@ -2888,7 +2891,7 @@ impl DataGridPanel {
                                 .py(px(3.0))
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
-                                .text_size(px(11.0))
+                                .text_size(ui(11.0))
                                 .when(is_selected, |d| {
                                     d.bg(gpui::Hsla {
                                         a: 0.18,
@@ -2993,7 +2996,7 @@ impl DataGridPanel {
                     ))
                     .child(Self::dock_kv_row(
                         &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.y_axis"),
-                        div().text_size(px(11.0)).text_color(theme.foreground).child(
+                        div().text_size(ui(11.0)).text_color(theme.foreground).child(
                             dbflux_i18n::t!(
                                 "document.data.chart_dock.configure.axis_stacking.y_axis_value"
                             ),
@@ -3003,7 +3006,7 @@ impl DataGridPanel {
                     .child(Self::dock_kv_row(
                         &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.stack"),
                         div()
-                            .text_size(px(11.0))
+                            .text_size(ui(11.0))
                             .text_color(theme.muted_foreground)
                             .child(dbflux_i18n::t!(
                                 "document.data.chart_dock.configure.axis_stacking.stack_value"
@@ -3014,7 +3017,7 @@ impl DataGridPanel {
                         &dbflux_i18n::t!(
                             "document.data.chart_dock.configure.axis_stacking.interpolation"
                         ),
-                        div().text_size(px(11.0)).text_color(theme.foreground).child(
+                        div().text_size(ui(11.0)).text_color(theme.foreground).child(
                             dbflux_i18n::t!(
                                 "document.data.chart_dock.configure.axis_stacking.interpolation_value"
                             ),
@@ -3160,35 +3163,35 @@ impl DataGridPanel {
         let tint_color = ChromeColors::tint(theme);
         let cyan_val = |v: f64| -> gpui::AnyElement {
             div()
-                .text_size(px(11.0))
+                .text_size(ui(11.0))
                 .text_color(cyan_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
         let tint_val = |v: f64| -> gpui::AnyElement {
             div()
-                .text_size(px(11.0))
+                .text_size(ui(11.0))
                 .text_color(tint_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
         let fg_val = |v: f64| -> gpui::AnyElement {
             div()
-                .text_size(px(11.0))
+                .text_size(ui(11.0))
                 .text_color(theme.foreground)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
         let str_val = |s: String| -> gpui::AnyElement {
             div()
-                .text_size(px(11.0))
+                .text_size(ui(11.0))
                 .text_color(theme.foreground)
                 .child(SharedString::from(s))
                 .into_any_element()
         };
         let unavail_val = || -> gpui::AnyElement {
             div()
-                .text_size(px(11.0))
+                .text_size(ui(11.0))
                 .text_color(theme.muted_foreground)
                 .italic()
                 .child(dbflux_i18n::t!(
@@ -3518,7 +3521,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(ResultMetrics::PAGER_GAP)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(
                         pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
                             can_prev,
@@ -3586,7 +3589,7 @@ impl DataGridPanel {
                 d.child(
                     div()
                         .flex_shrink_0()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .child(label),
                 )
             })
@@ -3640,7 +3643,7 @@ impl DataGridPanel {
             .child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(exec_time.to_string()),
             );
 

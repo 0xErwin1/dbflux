@@ -158,7 +158,7 @@ impl ObjectEditorDocument {
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .font_weight(FontWeight::BOLD)
                     .text_color(ChromeColors::strong(theme))
                     .child(format!("s3://{}/{}", self.bucket, self.key)),
@@ -321,7 +321,7 @@ impl ObjectEditorDocument {
             .when_some(position, |footer, position| {
                 footer.child(
                     div()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .child(cursor_label(position)),
                 )
             })

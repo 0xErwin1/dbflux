@@ -565,7 +565,7 @@ impl ConnectionManagerWindow {
         focused: bool,
         field: Option<FormFocus>,
         enabled: bool,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         mono: bool,
         control: impl IntoElement,
         cx: &mut Context<Self>,

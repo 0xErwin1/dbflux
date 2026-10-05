@@ -1519,7 +1519,7 @@ impl CodeDocument {
                 .ml_auto()
                 .items_center()
                 .gap(EditorMetrics::FILE_GAP)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(EditorMetrics::FILE_FONT)
                 .text_color(theme.muted_foreground)
                 .child(

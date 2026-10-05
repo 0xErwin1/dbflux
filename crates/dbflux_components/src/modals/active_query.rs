@@ -3,7 +3,6 @@ use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{SurfaceRole, Text, surface};
 use crate::tokens::{FontSizes, Spacing};
-use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Task, Window, div, px};
@@ -256,7 +255,7 @@ impl Render for ModalActiveQuery {
                         div()
                             .debug_selector(|| ACTIVE_QUERY_PREVIEW_SELECTOR.to_string())
                             .text_size(FontSizes::XS)
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .text_color(theme.foreground)
                             .line_clamp(QUERY_PREVIEW_MAX_LINES)
                             .text_ellipsis()

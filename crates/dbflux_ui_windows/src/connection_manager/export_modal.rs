@@ -13,7 +13,6 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, SurfaceRole, Text, surface};
 use dbflux_components::tokens::{FontSizes, Spacing};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::SecretString;
@@ -1117,7 +1116,7 @@ impl ExportBundleModal {
             .child(
                 div()
                     .text_size(FontSizes::SM)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_color(theme.foreground)
                     .child(summary.primary_name.clone()),
             );

@@ -1,16 +1,16 @@
 use gpui::prelude::*;
-use gpui::{App, Pixels, div};
+use gpui::{App, Pixels, Rems, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::Chamfer;
 use crate::tokens::{ChamferCut, Fields};
 
-pub(crate) const CONTROL_SHELL_HEIGHT: Pixels = Fields::HEIGHT;
+pub(crate) const CONTROL_SHELL_HEIGHT: Rems = Fields::HEIGHT;
 pub(crate) const CONTROL_SHELL_HORIZONTAL_PADDING: Pixels = Fields::PADDING_X;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ControlShellMetrics {
-    pub height: Pixels,
+    pub height: Rems,
     pub horizontal_padding: Pixels,
     pub cut: Pixels,
 }

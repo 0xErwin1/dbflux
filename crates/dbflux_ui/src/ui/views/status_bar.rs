@@ -4,7 +4,6 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::composites::island_fill;
 use dbflux_components::primitives::{Chamfer, Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::{TaskKind, TaskSnapshot, TaskStatus};
 use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
@@ -462,7 +461,7 @@ impl Render for StatusBar {
             .gap(ShellMetrics::STATUS_BAR_GAP)
             .h(ShellMetrics::STATUS_BAR_HEIGHT)
             .px(ShellMetrics::STATUS_BAR_PADDING_X)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(dbflux_components::fonts::ui_family(cx))
             .text_size(ShellMetrics::STATUS_FONT)
             .text_color(cx.theme().muted_foreground)
             .overflow_hidden()
@@ -563,7 +562,10 @@ mod tests {
         let inspection = StatusBar::readout_text("SELECT 1 \u{b7} 12 ms").inspect();
 
         assert_eq!(inspection.family, AppFonts::MONO);
-        assert_eq!(inspection.size_override, Some(ShellMetrics::STATUS_FONT));
+        assert_eq!(
+            inspection.size_override,
+            Some(ShellMetrics::STATUS_FONT.into())
+        );
     }
 
     fn task(status: TaskStatus, description: &str, elapsed_secs: f64) -> TaskSnapshot {

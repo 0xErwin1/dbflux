@@ -429,9 +429,12 @@ fn run_gui() {
         );
         dbflux_i18n::set_locale(language);
 
-        // Set up the density global and apply the persisted theme+style so
-        // radius tokens are correct from the very first frame.
-        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
+        // Set up the density and font globals and apply the persisted
+        // theme+style so radius tokens and fonts are correct from the very
+        // first frame.
+        let font_settings =
+            dbflux_ui_base::app_state_entity::resolve_font_settings(&general_settings, cx);
+        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, font_settings, cx);
 
         let channel = dbflux_core::ReleaseChannel::current();
 

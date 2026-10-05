@@ -3,7 +3,7 @@ use dbflux_components::primitives::Chamfer;
 use dbflux_components::tokens::{BuilderMetrics, ChamferCut, ChromeColors, Feedback};
 use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
-use gpui::{Context, ElementId, FontWeight, Hsla, IntoElement, SharedString, Stateful, div};
+use gpui::{App, Context, ElementId, FontWeight, Hsla, IntoElement, SharedString, Stateful, div};
 use gpui_component::ActiveTheme;
 
 use crate::query_builder::keyboard::row_id;
@@ -17,6 +17,7 @@ fn column_chip(
     fill: Hsla,
     color: Hsla,
     mono: bool,
+    cx: &App,
 ) -> Stateful<gpui::Div> {
     div()
         .id(id)
@@ -31,7 +32,9 @@ fn column_chip(
         .text_size(Feedback::BADGE_FONT)
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(color)
-        .when(mono, |chip| chip.font_family(AppFonts::MONO))
+        .when(mono, |chip| {
+            chip.font_family(dbflux_components::fonts::editor_family(cx))
+        })
         .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
         .child(label.into())
 }
@@ -99,6 +102,7 @@ pub fn render_columns(
                 theme.secondary,
                 ChromeColors::strong(&theme),
                 true,
+                cx,
             )
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.toggle_column(&alias_for_listener, &column_for_listener, cx);
@@ -115,6 +119,7 @@ pub fn render_columns(
         tint.opacity(Feedback::BADGE_FILL_ALPHA),
         tint,
         false,
+        cx,
     )
     .on_click(cx.listener(|this, _event, _window, cx| {
         this.column_picker_open = !this.column_picker_open;
@@ -181,7 +186,7 @@ pub fn render_columns(
                     .items_center(),
             )
             .child(mark.ring(&entry_row, "input", div().flex_1()).child(
-                crate::completion_support::single_line_completion_editor(add_state).w_full(),
+                crate::completion_support::single_line_completion_editor(add_state, cx).w_full(),
             ))
             .child(
                 mark.ring_element(

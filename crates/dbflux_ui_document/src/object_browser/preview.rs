@@ -349,7 +349,7 @@ impl ObjectBrowserDocument {
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .font_weight(FontWeight::BOLD)
                     .text_color(ChromeColors::strong(theme))
                     .child(name.to_string()),
@@ -698,7 +698,7 @@ impl ObjectBrowserDocument {
         let value = |text: String| {
             div()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_color(ChromeColors::strong(theme))
                 .child(text)
                 .into_any_element()

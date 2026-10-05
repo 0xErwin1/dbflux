@@ -1,12 +1,13 @@
+use crate::fonts::FontSettings;
 use crate::semantic::ThemeSettingGlobal;
-use crate::tokens::SyntaxColors;
+use crate::tokens::{BASE_REM, SyntaxColors};
 pub use crate::typography::AppFonts;
 use crate::typography::load_bundled_fonts;
 use dbflux_core::{AppStyle, ThemeSetting};
-use gpui::{App, Hsla, SharedString, Window, WindowAppearance, hsla, px};
+use gpui::{App, Hsla, Window, WindowAppearance, hsla, px};
 use gpui_component::{
     highlighter::{HighlightTheme, ThemeStyle},
-    theme::{Theme, ThemeMode, ThemeTokens},
+    theme::{Theme, ThemeConfig, ThemeMode, ThemeTokens},
 };
 use std::{rc::Rc, sync::Arc};
 
@@ -22,14 +23,34 @@ pub fn init(cx: &mut App) {
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }
 
-/// Initialize the theme and density global from persisted settings.
+/// Initialize the theme, density and font globals from persisted settings.
 ///
 /// Call this after `init` and after the config has been loaded, before
-/// the first window opens. This sets up the correct radius tokens and
-/// density global for the first frame.
-pub fn init_with_settings(setting: ThemeSetting, style: AppStyle, cx: &mut App) {
+/// the first window opens. This sets up the correct radius tokens, density
+/// global and fonts for the first frame.
+pub fn init_with_settings(
+    setting: ThemeSetting,
+    style: AppStyle,
+    fonts: FontSettings,
+    cx: &mut App,
+) {
     crate::density::init(cx, style);
+    crate::fonts::init(cx, fonts);
     apply_theme(setting, style, None, cx);
+}
+
+/// Write the active font settings into the global theme without changing
+/// its palette, so open windows pick them up on their next render.
+///
+/// Does nothing before the theme has been initialized.
+pub fn apply_fonts(cx: &mut App) {
+    if !cx.has_global::<Theme>() {
+        return;
+    }
+
+    let fonts = crate::fonts::current(cx);
+    persist_font_config(Theme::global_mut(cx), &fonts);
+    Theme::sync_base(cx);
 }
 
 /// Apply the Bolt Byzantium palette for `setting`.
@@ -180,23 +201,35 @@ fn rgb_to_hsla_alpha(hex: u32, alpha: f32) -> Hsla {
     hsla
 }
 
-/// Persist custom font families into the stored ThemeConfig so that
+/// Persist the active fonts into the stored ThemeConfigs so that
 /// `Theme::change()` (triggered by ThemeRegistry observer) preserves them.
 /// Without this, `apply_config()` resets font_family to ".SystemUIFont".
-fn persist_font_config(theme: &mut Theme) {
+///
+/// `font_size` is the rem size every `Root` applies to its window; it keeps
+/// gpui-component's 16 px at the default interface size and follows the
+/// interface scale.
+fn persist_font_config(theme: &mut Theme, fonts: &FontSettings) {
+    let rem_size = BASE_REM * fonts.ui_size / dbflux_core::GeneralSettings::DEFAULT_UI_FONT_SIZE;
+
+    let apply = |config: &mut ThemeConfig| {
+        config.font_family = Some(fonts.ui_family.clone());
+        config.font_size = Some(rem_size);
+        config.mono_font_family = Some(fonts.editor_family.clone());
+        config.mono_font_size = Some(fonts.editor_size);
+    };
+
     let mut dark = (*theme.dark_theme).clone();
-    dark.font_family = Some(SharedString::from(AppFonts::INTERFACE));
-    dark.mono_font_family = Some(SharedString::from(AppFonts::MONO));
+    apply(&mut dark);
     theme.dark_theme = Rc::new(dark);
 
     let mut light = (*theme.light_theme).clone();
-    light.font_family = Some(SharedString::from(AppFonts::INTERFACE));
-    light.mono_font_family = Some(SharedString::from(AppFonts::MONO));
+    apply(&mut light);
     theme.light_theme = Rc::new(light);
 
-    // Also set the immediate values
-    theme.font_family = SharedString::from(AppFonts::INTERFACE);
-    theme.mono_font_family = SharedString::from(AppFonts::MONO);
+    theme.font_family = fonts.ui_family.clone();
+    theme.font_size = px(rem_size);
+    theme.mono_font_family = fonts.editor_family.clone();
+    theme.mono_font_size = px(fonts.editor_size);
 }
 
 /// Apply border-radius values to the theme based on the active `AppStyle`.
@@ -453,9 +486,10 @@ fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
 }
 
 fn apply_palette(palette: &Palette, style: AppStyle, cx: &mut App) {
+    let fonts = crate::fonts::current(cx);
     let theme = Theme::global_mut(cx);
 
-    persist_font_config(theme);
+    persist_font_config(theme, &fonts);
     apply_style_radius(theme, style);
     apply_editor_chrome(
         theme,

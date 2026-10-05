@@ -168,7 +168,7 @@ pub fn environment_label(environment: ConnectionEnvironment) -> String {
 }
 
 impl RenderOnce for EnvTag {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let fill = self.tone.fill(theme, Feedback::ENV_TAG_FILL_ALPHA);
         let text_color = self.tone.text_color(theme);
@@ -187,7 +187,10 @@ impl RenderOnce for EnvTag {
                     .whitespace_nowrap()
                     .text_size(Feedback::ENV_TAG_FONT)
                     .font_weight(FontWeight::BOLD)
-                    .letter_spacing(Feedback::ENV_TAG_FONT * Feedback::ENV_TAG_TRACKING_EM)
+                    .letter_spacing(
+                        Feedback::ENV_TAG_FONT.to_pixels(window.rem_size())
+                            * Feedback::ENV_TAG_TRACKING_EM,
+                    )
                     .text_color(text_color)
                     .child(label),
             )

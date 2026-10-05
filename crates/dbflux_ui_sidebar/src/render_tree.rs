@@ -4,7 +4,6 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics, TreeMetrics};
-use dbflux_components::typography::AppFonts;
 use gpui::FontWeight;
 use std::time::Duration;
 
@@ -147,8 +146,9 @@ pub(super) fn render_tree_item(
         || item_id.starts_with("KL|");
     if is_loading_row {
         let theme = cx.theme();
-        let label_start =
-            TreeMetrics::INDENT * depth as f32 + TreeMetrics::CHEVRON + TreeMetrics::GAP;
+        let label_start = dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT) * depth as f32
+            + dbflux_components::fonts::ui_px(cx, TreeMetrics::CHEVRON)
+            + TreeMetrics::GAP;
         return ListItem::new(ix).h(TreeMetrics::ROW_HEIGHT).child(
             div()
                 .w_full()
@@ -197,7 +197,7 @@ pub(super) fn render_tree_item(
     );
 
     let theme = cx.theme();
-    let indent_per_level = f32::from(TreeMetrics::INDENT);
+    let indent_per_level = f32::from(dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT));
     let is_folder = entry.is_folder();
     let is_expanded = reads_expanded(node_kind, entry.is_expanded(), is_folder);
 
@@ -580,7 +580,7 @@ pub(super) fn render_tree_item(
                         div()
                             .flex_shrink_0()
                             .ml(TreeMetrics::GAP)
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(TreeMetrics::META_FONT)
                             .text_color(theme.muted_foreground)
                             .child(count),
@@ -1200,8 +1200,10 @@ fn render_failure_slice(
     let theme = cx.theme();
     let danger = theme.danger;
     let muted = theme.muted_foreground;
-    let row_height = TreeMetrics::ROW_HEIGHT;
-    let block_left = TreeMetrics::PADDING_X + TreeMetrics::INDENT * depth as f32 + Spacing::SM;
+    let row_height = dbflux_components::fonts::ui_px(cx, TreeMetrics::ROW_HEIGHT);
+    let block_left = TreeMetrics::PADDING_X
+        + dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT) * depth as f32
+        + Spacing::SM;
 
     let failure = params
         .failure_details
@@ -1238,7 +1240,7 @@ fn render_failure_slice(
         .border_color(danger)
         .child(
             div()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(ShellMetrics::FAILURE_FONT)
                 .line_height(ShellMetrics::FAILURE_LINE_HEIGHT)
                 .text_color(muted)

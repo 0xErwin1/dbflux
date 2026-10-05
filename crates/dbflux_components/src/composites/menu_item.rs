@@ -7,7 +7,6 @@ use crate::primitives::{Chamfer, Icon, key_label};
 use crate::tokens::{
     Borders, ChamferCut, ChromeColorSlot, ChromeColors, ChromeEdgeRole, KbdMetrics, MenuMetrics,
 };
-use crate::typography::AppFonts;
 
 pub(crate) const DEFAULT_MENU_CONTAINER_MIN_WIDTH: Pixels = px(160.0);
 
@@ -265,7 +264,7 @@ pub fn menu_row(
         .h(MenuMetrics::ROW_HEIGHT)
         .mx(MenuMetrics::ROW_INSET)
         .px(MenuMetrics::ROW_PADDING_X)
-        .font_family(AppFonts::INTERFACE)
+        .font_family(crate::fonts::ui_family(cx))
         .text_size(MenuMetrics::ROW_FONT)
         .whitespace_nowrap()
         .text_color(text_color)
@@ -295,7 +294,7 @@ pub fn menu_row(
             row.child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::editor_family(cx))
                     .text_size(KbdMetrics::FONT)
                     .text_color(shortcut_color)
                     .child(key_label(shortcut)),
@@ -354,7 +353,7 @@ pub fn render_menu_header(item: &MenuItem, cx: &App) -> Div {
         .pt(MenuMetrics::HEADER_PADDING_TOP)
         .pb(MenuMetrics::HEADER_PADDING_BOTTOM)
         .px(MenuMetrics::HEADER_PADDING_X)
-        .font_family(AppFonts::MONO)
+        .font_family(crate::fonts::editor_family(cx))
         .text_size(MenuMetrics::HEADER_FONT)
         .text_color(theme.muted_foreground)
         .whitespace_nowrap()

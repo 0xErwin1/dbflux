@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, KeyUpEvent,
-    MouseButton, Pixels, SharedString, Window, div,
+    AbsoluteLength, App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent,
+    KeyUpEvent, MouseButton, Pixels, Rems, SharedString, Window, div,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::theme::Theme;
@@ -12,7 +12,6 @@ use crate::primitives::{
     Chamfer, ChamferCorners, ChamferFillKind, ChamferRing, Icon, Kbd, KbdTone,
 };
 use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, Fields};
-use crate::typography::AppFonts;
 
 /// Color treatment of a [`Button`] (DSStates).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -53,7 +52,7 @@ pub enum ButtonSize {
 }
 
 impl ButtonSize {
-    pub fn height(self) -> Pixels {
+    pub fn height(self) -> Rems {
         match self {
             Self::Inline => ButtonMetrics::HEIGHT_INLINE,
             Self::Regular => ButtonMetrics::HEIGHT,
@@ -61,7 +60,7 @@ impl ButtonSize {
         }
     }
 
-    pub fn icon_only_width(self) -> Pixels {
+    pub fn icon_only_width(self) -> Rems {
         match self {
             Self::Inline => ButtonMetrics::ICON_ONLY_WIDTH_INLINE,
             Self::Regular => ButtonMetrics::ICON_ONLY_WIDTH,
@@ -76,7 +75,7 @@ impl ButtonSize {
         }
     }
 
-    pub fn font_size(self) -> Pixels {
+    pub fn font_size(self) -> Rems {
         match self {
             Self::Inline => ButtonMetrics::FONT_INLINE,
             Self::Regular => ButtonMetrics::FONT,
@@ -100,7 +99,7 @@ impl ButtonSize {
     }
 
     /// Icon leading a label.
-    pub fn icon(self) -> Pixels {
+    pub fn icon(self) -> Rems {
         match self {
             Self::Inline => ButtonMetrics::ICON_INLINE,
             Self::Regular | Self::Large => ButtonMetrics::ICON,
@@ -108,7 +107,7 @@ impl ButtonSize {
     }
 
     /// Icon of an icon-only button.
-    pub fn icon_only_icon(self) -> Pixels {
+    pub fn icon_only_icon(self) -> Rems {
         match self {
             Self::Inline => ButtonMetrics::ICON_ONLY_INLINE,
             Self::Regular | Self::Large => ButtonMetrics::ICON_ONLY,
@@ -198,7 +197,7 @@ pub struct Button {
     variant: ButtonVariant,
     size: ButtonSize,
     icon: Option<IconSource>,
-    icon_size: Option<Pixels>,
+    icon_size: Option<AbsoluteLength>,
     icon_only: bool,
     trailing_icon: Option<IconSource>,
     kbd: Option<SharedString>,
@@ -286,8 +285,8 @@ impl Button {
 
     /// Overrides the icon size (by default 15 px beside a label and 16 px
     /// icon-only; 12 and 13 px inline).
-    pub fn icon_size(mut self, size: Pixels) -> Self {
-        self.icon_size = Some(size);
+    pub fn icon_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.icon_size = Some(size.into());
         self
     }
 
@@ -451,10 +450,12 @@ impl RenderOnce for Button {
                 .interactive("button-chamfer");
         }
 
-        let icon_size = icon_size.unwrap_or(if icon_only {
-            size.icon_only_icon()
-        } else {
-            size.icon()
+        let icon_size = icon_size.unwrap_or_else(|| {
+            if icon_only {
+                size.icon_only_icon().into()
+            } else {
+                size.icon().into()
+            }
         });
 
         let mut button = div()
@@ -466,7 +467,7 @@ impl RenderOnce for Button {
             .justify_center()
             .gap(size.gap())
             .h(size.height())
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .font_weight(FontWeight::SEMIBOLD)
             .text_size(size.font_size())
             .text_color(content)
@@ -552,6 +553,7 @@ impl RenderOnce for Button {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::{BASE_REM, ui};
     use gpui::px;
 
     #[test]
@@ -607,20 +609,20 @@ mod tests {
         ];
 
         for (size, height, icon_width, cut, padding, gap, font, icon, icon_only) in table {
-            assert_eq!(size.height(), px(height), "{size:?} height");
+            assert_eq!(size.height(), ui(height), "{size:?} height");
             assert_eq!(
                 size.icon_only_width(),
-                px(icon_width),
+                ui(icon_width),
                 "{size:?} icon width"
             );
             assert_eq!(size.cut(), px(cut), "{size:?} cut");
             assert_eq!(size.padding_x(), px(padding), "{size:?} padding");
             assert_eq!(size.gap(), px(gap), "{size:?} gap");
-            assert_eq!(size.font_size(), px(font), "{size:?} font");
-            assert_eq!(size.icon(), px(icon), "{size:?} icon");
+            assert_eq!(size.font_size(), ui(font), "{size:?} font");
+            assert_eq!(size.icon(), ui(icon), "{size:?} icon");
             assert_eq!(
                 size.icon_only_icon(),
-                px(icon_only),
+                ui(icon_only),
                 "{size:?} icon-only icon"
             );
         }
@@ -798,7 +800,10 @@ mod tests {
             .debug_bounds("first-button")
             .expect("the first button is laid out");
 
-        assert_eq!(first.size.height, ButtonMetrics::HEIGHT);
+        assert_eq!(
+            first.size.height,
+            ButtonMetrics::HEIGHT.to_pixels(px(BASE_REM))
+        );
     }
 
     #[gpui::test]

@@ -2,10 +2,10 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::controls::{GpuiInput as Input, InputState};
+use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
 use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors, Spacing};
-use crate::typography::AppFonts;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -17,11 +17,12 @@ use gpui::{
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
+use super::document::DocumentPresentation;
 use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
-use super::theme::{CELL_PADDING_X, ROW_HEIGHT, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -173,6 +174,9 @@ impl gpui::Render for DataTable {
             let focus_handle = self.state.read(cx).focus_handle().clone();
             focus_handle.focus(window, cx);
         }
+
+        self.state
+            .update(cx, |state, cx| state.sync_grid_text_metrics(cx));
 
         let state = self.state.read(cx);
         let theme = cx.theme();
@@ -458,7 +462,7 @@ impl gpui::Render for DataTable {
             });
         };
 
-        let header_height = state.header_height();
+        let header_height = state.header_height(cx);
 
         // Main layout: vertical flex with header and scrollable body.
         // Both header and body share the same horizontal scroll handle.
@@ -519,7 +523,7 @@ impl gpui::Render for DataTable {
             // Build header
             let header = match state.document_presentation() {
                 Some(document) => self
-                    .render_document_header(state, document, total_width, theme)
+                    .render_document_header(state, document, total_width, theme, cx)
                     .into_any_element(),
                 None => self
                     .render_header(state, total_width, theme, cx)
@@ -570,7 +574,7 @@ impl gpui::Render for DataTable {
             .relative()
             .size_full()
             .overflow_hidden()
-            .font_family(AppFonts::MONO)
+            .font_family(fonts::grid_family(cx))
             .bg(theme.table)
             // Navigation actions
             .on_action(on_move_up)
@@ -750,10 +754,12 @@ impl DataTable {
         state: &DataTableState,
         total_width: f32,
         theme: &gpui_component::theme::Theme,
-        _cx: &gpui::App,
+        cx: &gpui::App,
     ) -> impl IntoElement {
         let model = state.model();
         let sort = state.sort();
+        let font_size = fonts::grid_font_size(cx);
+        let type_font_size = fonts::grid_type_font_size(cx);
         let column_widths = state.column_widths();
         let h_offset = state.horizontal_offset();
         let state_entity = self.state.clone();
@@ -762,7 +768,7 @@ impl DataTable {
         let pk_cols = state.pk_columns().to_vec();
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
-        let header_height = state.header_height();
+        let header_height = state.header_height(cx);
 
         let header_cells: Vec<_> = model
             .columns
@@ -843,7 +849,7 @@ impl DataTable {
                         div()
                             .flex_shrink_0()
                             .whitespace_nowrap()
-                            .text_size(GridMetrics::FONT)
+                            .text_size(font_size)
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ChromeColors::strong(theme))
                             .child(SharedString::from(col_spec.title.clone())),
@@ -860,7 +866,7 @@ impl DataTable {
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .text_size(GridMetrics::TYPE_FONT)
+                                    .text_size(type_font_size)
                                     .text_color(theme.muted_foreground)
                                     .child(label),
                             )
@@ -897,7 +903,7 @@ impl DataTable {
                                 .gap(GridMetrics::HEADER_GAP)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
-                                .text_size(GridMetrics::TYPE_FONT)
+                                .text_size(type_font_size)
                                 .text_color(theme.muted_foreground)
                                 .child(
                                     div()
@@ -950,7 +956,7 @@ impl DataTable {
             .bg(theme.table_head)
             .border_b_1()
             .border_color(theme.input)
-            .font_family(AppFonts::MONO)
+            .font_family(fonts::grid_family(cx))
             .child(
                 div()
                     .flex()
@@ -968,9 +974,10 @@ impl DataTable {
     fn render_document_header(
         &self,
         state: &DataTableState,
-        document: &super::document::DocumentPresentation,
+        document: &DocumentPresentation,
         total_width: f32,
         theme: &gpui_component::theme::Theme,
+        cx: &gpui::App,
     ) -> impl IntoElement {
         let model = state.model();
         let column_widths = state.column_widths();
@@ -980,7 +987,8 @@ impl DataTable {
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
         let has_presence = document.has_presence();
-        let name_row_height = document.name_row_height();
+        let name_row_height = document.name_row_height(cx);
+        let font_size = fonts::grid_font_size(cx);
         let col_count = model.col_count();
 
         let width_of = |col: usize| column_widths.get(col).copied().unwrap_or(120.0);
@@ -1013,7 +1021,10 @@ impl DataTable {
                                 .child(SharedString::from(group.label.to_string()))
                                 .child(
                                     div()
-                                        .text_size(CollectionMetrics::HEADER_META_FONT)
+                                        .text_size(fonts::grid_px(
+                                            cx,
+                                            CollectionMetrics::HEADER_META_FONT,
+                                        ))
                                         .text_color(muted)
                                         .child(SharedString::from(group.type_label.to_string())),
                                 )
@@ -1024,12 +1035,12 @@ impl DataTable {
             div()
                 .flex()
                 .flex_shrink_0()
-                .h(CollectionMetrics::GROUP_ROW_HEIGHT)
+                .h(DocumentPresentation::group_row_height(cx))
                 .min_w(px(total_width))
                 .ml(-h_offset)
                 .border_b_1()
                 .border_color(theme.border)
-                .text_size(CollectionMetrics::GROUP_FONT)
+                .text_size(fonts::grid_px(cx, CollectionMetrics::GROUP_FONT))
                 .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
                 .children(cells)
         });
@@ -1059,7 +1070,7 @@ impl DataTable {
                         div()
                             .flex_shrink_0()
                             .whitespace_nowrap()
-                            .text_size(GridMetrics::FONT)
+                            .text_size(font_size)
                             .when(!is_child, |name| name.font_weight(FontWeight::SEMIBOLD))
                             .text_color(strong)
                             .child(SharedString::from(col_spec.title.to_string())),
@@ -1069,7 +1080,7 @@ impl DataTable {
                             .min_w_0()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_size(CollectionMetrics::HEADER_META_FONT)
+                            .text_size(fonts::grid_px(cx, CollectionMetrics::HEADER_META_FONT))
                             .text_color(muted)
                             .child(SharedString::from(col_spec.type_name.to_string())),
                     )
@@ -1114,7 +1125,7 @@ impl DataTable {
                         )
                         .child(
                             div()
-                                .text_size(CollectionMetrics::HEADER_META_FONT)
+                                .text_size(fonts::grid_px(cx, CollectionMetrics::HEADER_META_FONT))
                                 .text_color(muted)
                                 .child(format!("{}%", (clamped * 100.0).round() as u32)),
                         )
@@ -1192,7 +1203,7 @@ impl DataTable {
             .flex_shrink_0()
             .overflow_hidden()
             .bg(theme.table_head)
-            .font_family(AppFonts::MONO)
+            .font_family(fonts::grid_family(cx))
             .when_some(group_row, |header, row| header.child(row))
             .child(
                 div()
@@ -1225,6 +1236,9 @@ impl DataTable {
             row_count,
             move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
                 let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
+                let font_size = fonts::grid_font_size(cx);
+                let row_height = fonts::grid_row_height(cx);
+                let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
                 let theme = cx.theme();
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
@@ -1246,6 +1260,9 @@ impl DataTable {
                     edit_buffer,
                     state.document_presentation(),
                     total_width,
+                    font_size,
+                    row_height,
+                    nested_icon,
                     null_color,
                     theme,
                 )
@@ -1287,8 +1304,11 @@ fn render_rows(
     cell_input: Option<&Entity<InputState>>,
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
-    document: Option<&super::document::DocumentPresentation>,
+    document: Option<&DocumentPresentation>,
     total_width: f32,
+    font_size: Pixels,
+    row_height: Pixels,
+    nested_icon: Pixels,
     null_color: Hsla,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
@@ -1519,7 +1539,7 @@ fn render_rows(
                         .when_some(nested_kind, |d, _| {
                             d.gap(GridMetrics::HEADER_GAP).child(
                                 Icon::new(AppIcon::Braces)
-                                    .size(CollectionMetrics::NESTED_ICON)
+                                    .size(nested_icon)
                                     .color(text_color),
                             )
                         })
@@ -1527,14 +1547,14 @@ fn render_rows(
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(GridMetrics::FONT)
+                                .text_size(font_size)
                                 .text_color(text_color)
                                 .child(display_text.to_string()),
                         )
                         .when(nested_kind == Some(true), |d| {
                             d.child(
                                 Icon::new(AppIcon::ChevronRight)
-                                    .size(CollectionMetrics::NESTED_ICON)
+                                    .size(nested_icon)
                                     .color(text_color),
                             )
                         })
@@ -1547,7 +1567,7 @@ fn render_rows(
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
-                .h(ROW_HEIGHT)
+                .h(row_height)
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(theme.table_row_border)
@@ -1570,7 +1590,7 @@ fn render_rows(
                         .w(ROW_NUMBER_WIDTH)
                         .h_full()
                         .pr(CELL_PADDING_X)
-                        .text_size(GridMetrics::FONT)
+                        .text_size(font_size)
                         .text_color(if is_active_row { tint } else { theme.input })
                         .child((row_ix + 1).to_string()),
                 )
@@ -1700,12 +1720,10 @@ mod tests {
         // horizontal scrollbar strip.
         let track_x =
             harness.origin.x + harness.size.width - super::super::theme::SCROLLBAR_WIDTH / 2.0;
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
         let track_y = harness.origin.y
-            + super::super::theme::HEADER_HEIGHT
-            + (harness.size.height
-                - super::super::theme::HEADER_HEIGHT
-                - super::super::theme::SCROLLBAR_WIDTH)
-                / 2.0;
+            + header_height
+            + (harness.size.height - header_height - super::super::theme::SCROLLBAR_WIDTH) / 2.0;
 
         let (y_before, x_before) = offsets(visual, &state);
         assert_eq!(x_before, gpui::px(0.0), "horizontal must start unscrolled");
@@ -1829,7 +1847,10 @@ mod tests {
         let header = visual
             .debug_bounds("table-header")
             .expect("the header is drawn");
-        assert_eq!(header.size.height, super::super::theme::HEADER_HEIGHT);
+        assert_eq!(
+            header.size.height,
+            crate::tokens::GridMetrics::HEADER_HEIGHT
+        );
         assert!(visual.debug_bounds("table-header-annotation").is_none());
     }
 

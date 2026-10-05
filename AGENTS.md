@@ -264,6 +264,14 @@ impl Render for MyComponent {
 - Use `.when_some(option, |this, value| ...)` for Option-based conditionals
 - Call `cx.notify()` when state changes affect rendering
 
+### Font Size Scaling
+
+- Interface sizes that follow the UI font size are rems built with `dbflux_components::tokens::ui(px)`: font sizes, text row and control heights, inline icons, and widths that hold text. Spacing, borders, radii and layout panel sizes stay `Pixels`.
+- Every window must render under `gpui_component::Root`, which sets the rem size from the UI font size. A window without it keeps the default 16 px rem and ignores the setting.
+- Pixel arithmetic on a rem token converts first: `token.to_pixels(window.rem_size())`, or `fonts::ui_px(cx, token)` without a `Window`.
+- The data grid and the code editor follow their own font sizes: use `fonts::grid_*` / `fonts::grid_px` and `fonts::editor_*` / `fonts::editor_scaled`, not `tokens::ui`.
+- Do not write `text_size(px(..))`. The `dbflux_components` style guardrails reject it in every UI crate.
+
 ### Entity Updates in Render
 
 Use `pending_*` fields with `.take()` to safely update other entities or open modals:

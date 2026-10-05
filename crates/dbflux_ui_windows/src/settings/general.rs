@@ -4,15 +4,16 @@ use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
-use dbflux_components::typography::AppFonts;
+use dbflux_components::tokens::{Fields, ui};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::select::Select;
 
-use super::general_section::{GeneralFormRow, GeneralSection};
+use super::general_section::{FontFamilyField, FontFamilySelect, GeneralFormRow, GeneralSection};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 
@@ -34,6 +35,9 @@ impl GeneralSection {
             current.theme != saved.theme,
             current.style != saved.style,
             current.language != saved.language,
+            current.ui_font_family != saved.ui_font_family,
+            current.editor_font_family != saved.editor_font_family,
+            current.grid_font_family != saved.grid_font_family,
             current.restore_session_on_startup != saved.restore_session_on_startup,
             current.reopen_last_connections != saved.reopen_last_connections,
             current.default_focus_on_startup != saved.default_focus_on_startup,
@@ -48,6 +52,12 @@ impl GeneralSection {
         ];
 
         let input_changes = [
+            (&self.input_ui_font_size, saved.ui_font_size.to_string()),
+            (
+                &self.input_editor_font_size,
+                saved.editor_font_size.to_string(),
+            ),
+            (&self.input_grid_font_size, saved.grid_font_size.to_string()),
             (
                 &self.input_max_history,
                 saved.max_history_entries.to_string(),
@@ -101,6 +111,12 @@ impl GeneralSection {
             GeneralFormRow::Theme,
             GeneralFormRow::Style,
             GeneralFormRow::Language,
+            GeneralFormRow::UiFontFamily,
+            GeneralFormRow::UiFontSize,
+            GeneralFormRow::EditorFontFamily,
+            GeneralFormRow::EditorFontSize,
+            GeneralFormRow::GridFontFamily,
+            GeneralFormRow::GridFontSize,
             GeneralFormRow::VimMode,
             GeneralFormRow::VimLeader,
             GeneralFormRow::RestoreSession,
@@ -293,7 +309,13 @@ impl GeneralSection {
                 self.set_share_stable_db(!self.gen_share_stable_db, cx);
                 cx.notify();
             }
-            Some(GeneralFormRow::MaxHistory)
+            Some(GeneralFormRow::UiFontFamily)
+            | Some(GeneralFormRow::EditorFontFamily)
+            | Some(GeneralFormRow::GridFontFamily)
+            | Some(GeneralFormRow::UiFontSize)
+            | Some(GeneralFormRow::EditorFontSize)
+            | Some(GeneralFormRow::GridFontSize)
+            | Some(GeneralFormRow::MaxHistory)
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
             | Some(GeneralFormRow::MaxBackgroundTasks)
@@ -313,6 +335,30 @@ impl GeneralSection {
         self.gen_editing_field = true;
 
         match self.gen_current_row() {
+            Some(GeneralFormRow::UiFontFamily) => {
+                self.select_ui_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::EditorFontFamily) => {
+                self.select_editor_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::GridFontFamily) => {
+                self.select_grid_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::UiFontSize) => {
+                self.input_ui_font_size
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::EditorFontSize) => {
+                self.input_editor_font_size
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::GridFontSize) => {
+                self.input_grid_font_size
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
             Some(GeneralFormRow::MaxHistory) => {
                 self.input_max_history
                     .update(cx, |state, cx| state.focus(window, cx));
@@ -345,6 +391,30 @@ impl GeneralSection {
                 self.gen_editing_field = false;
             }
         }
+    }
+
+    /// Whether a font family select, or its open search list, holds focus.
+    /// A select opened with the mouse takes typed keys without the row being
+    /// in edit mode, so the page must not treat them as navigation.
+    fn font_family_select_focused(&self, window: &Window, cx: &App) -> bool {
+        [
+            &self.select_ui_font_family,
+            &self.select_editor_font_family,
+            &self.select_grid_font_family,
+        ]
+        .into_iter()
+        .any(|select| select.focus_handle(cx).contains_focused(window, cx))
+    }
+
+    /// Whether the cursor is on a font family row, whose select opens and
+    /// confirms with Enter itself.
+    fn on_font_family_row(&self) -> bool {
+        matches!(
+            self.gen_current_row(),
+            Some(GeneralFormRow::UiFontFamily)
+                | Some(GeneralFormRow::EditorFontFamily)
+                | Some(GeneralFormRow::GridFontFamily)
+        )
     }
 
     pub(super) fn close_open_dropdown(&mut self, cx: &mut Context<Self>) {
@@ -418,14 +488,16 @@ impl GeneralSection {
     ) {
         let chord = key_chord_from_gpui(&event.keystroke);
 
-        if self.gen_editing_field {
+        if self.gen_editing_field || self.font_family_select_focused(window, cx) {
             match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
                     self.gen_editing_field = false;
                     cx.emit(SectionFocusEvent::RequestFocusReturn);
                     cx.notify();
                 }
-                ("enter", modifiers) if modifiers == Modifiers::none() => {
+                ("enter", modifiers)
+                    if modifiers == Modifiers::none() && !self.on_font_family_row() =>
+                {
                     self.gen_editing_field = false;
                     self.gen_move_down();
                     cx.notify();
@@ -570,8 +642,62 @@ impl GeneralSection {
         cx.on_next_frame(window, |_, _, cx| cx.notify());
     }
 
+    /// Reads a font size input, or reports `error_key` on `row` and returns
+    /// `None`.
+    fn read_font_size(
+        &mut self,
+        input: &Entity<InputState>,
+        row: GeneralFormRow,
+        error_key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<f32> {
+        let value = input.read(cx).value().to_string();
+
+        if let Some(size) = Self::parse_font_size(&value) {
+            return Some(size);
+        }
+
+        let message = dbflux_i18n::t!(
+            error_key,
+            min = dbflux_core::GeneralSettings::MIN_FONT_SIZE,
+            max = dbflux_core::GeneralSettings::MAX_FONT_SIZE
+        );
+        self.reject_field(row, message, window, cx);
+
+        None
+    }
+
     pub(super) fn save_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gen_field_error = None;
+
+        let Some(ui_font_size) = self.read_font_size(
+            &self.input_ui_font_size.clone(),
+            GeneralFormRow::UiFontSize,
+            "settings.general.ui_font_size.error",
+            window,
+            cx,
+        ) else {
+            return;
+        };
+        let Some(editor_font_size) = self.read_font_size(
+            &self.input_editor_font_size.clone(),
+            GeneralFormRow::EditorFontSize,
+            "settings.general.editor_font_size.error",
+            window,
+            cx,
+        ) else {
+            return;
+        };
+        let Some(grid_font_size) = self.read_font_size(
+            &self.input_grid_font_size.clone(),
+            GeneralFormRow::GridFontSize,
+            "settings.general.grid_font_size.error",
+            window,
+            cx,
+        ) else {
+            return;
+        };
 
         let max_history_str = self.input_max_history.read(cx).value().trim().to_string();
         let max_history = match max_history_str.parse::<usize>() {
@@ -683,6 +809,9 @@ impl GeneralSection {
             }
         };
 
+        self.gen_settings.ui_font_size = ui_font_size;
+        self.gen_settings.editor_font_size = editor_font_size;
+        self.gen_settings.grid_font_size = grid_font_size;
         self.gen_settings.max_history_entries = max_history;
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
@@ -762,8 +891,47 @@ impl GeneralSection {
             .child(self.render_gen_dropdown(
                 dbflux_i18n::t!("settings.general.language.label"),
                 Some(dbflux_i18n::t!("settings.general.language.notice")),
-                &self.dropdown_language,
+                self.dropdown_language.clone(),
                 GeneralFormRow::Language,
+                cx,
+            ))
+            .child(self.render_gen_font_family(
+                FontFamilyField::Ui,
+                &self.select_ui_font_family,
+                GeneralFormRow::UiFontFamily,
+                cx,
+            ))
+            .child(self.render_gen_font_size(
+                dbflux_i18n::t!("settings.general.ui_font_size.label"),
+                dbflux_i18n::t!("settings.general.ui_font_size.help"),
+                &self.input_ui_font_size,
+                GeneralFormRow::UiFontSize,
+                cx,
+            ))
+            .child(self.render_gen_font_family(
+                FontFamilyField::Editor,
+                &self.select_editor_font_family,
+                GeneralFormRow::EditorFontFamily,
+                cx,
+            ))
+            .child(self.render_gen_font_size(
+                dbflux_i18n::t!("settings.general.editor_font_size.label"),
+                dbflux_i18n::t!("settings.general.editor_font_size.help"),
+                &self.input_editor_font_size,
+                GeneralFormRow::EditorFontSize,
+                cx,
+            ))
+            .child(self.render_gen_font_family(
+                FontFamilyField::Grid,
+                &self.select_grid_font_family,
+                GeneralFormRow::GridFontFamily,
+                cx,
+            ))
+            .child(self.render_gen_font_size(
+                dbflux_i18n::t!("settings.general.grid_font_size.label"),
+                dbflux_i18n::t!("settings.general.grid_font_size.help"),
+                &self.input_grid_font_size,
+                GeneralFormRow::GridFontSize,
                 cx,
             ));
 
@@ -787,7 +955,7 @@ impl GeneralSection {
             .child(self.render_gen_dropdown(
                 dbflux_i18n::t!("settings.general.vim_leader.label"),
                 Some(dbflux_i18n::t!("settings.general.vim_leader.hint")),
-                &self.dropdown_vim_leader,
+                self.dropdown_vim_leader.clone(),
                 GeneralFormRow::VimLeader,
                 cx,
             ));
@@ -859,7 +1027,7 @@ impl GeneralSection {
             .child(self.render_gen_dropdown(
                 dbflux_i18n::t!("settings.general.refresh_policy.label"),
                 None,
-                &self.dropdown_refresh_policy,
+                self.dropdown_refresh_policy.clone(),
                 GeneralFormRow::DefaultRefreshPolicy,
                 cx,
             ))
@@ -1135,11 +1303,12 @@ impl GeneralSection {
         )
     }
 
+    /// Select-width form row around `control`, a dropdown or select.
     fn render_gen_dropdown(
         &self,
         label: String,
         help: Option<String>,
-        dropdown: &Entity<Dropdown>,
+        control: impl IntoElement,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1147,9 +1316,7 @@ impl GeneralSection {
             label,
             layout::cursor_ring(
                 self.is_at(row),
-                div()
-                    .w(SettingsMetrics::SELECT_WIDTH)
-                    .child(dropdown.clone()),
+                div().w(SettingsMetrics::SELECT_WIDTH).child(control),
                 cx,
             )
             .w(SettingsMetrics::SELECT_WIDTH)
@@ -1164,9 +1331,84 @@ impl GeneralSection {
         )
     }
 
+    /// Font family row: a searchable select of the installed families.
+    fn render_gen_font_family(
+        &self,
+        field: FontFamilyField,
+        select: &FontFamilySelect,
+        row: GeneralFormRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let (id, label, help) = match field {
+            FontFamilyField::Ui => (
+                "general-ui-font-family",
+                dbflux_i18n::t!("settings.general.ui_font_family.label"),
+                dbflux_i18n::t!("settings.general.ui_font_family.help"),
+            ),
+            FontFamilyField::Editor => (
+                "general-editor-font-family",
+                dbflux_i18n::t!("settings.general.editor_font_family.label"),
+                dbflux_i18n::t!("settings.general.editor_font_family.help"),
+            ),
+            FontFamilyField::Grid => (
+                "general-grid-font-family",
+                dbflux_i18n::t!("settings.general.grid_font_family.label"),
+                dbflux_i18n::t!("settings.general.grid_font_family.help"),
+            ),
+        };
+
+        let select = Select::new(select)
+            .id(id)
+            .appearance(false)
+            .h_full()
+            .px(Fields::PADDING_X)
+            .py(ui(4.0))
+            .font_family(dbflux_components::fonts::ui_family(cx))
+            .text_size(Fields::TEXT)
+            .icon(AppIcon::ChevronDown)
+            .accessibility_label(label.clone())
+            .search_placeholder(dbflux_i18n::t!(
+                "settings.general.font_family.search_placeholder"
+            ))
+            .empty(|_, _| {
+                div()
+                    .p(Fields::PADDING_X)
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "settings.general.font_family.no_matches"
+                    )))
+            });
+        // The select carries the field padding itself instead of the shell, so
+        // its bounds, which place the popup, span the whole field.
+        let control = dbflux_components::composites::control_shell(select, cx).px_0();
+
+        self.render_gen_dropdown(label, Some(help), control, row, cx)
+    }
+
+    /// Font size row: a numeric field with the pixel unit and a help line.
+    fn render_gen_font_size(
+        &self,
+        label: String,
+        help: String,
+        input: &Entity<InputState>,
+        row: GeneralFormRow,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        self.render_gen_input_field(
+            label,
+            input,
+            Some(dbflux_i18n::t!("settings.general.unit.pixels")),
+            Some(help),
+            row,
+            cx,
+        )
+    }
+
     /// Stable element id for inputs that UI automation addresses by name.
     fn input_element_id(row: GeneralFormRow) -> &'static str {
         match row {
+            GeneralFormRow::UiFontSize => "general-ui-font-size",
+            GeneralFormRow::EditorFontSize => "general-editor-font-size",
+            GeneralFormRow::GridFontSize => "general-grid-font-size",
             GeneralFormRow::MaxHistory => "general-max-history",
             GeneralFormRow::AutoSaveInterval => "general-auto-save",
             GeneralFormRow::DefaultRefreshInterval => "general-refresh-interval",
@@ -1228,7 +1470,7 @@ impl GeneralSection {
             div()
                 .relative()
                 .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .child(field)
                 .child(bounds_recorder),
             cx,

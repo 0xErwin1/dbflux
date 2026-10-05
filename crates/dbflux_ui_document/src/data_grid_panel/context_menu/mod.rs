@@ -5,10 +5,11 @@ use super::{
 };
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
+use dbflux_components::components::data_table::ROW_NUMBER_WIDTH;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
-use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH};
 use dbflux_components::composites::{MenuItem, render_menu_header};
 use dbflux_components::controls::Button;
+use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
@@ -233,7 +234,10 @@ impl DataGridPanel {
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
             x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
-            y: self.panel_origin.y + toolbar_height + HEADER_HEIGHT + ROW_HEIGHT * row,
+            y: self.panel_origin.y
+                + toolbar_height
+                + fonts::grid_header_height(cx)
+                + fonts::grid_row_height(cx) * row,
         };
 
         self.context_menu = Some(TableContextMenu {
@@ -1732,8 +1736,9 @@ impl DataGridPanel {
 
         // Separators are shorter than rows, so this over-estimates a little;
         // a menu placed a few pixels higher than necessary is harmless.
-        let menu_height =
-            MenuMetrics::ROW_HEIGHT * menu_items.len() as f32 + MenuMetrics::PADDING_Y * 2.0;
+        let menu_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
+            * menu_items.len() as f32
+            + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
         self.render_context_menu_overlay(

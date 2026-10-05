@@ -21,7 +21,7 @@ use dbflux_app::MetricCatalogCache;
 use dbflux_app::keymap::Command;
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::primitives::{Text, hdivider};
-use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing, ui};
 use dbflux_core::DimensionFilter;
 use dbflux_ui_base::keymap::RunCommand;
 use gpui::prelude::*;
@@ -257,14 +257,14 @@ fn render_metric_header(state: &MetricPickerState, cx: &mut Context<ChartShell>)
         .bg(theme.secondary)
         .child(
             div()
-                .text_size(px(10.0))
+                .text_size(ui(10.0))
                 .text_color(theme.muted_foreground)
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(namespace),
         )
         .child(
             div()
-                .text_size(px(12.0))
+                .text_size(ui(12.0))
                 .text_color(theme.foreground)
                 .overflow_hidden()
                 .text_ellipsis()
@@ -292,7 +292,7 @@ fn render_dimensions_section(
         .border_color(theme.border)
         .child(
             div()
-                .text_size(px(10.0))
+                .text_size(ui(10.0))
                 .text_color(theme.muted_foreground)
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(dbflux_i18n::t!(

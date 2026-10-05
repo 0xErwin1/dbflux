@@ -672,13 +672,13 @@ impl HistoryPanel {
             })
     }
 
-    fn query_line(sql: String, color: Hsla) -> impl IntoElement {
+    fn query_line(sql: String, color: Hsla, cx: &App) -> impl IntoElement {
         div()
             .min_w_0()
             .whitespace_nowrap()
             .overflow_hidden()
             .text_ellipsis()
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(HistoryPanelMetrics::QUERY_FONT)
             .text_color(color)
             .child(sql)
@@ -740,6 +740,7 @@ impl HistoryPanel {
                             } else {
                                 theme.foreground
                             },
+                            cx,
                         ))
                         .child(Self::meta_line(history_entry_meta(&entry, now), muted))
                 });
@@ -821,7 +822,11 @@ impl HistoryPanel {
                                 .child(name)
                                 .child(favorite),
                         )
-                        .child(Self::query_line(entry.sql_preview(200), theme.foreground))
+                        .child(Self::query_line(
+                            entry.sql_preview(200),
+                            theme.foreground,
+                            cx,
+                        ))
                         .child(Self::meta_line(entry.formatted_last_used_at(), muted))
                 });
 
@@ -860,7 +865,7 @@ impl HistoryPanel {
             .min_h_0()
             .gap(HistoryPanelMetrics::SECTION_GAP)
             .px(HistoryPanelMetrics::PADDING_X)
-            .child(Self::query_line(preview, theme.foreground))
+            .child(Self::query_line(preview, theme.foreground, cx))
             .child(Input::new(&self.save_name_input).small().w_full())
             .child(Self::meta_line(
                 dbflux_i18n::t!("document.shared.hint.enter_save_esc_cancel"),

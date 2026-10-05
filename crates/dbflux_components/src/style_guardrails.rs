@@ -25,6 +25,38 @@ mod style_guardrails {
 
     const SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 
+    /// Directory holding every workspace crate, for checks that span the UI
+    /// crates.
+    const CRATES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+
+    /// UI crates whose interface text must follow the interface font size.
+    const UI_CRATES: &[&str] = &[
+        "dbflux_components",
+        "dbflux_ui_base",
+        "dbflux_ui_document",
+        "dbflux_ui_sidebar",
+        "dbflux_ui_windows",
+        "dbflux_ui",
+    ];
+
+    /// A pixel literal text size stays fixed when the user changes the
+    /// interface font size; text sizes come from `tokens::ui`, `FontSizes`,
+    /// or the grid and editor accessors in `fonts`.
+    const FORBIDDEN_TEXT_SIZE_PATTERNS: &[&str] = &["text_size(px("];
+
+    /// A bundled family constant ignores the families chosen in Settings;
+    /// surfaces read the active family from `fonts` (`ui_family`,
+    /// `display_family`, `editor_family`, `grid_family`).
+    const FORBIDDEN_FONT_FAMILY_PATTERNS: &[&str] = &[
+        "font_family(AppFonts::",
+        "font_family(crate::typography::AppFonts::",
+        "font_family(dbflux_components::typography::AppFonts::",
+        "font(AppFonts::",
+    ];
+
+    /// Files that define or resolve the bundled families.
+    const FONT_FAMILY_EXEMPT: &[&str] = &["/fonts.rs", "/typography.rs"];
+
     /// Fragments that, when found in a file's path, exempt it from ALL checks
     /// (both spacing and color). These are canonical token/semantic/theme
     /// definition files where bare literals and color constructors are
@@ -86,9 +118,19 @@ mod style_guardrails {
     }
 
     fn check_violations(forbidden_patterns: &[&str], extra_exempt: &[&str]) -> Vec<String> {
-        let src_root = PathBuf::from(SRC_DIR);
+        check_violations_in(&[PathBuf::from(SRC_DIR)], forbidden_patterns, extra_exempt)
+    }
+
+    fn check_violations_in(
+        roots: &[PathBuf],
+        forbidden_patterns: &[&str],
+        extra_exempt: &[&str],
+    ) -> Vec<String> {
         let mut files = Vec::new();
-        collect_rust_files(&src_root, &mut files);
+
+        for root in roots {
+            collect_rust_files(root, &mut files);
+        }
 
         let mut violations = Vec::new();
 
@@ -131,6 +173,44 @@ mod style_guardrails {
         assert!(
             violations.is_empty(),
             "Found bare spacing literals that must use design tokens:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn no_pixel_literal_text_sizes_in_ui_crates() {
+        let roots: Vec<PathBuf> = UI_CRATES
+            .iter()
+            .map(|name| Path::new(CRATES_DIR).join(name).join("src"))
+            .collect();
+
+        assert!(
+            roots.iter().all(|root| root.is_dir()),
+            "every UI crate source directory should exist: {roots:?}"
+        );
+
+        let violations = check_violations_in(&roots, FORBIDDEN_TEXT_SIZE_PATTERNS, &[]);
+
+        assert!(
+            violations.is_empty(),
+            "Found pixel literal text sizes that do not follow the interface font size:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn no_bundled_font_families_in_ui_crates() {
+        let roots: Vec<PathBuf> = UI_CRATES
+            .iter()
+            .map(|name| Path::new(CRATES_DIR).join(name).join("src"))
+            .collect();
+
+        let violations =
+            check_violations_in(&roots, FORBIDDEN_FONT_FAMILY_PATTERNS, FONT_FAMILY_EXEMPT);
+
+        assert!(
+            violations.is_empty(),
+            "Found bundled font family constants that ignore the font settings:\n{}",
             violations.join("\n")
         );
     }

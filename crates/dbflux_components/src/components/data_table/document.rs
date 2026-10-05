@@ -5,9 +5,9 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::Pixels;
+use gpui::{App, Pixels};
 
-use super::theme::HEADER_HEIGHT;
+use crate::fonts;
 use crate::tokens::CollectionMetrics;
 
 /// Parent header shared by the child columns of an expanded object column.
@@ -61,23 +61,29 @@ impl DocumentPresentation {
             .is_some_and(|header| header.group.is_some())
     }
 
-    /// Height of the name row (with or without presence bars).
-    pub fn name_row_height(&self) -> Pixels {
+    /// Height of the name row (with or without presence bars), scaled with
+    /// the grid font size.
+    pub fn name_row_height(&self, cx: &App) -> Pixels {
         if self.has_presence() {
-            CollectionMetrics::PRESENCE_HEADER_HEIGHT
+            fonts::grid_scaled(cx, CollectionMetrics::PRESENCE_HEADER_HEIGHT)
         } else if self.has_groups() {
-            CollectionMetrics::GROUPED_HEADER_HEIGHT
+            fonts::grid_scaled(cx, CollectionMetrics::GROUPED_HEADER_HEIGHT)
         } else {
-            HEADER_HEIGHT
+            fonts::grid_header_height(cx)
         }
     }
 
+    /// Height of the column-group row, scaled with the grid font size.
+    pub fn group_row_height(cx: &App) -> Pixels {
+        fonts::grid_scaled(cx, CollectionMetrics::GROUP_ROW_HEIGHT)
+    }
+
     /// Total header height, group row included.
-    pub fn header_height(&self) -> Pixels {
+    pub fn header_height(&self, cx: &App) -> Pixels {
         if self.has_groups() {
-            self.name_row_height() + CollectionMetrics::GROUP_ROW_HEIGHT
+            self.name_row_height(cx) + Self::group_row_height(cx)
         } else {
-            self.name_row_height()
+            self.name_row_height(cx)
         }
     }
 
@@ -156,28 +162,63 @@ mod tests {
         assert_eq!(presentation.group_spans(2).len(), 2);
     }
 
-    #[test]
-    fn header_height_adds_the_group_row() {
-        let plain = DocumentPresentation::default();
-        assert_eq!(plain.header_height(), HEADER_HEIGHT);
-
-        let with_group = DocumentPresentation {
+    fn with_group() -> DocumentPresentation {
+        DocumentPresentation {
             headers: vec![grouped("price")],
-        };
-        assert_eq!(
-            with_group.header_height(),
-            CollectionMetrics::GROUPED_HEADER_HEIGHT + CollectionMetrics::GROUP_ROW_HEIGHT
-        );
+        }
+    }
 
-        let with_presence = DocumentPresentation {
+    fn with_presence() -> DocumentPresentation {
+        DocumentPresentation {
             headers: vec![DocumentColumnHeader {
                 group: None,
                 presence: Some(0.5),
             }],
-        };
-        assert_eq!(
-            with_presence.header_height(),
-            CollectionMetrics::PRESENCE_HEADER_HEIGHT
-        );
+        }
+    }
+
+    #[gpui::test]
+    fn header_height_adds_the_group_row(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let plain = DocumentPresentation::default();
+            assert_eq!(plain.header_height(cx), gpui::px(40.0));
+
+            assert_eq!(
+                with_group().header_height(cx),
+                CollectionMetrics::GROUPED_HEADER_HEIGHT + CollectionMetrics::GROUP_ROW_HEIGHT
+            );
+
+            assert_eq!(
+                with_presence().header_height(cx),
+                CollectionMetrics::PRESENCE_HEADER_HEIGHT
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn header_height_follows_the_grid_font_size(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            fonts::init(
+                cx,
+                fonts::FontSettings {
+                    grid_size: 25.0,
+                    ..fonts::FontSettings::default()
+                },
+            );
+
+            assert_eq!(
+                DocumentPresentation::default().header_height(cx),
+                fonts::grid_header_height(cx)
+            );
+            assert_eq!(
+                with_group().header_height(cx),
+                (CollectionMetrics::GROUPED_HEADER_HEIGHT + CollectionMetrics::GROUP_ROW_HEIGHT)
+                    * 2.0
+            );
+            assert_eq!(
+                with_presence().header_height(cx),
+                CollectionMetrics::PRESENCE_HEADER_HEIGHT * 2.0
+            );
+        });
     }
 }

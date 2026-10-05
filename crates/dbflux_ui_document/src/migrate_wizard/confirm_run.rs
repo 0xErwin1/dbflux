@@ -1109,7 +1109,7 @@ impl ConfirmRunPhase {
             )
             .child(
                 div()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_color(ChromeColors::strong(theme))
                     .child(label.to_string()),
             )
@@ -1178,7 +1178,7 @@ impl ConfirmRunPhase {
                     .gap(MigrateRunMetrics::HEADER_GAP)
                     .child(
                         div()
-                            .font_family(AppFonts::DISPLAY)
+                            .font_family(dbflux_components::fonts::display_family(cx))
                             .font_weight(FontWeight::BLACK)
                             .text_size(MigrateRunMetrics::PERCENT_FONT)
                             .text_color(ChromeColors::strong(theme))
@@ -1327,7 +1327,7 @@ impl ConfirmRunPhase {
             .flex_shrink_0()
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(ModalMetrics::CODE_FONT)
             .child(
                 div()
