@@ -121,6 +121,7 @@ mod connections;
 mod delimited;
 mod documents;
 mod dump_analysis;
+mod local_file;
 mod metrics;
 mod migrate;
 mod parquet;
