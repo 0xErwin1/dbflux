@@ -19,13 +19,11 @@ use crate::typography::AppFonts;
 /// Columns named by a chip; the rest are counted in "+N more".
 const MAX_CHIPS: usize = 4;
 
-/// Width of the bar split by column.
 const BAR_WIDTH: Pixels = px(220.0);
 
 /// Height of the bar split by column, and side of a chip's swatch.
 const SWATCH: Pixels = px(8.0); // guardrail-allow: estimate swatch and bar height
 
-/// Height of the strip.
 const STRIP_HEIGHT: Pixels = px(40.0);
 
 /// The color a column takes in the bar and on its chip: the largest columns
@@ -76,7 +74,8 @@ pub struct ReadEstimateBar {
     lead: SharedString,
     total: SharedString,
     scope: SharedString,
-    /// Each read column's share of the total, largest first.
+    /// The share of the total of each column with a chip, largest first,
+    /// then the share of every other column together.
     segments: Vec<(f32, SegmentTone)>,
     chips: Vec<EstimateChip>,
     more: Option<SharedString>,
@@ -96,16 +95,7 @@ impl ReadEstimateBar {
         let segments = if estimate.total_bytes == 0 {
             Vec::new()
         } else {
-            columns
-                .iter()
-                .enumerate()
-                .map(|(rank, (_, bytes))| {
-                    (
-                        *bytes as f32 / estimate.total_bytes as f32,
-                        SegmentTone::for_rank(rank),
-                    )
-                })
-                .collect()
+            bar_segments(&columns, estimate.total_bytes)
         };
 
         let chips = columns
@@ -235,6 +225,32 @@ impl RenderOnce for ReadEstimateBar {
     }
 }
 
+/// One segment per column with a chip, then one for every other column
+/// together: a segment per column would let the gaps between hundreds of
+/// columns outgrow the bar.
+fn bar_segments(columns: &[(usize, u64)], total_bytes: u64) -> Vec<(f32, SegmentTone)> {
+    let share = |bytes: u64| bytes as f32 / total_bytes as f32;
+
+    let mut segments: Vec<(f32, SegmentTone)> = columns
+        .iter()
+        .take(MAX_CHIPS)
+        .enumerate()
+        .map(|(rank, (_, bytes))| (share(*bytes), SegmentTone::for_rank(rank)))
+        .collect();
+
+    if columns.len() > MAX_CHIPS {
+        let rest: u64 = columns
+            .iter()
+            .skip(MAX_CHIPS)
+            .map(|(_, bytes)| *bytes)
+            .sum();
+
+        segments.push((share(rest), SegmentTone::Muted));
+    }
+
+    segments
+}
+
 fn column_name(profile: &TableProfile, index: usize) -> SharedString {
     profile
         .columns
@@ -348,6 +364,33 @@ mod tests {
         assert_eq!(bar.chip_names(), vec!["#7", "only"]);
         assert_eq!(bar.more_label(), None);
         assert_eq!(bar.summary(), "Will read ≈ 3.0 MiB · 2 of 2 row groups");
+    }
+
+    #[test]
+    fn a_wide_estimate_keeps_its_bar_segments_inside_the_bar() {
+        let names: Vec<String> = (0..300).map(|index| format!("c{index}")).collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let table = profile(&name_refs);
+        let estimate = ReadEstimate {
+            total_bytes: 300 * MIB,
+            per_column: (0..300).map(|index| (index, MIB)).collect(),
+            scope: EstimateScope::Parts {
+                touched: 1,
+                total: 1,
+                unit: PartUnit::RowGroups,
+            },
+        };
+
+        let bar = ReadEstimateBar::new(&estimate, &table);
+
+        assert_eq!(
+            bar.segments.len(),
+            super::MAX_CHIPS + 1,
+            "one segment per chip and one for every other column"
+        );
+
+        let covered: f32 = bar.segments.iter().map(|(fraction, _)| fraction).sum();
+        assert!((covered - 1.0).abs() < 1e-4, "{covered}");
     }
 
     #[test]

@@ -15,8 +15,8 @@ use dbflux_core::keymap_types::{Command, ContextId};
 use dbflux_core::{ColumnBadge, ColumnProfile, ColumnProjection, ProfileSource, TableProfile};
 use gpui::prelude::*;
 use gpui::{
-    Entity, EventEmitter, FocusHandle, FontWeight, IntoElement, ParentElement, Pixels, Render,
-    Role, ScrollHandle, ScrollStrategy, SharedString, Styled, Subscription, Toggled,
+    Entity, EventEmitter, FocusHandle, FontWeight, Hsla, IntoElement, ParentElement, Pixels,
+    Render, Role, ScrollHandle, ScrollStrategy, SharedString, Styled, Subscription, Toggled,
     UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::ActiveTheme;
@@ -582,16 +582,8 @@ impl ColumnProfileView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let theme = cx.theme();
-        let strong = ChromeColors::strong(theme);
-        let tint = ChromeColors::tint(theme);
-        let muted = theme.muted_foreground;
-        let secondary_text = theme.foreground;
-        let border = theme.border;
-        let track = theme.secondary;
-        let info = theme.info;
+        let palette = RowPalette::of(cx.theme());
         let focused = self.table_focus.is_focused(window);
-        let cursor_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
 
         range
             .filter_map(|position| {
@@ -600,105 +592,7 @@ impl ColumnProfileView {
                 let shown = self.applied.is_selected(index);
                 let at_cursor = focused && self.cursor == Some(position);
 
-                let eye = div()
-                    .id(("column-profile-eye", index))
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .w(EYE_WIDTH)
-                    .h_full()
-                    .cursor_pointer()
-                    .role(Role::CheckBox)
-                    .aria_toggled(if shown { Toggled::True } else { Toggled::False })
-                    .aria_label(row.name.clone())
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.cursor = Some(position);
-                        this.toggle_column(index, cx);
-                    }))
-                    .child(
-                        Icon::new(if shown { AppIcon::Eye } else { AppIcon::EyeOff })
-                            .size(Fields::LEADING_ICON)
-                            .color(if shown { tint } else { muted }),
-                    );
-
-                let name_cell = div()
-                    .debug_selector(move || format!("column-profile-name-{index}"))
-                    .flex()
-                    .flex_col()
-                    .flex_shrink_0()
-                    .gap(px(2.0))
-                    .w(NAME_WIDTH)
-                    .min_w_0()
-                    .px(GridMetrics::CELL_PADDING_X)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XXS)
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(if shown { strong } else { muted })
-                                    .child(row.name.clone()),
-                            )
-                            .children(
-                                row.badges
-                                    .iter()
-                                    .map(|badge| Badge::new(badge.clone(), BadgeTone::Accent)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(GridMetrics::TYPE_FONT)
-                            .text_color(muted)
-                            .child(row.type_name.clone()),
-                    );
-
-                let fixed = |width: Pixels, text: SharedString, color, right: bool| {
-                    div()
-                        .flex_shrink_0()
-                        .w(width)
-                        .px(GridMetrics::CELL_PADDING_X)
-                        .whitespace_nowrap()
-                        .truncate()
-                        .when(right, |cell| cell.flex().justify_end())
-                        .text_color(color)
-                        .child(text)
-                };
-
-                let share_cell = div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .w(SHARE_WIDTH)
-                    .px(GridMetrics::CELL_PADDING_X)
-                    .child(div().flex_1().h(SHARE_BAR_HEIGHT).bg(track).when_some(
-                        row.share,
-                        |bar, share| {
-                            bar.child(
-                                div()
-                                    .h_full()
-                                    .w(gpui::relative(share.clamp(0.0, 1.0)))
-                                    .bg(info),
-                            )
-                        },
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_shrink_0()
-                            .justify_end()
-                            .w(SHARE_LABEL_WIDTH)
-                            .text_size(FontSizes::LABEL)
-                            .text_color(muted)
-                            .child(row.share_label.clone()),
-                    );
+                let eye = Self::eye_cell(row, index, position, shown, &palette, cx);
 
                 Some(
                     div()
@@ -712,43 +606,79 @@ impl ColumnProfileView {
                         .w_full()
                         .h(ROW_HEIGHT)
                         .border_b_1()
-                        .border_color(border)
+                        .border_color(palette.border)
                         .font_family(AppFonts::MONO)
                         .text_size(GridMetrics::FONT)
-                        .when(at_cursor, |row| row.bg(cursor_wash))
+                        .when(at_cursor, |row| row.bg(palette.cursor_wash))
                         .child(eye)
-                        .child(name_cell)
+                        .child(name_cell(row, index, shown, &palette))
                         .child(
-                            fixed(CODEC_WIDTH, row.codec.clone(), muted, false)
+                            fixed_cell(CODEC_WIDTH, row.codec.clone(), palette.muted, false)
                                 .text_size(FontSizes::LABEL),
                         )
-                        .child(fixed(ON_DISK_WIDTH, row.on_disk.clone(), strong, true))
-                        .child(fixed(RATIO_WIDTH, row.ratio.clone(), secondary_text, true))
-                        .child(share_cell)
-                        .child(fixed(
-                            DISTINCT_WIDTH,
-                            row.distinct.clone(),
-                            secondary_text,
+                        .child(fixed_cell(
+                            ON_DISK_WIDTH,
+                            row.on_disk.clone(),
+                            palette.strong,
                             true,
                         ))
-                        .child(fixed(NULLS_WIDTH, row.nulls.clone(), secondary_text, true))
-                        .child(
-                            div()
-                                .debug_selector(move || {
-                                    format!("column-profile-distribution-{index}")
-                                })
-                                .flex_1()
-                                .min_w_0()
-                                .px(GridMetrics::CELL_PADDING_X)
-                                .truncate()
-                                .text_size(FontSizes::LABEL)
-                                .text_color(muted)
-                                .child(row.distribution.clone()),
-                        )
+                        .child(fixed_cell(
+                            RATIO_WIDTH,
+                            row.ratio.clone(),
+                            palette.secondary_text,
+                            true,
+                        ))
+                        .child(share_cell(row, &palette))
+                        .child(fixed_cell(
+                            DISTINCT_WIDTH,
+                            row.distinct.clone(),
+                            palette.secondary_text,
+                            true,
+                        ))
+                        .child(fixed_cell(
+                            NULLS_WIDTH,
+                            row.nulls.clone(),
+                            palette.secondary_text,
+                            true,
+                        ))
+                        .child(distribution_cell(row, index, &palette))
                         .into_any_element(),
                 )
             })
             .collect()
+    }
+
+    /// The eye of the row at `position`, which shows whether the column at
+    /// `index` is in the projection and toggles it on click.
+    fn eye_cell(
+        row: &ProfileRow,
+        index: usize,
+        position: usize,
+        shown: bool,
+        palette: &RowPalette,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(("column-profile-eye", index))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .w(EYE_WIDTH)
+            .h_full()
+            .cursor_pointer()
+            .role(Role::CheckBox)
+            .aria_toggled(if shown { Toggled::True } else { Toggled::False })
+            .aria_label(row.name.clone())
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.cursor = Some(position);
+                this.toggle_column(index, cx);
+            }))
+            .child(
+                Icon::new(if shown { AppIcon::Eye } else { AppIcon::EyeOff })
+                    .size(Fields::LEADING_ICON)
+                    .color(if shown { palette.tint } else { palette.muted }),
+            )
     }
 
     fn render_table(&self, cx: &Context<Self>) -> gpui::AnyElement {
@@ -914,6 +844,135 @@ impl ColumnProfileView {
                 .into_any_element(),
         }
     }
+}
+
+/// The theme colors a column row uses, read once per batch of rows.
+struct RowPalette {
+    strong: Hsla,
+    tint: Hsla,
+    muted: Hsla,
+    secondary_text: Hsla,
+    border: Hsla,
+    track: Hsla,
+    info: Hsla,
+    cursor_wash: Hsla,
+}
+
+impl RowPalette {
+    fn of(theme: &gpui_component::Theme) -> Self {
+        let tint = ChromeColors::tint(theme);
+
+        Self {
+            strong: ChromeColors::strong(theme),
+            tint,
+            muted: theme.muted_foreground,
+            secondary_text: theme.foreground,
+            border: theme.border,
+            track: theme.secondary,
+            info: theme.info,
+            cursor_wash: tint.opacity(GridMetrics::CELL_SELECTED_ALPHA),
+        }
+    }
+}
+
+/// The column's name and badges over its type.
+fn name_cell(row: &ProfileRow, index: usize, shown: bool, palette: &RowPalette) -> gpui::Div {
+    div()
+        .debug_selector(move || format!("column-profile-name-{index}"))
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .gap(px(2.0))
+        .w(NAME_WIDTH)
+        .min_w_0()
+        .px(GridMetrics::CELL_PADDING_X)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XXS)
+                .min_w_0()
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if shown { palette.strong } else { palette.muted })
+                        .child(row.name.clone()),
+                )
+                .children(
+                    row.badges
+                        .iter()
+                        .map(|badge| Badge::new(badge.clone(), BadgeTone::Accent)),
+                ),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_size(GridMetrics::TYPE_FONT)
+                .text_color(palette.muted)
+                .child(row.type_name.clone()),
+        )
+}
+
+/// A cell of fixed `width` holding one line of text.
+fn fixed_cell(width: Pixels, text: SharedString, color: Hsla, right: bool) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .w(width)
+        .px(GridMetrics::CELL_PADDING_X)
+        .whitespace_nowrap()
+        .truncate()
+        .when(right, |cell| cell.flex().justify_end())
+        .text_color(color)
+        .child(text)
+}
+
+/// The column's share of the table as a bar and a percentage.
+fn share_cell(row: &ProfileRow, palette: &RowPalette) -> gpui::Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(Spacing::SM)
+        .w(SHARE_WIDTH)
+        .px(GridMetrics::CELL_PADDING_X)
+        .child(
+            div()
+                .flex_1()
+                .h(SHARE_BAR_HEIGHT)
+                .bg(palette.track)
+                .when_some(row.share, |bar, share| {
+                    bar.child(
+                        div()
+                            .h_full()
+                            .w(gpui::relative(share.clamp(0.0, 1.0)))
+                            .bg(palette.info),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .justify_end()
+                .w(SHARE_LABEL_WIDTH)
+                .text_size(FontSizes::LABEL)
+                .text_color(palette.muted)
+                .child(row.share_label.clone()),
+        )
+}
+
+fn distribution_cell(row: &ProfileRow, index: usize, palette: &RowPalette) -> gpui::Div {
+    div()
+        .debug_selector(move || format!("column-profile-distribution-{index}"))
+        .flex_1()
+        .min_w_0()
+        .px(GridMetrics::CELL_PADDING_X)
+        .truncate()
+        .text_size(FontSizes::LABEL)
+        .text_color(palette.muted)
+        .child(row.distribution.clone())
 }
 
 fn header_label(key: &str) -> String {
@@ -1234,15 +1293,25 @@ mod tests {
             "components.column_profile.badge.partition_key",
         ];
 
-        for key in keys {
+        // "Codec" and "Ratio" read the same as English in some catalogs, so
+        // only their English text is checked.
+        let english_only_keys = [
+            "components.column_profile.header.codec",
+            "components.column_profile.header.ratio",
+        ];
+
+        for key in keys.iter().chain(&english_only_keys) {
             let english = dbflux_i18n::t!(key, locale = "en");
             assert!(
                 !english.is_empty() && !english.ends_with(key),
                 "en misses {key}"
             );
+        }
 
-            // A key missing from a catalog falls back to English. "Codec" and
-            // "Ratio" read the same in some catalogs, so they are left out.
+        for key in keys {
+            let english = dbflux_i18n::t!(key, locale = "en");
+
+            // A key missing from a catalog falls back to English.
             for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
                 let text = dbflux_i18n::t!(key, locale = locale);
                 assert_ne!(text, english, "{locale} misses {key}");
