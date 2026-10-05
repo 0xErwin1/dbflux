@@ -1362,6 +1362,7 @@ impl GeneralSection {
             .appearance(false)
             .h_full()
             .px(Fields::PADDING_X)
+            .py_0()
             .font_family(dbflux_components::fonts::ui_family(cx))
             .text_size(Fields::TEXT)
             .icon(AppIcon::ChevronDown)

@@ -1554,6 +1554,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_rejected_font_size_moves_the_cursor_to_its_field() {
+        with_general_section(|section, _, window, cx| {
+            section
+                .input_editor_font_size
+                .update(cx, |input, cx| input.set_value("40", window, cx));
+            section
+                .input_key_value_size_limit
+                .update(cx, |input, cx| input.set_value("0", window, cx));
+
+            section.save_general_settings(window, cx);
+
+            let editor_size_row = section
+                .gen_form_rows()
+                .iter()
+                .position(|row| *row == GeneralFormRow::EditorFontSize)
+                .expect("editor font size row");
+            assert_eq!(section.gen_form_cursor, editor_size_row);
+            assert!(section.content_focused);
+            assert!(
+                section.gen_editing_field,
+                "the invalid field takes focus for editing"
+            );
+            assert_eq!(section.pending_reveal, Some(GeneralFormRow::EditorFontSize));
+        });
+    }
+
     #[gpui::test]
     fn an_invalid_size_shows_its_error_under_the_field(cx: &mut TestAppContext) {
         let (section, window) = open_font_select_section(cx);
