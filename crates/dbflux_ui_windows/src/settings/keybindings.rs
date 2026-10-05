@@ -45,7 +45,7 @@ fn keybinding_row_indent(cx: &App) -> Pixels {
 }
 
 /// Width of the context filter next to the text filter. (170 px)
-const CONTEXT_FILTER_WIDTH: Pixels = px(170.0);
+const CONTEXT_FILTER_WIDTH: Rems = ui(170.0);
 
 /// Gap between the text filter and the context filter. (10 px)
 const FILTER_ROW_GAP: Pixels = px(10.0);

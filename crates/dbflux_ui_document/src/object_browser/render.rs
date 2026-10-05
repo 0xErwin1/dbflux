@@ -35,7 +35,7 @@ const SIZE_WIDTH: Pixels = px(100.0);
 const CLASS_WIDTH: Pixels = px(130.0);
 const MODIFIED_WIDTH: Pixels = px(140.0);
 /// Width of the filter field in the header.
-const FILTER_WIDTH: Pixels = px(240.0);
+const FILTER_WIDTH: Rems = ui(240.0);
 /// Height of the "Load more" row.
 const LOAD_MORE_HEIGHT: Rems = ui(38.0);
 

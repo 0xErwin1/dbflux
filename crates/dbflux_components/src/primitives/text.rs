@@ -260,7 +260,7 @@ impl TextVariant {
     ///
     /// Unlike `role_contract().size` (always the Default-tier constant), this
     /// reads the density global and returns the Compact-tier value when active.
-    pub fn density_size(self, cx: &App) -> gpui::Pixels {
+    pub fn density_size(self, cx: &App) -> gpui::Rems {
         match self {
             Self::Title => density::font_title(cx),
             Self::Heading => density::font_xl(cx),

@@ -315,7 +315,7 @@ impl BucketsTableDocument {
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let column = |width: Option<Pixels>, key: &str| {
+        let column = |width: Option<Rems>, key: &str| {
             let label = dbflux_i18n::t!(key);
             match width {
                 Some(width) => div().w(width).flex_shrink_0().child(label),
@@ -365,7 +365,7 @@ impl BucketsTableDocument {
         let select_name = name.clone();
         let bucket_color = theme.warning;
 
-        let mono_cell = |width: Pixels, value: CellValue, color: Hsla| {
+        let mono_cell = |width: Rems, value: CellValue, color: Hsla| {
             div()
                 .w(width)
                 .flex_shrink_0()

@@ -37,7 +37,7 @@ impl SettingsMetrics {
     pub const FOOTER_PADDING_X: Pixels = px(18.0);
     pub const FOOTER_GAP: Pixels = px(8.0);
     /// Unsaved-changes marker: a 7 px diamond, 8 px before 12.5 px text.
-    pub const DIRTY_MARKER: Pixels = px(7.0);
+    pub const DIRTY_MARKER: Rems = ui(7.0);
     pub const DIRTY_FONT: Rems = ui(12.5);
 
     /// Master list of a master-detail page: 280 px wide, 12 px toolbar
@@ -55,13 +55,13 @@ impl SettingsMetrics {
     /// Form rows of a settings page: 200 px label column.
     pub const FORM_LABEL_WIDTH: Rems = ui(200.0);
     /// Width of a short numeric field (history entries, intervals). (140 px)
-    pub const NUMBER_FIELD_WIDTH: Pixels = px(140.0);
+    pub const NUMBER_FIELD_WIDTH: Rems = ui(140.0);
     /// Width of a select trigger in a form row. (280 px)
-    pub const SELECT_WIDTH: Pixels = px(280.0);
+    pub const SELECT_WIDTH: Rems = ui(280.0);
     /// Width of a text field in a detail form. (360 px)
-    pub const TEXT_FIELD_WIDTH: Pixels = px(360.0);
+    pub const TEXT_FIELD_WIDTH: Rems = ui(360.0);
     /// Width of the port field next to a host field. (80 px)
-    pub const PORT_FIELD_WIDTH: Pixels = px(80.0);
+    pub const PORT_FIELD_WIDTH: Rems = ui(80.0);
 }
 
 /// Form rows shared by the Settings pages and the Connection Manager form.
@@ -122,17 +122,17 @@ impl ConnectionFormMetrics {
     pub const SUBTITLE_FONT: Rems = ui(12.5);
     pub const TITLE_GAP: Pixels = px(2.0);
     /// Name field of the form header. (240 px)
-    pub const NAME_FIELD_WIDTH: Pixels = px(240.0);
+    pub const NAME_FIELD_WIDTH: Rems = ui(240.0);
     /// Top padding of the form body. (4 px)
     pub const BODY_PADDING_TOP: Pixels = px(4.0);
     /// Bottom margin of the test-result banner. (14 px)
     pub const BANNER_MARGIN_BOTTOM: Pixels = px(14.0);
     /// Width of the database field. (300 px)
-    pub const DATABASE_FIELD_WIDTH: Pixels = px(300.0);
+    pub const DATABASE_FIELD_WIDTH: Rems = ui(300.0);
     /// Width of the port field next to the host field. (90 px)
-    pub const PORT_FIELD_WIDTH: Pixels = px(90.0);
+    pub const PORT_FIELD_WIDTH: Rems = ui(90.0);
     /// Width of the value-source select before a credential field. (170 px)
-    pub const SOURCE_SELECT_WIDTH: Pixels = px(170.0);
+    pub const SOURCE_SELECT_WIDTH: Rems = ui(170.0);
 
     /// Environment chips: 28 px tall, 12 px padding, 7 px gap, 6 px apart,
     /// 12.5 px semibold text, a 7 px diamond and a 13% wash of the
@@ -142,7 +142,7 @@ impl ConnectionFormMetrics {
     pub const ENV_CHIP_GAP: Pixels = px(7.0);
     pub const ENV_CHIPS_GAP: Pixels = px(6.0);
     pub const ENV_CHIP_FONT: Rems = ui(12.5);
-    pub const ENV_CHIP_DIAMOND: Pixels = px(7.0);
+    pub const ENV_CHIP_DIAMOND: Rems = ui(7.0);
     pub const ENV_CHIP_WASH_ALPHA: f32 = 0.13;
 
     /// Driver picker header: 18 by 24 px padding, 14 px gap, 3 px between
@@ -151,7 +151,7 @@ impl ConnectionFormMetrics {
     pub const PICKER_PADDING_X: Pixels = px(24.0);
     pub const PICKER_HEADER_GAP: Pixels = px(14.0);
     pub const PICKER_TITLE_GAP: Pixels = px(3.0);
-    pub const PICKER_FILTER_WIDTH: Pixels = px(340.0);
+    pub const PICKER_FILTER_WIDTH: Rems = ui(340.0);
     /// Driver picker body: 16 px bottom padding; category label 16 px above
     /// and 8 px below.
     pub const PICKER_BODY_PADDING_BOTTOM: Pixels = px(16.0);

@@ -137,7 +137,7 @@ impl ModalMetrics {
     /// Smallest height of the body area, padding included.
     pub const BODY_MIN_HEIGHT: Pixels = px(96.0);
     /// Default width.
-    pub const WIDTH: Pixels = px(480.0);
+    pub const WIDTH: Rems = ui(480.0);
 
     /// Lead sentence at the top of a body: 13.5 px on a 1.6 line height.
     pub const LEAD_FONT: Rems = ui(13.5);
@@ -390,7 +390,7 @@ impl Fields {
     /// Filter field leading icon size. (15 px)
     pub const FILTER_ICON: Rems = ui(15.0);
     /// Width reserved for the LIMIT value inside the filter field. (48 px)
-    pub const FILTER_LIMIT_WIDTH: Pixels = px(48.0);
+    pub const FILTER_LIMIT_WIDTH: Rems = ui(48.0);
 
     /// Segment height inside a segmented control. (26 px)
     pub const SEGMENT_HEIGHT: Rems = ui(26.0);
@@ -778,9 +778,9 @@ impl Feedback {
     pub const ENV_TAG_FILL_ALPHA: f32 = 0.16;
 
     /// Status diamond next to connection names and in the status bar (7 px).
-    pub const STATUS_DIAMOND: Pixels = px(7.0);
+    pub const STATUS_DIAMOND: Rems = ui(7.0);
     /// Compact status diamond, used for the document-tab dirty marker (6 px).
-    pub const STATUS_DIAMOND_COMPACT: Pixels = px(6.0);
+    pub const STATUS_DIAMOND_COMPACT: Rems = ui(6.0);
     /// Gap between the diamond and its label (6 px).
     pub const STATUS_GAP: Pixels = px(6.0);
 
@@ -797,7 +797,7 @@ impl Feedback {
     pub const BANNER_FILL_ALPHA: f32 = 0.08;
 
     /// Toast width (440 px).
-    pub const TOAST_WIDTH: Pixels = px(440.0);
+    pub const TOAST_WIDTH: Rems = ui(440.0);
     /// Toast padding: 12 px vertical, 14 px horizontal.
     pub const TOAST_PADDING_Y: Pixels = px(12.0);
     pub const TOAST_PADDING_X: Pixels = px(14.0);
@@ -876,7 +876,7 @@ impl TreeMetrics {
     /// Row height. (26 px)
     pub const ROW_HEIGHT: Rems = ui(26.0);
     /// Indent added per depth level. (14 px)
-    pub const INDENT: Pixels = px(14.0);
+    pub const INDENT: Rems = ui(14.0);
     /// Padding before the depth-0 chevron and after the trailing slot. (12 px)
     pub const PADDING_X: Pixels = px(12.0);
     /// Gap between chevron, icon, label and trailing slot. (7 px)
@@ -887,7 +887,7 @@ impl TreeMetrics {
     pub const ICON: Rems = ui(15.0);
     /// Distance from the row's left edge to the first indent guide, which
     /// runs through the depth-0 chevron. (19 px)
-    pub const GUIDE_OFFSET: Pixels = px(19.0);
+    pub const GUIDE_OFFSET: Rems = ui(19.0);
     /// Label size. (13 px)
     pub const FONT: Rems = ui(13.0);
     /// Trailing count and latency size. (11 px)
@@ -947,7 +947,7 @@ impl ResultMetrics {
     pub const VIEW_ROW_GAP: Pixels = px(12.0);
     pub const STATEMENT_FONT: Rems = ui(11.5);
     /// Search-in-results field width. (240 px)
-    pub const SEARCH_WIDTH: Pixels = px(240.0);
+    pub const SEARCH_WIDTH: Rems = ui(240.0);
 }
 
 /// Geometry of the migrate wizard's Run phase, from P1Migrate.
@@ -966,10 +966,10 @@ impl MigrateRunMetrics {
     pub const TABLE_HEADER_HEIGHT: Rems = ui(32.0);
     pub const TABLE_ROW_HEIGHT: Rems = ui(36.0);
     pub const TABLE_PADDING_X: Pixels = px(14.0);
-    pub const STATUS_COLUMN: Pixels = px(30.0);
+    pub const STATUS_COLUMN: Rems = ui(30.0);
     pub const STATUS_ICON: Rems = ui(15.0);
     pub const PROGRESS_COLUMN: Pixels = px(220.0);
-    pub const ROWS_COLUMN: Pixels = px(160.0);
+    pub const ROWS_COLUMN: Rems = ui(160.0);
     pub const TABLE_BAR_WIDTH: Pixels = px(150.0);
     pub const TABLE_BAR_HEIGHT: Pixels = px(4.0);
     pub const BAR_GAP: Pixels = px(8.0);
@@ -981,7 +981,7 @@ pub struct PaletteMetrics;
 
 impl PaletteMetrics {
     /// Card width (640 px) and its distance from the top of the window (90 px).
-    pub const WIDTH: Pixels = px(640.0);
+    pub const WIDTH: Rems = ui(640.0);
     pub const TOP_OFFSET: Pixels = px(90.0);
 
     /// Search row: 56 px tall, 18 px sides, 12 px gap, 18 px search icon,
@@ -1089,9 +1089,9 @@ impl CollectionMetrics {
     pub const SLOT_PADDING_X: Pixels = px(10.0);
     pub const SLOT_GAP: Pixels = px(8.0);
     pub const SLOT_FONT: Rems = ui(12.5);
-    pub const PROJECT_SLOT_WIDTH: Pixels = px(190.0);
-    pub const SORT_SLOT_WIDTH: Pixels = px(200.0);
-    pub const LIMIT_SLOT_WIDTH: Pixels = px(124.0);
+    pub const PROJECT_SLOT_WIDTH: Rems = ui(190.0);
+    pub const SORT_SLOT_WIDTH: Rems = ui(200.0);
+    pub const LIMIT_SLOT_WIDTH: Rems = ui(124.0);
     /// View row under the query bar: 42 px tall, 14 px side padding.
     pub const VIEW_ROW_HEIGHT: Rems = ui(42.0);
     pub const VIEW_ROW_PADDING_X: Pixels = px(14.0);
@@ -1132,7 +1132,7 @@ impl CollectionMetrics {
     /// Server-change card: 460 px wide, 24 px from the right and 56 px from
     /// the bottom of the grid, 16 px padding, 10 px gap, 3 px warning edge,
     /// 12.5 px body, 8 x 10 px code block in 12 px mono.
-    pub const CONFLICT_WIDTH: Pixels = px(460.0);
+    pub const CONFLICT_WIDTH: Rems = ui(460.0);
     pub const CONFLICT_RIGHT: Pixels = px(24.0);
     pub const CONFLICT_BOTTOM: Pixels = px(56.0);
     pub const CONFLICT_PADDING: Pixels = px(16.0);
@@ -1147,14 +1147,14 @@ impl CollectionMetrics {
     /// size field, 34 px column header in 11.5 px, rows at least 52 px tall
     /// with 18 px side padding. Columns: field 240, types 360, presence 100.
     pub const SCHEMA_TOOLBAR_HEIGHT: Rems = ui(44.0);
-    pub const SCHEMA_SAMPLE_WIDTH: Pixels = px(140.0);
+    pub const SCHEMA_SAMPLE_WIDTH: Rems = ui(140.0);
     pub const SCHEMA_HEADER_HEIGHT: Rems = ui(34.0);
     pub const SCHEMA_HEADER_FONT: Rems = ui(11.5);
     pub const SCHEMA_ROW_MIN_HEIGHT: Rems = ui(52.0);
     pub const SCHEMA_PADDING_X: Pixels = px(18.0);
-    pub const SCHEMA_FIELD_WIDTH: Pixels = px(240.0);
-    pub const SCHEMA_TYPES_WIDTH: Pixels = px(360.0);
-    pub const SCHEMA_PRESENCE_WIDTH: Pixels = px(100.0);
+    pub const SCHEMA_FIELD_WIDTH: Rems = ui(240.0);
+    pub const SCHEMA_TYPES_WIDTH: Rems = ui(360.0);
+    pub const SCHEMA_PRESENCE_WIDTH: Rems = ui(100.0);
     /// Type bar: 8 px tall with 30 px clearance to the next column, 6 px to
     /// its legend; legend swatches 8 px, 4 px to their label, 10 px apart,
     /// 11 px text. Field names 13 px mono, values 12.5 px.
@@ -1229,7 +1229,7 @@ impl EditorMetrics {
     /// Result sub-toolbar: 11.5 px mono statement caption, 240 px search field
     /// with a 13 px search icon.
     pub const RESULT_CAPTION_FONT: Rems = ui(11.5);
-    pub const RESULT_SEARCH_WIDTH: Pixels = px(240.0);
+    pub const RESULT_SEARCH_WIDTH: Rems = ui(240.0);
     pub const RESULT_SEARCH_ICON: Rems = ui(13.0);
     /// Smallest height the results pane can be dragged to: the result tabs
     /// (34), the view row (42), the grid header (40), one grid row (31) and
@@ -1323,7 +1323,7 @@ impl KeyValueMetrics {
     pub const TOOLBAR_DIVIDER_MARGIN_X: Pixels = px(4.0);
     /// Narrowest the key pattern field shrinks to before the filter row
     /// wraps its controls onto a second line. (220 px)
-    pub const PATTERN_MIN_WIDTH: Pixels = px(220.0);
+    pub const PATTERN_MIN_WIDTH: Rems = ui(220.0);
     /// Key list column. (440 px, IslKvStream)
     pub const KEY_LIST_WIDTH: Pixels = px(440.0);
     /// Key list header: 30 px, 11.5 px text.
@@ -1340,8 +1340,8 @@ impl KeyValueMetrics {
     pub const LIST_ROW_GAP: Pixels = px(8.0);
     pub const LIST_META_FONT: Rems = ui(11.5);
     /// TTL and size columns. (76 px, 66 px)
-    pub const TTL_COLUMN: Pixels = px(76.0);
-    pub const SIZE_COLUMN: Pixels = px(66.0);
+    pub const TTL_COLUMN: Rems = ui(76.0);
+    pub const SIZE_COLUMN: Rems = ui(66.0);
     /// Folder row: 13 px mono name, 7 px gap, 12 px chevron, 14 px folder
     /// icon, 11 px count in a 140 px column.
     pub const FOLDER_ROW_FONT: Rems = ui(13.0);
@@ -1349,7 +1349,7 @@ impl KeyValueMetrics {
     pub const FOLDER_CHEVRON: Rems = ui(12.0);
     pub const FOLDER_ICON: Rems = ui(14.0);
     pub const FOLDER_COUNT_FONT: Rems = ui(11.0);
-    pub const FOLDER_COUNT_COLUMN: Pixels = px(140.0);
+    pub const FOLDER_COUNT_COLUMN: Rems = ui(140.0);
     /// Space where a folder row draws its chevron, kept on key rows so names
     /// line up. (12 px)
     pub const CHEVRON_SLOT: Rems = ui(12.0);
@@ -1395,33 +1395,33 @@ impl KeyValueMetrics {
     pub const META_FONT: Rems = ui(12.0);
     /// Value toolbar (filter, order, View as): 42 px.
     pub const VALUE_TOOLBAR_HEIGHT: Rems = ui(42.0);
-    pub const MEMBER_FILTER_WIDTH: Pixels = px(260.0);
-    pub const COMPRESSION_WIDTH: Pixels = px(110.0);
+    pub const MEMBER_FILTER_WIDTH: Rems = ui(260.0);
+    pub const COMPRESSION_WIDTH: Rems = ui(110.0);
     /// Member tables: 32 px header, 32 px hash rows, 30 px ranked rows,
     /// 12 px sides.
     pub const MEMBER_HEADER_HEIGHT: Rems = ui(32.0);
     pub const MEMBER_ROW_HEIGHT: Rems = ui(32.0);
     pub const RANKED_ROW_HEIGHT: Rems = ui(30.0);
     pub const MEMBER_PADDING_X: Pixels = px(12.0);
-    pub const INDEX_COLUMN: Pixels = px(40.0);
-    pub const FIELD_COLUMN: Pixels = px(180.0);
-    pub const FORMAT_COLUMN: Pixels = px(90.0);
-    pub const ACTION_COLUMN: Pixels = px(36.0);
+    pub const INDEX_COLUMN: Rems = ui(40.0);
+    pub const FIELD_COLUMN: Rems = ui(180.0);
+    pub const FORMAT_COLUMN: Rems = ui(90.0);
+    pub const ACTION_COLUMN: Rems = ui(36.0);
     pub const ACTION_ICON: Rems = ui(13.0);
     /// Format badge on member rows: 20 px, 7 px sides, 11 px semibold.
     pub const FORMAT_BADGE_HEIGHT: Rems = ui(20.0);
     pub const FORMAT_BADGE_PADDING_X: Pixels = px(7.0);
     pub const FORMAT_BADGE_FONT: Rems = ui(11.0);
     /// Sorted-set columns: 56 px rank, 120 px score, 260 px bar, 6 px bar.
-    pub const RANK_COLUMN: Pixels = px(56.0);
-    pub const SCORE_COLUMN: Pixels = px(120.0);
+    pub const RANK_COLUMN: Rems = ui(56.0);
+    pub const SCORE_COLUMN: Rems = ui(120.0);
     pub const BAR_COLUMN: Pixels = px(260.0);
     pub const BAR_HEIGHT: Pixels = px(6.0);
     /// Stream columns: 210 px ID, 150 px time, 110 px per field.
-    pub const ENTRY_ID_COLUMN: Pixels = px(210.0);
-    pub const ENTRY_TIME_COLUMN: Pixels = px(150.0);
-    pub const ENTRY_FIELD_COLUMN: Pixels = px(110.0);
-    pub const RANGE_INPUT_WIDTH: Pixels = px(170.0);
+    pub const ENTRY_ID_COLUMN: Rems = ui(210.0);
+    pub const ENTRY_TIME_COLUMN: Rems = ui(150.0);
+    pub const ENTRY_FIELD_COLUMN: Rems = ui(110.0);
+    pub const RANGE_INPUT_WIDTH: Rems = ui(170.0);
     /// Consumer groups panel: 360 px, 42 px header, 34 px rows, 14 px sides,
     /// 70/70/110 px columns, 14 px callout margin, 12 px callout padding.
     pub const GROUPS_WIDTH: Pixels = px(360.0);
@@ -1429,8 +1429,8 @@ impl KeyValueMetrics {
     pub const GROUPS_TABLE_HEADER_HEIGHT: Rems = ui(30.0);
     pub const GROUPS_ROW_HEIGHT: Rems = ui(34.0);
     pub const GROUPS_PADDING_X: Pixels = px(14.0);
-    pub const GROUPS_COUNT_COLUMN: Pixels = px(70.0);
-    pub const GROUPS_ID_COLUMN: Pixels = px(110.0);
+    pub const GROUPS_COUNT_COLUMN: Rems = ui(70.0);
+    pub const GROUPS_ID_COLUMN: Rems = ui(110.0);
     pub const CALLOUT_MARGIN: Pixels = px(14.0);
     pub const CALLOUT_PADDING: Pixels = px(12.0);
     pub const CALLOUT_GAP: Pixels = px(6.0);
@@ -1442,7 +1442,7 @@ impl KeyValueMetrics {
     /// gutter with 14 px right padding, 20 px per JSON level.
     pub const VALUE_PADDING_TOP: Pixels = px(12.0);
     pub const VALUE_LINE_HEIGHT: Rems = ui(22.0);
-    pub const LINE_NUMBER_WIDTH: Pixels = px(36.0);
+    pub const LINE_NUMBER_WIDTH: Rems = ui(36.0);
     pub const LINE_NUMBER_PADDING_RIGHT: Pixels = px(14.0);
     pub const JSON_INDENT: Pixels = px(20.0);
     /// Large value gate: 16 px margin, 14 x 16 px padding, 12 px gap,
@@ -1455,15 +1455,15 @@ impl KeyValueMetrics {
     /// Expiry popover: 380 px, 16 px from the pane's left edge and 84 px
     /// from its top, 16 px padding, 12 px gap, 110 px duration field, 180 px
     /// date field.
-    pub const EXPIRY_WIDTH: Pixels = px(380.0);
+    pub const EXPIRY_WIDTH: Rems = ui(380.0);
     pub const EXPIRY_OFFSET_LEFT: Pixels = px(16.0);
     pub const EXPIRY_OFFSET_TOP: Pixels = px(84.0);
     pub const EXPIRY_PADDING: Pixels = px(16.0);
     pub const EXPIRY_GAP: Pixels = px(12.0);
-    pub const EXPIRY_DURATION_WIDTH: Pixels = px(110.0);
-    pub const EXPIRY_AT_WIDTH: Pixels = px(180.0);
+    pub const EXPIRY_DURATION_WIDTH: Rems = ui(110.0);
+    pub const EXPIRY_AT_WIDTH: Rems = ui(180.0);
     /// Bulk delete confirmation: 560 px wide, 30 px match rows.
-    pub const BULK_MODAL_WIDTH: Pixels = px(560.0);
+    pub const BULK_MODAL_WIDTH: Rems = ui(560.0);
     pub const BULK_ROW_HEIGHT: Rems = ui(30.0);
 }
 
@@ -1505,7 +1505,7 @@ impl NavigationMetrics {
     pub const BREADCRUMB_META_MARGIN: Pixels = px(6.0);
 
     /// Empty state card width (460 px), padding (34 px) and gap (14 px).
-    pub const EMPTY_WIDTH: Pixels = px(460.0);
+    pub const EMPTY_WIDTH: Rems = ui(460.0);
     pub const EMPTY_PADDING: Pixels = px(34.0);
     pub const EMPTY_GAP: Pixels = px(14.0);
     /// Empty state icon. (30 px)
@@ -1531,7 +1531,7 @@ impl ShellMetrics {
 
     /// Command search field, centered in the title bar: 420 by 30 px, cut
     /// 6, 10 px padding, 8 px gap, 14 px search icon, 12.5 px text.
-    pub const COMMAND_SEARCH_WIDTH: Pixels = px(420.0);
+    pub const COMMAND_SEARCH_WIDTH: Rems = ui(420.0);
     pub const COMMAND_SEARCH_HEIGHT: Rems = ui(30.0);
     pub const COMMAND_SEARCH_PADDING_X: Pixels = px(10.0);
     pub const COMMAND_SEARCH_GAP: Pixels = px(8.0);
@@ -1548,7 +1548,7 @@ impl ShellMetrics {
     pub const BELL_BADGE_MIN_WIDTH: Rems = ui(16.0);
     pub const BELL_BADGE_PADDING_X: Pixels = px(4.0);
     pub const BELL_BADGE_FONT: Rems = ui(10.0);
-    pub const BELL_BADGE_OFFSET: Pixels = px(-5.0);
+    pub const BELL_BADGE_OFFSET: Rems = ui(-5.0);
 
     /// Activity rail: 46 px wide on the desk, no fill and no line.
     pub const RAIL_WIDTH: Rems = ui(46.0);
@@ -1613,7 +1613,7 @@ impl ShellMetrics {
     /// aligned with the task name (58 px), 11.5 px mono, on a 6% danger wash.
     pub const TASK_ERROR_PADDING_TOP: Pixels = px(6.0);
     pub const TASK_ERROR_PADDING_BOTTOM: Pixels = px(8.0);
-    pub const TASK_ERROR_INDENT: Pixels = px(58.0);
+    pub const TASK_ERROR_INDENT: Rems = ui(58.0);
     pub const TASK_ERROR_FONT: Rems = ui(11.5);
     pub const TASK_ERROR_ALPHA: f32 = 0.06;
     /// The task row the keyboard points at: a 10% tint wash.
@@ -1623,7 +1623,7 @@ impl ShellMetrics {
     /// the glyph and the title and between the cards. Wide enough that
     /// longer translations of "Command palette" stay on one line next to
     /// their shortcut keys.
-    pub const EMPTY_WIDTH: Pixels = px(700.0);
+    pub const EMPTY_WIDTH: Rems = ui(700.0);
     pub const EMPTY_GAP: Pixels = px(26.0);
     pub const EMPTY_HEAD_GAP: Pixels = px(16.0);
     pub const EMPTY_GLYPH: Rems = ui(44.0);
@@ -1676,7 +1676,7 @@ impl NotificationMetrics {
 
     /// The popover: 440 px wide, at most 70 % of the window tall, cut 12,
     /// 2 px under the title bar.
-    pub const POPOVER_WIDTH: Pixels = px(440.0);
+    pub const POPOVER_WIDTH: Rems = ui(440.0);
     pub const POPOVER_MAX_HEIGHT_FRACTION: f32 = 0.70;
     pub const POPOVER_GAP_TOP: Pixels = px(2.0);
 
@@ -1720,8 +1720,8 @@ impl NotificationMetrics {
     pub const ROW_PADDING_LEFT: Pixels = px(12.0);
     pub const ROW_PADDING_RIGHT: Pixels = px(14.0);
     pub const ROW_GAP: Pixels = px(10.0);
-    pub const DIAMOND: Pixels = px(7.0);
-    pub const DIAMOND_OFFSET_TOP: Pixels = px(7.0);
+    pub const DIAMOND: Rems = ui(7.0);
+    pub const DIAMOND_OFFSET_TOP: Rems = ui(7.0);
     pub const ICON_BOX: Rems = ui(28.0);
     pub const ICON: Rems = ui(15.0);
     pub const TEXT_GAP: Pixels = px(4.0);
@@ -1838,7 +1838,7 @@ impl DocumentMetrics {
     pub const TOOLBAR_RULE_HEIGHT: Pixels = px(20.0);
     pub const TOOLBAR_RULE_MARGIN_X: Pixels = px(4.0);
     /// Search field in a toolbar. (300 px)
-    pub const SEARCH_WIDTH: Pixels = px(300.0);
+    pub const SEARCH_WIDTH: Rems = ui(300.0);
     pub const SEARCH_ICON: Rems = ui(14.0);
     /// Leading icon of a toolbar select. (14 px)
     pub const SELECT_ICON: Rems = ui(14.0);
@@ -1861,7 +1861,7 @@ impl DocumentMetrics {
     pub const DETAIL_FIELD_GAP: Pixels = px(16.0);
     pub const DETAIL_LABEL_GAP: Pixels = px(4.0);
     pub const DETAIL_LABEL_FONT: Rems = ui(11.0);
-    pub const DETAIL_FIELD_MIN_WIDTH: Pixels = px(140.0);
+    pub const DETAIL_FIELD_MIN_WIDTH: Rems = ui(140.0);
     /// Code block inside a detail: 14 px above, 12 by 14 px padding, 12 px
     /// mono at 1.7 line height; the action row sits 12 px below.
     pub const DETAIL_BLOCK_MARGIN_TOP: Pixels = px(14.0);
@@ -1890,7 +1890,7 @@ pub struct ObjectStoreMetrics;
 
 impl ObjectStoreMetrics {
     /// Search field in the header. (280 px)
-    pub const SEARCH_WIDTH: Pixels = px(280.0);
+    pub const SEARCH_WIDTH: Rems = ui(280.0);
     /// Table: 16 px side padding, 34 px bucket rows and 32 px object rows,
     /// a 15 px icon 9 px before the 13 px mono name (12.5 px for objects).
     pub const TABLE_PADDING_X: Pixels = px(16.0);
@@ -1902,11 +1902,11 @@ impl ObjectStoreMetrics {
     pub const OBJECT_NAME_FONT: Rems = ui(12.5);
     /// Bucket columns after the name: region, objects, size, versioning,
     /// created.
-    pub const REGION_WIDTH: Pixels = px(140.0);
-    pub const OBJECTS_WIDTH: Pixels = px(120.0);
-    pub const SIZE_WIDTH: Pixels = px(130.0);
-    pub const VERSIONING_WIDTH: Pixels = px(130.0);
-    pub const CREATED_WIDTH: Pixels = px(150.0);
+    pub const REGION_WIDTH: Rems = ui(140.0);
+    pub const OBJECTS_WIDTH: Rems = ui(120.0);
+    pub const SIZE_WIDTH: Rems = ui(130.0);
+    pub const VERSIONING_WIDTH: Rems = ui(130.0);
+    pub const CREATED_WIDTH: Rems = ui(150.0);
     /// Bucket details strip: 14 by 16 px padding, 28 px between fields, a
     /// 16 px icon before the bold name, 13 px mono values.
     pub const DETAILS_PADDING_Y: Pixels = px(14.0);
@@ -2054,10 +2054,10 @@ pub struct SchemaMetrics;
 impl SchemaMetrics {
     /// Toolbar: 46 px, the zoom readout 44 px wide in 12 px mono.
     pub const TOOLBAR_HEIGHT: Rems = ui(46.0);
-    pub const ZOOM_WIDTH: Pixels = px(44.0);
+    pub const ZOOM_WIDTH: Rems = ui(44.0);
     pub const ZOOM_FONT: Rems = ui(12.0);
     /// Layout select width. (160 px)
-    pub const LAYOUT_WIDTH: Pixels = px(160.0);
+    pub const LAYOUT_WIDTH: Rems = ui(160.0);
     /// Table card: 10 px side padding, 8 px header gap, a 13 px tint icon
     /// and 12 px bold mono name; rows with a 6 px gap, an 11 px key icon and
     /// 11.5 px mono text.
@@ -2071,7 +2071,7 @@ impl SchemaMetrics {
     /// Label of a card's index section. (10 px)
     pub const INDEX_LABEL_FONT: Rems = ui(10.0);
     /// Type column width inside a row. (56 px)
-    pub const TYPE_WIDTH: Pixels = px(56.0);
+    pub const TYPE_WIDTH: Rems = ui(56.0);
     /// Wash on the selected card's header. (tint at 12 %)
     pub const SELECTED_HEADER_ALPHA: f32 = 0.12;
     /// Dot grid: 2 px dots on the line color.
@@ -2125,7 +2125,7 @@ impl DocumentInspectorMetrics {
     pub const CHEVRON: Rems = ui(11.0);
     pub const ROW_FONT: Rems = ui(12.5);
     /// Type chip column at the right: 44 px wide, 10 px text.
-    pub const TYPE_WIDTH: Pixels = px(44.0);
+    pub const TYPE_WIDTH: Rems = ui(44.0);
     pub const TYPE_FONT: Rems = ui(10.0);
     /// A row with a staged edit: a 2 px warning edge at its left.
     pub const PENDING_EDGE: Pixels = px(2.0);
@@ -2157,11 +2157,11 @@ impl BuilderMetrics {
     /// Rows inside a card: 6 px between controls.
     pub const ROW_GAP: Pixels = px(6.0);
     /// Filter row controls: 120 px column select, 64 px comparator.
-    pub const FILTER_COLUMN_WIDTH: Pixels = px(120.0);
-    pub const FILTER_COMPARATOR_WIDTH: Pixels = px(64.0);
+    pub const FILTER_COLUMN_WIDTH: Rems = ui(120.0);
+    pub const FILTER_COMPARATOR_WIDTH: Rems = ui(64.0);
     /// Sort and limit row: a 150 px column dropdown and a 70 px limit field.
-    pub const SORT_COLUMN_WIDTH: Pixels = px(150.0);
-    pub const SORT_LIMIT_WIDTH: Pixels = px(70.0);
+    pub const SORT_COLUMN_WIDTH: Rems = ui(150.0);
+    pub const SORT_LIMIT_WIDTH: Rems = ui(70.0);
     /// "valid" status: 11.5 px text, 12 px icon 5 px before it.
     pub const STATUS_FONT: Rems = ui(11.5);
     pub const STATUS_ICON: Rems = ui(12.0);
@@ -2236,7 +2236,7 @@ impl ChartDocumentMetrics {
     pub const RAIL_ICON: Rems = ui(13.0);
     pub const RAIL_LABEL_FONT: Rems = ui(10.0);
     /// Width of the metric picker rail. (320 px)
-    pub const PICKER_WIDTH: Pixels = px(320.0);
+    pub const PICKER_WIDTH: Rems = ui(320.0);
 }
 
 /// Geometry of the chart axis row (P1Chart): the X, Y, Group and Agg
@@ -2249,9 +2249,9 @@ impl AxisBarMetrics {
     /// Role labels ("X", "Y", "Group"). (12 px)
     pub const ROLE_FONT: Rems = ui(12.0);
     /// Select widths: 190 px for X, 150 px for Y and Group, 110 px for Agg.
-    pub const X_WIDTH: Pixels = px(190.0);
-    pub const FIELD_WIDTH: Pixels = px(150.0);
-    pub const AGG_WIDTH: Pixels = px(110.0);
+    pub const X_WIDTH: Rems = ui(190.0);
+    pub const FIELD_WIDTH: Rems = ui(150.0);
+    pub const AGG_WIDTH: Rems = ui(110.0);
     /// Picker offset below the select. (34 px)
     pub const PICKER_OFFSET: Pixels = px(34.0);
 }
@@ -2266,13 +2266,13 @@ impl Widths {
     ///
     /// Applied to the fixed-width left column that holds field labels and
     /// dropdown controls in two-column settings forms. (220 px)
-    pub const SETTINGS_FORM_LABEL: Pixels = px(220.0);
+    pub const SETTINGS_FORM_LABEL: Rems = ui(220.0);
 
     /// Dropdown column width in connection manager form rows.
     ///
     /// Applied to dropdown and field-control wrappers in the connection manager
     /// tabs (hooks, render, access, drivers). (240 px)
-    pub const CM_FORM_DROPDOWN: Pixels = px(240.0);
+    pub const CM_FORM_DROPDOWN: Rems = ui(240.0);
 
     /// Left list-panel width in settings sections with a master/detail layout.
     ///

@@ -7,7 +7,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, Chamfer, SegmentedControl, SegmentedItem, Text, stepped_segment,
 };
-use dbflux_components::tokens::{ChamferCut, ChromeColors};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, ui};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
@@ -1484,7 +1484,7 @@ impl HooksSection {
         label: String,
         input: &Entity<InputState>,
         field: HookFormField,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         help: Option<String>,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -2363,7 +2363,7 @@ fn kind_segment_id(field: HookFormField) -> Option<&'static str> {
 }
 
 /// Width of the short text fields of the hook form (id, command). (300 px)
-const HOOK_FIELD_WIDTH: Pixels = px(300.0);
+const HOOK_FIELD_WIDTH: Rems = ui(300.0);
 
 /// Element-id suffix of a hook form field.
 fn hook_field_id(field: HookFormField) -> &'static str {

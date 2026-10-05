@@ -646,7 +646,7 @@ impl ChartDocument {
 
                     (
                         "chart-metric-picker",
-                        ChartDocumentMetrics::PICKER_WIDTH,
+                        ChartDocumentMetrics::PICKER_WIDTH.to_pixels(window.rem_size()),
                         content,
                     )
                 })

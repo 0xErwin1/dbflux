@@ -11,7 +11,7 @@
 use std::sync::{Arc, LazyLock, OnceLock};
 
 use dbflux_core::GeneralSettings;
-use gpui::{App, Global, Pixels, Rems, SharedString, px};
+use gpui::{AbsoluteLength, App, Global, Pixels, Rems, SharedString, px};
 
 use crate::tokens::{BASE_REM, EditorMetrics, GridMetrics};
 use crate::typography::{AppFonts, BUNDLED_FONT_ASSETS};
@@ -140,11 +140,6 @@ pub fn ui_scale(cx: &App) -> f32 {
     active(cx).ui_size / GeneralSettings::DEFAULT_UI_FONT_SIZE
 }
 
-/// Scales an interface measurement by `ui_scale`.
-pub fn scaled(cx: &App, value: Pixels) -> Pixels {
-    value * ui_scale(cx)
-}
-
 /// Resolves an interface length in rems to pixels at the current interface
 /// size, for code that does pixel arithmetic outside layout. It matches the
 /// rem size `Root` applies to every window.
@@ -187,6 +182,14 @@ pub fn grid_family(cx: &App) -> SharedString {
 /// Grid cell text and column name size.
 pub fn grid_font_size(cx: &App) -> Pixels {
     px(active(cx).grid_size)
+}
+
+/// Resolves a size drawn for the default grid size, such as a glyph or a
+/// secondary text size on the grid surface, at the current grid size. Rems
+/// resolve at the default rem size first, so interface tokens keep their
+/// design size on the grid. Not rounded, unlike [`grid_scaled`].
+pub fn grid_px(cx: &App, value: impl Into<AbsoluteLength>) -> Pixels {
+    value.into().to_pixels(px(BASE_REM)) * grid_scale(cx)
 }
 
 /// Grid column type size.
@@ -366,7 +369,6 @@ mod tests {
         cx.update(|cx| {
             assert_eq!(current(cx), FontSettings::default());
             assert_eq!(ui_scale(cx), 1.0);
-            assert_eq!(scaled(cx, px(11.0)), px(11.0));
             assert_eq!(ui_family(cx), SharedString::from(AppFonts::INTERFACE));
             assert_eq!(editor_family(cx), SharedString::from(AppFonts::MONO));
             assert_eq!(editor_font_size(cx), EditorMetrics::CODE_FONT);
@@ -375,6 +377,8 @@ mod tests {
             assert_eq!(grid_family(cx), SharedString::from(AppFonts::MONO));
             assert_eq!(grid_font_size(cx), GridMetrics::FONT);
             assert_eq!(grid_type_font_size(cx), GridMetrics::TYPE_FONT);
+            assert_eq!(grid_px(cx, ui(13.0)), px(13.0));
+            assert_eq!(grid_px(cx, px(11.5)), px(11.5));
             assert_eq!(grid_row_height(cx), GridMetrics::ROW_HEIGHT);
             assert_eq!(grid_header_height(cx), GridMetrics::HEADER_HEIGHT);
             assert_eq!(grid_record_row_height(cx), px(30.0));
@@ -409,12 +413,13 @@ mod tests {
             );
 
             assert_eq!(ui_scale(cx), 1.5);
-            assert_eq!(scaled(cx, px(10.0)), px(15.0));
             assert_eq!(editor_font_size(cx), px(20.0));
             assert_eq!(editor_line_height(cx), px(34.0));
             assert_eq!(editor_scaled(cx, px(13.0)), px(20.0));
             assert_eq!(grid_font_size(cx), px(25.0));
             assert_eq!(grid_type_font_size(cx), px(21.0));
+            assert_eq!(grid_px(cx, ui(13.0)), px(26.0));
+            assert_eq!(grid_px(cx, px(11.5)), px(23.0));
             assert_eq!(grid_row_height(cx), px(62.0));
             assert_eq!(grid_header_height(cx), px(80.0));
             assert_eq!(grid_record_row_height(cx), px(60.0));

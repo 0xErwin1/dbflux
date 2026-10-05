@@ -1037,7 +1037,7 @@ impl ServicesSection {
         label: String,
         input: &Entity<InputState>,
         row: ServiceFormRow,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         unit: Option<String>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {

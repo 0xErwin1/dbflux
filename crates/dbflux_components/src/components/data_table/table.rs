@@ -1021,7 +1021,10 @@ impl DataTable {
                                 .child(SharedString::from(group.label.to_string()))
                                 .child(
                                     div()
-                                        .text_size(CollectionMetrics::HEADER_META_FONT)
+                                        .text_size(fonts::grid_px(
+                                            cx,
+                                            CollectionMetrics::HEADER_META_FONT,
+                                        ))
                                         .text_color(muted)
                                         .child(SharedString::from(group.type_label.to_string())),
                                 )
@@ -1037,7 +1040,7 @@ impl DataTable {
                 .ml(-h_offset)
                 .border_b_1()
                 .border_color(theme.border)
-                .text_size(CollectionMetrics::GROUP_FONT)
+                .text_size(fonts::grid_px(cx, CollectionMetrics::GROUP_FONT))
                 .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
                 .children(cells)
         });
@@ -1077,7 +1080,7 @@ impl DataTable {
                             .min_w_0()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_size(CollectionMetrics::HEADER_META_FONT)
+                            .text_size(fonts::grid_px(cx, CollectionMetrics::HEADER_META_FONT))
                             .text_color(muted)
                             .child(SharedString::from(col_spec.type_name.to_string())),
                     )
@@ -1122,7 +1125,7 @@ impl DataTable {
                         )
                         .child(
                             div()
-                                .text_size(CollectionMetrics::HEADER_META_FONT)
+                                .text_size(fonts::grid_px(cx, CollectionMetrics::HEADER_META_FONT))
                                 .text_color(muted)
                                 .child(format!("{}%", (clamped * 100.0).round() as u32)),
                         )
@@ -1235,6 +1238,7 @@ impl DataTable {
                 let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
+                let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
                 let theme = cx.theme();
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
@@ -1258,6 +1262,7 @@ impl DataTable {
                     total_width,
                     font_size,
                     row_height,
+                    nested_icon,
                     null_color,
                     theme,
                 )
@@ -1303,6 +1308,7 @@ fn render_rows(
     total_width: f32,
     font_size: Pixels,
     row_height: Pixels,
+    nested_icon: Pixels,
     null_color: Hsla,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
@@ -1533,7 +1539,7 @@ fn render_rows(
                         .when_some(nested_kind, |d, _| {
                             d.gap(GridMetrics::HEADER_GAP).child(
                                 Icon::new(AppIcon::Braces)
-                                    .size(CollectionMetrics::NESTED_ICON)
+                                    .size(nested_icon)
                                     .color(text_color),
                             )
                         })
@@ -1548,7 +1554,7 @@ fn render_rows(
                         .when(nested_kind == Some(true), |d| {
                             d.child(
                                 Icon::new(AppIcon::ChevronRight)
-                                    .size(CollectionMetrics::NESTED_ICON)
+                                    .size(nested_icon)
                                     .color(text_color),
                             )
                         })

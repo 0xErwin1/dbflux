@@ -116,7 +116,7 @@ pub(crate) fn toolbar_rule(cx: &App) -> Div {
 /// search icon, the frameless input and the `/` keycap while it is empty.
 pub(crate) fn search_field(
     input: &Entity<InputState>,
-    width: Option<Pixels>,
+    width: Option<Rems>,
     focused: bool,
     cx: &App,
 ) -> Div {

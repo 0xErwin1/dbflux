@@ -9,7 +9,7 @@ use dbflux_components::composites::{
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, SegmentedControl, SegmentedItem};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics, Spacing, ui};
 use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::VimBinding;
 use dbflux_core::{FieldSchemaStats, FieldValueSummary, NULL_TYPE_NAME, Value};
@@ -77,7 +77,7 @@ impl DataGridPanel {
         keyword: &'static str,
         tooltip: String,
         content: AnyElement,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         cx: &App,
     ) -> Stateful<Div> {
         let theme = cx.theme();
@@ -672,7 +672,7 @@ impl DataGridPanel {
             .border_color(theme.border)
             .child(
                 Icon::new(AppIcon::Activity)
-                    .size(CollectionMetrics::NESTED_ICON)
+                    .size(ui(f32::from(CollectionMetrics::NESTED_ICON)))
                     .color(muted),
             )
             .child(
@@ -707,7 +707,7 @@ impl DataGridPanel {
                     .child(dbflux_i18n::t!("document.collection.schema.click_hint")),
             );
 
-        let header_cell = |label: String, width: Option<Pixels>| {
+        let header_cell = |label: String, width: Option<Rems>| {
             div()
                 .when_some(width, |cell, width| cell.w(width).flex_shrink_0())
                 .when(width.is_none(), |cell| cell.flex_1())
@@ -806,8 +806,10 @@ impl DataGridPanel {
             theme.warning
         };
 
-        let bar_width = f32::from(CollectionMetrics::SCHEMA_TYPES_WIDTH)
-            - f32::from(CollectionMetrics::TYPE_BAR_CLEARANCE);
+        let bar_width = f32::from(dbflux_components::fonts::ui_px(
+            cx,
+            CollectionMetrics::SCHEMA_TYPES_WIDTH,
+        )) - f32::from(CollectionMetrics::TYPE_BAR_CLEARANCE);
         let presence_ratio = field.presence_ratio(sampled).clamp(0.0, 1.0);
 
         let segments: Vec<AnyElement> = field
@@ -861,7 +863,7 @@ impl DataGridPanel {
                 .gap(Spacing::SM)
                 .child(
                     Icon::new(AppIcon::TriangleAlert)
-                        .size(CollectionMetrics::NESTED_ICON)
+                        .size(ui(f32::from(CollectionMetrics::NESTED_ICON)))
                         .color(theme.warning),
                 )
                 .child(match secondary {
@@ -1049,7 +1051,7 @@ impl DataGridPanel {
                                 .gap(Spacing::SM)
                                 .child(
                                     Icon::new(AppIcon::TriangleAlert)
-                                        .size(CollectionMetrics::NESTED_ICON)
+                                        .size(ui(f32::from(CollectionMetrics::NESTED_ICON)))
                                         .color(theme.warning),
                                 )
                                 .child(

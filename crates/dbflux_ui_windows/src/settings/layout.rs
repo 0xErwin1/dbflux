@@ -250,7 +250,7 @@ pub(crate) fn cursor_ring(focused: bool, child: impl IntoElement, cx: &App) -> D
 /// `cursor` is set.
 pub(crate) fn field_frame(
     cursor: bool,
-    width: Option<Pixels>,
+    width: Option<Rems>,
     mono: bool,
     field: impl IntoElement,
     cx: &App,

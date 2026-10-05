@@ -8,8 +8,8 @@ use dbflux_core::LogErr;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, AnyWindowHandle, App, Div, ElementId, FocusHandle, Hsla, KeyContext, MouseButton,
-    Pixels, ScrollHandle, SharedString, Stateful, Window, div, point, px,
+    AbsoluteLength, AnyElement, AnyWindowHandle, App, Div, ElementId, FocusHandle, Hsla,
+    KeyContext, MouseButton, Pixels, ScrollHandle, SharedString, Stateful, Window, div, point, px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, FocusTrapElement};
@@ -182,7 +182,7 @@ pub struct Modal {
     icon: Option<IconSource>,
     icon_color: Option<Hsla>,
     variant: ModalVariant,
-    width: Pixels,
+    width: AbsoluteLength,
     height: ModalHeight,
     placement: ModalPlacement,
     header_extra: Option<AnyElement>,
@@ -211,7 +211,7 @@ impl Modal {
             icon: None,
             icon_color: None,
             variant: ModalVariant::Default,
-            width: ModalMetrics::WIDTH,
+            width: ModalMetrics::WIDTH.into(),
             height: ModalHeight::Auto,
             placement: ModalPlacement::Centered,
             header_extra: None,
@@ -261,8 +261,8 @@ impl Modal {
     }
 
     /// Card width (default: `ModalMetrics::WIDTH`), capped at 95% of the viewport.
-    pub fn width(mut self, width: Pixels) -> Self {
-        self.width = width;
+    pub fn width(mut self, width: impl Into<AbsoluteLength>) -> Self {
+        self.width = width.into();
         self
     }
 

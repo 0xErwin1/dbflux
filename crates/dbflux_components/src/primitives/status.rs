@@ -3,7 +3,10 @@
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{App, Bounds, Hsla, PathBuilder, Pixels, SharedString, Window, canvas, div, point};
+use gpui::{
+    AbsoluteLength, App, Bounds, Hsla, PathBuilder, Pixels, Rems, SharedString, Window, canvas,
+    div, point,
+};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::{ChromeColors, Feedback};
@@ -52,7 +55,7 @@ pub struct StatusIndicator {
     status: Status,
     label: Option<SharedString>,
     latency: Option<Duration>,
-    diamond_size: Pixels,
+    diamond_size: Rems,
 }
 
 impl StatusIndicator {
@@ -111,7 +114,9 @@ impl RenderOnce for StatusIndicator {
 
 /// A bare diamond of `size` in `color`, for markers that carry a color
 /// outside the [`Status`] set (environment chips).
-pub fn status_diamond(color: Hsla, size: Pixels) -> impl IntoElement {
+pub fn status_diamond(color: Hsla, size: impl Into<AbsoluteLength>) -> impl IntoElement {
+    let size: AbsoluteLength = size.into();
+
     div().flex_shrink_0().size(size).child(
         canvas(
             |_, _, _| {},

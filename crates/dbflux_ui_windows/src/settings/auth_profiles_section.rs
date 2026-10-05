@@ -12,7 +12,7 @@ use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Text};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ui};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
@@ -33,7 +33,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 /// Width of the text fields and selects of the auth profile form. (300 px)
-const AUTH_SELECT_WIDTH: Pixels = px(300.0);
+const AUTH_SELECT_WIDTH: Rems = ui(300.0);
 
 /// Cached dropdown options for a `DynamicSelect` field.
 ///

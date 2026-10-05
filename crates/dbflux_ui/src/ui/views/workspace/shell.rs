@@ -425,6 +425,9 @@ impl Workspace {
 
         let start_card = self.render_start_card(cx);
         let has_recent = !recent.is_empty();
+        let lone_card_width = (dbflux_components::fonts::ui_px(cx, ShellMetrics::EMPTY_WIDTH)
+            - ShellMetrics::EMPTY_HEAD_GAP)
+            / 2.0;
 
         let cards = div()
             .flex()
@@ -433,9 +436,7 @@ impl Workspace {
             .child(
                 div()
                     .when(has_recent, |card| card.flex_1())
-                    .when(!has_recent, |card| {
-                        card.w((ShellMetrics::EMPTY_WIDTH - ShellMetrics::EMPTY_HEAD_GAP) / 2.0)
-                    })
+                    .when(!has_recent, |card| card.w(lone_card_width))
                     .child(start_card),
             )
             .when(has_recent, |cards| {

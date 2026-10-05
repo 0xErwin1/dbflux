@@ -147,7 +147,7 @@ pub(super) fn render_tree_item(
         || item_id.starts_with("KL|");
     if is_loading_row {
         let theme = cx.theme();
-        let label_start = TreeMetrics::INDENT * depth as f32
+        let label_start = dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT) * depth as f32
             + dbflux_components::fonts::ui_px(cx, TreeMetrics::CHEVRON)
             + TreeMetrics::GAP;
         return ListItem::new(ix).h(TreeMetrics::ROW_HEIGHT).child(
@@ -198,7 +198,7 @@ pub(super) fn render_tree_item(
     );
 
     let theme = cx.theme();
-    let indent_per_level = f32::from(TreeMetrics::INDENT);
+    let indent_per_level = f32::from(dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT));
     let is_folder = entry.is_folder();
     let is_expanded = reads_expanded(node_kind, entry.is_expanded(), is_folder);
 
@@ -1202,7 +1202,9 @@ fn render_failure_slice(
     let danger = theme.danger;
     let muted = theme.muted_foreground;
     let row_height = dbflux_components::fonts::ui_px(cx, TreeMetrics::ROW_HEIGHT);
-    let block_left = TreeMetrics::PADDING_X + TreeMetrics::INDENT * depth as f32 + Spacing::SM;
+    let block_left = TreeMetrics::PADDING_X
+        + dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT) * depth as f32
+        + Spacing::SM;
 
     let failure = params
         .failure_details

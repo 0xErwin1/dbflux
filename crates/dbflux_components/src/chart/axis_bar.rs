@@ -16,8 +16,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, ElementId, Pixels, SharedString, Window, anchored, deferred, div,
-    point, px,
+    Anchor, AnyElement, App, ElementId, Rems, SharedString, Window, anchored, deferred, div, point,
+    px,
 };
 
 use crate::chart::spec::{AggKind, BindingSpec};
@@ -455,7 +455,7 @@ where
 /// Leading icon and width of an axis field.
 struct AxisPillStyle {
     icon: AppIcon,
-    width: Pixels,
+    width: Rems,
 }
 
 /// Build a single axis field (P1Chart): the role ("X", "Y", "Group") in

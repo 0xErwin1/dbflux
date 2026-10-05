@@ -2,7 +2,7 @@ use crate::controls::{GpuiInput as Input, InputEvent, InputState};
 use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing, ui};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing, TreeMetrics, ui};
 use crate::typography::AppFonts;
 use crate::vim::{VimBinding, VimHost};
 use gpui::prelude::FluentBuilder;
@@ -18,8 +18,34 @@ use super::state::{DocumentTreeState, DocumentViewMode};
 /// Height of each row in the tree at the default grid font size.
 pub const TREE_ROW_HEIGHT: Pixels = px(26.0);
 
-/// Indentation per depth level.
+/// Indentation per depth level at the default grid font size.
 const INDENT_WIDTH: Pixels = px(16.0); // guardrail-allow: domain const, tree indentation step
+
+/// Sizes of a tree row. The tree is the grid surface of document
+/// collections, so its rows follow the grid font size rather than the
+/// interface size.
+#[derive(Clone, Copy)]
+struct TreeRowMetrics {
+    row_height: Pixels,
+    indent: Pixels,
+    chevron_box: Pixels,
+    chevron: Pixels,
+    label_font: Pixels,
+    value_font: Pixels,
+}
+
+impl TreeRowMetrics {
+    fn for_grid(cx: &App) -> Self {
+        Self {
+            row_height: fonts::grid_scaled(cx, TREE_ROW_HEIGHT),
+            indent: fonts::grid_scaled(cx, INDENT_WIDTH),
+            chevron_box: fonts::grid_px(cx, Heights::ICON_SM),
+            chevron: fonts::grid_px(cx, TreeMetrics::CHEVRON),
+            label_font: fonts::grid_px(cx, FontSizes::XS),
+            value_font: fonts::grid_px(cx, FontSizes::SM),
+        }
+    }
+}
 
 actions!(
     document_tree,
@@ -397,7 +423,7 @@ impl Render for DocumentTree {
 
                                     let editing_node = state_ref.editing_node().cloned();
                                     let inline_edit_input = state_ref.inline_edit_input().cloned();
-                                    let row_height = fonts::grid_scaled(cx, TREE_ROW_HEIGHT);
+                                    let metrics = TreeRowMetrics::for_grid(cx);
 
                                     range
                                         .filter_map(|ix| visible_nodes.get(ix).cloned())
@@ -427,7 +453,7 @@ impl Render for DocumentTree {
                                                 theme.clone(),
                                                 state_clone,
                                                 node_id,
-                                                row_height,
+                                                metrics,
                                             )
                                         })
                                         .collect()
@@ -584,9 +610,9 @@ fn render_tree_row(
     theme: gpui_component::Theme,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
-    row_height: Pixels,
+    metrics: TreeRowMetrics,
 ) -> Stateful<Div> {
-    let indent = INDENT_WIDTH * node.depth as f32;
+    let indent = metrics.indent * node.depth as f32;
     let is_expandable = node.is_expandable();
 
     let chevron_state = state.clone();
@@ -622,7 +648,7 @@ fn render_tree_row(
         .id(ElementId::Name(
             format!("tree-row-{:?}", node.id.path).into(),
         ))
-        .h(row_height)
+        .h(metrics.row_height)
         .w_full()
         .flex()
         .items_center()
@@ -675,6 +701,7 @@ fn render_tree_row(
             muted_color,
             chevron_state,
             chevron_node_id,
+            metrics,
         ))
         // Key
         .child(
@@ -682,10 +709,14 @@ fn render_tree_row(
                 .flex()
                 .items_center()
                 .gap(Spacing::XS)
-                .child(Text::body_sm(node.key.to_string()).color(key_color))
+                .child(
+                    Text::body_sm(node.key.to_string())
+                        .font_size(metrics.label_font)
+                        .color(key_color),
+                )
                 .child(
                     Text::caption(":")
-                        .font_size(FontSizes::XS)
+                        .font_size(metrics.label_font)
                         .color(muted_color),
                 ),
         )
@@ -699,6 +730,7 @@ fn render_tree_row(
             &theme,
             value_state,
             value_node_id,
+            metrics.value_font,
         ))
         // Type badge with type-colored background
         .child({
@@ -709,7 +741,7 @@ fn render_tree_row(
                 .bg(type_color.opacity(0.15))
                 .child(
                     Text::caption(node.value.type_label())
-                        .font_size(FontSizes::XS)
+                        .font_size(metrics.label_font)
                         .color(type_color),
                 )
         })
@@ -721,13 +753,14 @@ fn render_chevron(
     muted_color: Hsla,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
+    metrics: TreeRowMetrics,
 ) -> Stateful<Div> {
     let chevron = div()
         .id(ElementId::Name(
             format!("tree-chevron-{:?}", node_id.path).into(),
         ))
-        .w(Heights::ICON_SM)
-        .h(Heights::ICON_SM)
+        .w(metrics.chevron_box)
+        .h(metrics.chevron_box)
         .flex()
         .items_center()
         .justify_center();
@@ -740,7 +773,7 @@ fn render_chevron(
         };
 
         chevron
-            .child(Icon::new(icon).size(ui(12.0)).color(muted_color))
+            .child(Icon::new(icon).size(metrics.chevron).color(muted_color))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, _, cx| {
@@ -784,6 +817,7 @@ fn render_value_preview_with_expand(
     theme: &gpui_component::Theme,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
+    font_size: Pixels,
 ) -> Stateful<Div> {
     let color = get_type_color(value, theme);
 
@@ -800,7 +834,7 @@ fn render_value_preview_with_expand(
         .flex_1()
         .overflow_x_hidden()
         .ml(Spacing::XS)
-        .text_size(FontSizes::SM)
+        .text_size(font_size)
         .text_color(color);
 
     if is_editing && let Some(input) = inline_edit_input {

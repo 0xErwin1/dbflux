@@ -1288,10 +1288,10 @@ impl DriversSection {
 const DRIVER_LOGO_SIZE: Rems = ui(28.0);
 
 /// Width of the "global: ..." caption column of the override rows. (160 px)
-const OVERRIDE_CAPTION_WIDTH: Pixels = px(160.0);
+const OVERRIDE_CAPTION_WIDTH: Rems = ui(160.0);
 
 /// Width of the value column of the override rows. (160 px)
-const OVERRIDE_CONTROL_WIDTH: Pixels = px(160.0);
+const OVERRIDE_CONTROL_WIDTH: Rems = ui(160.0);
 
 #[cfg(test)]
 mod tests {
