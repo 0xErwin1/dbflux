@@ -3624,6 +3624,7 @@ settings:
     persist_error: "No se pudo persistir la gobernanza de MCP: %{error}"
   general:
     unit:
+      pixels: "px"
       mebibytes: "MiB"
       seconds: "s"
       milliseconds: "ms"
@@ -3660,6 +3661,37 @@ settings:
       option:
         system: Sistema
       notice: "Se aplica al reiniciar DBFlux."
+    ui_font_family:
+      label: "Fuente de la interfaz"
+      help: "Fuente de menús, etiquetas, pestañas y diálogos."
+      option:
+        default: "Predeterminada (%{family})"
+    ui_font_size:
+      label: "Tamaño de fuente de la interfaz"
+      help: "De 8 a 32 px. Todo el texto, las filas y los controles de la interfaz se ajustan a este tamaño."
+      error: "El tamaño de fuente de la interfaz debe ser un número entre %{min} y %{max}"
+    editor_font_family:
+      label: "Fuente del editor"
+      help: "Fuente del editor de código."
+      option:
+        default: "Predeterminada (%{family})"
+    editor_font_size:
+      label: "Tamaño de fuente del editor"
+      help: "De 8 a 32 px. La altura de línea y el texto de la consola se ajustan a este tamaño."
+      error: "El tamaño de fuente del editor debe ser un número entre %{min} y %{max}"
+    grid_font_family:
+      label: "Fuente de la tabla de datos"
+      help: "Fuente de las celdas y de los nombres de columna."
+      option:
+        same_as_editor: "Igual que el editor"
+    grid_font_size:
+      label: "Tamaño de fuente de la tabla de datos"
+      help: "De 8 a 32 px. La altura de filas y encabezados y el ancho automático de columnas se ajustan a este tamaño."
+      error: "El tamaño de fuente de la tabla de datos debe ser un número entre %{min} y %{max}"
+    font_family:
+      option:
+        not_installed: "%{family} (no instalada)"
+      search_placeholder: "Buscar fuentes"
     editor:
       group: "Editor"
     vim_mode:

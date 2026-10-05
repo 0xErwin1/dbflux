@@ -3624,6 +3624,7 @@ settings:
     persist_error: "Failed to persist MCP governance: %{error}"
   general:
     unit:
+      pixels: "px"
       mebibytes: "MiB"
       seconds: "s"
       milliseconds: "ms"
@@ -3660,6 +3661,37 @@ settings:
       option:
         system: System
       notice: "Applies after restarting DBFlux."
+    ui_font_family:
+      label: "Interface font"
+      help: "Font of menus, labels, tabs and dialogs."
+      option:
+        default: "Default (%{family})"
+    ui_font_size:
+      label: "Interface font size"
+      help: "From 8 to 32 px. Every interface text, row and control scales with it."
+      error: "Interface font size must be a number from %{min} to %{max}"
+    editor_font_family:
+      label: "Editor font"
+      help: "Font of the code editor."
+      option:
+        default: "Default (%{family})"
+    editor_font_size:
+      label: "Editor font size"
+      help: "From 8 to 32 px. The line height and the console text follow it."
+      error: "Editor font size must be a number from %{min} to %{max}"
+    grid_font_family:
+      label: "Data grid font"
+      help: "Font of table cells and column names."
+      option:
+        same_as_editor: "Same as editor"
+    grid_font_size:
+      label: "Data grid font size"
+      help: "From 8 to 32 px. Row height, header height and automatic column widths follow it."
+      error: "Data grid font size must be a number from %{min} to %{max}"
+    font_family:
+      option:
+        not_installed: "%{family} (not installed)"
+      search_placeholder: "Search fonts"
     editor:
       group: "Editor"
     vim_mode:

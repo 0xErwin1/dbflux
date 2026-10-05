@@ -147,6 +147,14 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "general-vim-leader.*",
             KeyboardPath::Command(Command::Execute),
         ),
+        (
+            "general-*-font-family",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "general-*-font-family.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("pause-on-error", KeyboardPath::Command(Command::Execute)),
         ("refresh-visible", KeyboardPath::Command(Command::Execute)),
         ("reopen-conns", KeyboardPath::Command(Command::Execute)),

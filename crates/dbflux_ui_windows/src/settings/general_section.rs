@@ -5,6 +5,7 @@ use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChang
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::SegmentedItem;
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
@@ -12,6 +13,8 @@ use gpui::*;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use gpui_component::IndexPath;
+use gpui_component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
 
 /// The leader keys Settings > General offers, in the keymap's stored key
 /// form: Space, and Vim's usual alternatives, comma and backslash (Vim's own
@@ -23,6 +26,12 @@ pub(super) enum GeneralFormRow {
     Theme,
     Style,
     Language,
+    UiFontFamily,
+    UiFontSize,
+    EditorFontFamily,
+    EditorFontSize,
+    GridFontFamily,
+    GridFontSize,
     VimMode,
     VimLeader,
     RestoreSession,
@@ -47,6 +56,35 @@ pub(super) enum GeneralFormRow {
 
 /// Each numeric field's last drawn bounds and the scroll offset of that frame.
 pub(super) type FieldBounds = Rc<RefCell<HashMap<GeneralFormRow, (Bounds<Pixels>, Pixels)>>>;
+/// One of the three font families Settings > General configures.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FontFamilyField {
+    Ui,
+    Editor,
+    Grid,
+}
+
+/// An entry of a font family select: its label and the family it stores,
+/// `None` for the bundled default (or, for the grid, the editor family).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FontFamilyOption {
+    pub(super) label: SharedString,
+    pub(super) family: Option<SharedString>,
+}
+
+impl SelectItem for FontFamilyOption {
+    type Value = Option<SharedString>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.family
+    }
+}
+
+pub(super) type FontFamilySelect = Entity<SelectState<SearchableVec<FontFamilyOption>>>;
 
 pub(super) struct GeneralSection {
     pub(super) app_state: Entity<AppStateEntity>,
@@ -59,6 +97,12 @@ pub(super) struct GeneralSection {
     pub(super) dropdown_language: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
     pub(super) dropdown_vim_leader: Entity<Dropdown>,
+    pub(super) select_ui_font_family: FontFamilySelect,
+    pub(super) select_editor_font_family: FontFamilySelect,
+    pub(super) select_grid_font_family: FontFamilySelect,
+    pub(super) input_ui_font_size: Entity<InputState>,
+    pub(super) input_editor_font_size: Entity<InputState>,
+    pub(super) input_grid_font_size: Entity<InputState>,
     pub(super) input_max_history: Entity<InputState>,
     pub(super) input_auto_save: Entity<InputState>,
     pub(super) input_refresh_interval: Entity<InputState>,
@@ -127,6 +171,73 @@ impl GeneralSection {
                 .items(Self::vim_leader_items())
                 .selected_index(vim_leader_index)
         });
+
+        let installed_fonts = dbflux_components::fonts::installed_font_names(cx);
+        let select_ui_font_family = Self::new_font_family_select(
+            FontFamilyField::Ui,
+            settings.ui_font_family.as_deref(),
+            &installed_fonts,
+            window,
+            cx,
+        );
+        let select_editor_font_family = Self::new_font_family_select(
+            FontFamilyField::Editor,
+            settings.editor_font_family.as_deref(),
+            &installed_fonts,
+            window,
+            cx,
+        );
+        let select_grid_font_family = Self::new_font_family_select(
+            FontFamilyField::Grid,
+            settings.grid_font_family.as_deref(),
+            &installed_fonts,
+            window,
+            cx,
+        );
+
+        let input_ui_font_size = Self::new_font_size_input(
+            settings.ui_font_size,
+            GeneralSettings::DEFAULT_UI_FONT_SIZE,
+            window,
+            cx,
+        );
+        let input_editor_font_size = Self::new_font_size_input(
+            settings.editor_font_size,
+            GeneralSettings::DEFAULT_EDITOR_FONT_SIZE,
+            window,
+            cx,
+        );
+        let input_grid_font_size = Self::new_font_size_input(
+            settings.grid_font_size,
+            GeneralSettings::DEFAULT_GRID_FONT_SIZE,
+            window,
+            cx,
+        );
+
+        let mut font_subscriptions = Vec::new();
+
+        for (field, select) in [
+            (FontFamilyField::Ui, &select_ui_font_family),
+            (FontFamilyField::Editor, &select_editor_font_family),
+            (FontFamilyField::Grid, &select_grid_font_family),
+        ] {
+            font_subscriptions.push(cx.subscribe(
+                select,
+                move |this, _, event: &SelectEvent<SearchableVec<FontFamilyOption>>, cx| {
+                    let SelectEvent::Confirm(choice) = event;
+                    this.set_font_family(field, choice.clone().flatten());
+                    cx.notify();
+                },
+            ));
+        }
+
+        for input in [
+            &input_ui_font_size,
+            &input_editor_font_size,
+            &input_grid_font_size,
+        ] {
+            font_subscriptions.push(cx.subscribe(input, Self::return_focus_on_blur));
+        }
 
         let input_max_history = cx.new(|cx| {
             InputState::new(window, cx)
@@ -285,6 +396,12 @@ impl GeneralSection {
             dropdown_language,
             dropdown_refresh_policy,
             dropdown_vim_leader,
+            select_ui_font_family,
+            select_editor_font_family,
+            select_grid_font_family,
+            input_ui_font_size,
+            input_editor_font_size,
+            input_grid_font_size,
             input_max_history,
             input_auto_save,
             input_refresh_interval,
@@ -311,8 +428,143 @@ impl GeneralSection {
                 blur_editor_row_limit,
                 blur_object_preview_limit,
                 blur_key_value_size_limit,
-            ],
+            ]
+            .into_iter()
+            .chain(font_subscriptions)
+            .collect(),
         }
+    }
+
+    fn return_focus_on_blur(
+        &mut self,
+        _input: Entity<InputState>,
+        event: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(event, InputEvent::Blur) {
+            return;
+        }
+
+        if self.switching_input {
+            self.switching_input = false;
+            return;
+        }
+
+        cx.emit(SectionFocusEvent::RequestFocusReturn);
+    }
+
+    fn new_font_size_input(
+        size: f32,
+        default: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(default.to_string())
+                .default_value(size.to_string())
+        })
+    }
+
+    fn new_font_family_select(
+        field: FontFamilyField,
+        saved: Option<&str>,
+        installed: &[SharedString],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> FontFamilySelect {
+        let options = Self::font_family_options(field, saved, installed);
+        let selected = Self::font_family_index(&options, saved);
+
+        cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(options),
+                Some(IndexPath::new(selected)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        })
+    }
+
+    /// Entries of a font family select: the default first, then a saved
+    /// family the platform does not report (so saving keeps it), then every
+    /// installed family.
+    pub(super) fn font_family_options(
+        field: FontFamilyField,
+        saved: Option<&str>,
+        installed: &[SharedString],
+    ) -> Vec<FontFamilyOption> {
+        let default = FontFamilyOption {
+            label: Self::font_family_default_label(field).into(),
+            family: None,
+        };
+
+        let missing_saved = saved
+            .filter(|family| !installed.iter().any(|name| name.as_ref() == *family))
+            .map(|family| FontFamilyOption {
+                label: dbflux_i18n::t!(
+                    "settings.general.font_family.option.not_installed",
+                    family = family
+                )
+                .into(),
+                family: Some(SharedString::from(family.to_string())),
+            });
+
+        let installed = installed.iter().map(|name| FontFamilyOption {
+            label: name.clone(),
+            family: Some(name.clone()),
+        });
+
+        std::iter::once(default)
+            .chain(missing_saved)
+            .chain(installed)
+            .collect()
+    }
+
+    /// Index of the entry storing `saved` in `options`, the default entry
+    /// when nothing matches.
+    pub(super) fn font_family_index(options: &[FontFamilyOption], saved: Option<&str>) -> usize {
+        options
+            .iter()
+            .position(|option| option.family.as_deref() == saved)
+            .unwrap_or(0)
+    }
+
+    fn font_family_default_label(field: FontFamilyField) -> String {
+        match field {
+            FontFamilyField::Ui => dbflux_i18n::t!(
+                "settings.general.ui_font_family.option.default",
+                family = AppFonts::INTERFACE
+            ),
+            FontFamilyField::Editor => dbflux_i18n::t!(
+                "settings.general.editor_font_family.option.default",
+                family = AppFonts::MONO
+            ),
+            FontFamilyField::Grid => {
+                dbflux_i18n::t!("settings.general.grid_font_family.option.same_as_editor")
+            }
+        }
+    }
+
+    /// Stores the family chosen for `field`; `None` selects the default.
+    pub(super) fn set_font_family(&mut self, field: FontFamilyField, family: Option<SharedString>) {
+        let family = family.map(|family| family.to_string());
+
+        match field {
+            FontFamilyField::Ui => self.gen_settings.ui_font_family = family,
+            FontFamilyField::Editor => self.gen_settings.editor_font_family = family,
+            FontFamilyField::Grid => self.gen_settings.grid_font_family = family,
+        }
+    }
+
+    /// Parses a font size input: a number, decimals allowed, from
+    /// `GeneralSettings::MIN_FONT_SIZE` to `MAX_FONT_SIZE`.
+    pub(super) fn parse_font_size(value: &str) -> Option<f32> {
+        let size = value.trim().parse::<f32>().ok()?;
+        let range = GeneralSettings::MIN_FONT_SIZE..=GeneralSettings::MAX_FONT_SIZE;
+
+        range.contains(&size).then_some(size)
     }
 
     /// Theme segments, in index order (see [`Self::theme_index`]).
@@ -565,7 +817,7 @@ impl Render for GeneralSection {
 
 #[cfg(test)]
 mod tests {
-    use super::{GeneralFormRow, GeneralSection};
+    use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralSection};
     use dbflux_core::{AppStyle, ThemeSetting};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
@@ -820,6 +1072,279 @@ mod tests {
             "settings.general.editor_row_limit.error",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty for {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+    }
+
+    fn stored_general_settings(
+        section: &GeneralSection,
+        cx: &gpui::App,
+    ) -> Option<(f64, f64, f64)> {
+        section
+            .app_state
+            .read(cx)
+            .storage_runtime()
+            .general_settings()
+            .get()
+            .expect("stored general settings readable")
+            .map(|settings| {
+                (
+                    settings.ui_font_size,
+                    settings.editor_font_size,
+                    settings.grid_font_size,
+                )
+            })
+    }
+
+    fn installed(names: &[&str]) -> Vec<gpui::SharedString> {
+        names
+            .iter()
+            .map(|name| gpui::SharedString::from(*name))
+            .collect()
+    }
+
+    #[test]
+    fn parse_font_size_accepts_decimals_within_the_supported_range() {
+        assert_eq!(GeneralSection::parse_font_size("12.5"), Some(12.5));
+        assert_eq!(GeneralSection::parse_font_size(" 14 "), Some(14.0));
+        assert_eq!(GeneralSection::parse_font_size("8"), Some(8.0));
+        assert_eq!(GeneralSection::parse_font_size("32"), Some(32.0));
+
+        for rejected in ["7.9", "32.5", "0", "-13", "", "abc", "NaN", "inf", "13px"] {
+            assert_eq!(
+                GeneralSection::parse_font_size(rejected),
+                None,
+                "{rejected:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn font_family_options_start_with_the_default_that_stores_none() {
+        let options = GeneralSection::font_family_options(
+            FontFamilyField::Editor,
+            None,
+            &installed(&["Fira Code", "Inter"]),
+        );
+
+        assert_eq!(
+            options,
+            vec![
+                FontFamilyOption {
+                    label: "Default (JetBrains Mono)".into(),
+                    family: None,
+                },
+                FontFamilyOption {
+                    label: "Fira Code".into(),
+                    family: Some("Fira Code".into()),
+                },
+                FontFamilyOption {
+                    label: "Inter".into(),
+                    family: Some("Inter".into()),
+                },
+            ]
+        );
+        assert_eq!(GeneralSection::font_family_index(&options, None), 0);
+        assert_eq!(
+            GeneralSection::font_family_index(&options, Some("Inter")),
+            2
+        );
+
+        let grid = GeneralSection::font_family_options(FontFamilyField::Grid, None, &[]);
+        assert_eq!(grid[0].label.as_ref(), "Same as editor");
+        assert_eq!(grid[0].family, None);
+    }
+
+    #[test]
+    fn a_saved_family_that_is_not_installed_stays_selectable() {
+        let options = GeneralSection::font_family_options(
+            FontFamilyField::Ui,
+            Some("Missing Sans"),
+            &installed(&["Inter"]),
+        );
+
+        assert_eq!(options[0].label.as_ref(), "Default (Archivo)");
+        assert_eq!(
+            options[1],
+            FontFamilyOption {
+                label: "Missing Sans (not installed)".into(),
+                family: Some("Missing Sans".into()),
+            }
+        );
+        assert_eq!(
+            GeneralSection::font_family_index(&options, Some("Missing Sans")),
+            1
+        );
+
+        let installed_saved = GeneralSection::font_family_options(
+            FontFamilyField::Ui,
+            Some("Inter"),
+            &installed(&["Inter"]),
+        );
+        assert_eq!(
+            installed_saved.len(),
+            2,
+            "no extra entry for an installed family"
+        );
+    }
+
+    #[test]
+    fn font_rows_follow_the_language_row_and_focus_their_controls() {
+        with_general_section(|section, _, window, cx| {
+            let rows = section.gen_form_rows();
+            let language = rows
+                .iter()
+                .position(|row| *row == GeneralFormRow::Language)
+                .expect("language row");
+
+            assert_eq!(
+                rows[language + 1..language + 7],
+                [
+                    GeneralFormRow::UiFontFamily,
+                    GeneralFormRow::UiFontSize,
+                    GeneralFormRow::EditorFontFamily,
+                    GeneralFormRow::EditorFontSize,
+                    GeneralFormRow::GridFontFamily,
+                    GeneralFormRow::GridFontSize,
+                ]
+            );
+
+            for _ in 0..language + 2 {
+                section.gen_move_down();
+            }
+            section.gen_activate_current_field(window, cx);
+            assert!(
+                section.gen_editing_field,
+                "the UI font size input takes focus"
+            );
+        });
+    }
+
+    #[test]
+    fn font_settings_mark_dirty_and_save() {
+        with_general_section(|section, _, window, cx| {
+            assert_eq!(
+                section.input_grid_font_size.read(cx).value().as_ref(),
+                "12.5"
+            );
+
+            section
+                .input_ui_font_size
+                .update(cx, |input, cx| input.set_value("16", window, cx));
+            section
+                .input_grid_font_size
+                .update(cx, |input, cx| input.set_value("14.5", window, cx));
+            section.set_font_family(FontFamilyField::Editor, Some("Fira Code".into()));
+            assert_eq!(section.general_change_count(cx), 3);
+
+            section.save_general_settings(window, cx);
+
+            let saved = section.app_state.read(cx).general_settings().clone();
+            assert_eq!(saved.ui_font_size, 16.0);
+            assert_eq!(saved.editor_font_size, 13.0);
+            assert_eq!(saved.grid_font_size, 14.5);
+            assert_eq!(saved.editor_font_family.as_deref(), Some("Fira Code"));
+            assert_eq!(saved.ui_font_family, None);
+            assert_eq!(
+                stored_general_settings(section, cx),
+                Some((16.0, 13.0, 14.5))
+            );
+            assert!(!section.has_unsaved_general_changes(cx));
+
+            section.set_font_family(FontFamilyField::Editor, None);
+            assert_eq!(section.general_change_count(cx), 1);
+            section.save_general_settings(window, cx);
+            assert_eq!(
+                section
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .editor_font_family,
+                None,
+                "the default entry clears the family"
+            );
+        });
+    }
+
+    #[test]
+    fn invalid_font_size_shows_an_error_and_saves_nothing() {
+        with_general_section(|section, toast_host, window, cx| {
+            let stored_before = stored_general_settings(section, cx);
+
+            for (input, key) in [
+                (
+                    section.input_ui_font_size.clone(),
+                    "settings.general.ui_font_size.error",
+                ),
+                (
+                    section.input_editor_font_size.clone(),
+                    "settings.general.editor_font_size.error",
+                ),
+                (
+                    section.input_grid_font_size.clone(),
+                    "settings.general.grid_font_size.error",
+                ),
+            ] {
+                let original = input.read(cx).value().to_string();
+                input.update(cx, |input, cx| input.set_value("40", window, cx));
+
+                section.save_general_settings(window, cx);
+
+                assert_eq!(
+                    toast_host.read(cx).last_toast_title(),
+                    Some(dbflux_i18n::t!(
+                        key,
+                        min = dbflux_core::GeneralSettings::MIN_FONT_SIZE,
+                        max = dbflux_core::GeneralSettings::MAX_FONT_SIZE
+                    ))
+                );
+                assert_eq!(stored_general_settings(section, cx), stored_before);
+
+                input.update(cx, |input, cx| input.set_value(original, window, cx));
+            }
+
+            assert_eq!(
+                section.app_state.read(cx).general_settings().ui_font_size,
+                13.0
+            );
+        });
+    }
+
+    #[test]
+    fn font_setting_copy_resolves_in_every_locale() {
+        let keys = [
+            "settings.general.ui_font_family.label",
+            "settings.general.ui_font_family.help",
+            "settings.general.ui_font_family.option.default",
+            "settings.general.ui_font_size.label",
+            "settings.general.ui_font_size.help",
+            "settings.general.ui_font_size.error",
+            "settings.general.editor_font_family.label",
+            "settings.general.editor_font_family.help",
+            "settings.general.editor_font_family.option.default",
+            "settings.general.editor_font_size.label",
+            "settings.general.editor_font_size.help",
+            "settings.general.editor_font_size.error",
+            "settings.general.grid_font_family.label",
+            "settings.general.grid_font_family.help",
+            "settings.general.grid_font_family.option.same_as_editor",
+            "settings.general.grid_font_size.label",
+            "settings.general.grid_font_size.help",
+            "settings.general.grid_font_size.error",
+            "settings.general.font_family.option.not_installed",
+            "settings.general.font_family.search_placeholder",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty for {locale}");

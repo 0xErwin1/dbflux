@@ -697,7 +697,8 @@ impl ColumnProjectionPicker {
                 .into_any_element()
         } else {
             let row_count = self.visible.len();
-            let list_height = (Fields::MENU_ROW_HEIGHT * row_count as f32).min(LIST_MAX_HEIGHT);
+            let row_height = Fields::MENU_ROW_HEIGHT.to_pixels(window.rem_size());
+            let list_height = (row_height * row_count as f32).min(LIST_MAX_HEIGHT);
 
             uniform_list(
                 "column-projection-rows",

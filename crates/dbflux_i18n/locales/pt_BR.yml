@@ -3624,6 +3624,7 @@ settings:
     persist_error: "Falha ao salvar a governança do MCP: %{error}"
   general:
     unit:
+      pixels: "px"
       mebibytes: "MiB"
       seconds: "s"
       milliseconds: "ms"
@@ -3660,6 +3661,37 @@ settings:
       option:
         system: Sistema
       notice: "Aplicado após reiniciar o DBFlux."
+    ui_font_family:
+      label: "Fonte da interface"
+      help: "Fonte de menus, rótulos, abas e diálogos."
+      option:
+        default: "Padrão (%{family})"
+    ui_font_size:
+      label: "Tamanho da fonte da interface"
+      help: "De 8 a 32 px. Todo texto, linha e controle da interface acompanha esse tamanho."
+      error: "O tamanho da fonte da interface deve ser um número de %{min} a %{max}"
+    editor_font_family:
+      label: "Fonte do editor"
+      help: "Fonte do editor de código."
+      option:
+        default: "Padrão (%{family})"
+    editor_font_size:
+      label: "Tamanho da fonte do editor"
+      help: "De 8 a 32 px. A altura de linha e o texto do console acompanham esse tamanho."
+      error: "O tamanho da fonte do editor deve ser um número de %{min} a %{max}"
+    grid_font_family:
+      label: "Fonte da grade de dados"
+      help: "Fonte das células e dos nomes de coluna."
+      option:
+        same_as_editor: "Igual ao editor"
+    grid_font_size:
+      label: "Tamanho da fonte da grade de dados"
+      help: "De 8 a 32 px. A altura das linhas e do cabeçalho e a largura automática das colunas acompanham esse tamanho."
+      error: "O tamanho da fonte da grade de dados deve ser um número de %{min} a %{max}"
+    font_family:
+      option:
+        not_installed: "%{family} (não instalada)"
+      search_placeholder: "Buscar fontes"
     editor:
       group: "Editor"
     vim_mode:
