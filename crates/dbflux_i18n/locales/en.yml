@@ -190,6 +190,39 @@ components:
     apply: "Apply"
     no_match: "No columns match the search"
     hint: "Space toggles · Enter applies · Esc discards"
+  column_profile:
+    filter_placeholder: "Filter columns"
+    sort:
+      table_order: "Sort: table order"
+      size: "Sort: size"
+      name: "Sort: name"
+    source:
+      file_footer: "Sizes from the file footer"
+    header:
+      column: "Column"
+      codec: "Codec"
+      on_disk: "On disk"
+      ratio: "Ratio"
+      share: "Share of table"
+      distinct: "Distinct"
+      nulls: "Nulls"
+      distribution: "Distribution"
+    footer:
+      counts: "%{total} columns · %{shown} shown in Data"
+      hint: "Toggle a column to add or drop it from the Data projection"
+    loading: "Reading column statistics…"
+    empty: "This table has no columns"
+    no_match: "No columns match the filter"
+    error_title: "Could not read column statistics"
+    badge:
+      sort_key: "Sort key"
+      partition_key: "Partition key"
+  read_estimate:
+    lead: "Will read"
+    row_groups: "%{touched} of %{total} row groups"
+    more:
+      one: "+%{count} more"
+      many: "+%{count} more"
 composites:
   rail:
     add: "Add"
