@@ -242,7 +242,7 @@ impl KeyValueDocument {
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .text_ellipsis()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(KeyValueMetrics::KEY_NAME_FONT)
                     .font_weight(FontWeight::BOLD)
                     .text_color(strong)
@@ -795,7 +795,7 @@ impl KeyValueDocument {
             .px(KeyValueMetrics::MEMBER_PADDING_X)
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(KeyValueMetrics::LIST_ROW_FONT)
             .text_color(theme.foreground)
             .when(is_selected, |row| {
@@ -847,7 +847,7 @@ impl KeyValueDocument {
                 div()
                     .w(KeyValueMetrics::FORMAT_COLUMN)
                     .pl(Spacing::SM)
-                    .font_family(AppFonts::INTERFACE)
+                    .font_family(dbflux_components::fonts::ui_family(cx))
                     .child(if is_json {
                         Badge::new("JSON", BadgeTone::Accent)
                     } else {
@@ -996,7 +996,7 @@ impl KeyValueDocument {
                 .child(
                     div()
                         .p(KeyValueMetrics::VALUE_PADDING_X)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .child(Input::new(input).w_full()),
                 )
                 .into_any_element();
@@ -1071,7 +1071,7 @@ impl KeyValueDocument {
                     .flex_col()
                     .pt(KeyValueMetrics::VALUE_PADDING_TOP)
                     .bg(theme.background)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(FontSizes::SM)
                     .when(editable, |text| {
                         text.cursor_pointer().on_click(cx.listener(
@@ -1348,7 +1348,7 @@ impl KeyValueDocument {
             .px(KeyValueMetrics::MEMBER_PADDING_X)
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(KeyValueMetrics::LIST_ROW_FONT)
             .when(is_selected, |row| {
                 row.bg(tint.opacity(KeyValueMetrics::SELECTED_MEMBER_ALPHA))
@@ -1445,7 +1445,7 @@ impl KeyValueDocument {
             div()
                 .w(KeyValueMetrics::RANGE_INPUT_WIDTH)
                 .flex_none()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .child(
                     Input::new(&input).id(id).w_full().prefix(
                         Icon::new(icon)
@@ -1644,7 +1644,7 @@ impl KeyValueDocument {
             .px(KeyValueMetrics::MEMBER_PADDING_X)
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(KeyValueMetrics::LIST_ROW_FONT)
             .when(is_selected, |row| {
                 row.bg(tint.opacity(KeyValueMetrics::SELECTED_MEMBER_ALPHA))
@@ -1777,7 +1777,7 @@ impl KeyValueDocument {
                 .px(KeyValueMetrics::GROUPS_PADDING_X)
                 .border_b_1()
                 .border_color(theme.table_row_border)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(KeyValueMetrics::LIST_ROW_FONT)
                 .child(div().flex_1().text_color(strong).child(group.name.clone()))
                 .child(
@@ -1899,7 +1899,7 @@ impl KeyValueDocument {
                             .child(
                                 div()
                                     .flex_1()
-                                    .font_family(AppFonts::MONO)
+                                    .font_family(dbflux_components::fonts::editor_family(cx))
                                     .child(Input::new(&input).small().w_full()),
                             )
                             .child(
@@ -1948,7 +1948,7 @@ impl KeyValueDocument {
                         .h(KeyValueMetrics::RANKED_ROW_HEIGHT)
                         .border_b_1()
                         .border_color(theme.table_row_border)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(KeyValueMetrics::LIST_META_FONT)
                         .child(div().flex_1().text_color(strong).child(entry.id.clone()))
                         .child(
@@ -2054,7 +2054,7 @@ impl KeyValueDocument {
                 .child(
                     div()
                         .w(KeyValueMetrics::EXPIRY_DURATION_WIDTH)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .child(
                             Input::new(&editor.duration_input)
                                 .id("kv-expiry-duration")
@@ -2065,7 +2065,7 @@ impl KeyValueDocument {
                 .into_any_element(),
             ExpiryMode::At => div()
                 .w(KeyValueMetrics::EXPIRY_AT_WIDTH)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .child(Input::new(&editor.at_input).id("kv-expiry-at").w_full())
                 .into_any_element(),
         };

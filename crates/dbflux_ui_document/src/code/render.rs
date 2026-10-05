@@ -408,7 +408,7 @@ impl CodeDocument {
                         .flex_shrink_0()
                         .items_center()
                         .gap(EditorMetrics::LAST_RUN_GAP)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(EditorMetrics::LAST_RUN_FONT)
                         .text_color(theme.muted_foreground)
                         .child(
@@ -427,7 +427,7 @@ impl CodeDocument {
                         .flex_shrink_0()
                         .items_center()
                         .gap(EditorMetrics::LAST_RUN_GAP)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(EditorMetrics::LAST_RUN_FONT)
                         .text_color(theme.success)
                         .child(

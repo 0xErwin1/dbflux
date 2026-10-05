@@ -11,7 +11,6 @@ use dbflux_components::primitives::Text;
 #[cfg(feature = "aws")]
 use dbflux_components::tokens::PaletteMetrics;
 use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::keymap_types::ContextId;
 use dbflux_core::{AuthProfile, LogErr};
 use gpui::prelude::FluentBuilder;
@@ -432,7 +431,7 @@ fn discovered_row(
             row.child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(ModalMetrics::LIST_DETAIL_FONT)
                     .text_color(theme.muted_foreground)
                     .child(detail),
@@ -531,7 +530,7 @@ impl SsoWizard {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(AppFonts::MONO)
+                                    .font_family(dbflux_components::fonts::editor_family(cx))
                                     .text_size(ModalMetrics::CODE_FONT)
                                     .text_color(ChromeColors::strong(theme))
                                     .child(input.read(cx).value().to_string()),

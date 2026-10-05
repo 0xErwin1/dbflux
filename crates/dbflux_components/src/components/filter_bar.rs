@@ -28,7 +28,6 @@ use crate::controls::{Dropdown, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, FOCUS_RING_SELECTOR, Icon, WhenFocusVisible};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Heights, Radii, Spacing};
-use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -477,7 +476,7 @@ impl RenderOnce for FilterField {
             .h(Fields::FILTER_HEIGHT)
             .px(Fields::FILTER_PADDING_X)
             .gap(Fields::FILTER_GAP)
-            .font_family(AppFonts::MONO)
+            .font_family(crate::fonts::editor_family(cx))
             .text_size(FontSizes::BASE)
             .text_color(theme.accent_foreground)
             .child(shape)

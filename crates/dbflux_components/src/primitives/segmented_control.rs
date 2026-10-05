@@ -13,7 +13,6 @@ use gpui_component::ActiveTheme;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon, focus_underline};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
-use crate::typography::AppFonts;
 
 /// A single option within a `SegmentedControl`.
 #[derive(Debug, Clone)]
@@ -240,7 +239,7 @@ impl RenderOnce for SegmentedControl {
             .flex_none()
             .items_center()
             .p(Fields::SEGMENT_TRACK_PADDING)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_size(FontSizes::XS)
             .child(
                 Chamfer::new(ChamferCut::CONTROL)

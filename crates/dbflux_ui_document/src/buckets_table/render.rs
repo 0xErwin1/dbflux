@@ -373,7 +373,7 @@ impl BucketsTableDocument {
                 .items_center()
                 .pr(DocumentMetrics::GAP)
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(DocumentMetrics::TABLE_META_FONT)
                 .child(value.render(color, muted))
         };
@@ -410,7 +410,7 @@ impl BucketsTableDocument {
                     .child(
                         div()
                             .truncate()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_color(ChromeColors::strong(theme))
                             .child(name),
                     ),
@@ -479,7 +479,7 @@ impl BucketsTableDocument {
                     div()
                         .flex()
                         .items_center()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ObjectStoreMetrics::DETAILS_VALUE_FONT)
                         .child(value.render(strong, muted)),
                 )

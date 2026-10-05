@@ -1,5 +1,7 @@
 use gpui::prelude::*;
-use gpui::{AbsoluteLength, App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
+use gpui::{
+    AbsoluteLength, App, Font, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font,
+};
 use gpui_component::ActiveTheme;
 
 use crate::density;
@@ -285,6 +287,25 @@ impl TextVariant {
         }
     }
 
+    /// The font this role renders with: the role's bundled family resolved
+    /// to the family chosen in Settings, with the role's fallbacks.
+    pub fn resolved_font(self, cx: &App) -> Font {
+        let contract = self.role_contract();
+        let mut text_font = font(crate::fonts::family_for(cx, contract.family));
+
+        if !contract.fallbacks.is_empty() {
+            text_font.fallbacks = Some(FontFallbacks::from_fonts(
+                contract
+                    .fallbacks
+                    .iter()
+                    .map(|fallback| (*fallback).to_owned())
+                    .collect(),
+            ));
+        }
+
+        text_font
+    }
+
     pub fn role_contract(self) -> TextRoleContract {
         const INTERFACE: &[&str] = &[];
         const MONO: &[&str] = &[AppFonts::MONO_FALLBACK];
@@ -364,18 +385,7 @@ impl RenderOnce for Text {
             .unwrap_or(TextColorSelection::RoleDefault(contract.color))
             .resolve(theme);
 
-        let mut text_font = font(contract.family);
-
-        if !contract.fallbacks.is_empty() {
-            text_font.fallbacks = Some(FontFallbacks::from_fonts(
-                contract
-                    .fallbacks
-                    .iter()
-                    .map(|fallback| (*fallback).to_owned())
-                    .collect(),
-            ));
-        }
-
+        let text_font = self.variant.resolved_font(cx);
         let letter_spacing_em = self.variant.letter_spacing_em();
 
         div()
@@ -479,6 +489,39 @@ mod tests {
             Text::body("Connection details").content.as_ref(),
             "Connection details"
         );
+    }
+
+    #[gpui::test]
+    fn roles_render_with_the_families_chosen_in_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert_eq!(
+                TextVariant::Body.resolved_font(cx).family.as_ref(),
+                AppFonts::INTERFACE
+            );
+            assert_eq!(
+                TextVariant::Label.resolved_font(cx).family.as_ref(),
+                AppFonts::DISPLAY
+            );
+
+            crate::fonts::init(
+                cx,
+                crate::fonts::FontSettings {
+                    ui_family: "Inter".into(),
+                    editor_family: "Fira Code".into(),
+                    ..crate::fonts::FontSettings::default()
+                },
+            );
+
+            assert_eq!(TextVariant::Body.resolved_font(cx).family.as_ref(), "Inter");
+            assert_eq!(
+                TextVariant::Label.resolved_font(cx).family.as_ref(),
+                "Inter"
+            );
+
+            let code = TextVariant::Code.resolved_font(cx);
+            assert_eq!(code.family.as_ref(), "Fira Code");
+            assert!(code.fallbacks.is_some(), "mono roles keep their fallback");
+        });
     }
 
     #[test]

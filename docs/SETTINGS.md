@@ -47,7 +47,9 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
 
 Font changes apply to every open window as soon as you save; no restart is
-needed. What each size controls:
+needed. The editor font also sets the monospace text in the interface
+(metadata, key hints, console), and a custom interface font also replaces the
+expanded display face of section labels. What each size controls:
 
 - **Interface font size** scales all interface text, rows, controls and icons.
 - **Editor font size** sets the code editor text and line height, and the

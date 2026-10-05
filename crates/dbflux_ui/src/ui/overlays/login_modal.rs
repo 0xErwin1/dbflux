@@ -6,7 +6,6 @@ use dbflux_components::controls::Button;
 use dbflux_components::modals::{Modal, modal_field, modal_lead, modal_value_field};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Spinner};
 use dbflux_components::tokens::{ChromeColors, ModalMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::PipelineState;
 use dbflux_core::keymap_types::ContextId;
 use gpui::prelude::FluentBuilder;
@@ -391,7 +390,7 @@ impl LoginModal {
             .child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(ModalMetrics::META_FONT)
                     .text_color(theme.muted_foreground)
                     .child(login_progress_label(elapsed, SSO_LOGIN_TIMEOUT.as_secs())),
@@ -422,7 +421,7 @@ impl LoginModal {
                         .gap(ModalMetrics::DEVICE_CODE_GAP)
                         .child(
                             div()
-                                .font_family(AppFonts::DISPLAY)
+                                .font_family(dbflux_components::fonts::display_family(cx))
                                 .font_weight(FontWeight::BLACK)
                                 .text_size(ModalMetrics::DEVICE_CODE_FONT)
                                 .letter_spacing(

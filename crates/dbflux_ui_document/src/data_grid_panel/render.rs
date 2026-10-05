@@ -3521,7 +3521,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(ResultMetrics::PAGER_GAP)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(
                         pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
                             can_prev,
@@ -3589,7 +3589,7 @@ impl DataGridPanel {
                 d.child(
                     div()
                         .flex_shrink_0()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .child(label),
                 )
             })
@@ -3643,7 +3643,7 @@ impl DataGridPanel {
             .child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(exec_time.to_string()),
             );
 

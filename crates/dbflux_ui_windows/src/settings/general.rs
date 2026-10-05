@@ -4,7 +4,6 @@ use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
-use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -1453,7 +1452,7 @@ impl GeneralSection {
             div()
                 .relative()
                 .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .child(field)
                 .child(bounds_recorder),
             cx,

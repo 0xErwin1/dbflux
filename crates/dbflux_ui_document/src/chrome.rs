@@ -247,7 +247,7 @@ pub(crate) fn detail_field(
             div()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(DocumentMetrics::TABLE_CELL_FONT)
                 .text_color(ChromeColors::strong(theme))
                 .child(value),
@@ -329,7 +329,7 @@ pub(crate) fn footer_pager(
         .flex_shrink_0()
         .items_center()
         .gap(ResultMetrics::PAGER_GAP)
-        .font_family(AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .child(previous)
         .child(
             div()

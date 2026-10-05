@@ -507,7 +507,7 @@ impl McpApprovalsView {
             )
             .child(
                 div()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(theme.foreground)
                     .truncate()
@@ -695,7 +695,7 @@ impl McpApprovalsView {
             .relative()
             .px(ApprovalsMetrics::CODE_PADDING_X)
             .py(ApprovalsMetrics::CODE_PADDING_Y)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(ApprovalsMetrics::CODE_FONT)
             .line_height(relative(ApprovalsMetrics::CODE_LINE_HEIGHT))
             .text_color(ChromeColors::strong(theme))
@@ -729,7 +729,7 @@ impl McpApprovalsView {
                     )
                     .child(
                         div()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ApprovalsMetrics::TITLE_FONT)
                             .font_weight(FontWeight::BOLD)
                             .text_color(ChromeColors::strong(theme))
@@ -742,7 +742,7 @@ impl McpApprovalsView {
                     .child(div().flex_1())
                     .child(
                         div()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ApprovalsMetrics::META_FONT)
                             .text_color(theme.muted_foreground)
                             .child(dbflux_i18n::t!(

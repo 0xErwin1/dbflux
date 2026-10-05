@@ -641,7 +641,7 @@ impl DataGridPanel {
                     .gap(CollectionMetrics::SLOT_GAP)
                     .h(CollectionMetrics::SLOT_HEIGHT)
                     .px(CollectionMetrics::SLOT_PADDING_X)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(CollectionMetrics::SLOT_FONT)
                     .child(
                         Chamfer::new(ChamferCut::CONTROL)

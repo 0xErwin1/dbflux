@@ -49,7 +49,10 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
 
 Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
-guardas; no hace falta reiniciar. Qué controla cada tamaño:
+guardas; no hace falta reiniciar. La fuente del editor también define el texto
+monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
+fuente de interfaz personalizada también reemplaza la fuente expandida de las
+etiquetas de sección. Qué controla cada tamaño:
 
 - **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
   controles y los íconos de la interfaz.

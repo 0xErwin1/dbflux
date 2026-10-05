@@ -4,7 +4,6 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics, TreeMetrics};
-use dbflux_components::typography::AppFonts;
 use gpui::FontWeight;
 use std::time::Duration;
 
@@ -581,7 +580,7 @@ pub(super) fn render_tree_item(
                         div()
                             .flex_shrink_0()
                             .ml(TreeMetrics::GAP)
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(TreeMetrics::META_FONT)
                             .text_color(theme.muted_foreground)
                             .child(count),
@@ -1241,7 +1240,7 @@ fn render_failure_slice(
         .border_color(danger)
         .child(
             div()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(ShellMetrics::FAILURE_FONT)
                 .line_height(ShellMetrics::FAILURE_LINE_HEIGHT)
                 .text_color(muted)

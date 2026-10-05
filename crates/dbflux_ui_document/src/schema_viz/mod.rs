@@ -3008,7 +3008,7 @@ impl SchemaVizDocument {
                     .flex()
                     .justify_center()
                     .cursor_pointer()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(SchemaMetrics::ZOOM_FONT)
                     .text_color(theme.foreground)
                     .tooltip(|window, cx| {
@@ -3361,7 +3361,7 @@ impl SchemaVizDocument {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(SchemaMetrics::HEADER_FONT)
                     .font_weight(gpui::FontWeight::BOLD)
                     .text_color(strong)
@@ -3387,7 +3387,7 @@ impl SchemaVizDocument {
                     .h(px(NODE_ROW_PX))
                     .gap(SchemaMetrics::ROW_GAP)
                     .overflow_hidden()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(SchemaMetrics::ROW_FONT)
                     .child(match key_icon {
                         Some((icon, color)) => Icon::new(icon)
@@ -3436,7 +3436,7 @@ impl SchemaVizDocument {
                         .h(px(NODE_INDEX_ROW_PX))
                         .gap(SchemaMetrics::ROW_GAP)
                         .overflow_hidden()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(SchemaMetrics::ROW_FONT)
                         .text_color(muted_fg)
                         .child(

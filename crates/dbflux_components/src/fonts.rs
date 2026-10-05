@@ -151,6 +151,31 @@ pub fn ui_family(cx: &App) -> SharedString {
     active(cx).ui_family.clone()
 }
 
+/// Family of the uppercase section labels: the bundled display face while
+/// the interface uses its bundled family, else the chosen interface family,
+/// so a custom interface font is not mixed with the bundled display face.
+pub fn display_family(cx: &App) -> SharedString {
+    let ui_family = &active(cx).ui_family;
+
+    if ui_family.as_ref() == AppFonts::INTERFACE {
+        SharedString::from(AppFonts::DISPLAY)
+    } else {
+        ui_family.clone()
+    }
+}
+
+/// The active family for a bundled role family: the interface, display and
+/// monospace faces resolve to the chosen interface, display and editor
+/// families; any other name is returned unchanged.
+pub fn family_for(cx: &App, bundled: &'static str) -> SharedString {
+    match bundled {
+        AppFonts::INTERFACE => ui_family(cx),
+        AppFonts::DISPLAY => display_family(cx),
+        AppFonts::MONO => editor_family(cx),
+        other => SharedString::from(other),
+    }
+}
+
 pub fn editor_family(cx: &App) -> SharedString {
     active(cx).editor_family.clone()
 }
@@ -449,6 +474,41 @@ mod tests {
 
             assert_eq!(ui_px(cx, ui(30.0)), px(60.0));
             assert_eq!(ui_px(cx, ui(13.0)), px(26.0));
+        });
+    }
+
+    #[gpui::test]
+    fn bundled_role_families_resolve_to_the_chosen_families(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            assert_eq!(display_family(cx), SharedString::from(AppFonts::DISPLAY));
+            assert_eq!(
+                family_for(cx, AppFonts::MONO),
+                SharedString::from(AppFonts::MONO)
+            );
+
+            init(
+                cx,
+                FontSettings {
+                    ui_family: "Inter".into(),
+                    editor_family: "Fira Code".into(),
+                    ..FontSettings::default()
+                },
+            );
+
+            assert_eq!(display_family(cx), SharedString::from("Inter"));
+            assert_eq!(
+                family_for(cx, AppFonts::INTERFACE),
+                SharedString::from("Inter")
+            );
+            assert_eq!(
+                family_for(cx, AppFonts::DISPLAY),
+                SharedString::from("Inter")
+            );
+            assert_eq!(
+                family_for(cx, AppFonts::MONO),
+                SharedString::from("Fira Code")
+            );
+            assert_eq!(family_for(cx, "Other"), SharedString::from("Other"));
         });
     }
 

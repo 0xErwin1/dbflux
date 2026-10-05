@@ -3,7 +3,6 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -494,7 +493,7 @@ impl TasksPanel {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ShellMetrics::TASK_META_FONT)
                             .text_color(muted)
                             .child(Self::format_elapsed(task.elapsed_secs)),
@@ -517,7 +516,7 @@ impl TasksPanel {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .font_family(AppFonts::MONO)
+                                .font_family(dbflux_components::fonts::editor_family(cx))
                                 .text_size(ShellMetrics::TASK_META_FONT)
                                 .text_color(muted)
                                 .child(format!("{}%", Self::progress_percent(progress))),
@@ -573,7 +572,7 @@ impl TasksPanel {
                         .pl(ShellMetrics::TASK_ERROR_INDENT)
                         .pr(ShellMetrics::TASKS_PADDING_X)
                         .bg(danger.opacity(ShellMetrics::TASK_ERROR_ALPHA))
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ShellMetrics::TASK_ERROR_FONT)
                         .text_color(danger)
                         .children(
@@ -594,7 +593,7 @@ impl TasksPanel {
                         .flex()
                         .flex_col()
                         .bg(track)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ShellMetrics::TASK_ERROR_FONT)
                         .text_color(muted)
                         .children(

@@ -23,7 +23,6 @@ use crate::chart::stats::{
 };
 use crate::semantic::ChartColors;
 use crate::tokens::ChromeColors;
-use crate::typography::AppFonts;
 use dbflux_core::{ColumnKind, LogErr, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -1406,6 +1405,7 @@ impl Render for ChartView {
 
         // Resolve per-theme chrome colors for the readout overlay.
         let readout_colors = ChartColors::for_current(cx);
+        let readout_family = crate::fonts::editor_family(cx);
 
         let plot_bounds_for_hover = plot_bounds_rc.clone();
 
@@ -1472,7 +1472,7 @@ impl Render for ChartView {
 
                                 let theme = cx.theme();
                                 let tick_color = theme.muted_foreground;
-                                let tick_font = font(AppFonts::MONO);
+                                let tick_font = font(crate::fonts::editor_family(cx));
                                 let tick_size = gpui::px(10.5);
                                 let line_height = gpui::px(13.0);
                                 let gridline_color = theme.border;
@@ -1608,7 +1608,7 @@ impl Render for ChartView {
                         .size_full()
                     })
                     .when_some(readout, |container, r| {
-                        container.child(readout_overlay(r, readout_colors))
+                        container.child(readout_overlay(r, readout_colors, readout_family))
                     }),
             )
             // Legend row (below canvas)
@@ -2212,7 +2212,7 @@ fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl In
                 .h_full()
                 .child(
                     div()
-                        .font_family(crate::typography::AppFonts::DISPLAY)
+                        .font_family(crate::fonts::display_family(cx))
                         .font_weight(gpui::FontWeight::BLACK)
                         .text_size(gpui::px(44.0))
                         .line_height(gpui::relative(1.0))
@@ -3183,7 +3183,7 @@ pub fn format_y_value(y: f64) -> String {
 ///
 /// `colors` is derived from `ChartColors::for_current(cx)` at the render call site
 /// so the overlay matches the active theme.
-fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
+fn readout_overlay(r: HoverReadout, colors: ChartColors, family: SharedString) -> impl IntoElement {
     const PANEL_MIN_WIDTH: f32 = 200.0;
     const PANEL_GAP: f32 = 12.0;
 
@@ -3209,7 +3209,7 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
         .gap(gpui::px(5.0))
         .px(gpui::px(12.0))
         .py(gpui::px(10.0))
-        .font_family(crate::typography::AppFonts::MONO)
+        .font_family(family)
         .text_size(gpui::px(12.0))
         .overflow_hidden()
         // P1Chart tooltip: the input cut on the raised fill with the strong

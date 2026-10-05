@@ -18,7 +18,6 @@ use crate::controls::{Button, ButtonSize};
 use crate::icons::AppIcon;
 use crate::primitives::{Badge, BadgeTone, Chamfer, Icon, Text, status_diamond};
 use crate::tokens::{ChamferCut, ChromeColors, NotificationMetrics};
-use crate::typography::AppFonts;
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
@@ -185,7 +184,9 @@ impl NotificationRow {
             .text_size(NotificationMetrics::TITLE_FONT)
             .font_weight(title_weight)
             .text_color(title_color)
-            .when(self.title_mono, |title| title.font_family(AppFonts::MONO))
+            .when(self.title_mono, |title| {
+                title.font_family(crate::fonts::editor_family(cx))
+            })
             .child(self.title);
 
         let title_line = div()
@@ -203,8 +204,11 @@ impl NotificationRow {
             .text_color(theme.muted_foreground)
             .child(self.meta)
             .when_some(self.meta_code, |line, code| {
-                line.child(" \u{b7} ")
-                    .child(div().font_family(AppFonts::MONO).child(code))
+                line.child(" \u{b7} ").child(
+                    div()
+                        .font_family(crate::fonts::editor_family(cx))
+                        .child(code),
+                )
             });
         let meta_line = div().flex().child(meta_line);
 
@@ -293,7 +297,7 @@ impl NotificationGroupSection {
             .when_some(self.count, |header, count| {
                 header.child(
                     div()
-                        .font_family(AppFonts::MONO)
+                        .font_family(crate::fonts::editor_family(cx))
                         .text_size(NotificationMetrics::COUNT_FONT)
                         .text_color(theme.muted_foreground)
                         .child(count.to_string()),
@@ -377,7 +381,7 @@ impl NotificationFilterChip {
             .child(
                 div()
                     .relative()
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::editor_family(cx))
                     .text_size(NotificationMetrics::COUNT_FONT)
                     .text_color(theme.muted_foreground)
                     .child(self.count.to_string()),
@@ -544,7 +548,7 @@ impl NotificationPopover {
                 header.child(
                     div()
                         .id("notifications-unread-count")
-                        .font_family(AppFonts::MONO)
+                        .font_family(crate::fonts::editor_family(cx))
                         .text_size(NotificationMetrics::UNREAD_FONT)
                         .text_color(theme.muted_foreground)
                         .child(label),
@@ -709,7 +713,7 @@ impl RenderOnce for NotificationPopover {
             .flex_col()
             .w(NotificationMetrics::POPOVER_WIDTH)
             .when_some(self.max_height, |popover, height| popover.max_h(height))
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_color(theme.foreground)
             .shadow(vec![shadow])
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

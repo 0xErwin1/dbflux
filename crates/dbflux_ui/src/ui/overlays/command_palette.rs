@@ -7,7 +7,6 @@ use dbflux_components::primitives::{
     Chamfer, Icon, Kbd, SurfaceRole, Text, inspect_surface_role, overlay_bg,
 };
 use dbflux_components::tokens::{ChamferCut, ChromeColors, PaletteMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_ui_base::keymap::{
     RunCommand, chord_display_parts, default_keymap, effective_keymap, run_command,
@@ -1126,7 +1125,7 @@ impl CommandPalette {
                 row.child(
                     div()
                         .flex_shrink_0()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(PaletteMetrics::QUALIFIER_FONT)
                         .text_color(theme.muted_foreground)
                         .child(qualifier),
@@ -1164,7 +1163,7 @@ impl CommandPalette {
             .child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(PaletteMetrics::COUNT_FONT)
                     .text_color(theme.muted_foreground)
                     .child(format!("{} / {}", self.filtered.len(), self.items.len())),

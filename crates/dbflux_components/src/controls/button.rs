@@ -12,7 +12,6 @@ use crate::primitives::{
     Chamfer, ChamferCorners, ChamferFillKind, ChamferRing, Icon, Kbd, KbdTone,
 };
 use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, Fields};
-use crate::typography::AppFonts;
 
 /// Color treatment of a [`Button`] (DSStates).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -468,7 +467,7 @@ impl RenderOnce for Button {
             .justify_center()
             .gap(size.gap())
             .h(size.height())
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .font_weight(FontWeight::SEMIBOLD)
             .text_size(size.font_size())
             .text_color(content)

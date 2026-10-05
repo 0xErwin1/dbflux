@@ -92,7 +92,7 @@ impl DataGridPanel {
             .gap(CollectionMetrics::SLOT_GAP)
             .h(CollectionMetrics::SLOT_HEIGHT)
             .px(CollectionMetrics::SLOT_PADDING_X)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(CollectionMetrics::SLOT_FONT)
             .map(|slot| match width {
                 Some(width) => slot.w(width).flex_shrink_0(),
@@ -632,7 +632,7 @@ impl DataGridPanel {
             .flex()
             .flex_col()
             .bg(theme.background)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .child(
                 div().flex_1().min_h_0().child(
                     vim.editor(!editable)
@@ -950,7 +950,7 @@ impl DataGridPanel {
                     .w(CollectionMetrics::SCHEMA_FIELD_WIDTH)
                     .flex_shrink_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(CollectionMetrics::FIELD_FONT)
                     .text_color(ChromeColors::strong(theme))
                     .child(field.path.clone()),
@@ -977,7 +977,7 @@ impl DataGridPanel {
                 div()
                     .w(CollectionMetrics::SCHEMA_PRESENCE_WIDTH)
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(CollectionMetrics::VALUE_FONT)
                     .text_color(presence_color)
                     .child(format!("{presence}%")),
@@ -1075,7 +1075,7 @@ impl DataGridPanel {
                                     .relative()
                                     .px(CollectionMetrics::CONFLICT_CODE_PADDING_X)
                                     .py(CollectionMetrics::CONFLICT_CODE_PADDING_Y)
-                                    .font_family(AppFonts::MONO)
+                                    .font_family(dbflux_components::fonts::editor_family(cx))
                                     .text_size(CollectionMetrics::CONFLICT_CODE_FONT)
                                     .text_color(theme.foreground)
                                     .child(Chamfer::new(ChamferCut::CONTROL).fill(theme.background))

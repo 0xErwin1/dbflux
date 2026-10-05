@@ -11,7 +11,6 @@ use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon};
 use crate::semantic::BannerColors as SemBannerColors;
 use crate::tokens::{ChamferCut, ChromeColors, Feedback, FontSizes, Spacing};
-use crate::typography::AppFonts;
 
 /// Semantic variant controlling banner colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,7 +148,7 @@ impl RenderOnce for BannerBlock {
                         .px(Spacing::SM)
                         .py(Spacing::XS)
                         .bg(pre_field)
-                        .font_family(AppFonts::MONO)
+                        .font_family(crate::fonts::editor_family(cx))
                         .text_size(FontSizes::XS)
                         .text_color(text_color)
                         .child(pre),

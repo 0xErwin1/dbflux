@@ -4,7 +4,6 @@ use gpui_component::ActiveTheme;
 
 use crate::primitives::Chamfer;
 use crate::tokens::{Borders, ChamferCut, KbdMetrics};
-use crate::typography::AppFonts;
 
 /// Surface a keycap sits on, which decides how it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -142,7 +141,7 @@ impl Kbd {
             .flex()
             .items_center()
             .flex_shrink_0()
-            .font_family(AppFonts::MONO)
+            .font_family(crate::fonts::editor_family(cx))
             .text_size(KbdMetrics::FONT)
             .line_height(KbdMetrics::LINE_HEIGHT)
             .font_weight(FontWeight::MEDIUM);
@@ -181,7 +180,7 @@ impl RenderOnce for Kbd {
             if index + 1 < key_count {
                 row = row.child(
                     div()
-                        .font_family(AppFonts::MONO)
+                        .font_family(crate::fonts::editor_family(cx))
                         .text_size(KbdMetrics::FONT)
                         .font_weight(FontWeight::LIGHT)
                         .text_color(separator_color)

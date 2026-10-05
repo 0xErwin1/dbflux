@@ -5,7 +5,6 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Chamfer, Icon, Text};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, FontSizes, Spacing, ui};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::{LogErr, ReleaseChannel};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::updates::channel_label;
@@ -135,7 +134,7 @@ impl WelcomeDialog {
                     .gap(Spacing::XXS)
                     .child(
                         div()
-                            .font_family(AppFonts::DISPLAY)
+                            .font_family(dbflux_components::fonts::display_family(cx))
                             .font_weight(FontWeight::BLACK)
                             .text_size(TITLE_SIZE)
                             .text_color(ChromeColors::strong(theme))
@@ -157,7 +156,7 @@ impl WelcomeDialog {
                     .child(Chamfer::new(ChamferCut::KEYCAP).fill(tint.opacity(BADGE_FILL_OPACITY)))
                     .child(
                         div()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(FontSizes::LABEL)
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(tint)

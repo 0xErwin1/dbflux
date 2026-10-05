@@ -8,7 +8,6 @@ use dbflux_components::primitives::{
     BannerBlock, BannerVariant, Chamfer, SegmentedControl, SegmentedItem, Text, stepped_segment,
 };
 use dbflux_components::tokens::{ChamferCut, ChromeColors, ui};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
@@ -1966,7 +1965,7 @@ impl HooksSection {
             .relative()
             .px(SettingsMetrics::LIST_ROW_PADDING_Y)
             .py(SettingsMetrics::LIST_ROW_PADDING_Y)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_color(ChromeColors::strong(&theme))
             .child(
                 Chamfer::new(ChamferCut::CONTROL)

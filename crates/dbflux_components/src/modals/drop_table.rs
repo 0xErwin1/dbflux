@@ -4,7 +4,6 @@ use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::modals::parts::{modal_code, modal_field, modal_lead};
 use crate::primitives::{Badge, BadgeTone};
 use crate::tokens::{ChromeColors, ModalMetrics};
-use crate::typography::AppFonts;
 use dbflux_core::{LogErr, RelationKind, RelationRef, SqlDialect};
 use gpui::prelude::*;
 use gpui::{
@@ -273,7 +272,7 @@ impl Render for ModalDropTable {
                 .items_center()
                 .gap(ModalMetrics::DEPENDENT_ROW_GAP)
                 .h(ModalMetrics::DEPENDENT_ROW_HEIGHT)
-                .font_family(AppFonts::MONO)
+                .font_family(crate::fonts::editor_family(cx))
                 .text_size(ModalMetrics::CODE_FONT)
                 .child(Badge::new(
                     relation_kind_label(&dependent.kind),
@@ -330,7 +329,7 @@ impl Render for ModalDropTable {
             .child(modal_field(
                 StyledText::new(prompt).with_highlights(prompt_highlights),
                 div()
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::editor_family(cx))
                     .child(Input::new(&self.confirm_input).w_full()),
                 cx,
             ));

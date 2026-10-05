@@ -6,7 +6,6 @@ use gpui_component::IconName;
 use crate::icon::IconSource;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{ChromeColors, HeaderMetrics, Heights, Spacing};
-use crate::typography::AppFonts;
 
 /// Panel header: 40 px, the title as an uppercase `Label`, actions on the
 /// right, and a line along the bottom.
@@ -95,7 +94,7 @@ pub fn collapsible_bar(
         .when_some(status, |row, status| {
             row.child(
                 div()
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::editor_family(cx))
                     .text_color(status_color)
                     .child(status),
             )

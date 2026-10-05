@@ -180,7 +180,7 @@ pub(crate) fn single_line_completion_editor(
     gpui_component::input::Editor::new(state)
         .h(row_height)
         .py(leading - EDITOR_INPUT_PADDING_Y - Borders::THIN)
-        .font_family(dbflux_components::typography::AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_size(FontSizes::SM)
 }
@@ -220,7 +220,7 @@ pub(crate) fn frameless_single_line_completion_editor_sized(
         .h(row_height)
         .py(leading - EDITOR_INPUT_PADDING_Y)
         .px(px(0.0))
-        .font_family(dbflux_components::typography::AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .font_weight(gpui::FontWeight::NORMAL)
         .text_size(text_size)
 }

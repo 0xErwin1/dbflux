@@ -486,7 +486,7 @@ impl ChartDocument {
         let session_note = self.source_is_accumulating().then(|| {
             div()
                 .flex_shrink_0()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(DocumentMetrics::TABLE_META_FONT)
                 .text_color(theme.muted_foreground)
                 .child(dbflux_i18n::t!("document.chart.session_samples_only"))
@@ -498,7 +498,7 @@ impl ChartDocument {
             .child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(theme.muted_foreground)
                     .child(window_label),
@@ -815,7 +815,7 @@ impl ChartDocument {
                     div()
                         .min_w_0()
                         .truncate()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_color(strong)
                         .child(value),
                 )

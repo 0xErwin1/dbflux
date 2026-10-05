@@ -265,7 +265,7 @@ pub(crate) fn field_frame(
     };
 
     frame.when(mono, |frame| {
-        frame.font_family(dbflux_components::typography::AppFonts::MONO)
+        frame.font_family(dbflux_components::fonts::editor_family(cx))
     })
 }
 

@@ -3,7 +3,6 @@ use crate::controls::Checkbox;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Heights, Spacing};
-use crate::typography::AppFonts;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
@@ -415,7 +414,7 @@ impl MultiSelect {
             .id("ms-menu")
             .relative()
             .min_w_full()
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_size(FontSizes::BASE)
             .shadow_lg()
             .occlude()
@@ -495,7 +494,7 @@ impl Render for MultiSelect {
             .gap(Fields::GAP)
             .w_full()
             .px(Fields::PADDING_X)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_size(Fields::TEXT)
             .text_color(text_color)
             .children(shape)

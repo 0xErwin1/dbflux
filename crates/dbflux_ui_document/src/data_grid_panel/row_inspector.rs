@@ -327,6 +327,7 @@ fn render_row_entry(
     cell: &InspectorCell,
     null_color: Hsla,
     theme: &gpui_component::theme::Theme,
+    cx: &App,
 ) -> impl IntoElement {
     let is_null = cell.value.is_null();
     let value_text = cell.value.as_display_string_truncated(200);
@@ -353,7 +354,7 @@ fn render_row_entry(
                     line.child(
                         div()
                             .flex_shrink_0()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .child(cell.type_label.clone()),
                     )
                 }),
@@ -369,7 +370,7 @@ fn render_row_entry(
                     div()
                         .min_w_0()
                         .truncate()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(InspectorMetrics::FIELD_VALUE_FONT)
                         .line_height(InspectorMetrics::FIELD_VALUE_LINE_HEIGHT)
                         .text_color(if is_null {
@@ -388,6 +389,7 @@ fn render_references_section(
     references_ready: bool,
     loading_label: &str,
     theme: &gpui_component::theme::Theme,
+    cx: &App,
 ) -> impl IntoElement {
     div()
         .flex()
@@ -396,7 +398,7 @@ fn render_references_section(
             references
                 .iter()
                 .enumerate()
-                .map(|(index, reference)| render_fk_reference_entry(index, reference, theme)),
+                .map(|(index, reference)| render_fk_reference_entry(index, reference, theme, cx)),
         )
         .when(!references_ready, |section| {
             section.child(
@@ -422,6 +424,7 @@ fn render_fk_reference_entry(
     index: usize,
     reference: &FkReference,
     theme: &gpui_component::theme::Theme,
+    cx: &App,
 ) -> impl IntoElement {
     let icon = match reference.kind {
         ReferenceKind::Outgoing => AppIcon::Cable,
@@ -451,7 +454,7 @@ fn render_fk_reference_entry(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_color(ChromeColors::strong(theme))
                 .child(reference.qualified_target()),
         )
@@ -670,7 +673,7 @@ impl RowInspectorContent {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(InspectorMetrics::KEY_FONT)
                     .text_color(theme.muted_foreground)
                     .when_some(self.snapshot.row_key.clone(), |key, text| key.child(text)),
@@ -797,7 +800,7 @@ impl Render for RowInspectorContent {
                 self.snapshot
                     .cells
                     .iter()
-                    .map(|cell| render_row_entry(cell, null_color, theme)),
+                    .map(|cell| render_row_entry(cell, null_color, theme, cx)),
             )
             .when(shows_references, |body| {
                 body.child(render_section_label(
@@ -811,6 +814,7 @@ impl Render for RowInspectorContent {
                     self.references_ready,
                     &loading_label,
                     theme,
+                    cx,
                 ))
             });
 

@@ -3,7 +3,6 @@ use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing, TreeMetrics, ui};
-use crate::typography::AppFonts;
 use crate::vim::{VimBinding, VimHost};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -222,7 +221,7 @@ impl Render for DocumentTree {
                         vim.editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),
@@ -381,7 +380,7 @@ impl Render for DocumentTree {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::grid_family(cx))
                     .when(is_tree_mode, |d| {
                         d.child(
                             uniform_list("document-tree-list", node_count, {

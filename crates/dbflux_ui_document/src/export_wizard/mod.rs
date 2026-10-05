@@ -419,7 +419,7 @@ impl ExportWizard {
                     div()
                         .min_w_0()
                         .truncate()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ModalMetrics::CODE_FONT)
                         .text_color(ChromeColors::strong(theme))
                         .child(table.qualified_name()),
@@ -536,7 +536,7 @@ impl ExportWizard {
                 dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
                 div()
                     .w(SEGMENT_SIZE_INPUT_WIDTH)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(Input::new(&self.segment_size_input).w_full().aria_label(
                         dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
                     )),

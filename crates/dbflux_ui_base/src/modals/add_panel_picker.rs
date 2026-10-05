@@ -9,7 +9,6 @@ use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::Text;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
@@ -1102,7 +1101,7 @@ impl ModalAddPanelPicker {
                             .editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     )

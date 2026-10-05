@@ -595,7 +595,7 @@ fn render_conflict(
                 .px(Spacing::SM)
                 .py(Spacing::XS)
                 .bg(theme.muted)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
                 .child(SharedString::from(clause.text.clone()))
@@ -970,12 +970,12 @@ fn render_field_button(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .text_color(label_color)
                 .child(SharedString::from(label)),
         )
-        .children(tag.map(|tag| type_tag(tag, theme)))
+        .children(tag.map(|tag| type_tag(tag, theme, cx)))
         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(target, window, cx)));
 
     panel
@@ -1025,7 +1025,7 @@ fn render_operator_select(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .text_color(ChromeColors::strong(theme))
                 .child(SharedString::from(panel.operator_label(condition.operator))),
@@ -1060,7 +1060,7 @@ fn render_operator_select(
                     .items_center()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(FontSizes::XS)
                     .cursor_pointer()
                     .when(highlighted, |row| row.bg(theme.accent.opacity(0.2)))
@@ -1125,10 +1125,10 @@ fn render_operator_select(
         .into_any_element()
 }
 
-fn type_tag(tag: String, theme: &Theme) -> AnyElement {
+fn type_tag(tag: String, theme: &Theme, cx: &App) -> AnyElement {
     div()
         .flex_shrink_0()
-        .font_family(AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .text_size(FontSizes::LABEL)
         .text_color(theme.muted_foreground)
         .child(SharedString::from(tag))
@@ -1159,7 +1159,7 @@ fn render_value(
                     .gap(Spacing::XS)
                     .px(Spacing::XXS)
                     .bg(theme.secondary)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(FontSizes::XS)
                     .child(SharedString::from(format_value(
                         item,
@@ -1216,11 +1216,11 @@ fn render_value(
             let object_id_affixes = panel.draft.value_syntax().object_id_affixes();
             let field = match (editor, object_id_affixes) {
                 (ValueEditor::Scalar(ScalarKind::ObjectId), Some((prefix, suffix))) => field
-                    .prefix(mono_affix(prefix, muted))
-                    .suffix(mono_affix(suffix, muted)),
+                    .prefix(mono_affix(prefix, muted, cx))
+                    .suffix(mono_affix(suffix, muted, cx)),
                 (ValueEditor::Scalar(ScalarKind::Date), _) => field
                     .prefix(Icon::new(AppIcon::Clock).small().color(muted))
-                    .suffix(mono_affix("UTC", muted)),
+                    .suffix(mono_affix("UTC", muted, cx)),
                 (ValueEditor::Pattern, _) => field.placeholder("/pattern/i"),
                 _ => field.placeholder(dbflux_i18n::t!(
                     "document.collection.builder.filter.value_placeholder"
@@ -1232,9 +1232,9 @@ fn render_value(
     }
 }
 
-fn mono_affix(text: impl Into<SharedString>, color: Hsla) -> AnyElement {
+fn mono_affix(text: impl Into<SharedString>, color: Hsla, cx: &App) -> AnyElement {
     div()
-        .font_family(AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .text_size(FontSizes::XS)
         .text_color(color)
         .child(text.into())
@@ -1324,7 +1324,7 @@ fn render_projection(
                 .gap(Spacing::XS)
                 .px(Spacing::XXS)
                 .bg(theme.secondary)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .child(SharedString::from(field.clone()))
                 .child(
@@ -1412,7 +1412,7 @@ impl Render for SortDragPreview {
             .bg(theme.popover)
             .border_1()
             .border_color(theme.border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(FontSizes::XS)
             .child(self.label.clone())
     }
@@ -1482,11 +1482,11 @@ fn render_sort(
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(FontSizes::XS)
                         .child(SharedString::from(key.path.clone())),
                 )
-                .children(tag.map(|tag| type_tag(tag, theme)))
+                .children(tag.map(|tag| type_tag(tag, theme, cx)))
                 .child(direction_switch(index, key.direction, cx))
                 .child(
                     Button::new(
@@ -1699,7 +1699,7 @@ fn render_match_card(
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(FontSizes::XS)
                     .child(
                         div()
@@ -1845,10 +1845,10 @@ fn render_group_stage(
                 .gap(Spacing::XS)
                 .px(Spacing::XXS)
                 .bg(theme.secondary)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .child(SharedString::from(key.clone()))
-                .children(tag.map(|tag| type_tag(tag, theme)))
+                .children(tag.map(|tag| type_tag(tag, theme, cx)))
                 .child(
                     Button::new(
                         SharedString::from(format!("doc-builder-group-key-remove-{index}")),
@@ -2129,12 +2129,12 @@ fn render_accumulator_field(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .text_color(color)
                 .child(SharedString::from(label)),
         )
-        .children(tag.map(|tag| type_tag(tag, theme)))
+        .children(tag.map(|tag| type_tag(tag, theme, cx)))
         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(target, window, cx)));
 
     panel
@@ -2206,7 +2206,7 @@ fn render_preview(panel: &DocumentBuilderPanel, theme: &Theme, cx: &App) -> AnyE
                 .id("doc-builder-preview-text")
                 .h(BuilderMetrics::PREVIEW_HEIGHT)
                 .overflow_y_scrollbar()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .text_color(ChromeColors::strong(theme))
                 .child(StyledText::new(panel.preview.clone()).with_highlights(highlights)),
@@ -2286,7 +2286,7 @@ fn render_saved_menu_if_open(
                         .text_size(FontSizes::XS)
                         .child(SharedString::from(entry.name.clone())),
                 )
-                .child(type_tag(mode_label.to_string(), theme))
+                .child(type_tag(mode_label.to_string(), theme, cx))
                 .child(
                     panel.rail_mark.ring_element(
                         &saved_row,
@@ -2428,6 +2428,7 @@ fn render_picker_if_open(
                 Vec::new(),
                 None,
                 theme,
+                cx,
             )
             .on_click(cx.listener(|this, _, _, cx| this.pick("", cx)))
             .into_any_element(),
@@ -2451,6 +2452,7 @@ fn render_picker_if_open(
                 field.types.clone(),
                 Some(field.presence_percent),
                 theme,
+                cx,
             )
             .on_click(cx.listener(move |this, _, _, cx| this.pick(&path, cx)))
             .into_any_element(),
@@ -2470,10 +2472,12 @@ fn render_picker_if_open(
                 Vec::new(),
                 None,
                 theme,
+                cx,
             )
             .child(type_tag(
                 dbflux_i18n::t!("document.collection.builder.filter.unsampled"),
                 theme,
+                cx,
             ))
             .on_click(cx.listener(move |this, _, _, cx| this.pick(&typed, cx)))
             .into_any_element(),
@@ -2540,9 +2544,10 @@ fn picker_row(
     types: Vec<DocumentFieldType>,
     presence: Option<u32>,
     theme: &Theme,
+    cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let tags = (!types.is_empty())
-        .then(|| type_tag(crate::labels::document_field_type_tags(&types), theme));
+        .then(|| type_tag(crate::labels::document_field_type_tags(&types), theme, cx));
 
     let selector = id.to_string();
 
@@ -2562,7 +2567,7 @@ fn picker_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(FontSizes::XS)
                 .child(SharedString::from(label)),
         )

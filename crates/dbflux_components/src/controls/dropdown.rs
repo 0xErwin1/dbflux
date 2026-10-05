@@ -6,7 +6,6 @@ use crate::density;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, EnvTag, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Fields, Heights, Spacing};
-use crate::typography::AppFonts;
 use dbflux_core::ConnectionEnvironment;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
@@ -688,7 +687,7 @@ impl Dropdown {
                     .h(Fields::MENU_ROW_HEIGHT)
                     .mx(Fields::MENU_ROW_INSET)
                     .px(Fields::PADDING_X)
-                    .font_family(AppFonts::INTERFACE)
+                    .font_family(crate::fonts::ui_family(cx))
                     .text_size(menu_font_size)
                     .whitespace_nowrap()
                     .text_color(text_color)
@@ -796,7 +795,7 @@ impl Dropdown {
                     .h_full()
                     .justify_center()
                     .px(Spacing::SM)
-                    .font_family(AppFonts::INTERFACE)
+                    .font_family(crate::fonts::ui_family(cx))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_size(font_sm)
                     .child(
@@ -811,9 +810,9 @@ impl Dropdown {
                     .justify_between()
                     .gap(Fields::GAP)
                     .font_family(if self.mono_label {
-                        AppFonts::MONO
+                        crate::fonts::editor_family(cx)
                     } else {
-                        AppFonts::INTERFACE
+                        crate::fonts::ui_family(cx)
                     })
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_size(Fields::TEXT)
@@ -862,7 +861,7 @@ impl Dropdown {
                     .h(Fields::HEIGHT)
                     .gap(Fields::GAP)
                     .px(Fields::PADDING_X)
-                    .font_family(AppFonts::INTERFACE)
+                    .font_family(crate::fonts::ui_family(cx))
                     .text_size(Fields::TEXT)
                     .text_color(text_color)
                     .child(shape)
