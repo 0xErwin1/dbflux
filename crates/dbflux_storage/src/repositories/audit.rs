@@ -371,15 +371,27 @@ impl AuditRepository {
         }
 
         if let Some(ref free_text) = filter.free_text {
-            conditions.push(
-                "(summary LIKE ? OR action LIKE ? OR error_message LIKE ? OR details_json LIKE ?)"
-                    .to_string(),
-            );
+            const FREE_TEXT_COLUMNS: [&str; 8] = [
+                "summary",
+                "action",
+                "error_message",
+                "details_json",
+                "driver_id",
+                "database_name",
+                "connection_id",
+                "object_id",
+            ];
+
+            let clauses: Vec<String> = FREE_TEXT_COLUMNS
+                .iter()
+                .map(|column| format!("{column} LIKE ?"))
+                .collect();
+            conditions.push(format!("({})", clauses.join(" OR ")));
+
             let pattern = format!("%{}%", free_text);
-            values.push(Box::new(pattern.clone()));
-            values.push(Box::new(pattern.clone()));
-            values.push(Box::new(pattern.clone()));
-            values.push(Box::new(pattern));
+            for _ in FREE_TEXT_COLUMNS {
+                values.push(Box::new(pattern.clone()));
+            }
         }
 
         let where_clause = if conditions.is_empty() {
@@ -871,6 +883,66 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
 
         path
+    }
+
+    #[test]
+    fn free_text_matches_connection_context_columns() {
+        let path = temp_db("free_text_connection_context");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        repo.append_extended(AppendAuditEventExtended {
+            actor_id: "local",
+            tool_id: "",
+            decision: "",
+            reason: None,
+            profile_id: None,
+            classification: None,
+            duration_ms: Some(10),
+            created_at_epoch_ms: 1000,
+            level: Some("info"),
+            category: Some("query"),
+            action: Some(QUERY_EXECUTE.as_str()),
+            outcome: Some("success"),
+            actor_type: Some("user"),
+            source_id: Some("local"),
+            summary: Some("Query executed"),
+            connection_id: Some("conn-reporting"),
+            database_name: Some("analytics"),
+            driver_id: Some("postgres"),
+            object_type: Some("table"),
+            object_id: Some("orders"),
+            details_json: Some("{}"),
+            error_code: None,
+            error_message: None,
+            session_id: None,
+            correlation_id: None,
+        })
+        .expect("insert should succeed");
+
+        for term in ["postgres", "analytics", "conn-reporting", "orders"] {
+            let events = repo
+                .query(&AuditQueryFilter {
+                    free_text: Some(term.to_string()),
+                    ..Default::default()
+                })
+                .expect("free-text query should succeed");
+
+            assert_eq!(events.len(), 1, "free text {term:?} should match");
+        }
+
+        let events = repo
+            .query(&AuditQueryFilter {
+                free_text: Some("mysql".to_string()),
+                ..Default::default()
+            })
+            .expect("free-text query should succeed");
+
+        assert!(events.is_empty());
     }
 
     #[test]
