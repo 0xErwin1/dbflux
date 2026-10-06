@@ -3,12 +3,13 @@
 //! The pane carries the close and quit hooks of an editable file: the save
 //! of an interrupted close, the commit of a value still in the cell editor,
 //! the quit check, the save and discard of a confirmed quit, and the save of
-//! the shutdown flush. It does not take part in the workspace session yet.
+//! the shutdown flush. A local file is recorded in the workspace session by
+//! its path.
 
 use super::document::SpreadsheetDocument;
-use crate::dedup::DocumentKey;
+use crate::dedup::{DocumentKey, FileDocumentKey};
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, PaneHandle};
+use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
@@ -157,6 +158,32 @@ impl SpreadsheetDocument {
         pane.pane_actions = Some({
             let entity = entity.clone();
             Box::new(move |cx| entity.read(cx).pane_actions(&entity))
+        });
+
+        // The workspace session reopens a local file by its path, on its first
+        // sheet. An object is left out: it needs the live connection of its
+        // profile, which is not there at startup. The sheet shown and the
+        // pending edits are not recorded.
+        pane.session_tab_snapshot = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| {
+                let document = entity.read(cx);
+
+                let FileDocumentKey::Local { path } = document.file() else {
+                    return None;
+                };
+
+                Some(CodeSessionTabSnapshot {
+                    kind: SpreadsheetDocument::SESSION_TAB_KIND,
+                    id: document.id(),
+                    title: document.title(),
+                    language: dbflux_core::QueryLanguage::Sql,
+                    exec_ctx: dbflux_core::ExecutionContext::default(),
+                    file_path: Some(path.clone()),
+                    scratch_path: None,
+                    shadow_path: None,
+                })
+            })
         });
 
         pane
