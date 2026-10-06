@@ -1743,6 +1743,12 @@ impl CodeDocument {
             return true;
         }
 
+        // Always land in the text: FocusUp from it would move into the context bar.
+        if cmd == Command::FocusEditor {
+            self.exit_context_bar(window, cx);
+            return true;
+        }
+
         // When focused on results, delegate to active DataGridPanel
         if self.focus_mode == SqlQueryFocus::Results
             && let Some(grid) = self.active_result_grid()
@@ -2133,7 +2139,8 @@ mod language_binding_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
+        CodeDocument, LanguageBinding, SqlQueryFocus, diff_stats_from_pair,
+        source_input_values_from_context,
     };
     use crate::handle::DocumentEvent;
     use dbflux_app::keymap::Command;
@@ -2142,7 +2149,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, Focusable, TestAppContext};
     use gpui_component::Root;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -3740,6 +3747,75 @@ mod tests {
         assert_eq!(environment, None);
         assert!(!banner);
         assert_eq!(icon.0, dbflux_components::icons::AppIcon::Database);
+    }
+
+    /// Focus editor lands in the query text, from the context bar or from the text itself.
+    #[gpui::test]
+    fn focus_editor_lands_in_the_text_not_the_context_bar(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        // Stepping up from the text moves into the context bar.
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.dispatch_command(Command::FocusUp, window, cx);
+            })
+        });
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).focus_mode),
+            SqlQueryFocus::ContextBar
+        );
+
+        // Focus editor brings the keyboard back to the text from there...
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                assert!(doc.dispatch_command(Command::FocusEditor, window, cx));
+            })
+        });
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).focus_mode),
+            SqlQueryFocus::Editor
+        );
+
+        // ...and keeps it there when it is already in the text.
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                assert!(doc.dispatch_command(Command::FocusEditor, window, cx));
+            })
+        });
+        let (mode, text_focused) = window.update(|window, cx| {
+            let doc = doc.read(cx);
+            (
+                doc.focus_mode,
+                doc.editor
+                    .input_state
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window),
+            )
+        });
+        assert_eq!(mode, SqlQueryFocus::Editor);
+        assert!(text_focused, "the query text has the keyboard");
     }
 
     /// An editor's history opens as a side panel for the workspace instead

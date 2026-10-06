@@ -45,7 +45,10 @@ impl Workspace {
             Command::FocusEditor => {
                 self.set_focus(FocusTarget::Document, window, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusUp, window, cx);
+                    // Documents that don't handle FocusEditor still get FocusUp.
+                    if !mgr.dispatch_active(Command::FocusEditor, window, cx) {
+                        mgr.dispatch_active(Command::FocusUp, window, cx);
+                    }
                 });
                 Some(true)
             }

@@ -1232,7 +1232,7 @@ impl CodeDocument {
         self.update_context_bar_focus_rings(cx);
     }
 
-    fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_context_bar_focus_rings(cx);
         self.focus_mode = SqlQueryFocus::Editor;
         self.editor
