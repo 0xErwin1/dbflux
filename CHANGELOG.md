@@ -21,9 +21,6 @@ All notable changes to DBFlux will be documented in this file.
 ### Fixed
 
 * **Edits in the data grid that were not saved** — An edit that only swapped whitespace in a value, such as a space for a tab or a line break, or that only changed text past the value's 200th character, is now saved; before, it was dropped without a message. Set NULL on a cell holding the text `NULL`, and Unset field on a document field holding the text `missing`, now take effect. Committing a decimal value such as `1.0` without changing it no longer saves it again. Pasting a cell's copied value back onto the same cell no longer stages a change; before, a NULL cell was set to an empty string, and a long value, or one with Windows line breaks, could be overwritten by its copy, in which tabs and line breaks are spaces. A row whose delete is undone keeps its cell edits, so Save all saves them. Undo and redo no longer change a table that cannot be edited.
-
-### Security
-
 * **Writes hidden in read queries are classified as writes** — The SQL classifier that decides whether an MCP `execute_script` call is governed as a read, and whether an editor query may auto-refresh, now classifies these statements as writes: a data-modifying CTE such as `WITH d AS (DELETE … RETURNING *) SELECT * FROM d`, `EXPLAIN ANALYZE` of a write, `SELECT … INTO` a new table, `OUTFILE` or `DUMPFILE`, locking reads such as `SELECT … FOR UPDATE`, and a write in any later statement of a batch. Before, a statement was classified by its first keyword, so an MCP role allowed only to read could run these writes and auto-refresh could repeat them on a timer. The classifier does not detect functions with side effects.
 
 ## [0.8.7] - 2026-10-05
