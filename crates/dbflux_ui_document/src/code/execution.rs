@@ -1428,53 +1428,58 @@ impl CodeDocument {
                 record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
 
-                let title: SharedString = if is_script {
-                    dbflux_i18n::t!("document.code.execution.result_title.script_failed").into()
-                } else {
-                    dbflux_i18n::t!("document.code.execution.result_title.query_failed").into()
-                };
-                let now = dbflux_core::chrono::Local::now()
-                    .format("%H:%M:%S")
-                    .to_string();
-                let copy_payload = error_msg.clone();
+                // A read-only refusal on an unattended run is expected: the
+                // fallback to Manual below tells the user, so it is not shown
+                // as a failed query.
+                if !read_only_refused {
+                    let title: SharedString = if is_script {
+                        dbflux_i18n::t!("document.code.execution.result_title.script_failed").into()
+                    } else {
+                        dbflux_i18n::t!("document.code.execution.result_title.query_failed").into()
+                    };
+                    let now = dbflux_core::chrono::Local::now()
+                        .format("%H:%M:%S")
+                        .to_string();
+                    let copy_payload = error_msg.clone();
 
-                // Pull structured info (code, message, detail, hint) from
-                // FormattedError when the driver provided it; fall back to
-                // the to_string() form otherwise.
-                let mut toast = match e.formatted() {
-                    Some(f) => {
-                        let mut t = dbflux_ui_base::toast::Toast::error(title)
+                    // Pull structured info (code, message, detail, hint) from
+                    // FormattedError when the driver provided it; fall back to
+                    // the to_string() form otherwise.
+                    let mut toast = match e.formatted() {
+                        Some(f) => {
+                            let mut t = dbflux_ui_base::toast::Toast::error(title)
+                                .meta_right(now)
+                                .body(f.message.clone());
+                            if let Some(code) = f.code.as_ref() {
+                                t = t.subtitle(format!("ERROR {}", code));
+                            }
+                            if let Some(detail) = f.detail.as_ref() {
+                                t = t.details(detail.clone());
+                            }
+                            if let Some(hint) = f.hint.as_ref() {
+                                t = t.code_block(format!("HINT: {}", hint));
+                            }
+                            t.collapsible()
+                        }
+                        None => dbflux_ui_base::toast::Toast::error(title)
                             .meta_right(now)
-                            .body(f.message.clone());
-                        if let Some(code) = f.code.as_ref() {
-                            t = t.subtitle(format!("ERROR {}", code));
-                        }
-                        if let Some(detail) = f.detail.as_ref() {
-                            t = t.details(detail.clone());
-                        }
-                        if let Some(hint) = f.hint.as_ref() {
-                            t = t.code_block(format!("HINT: {}", hint));
-                        }
-                        t.collapsible()
-                    }
-                    None => dbflux_ui_base::toast::Toast::error(title)
-                        .meta_right(now)
-                        .body(error_msg.clone()),
-                };
+                            .body(error_msg.clone()),
+                    };
 
-                toast = toast.action(
-                    dbflux_ui_base::toast::ToastAction::new(
-                        "copy-error",
-                        dbflux_i18n::t!("document.code.execution.copy_error"),
-                    )
-                    .primary()
-                    .on_click(move |cx: &mut App| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                            copy_payload.clone(),
-                        ));
-                    }),
-                );
-                toast.push(cx);
+                    toast = toast.action(
+                        dbflux_ui_base::toast::ToastAction::new(
+                            "copy-error",
+                            dbflux_i18n::t!("document.code.execution.copy_error"),
+                        )
+                        .primary()
+                        .on_click(move |cx: &mut App| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                copy_payload.clone(),
+                            ));
+                        }),
+                    );
+                    toast.push(cx);
+                }
                 let _ = window;
 
                 // Emit audit event for failed execution
@@ -3890,6 +3895,11 @@ mod auto_refresh_tests {
         );
         assert_eq!(refresh_policy(window, &document), RefreshPolicy::Manual);
         assert!(showed_blocked_toast(window, &toasts));
+        assert_eq!(
+            window.update(|_, cx| toasts.read(cx).toast_count()),
+            1,
+            "a refusal shows only the blocked warning, not a query failure"
+        );
     }
 
     #[gpui::test]
