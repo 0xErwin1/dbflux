@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.8.8] - 2026-10-06
+
+### Fixed
+
+* **Focus editor jumped to the context bar** — Ctrl+Shift+2 now takes you to the query text instead of the dropdowns above it.
+* **Focus editor typed into a hidden editor** — With the results maximized, Ctrl+Shift+2, or moving up out of the results, now restores the split and shows the query text it focuses. Before, the results stayed maximized and the keys went to the hidden editor, changing the query without showing it.
+
 ## [0.8.7] - 2026-10-05
 
 ### Fixed
