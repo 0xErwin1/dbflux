@@ -20,6 +20,10 @@ fn translation_tables() -> &'static HashMap<&'static str, HashMap<String, String
 
 /// Parses one catalog YAML source into a flat dotted-key table.
 fn parse_catalog(source: &str) -> HashMap<String, String> {
+    #[expect(
+        clippy::expect_used,
+        reason = "catalog sources are compile-time include_str! data; invalid YAML is a shipped-asset contract failure, and translation_tables() is infallible by design"
+    )]
     let value: serde_yaml::Value =
         serde_yaml::from_str(source).expect("shipped catalog must be valid YAML");
     let mut table = HashMap::new();
