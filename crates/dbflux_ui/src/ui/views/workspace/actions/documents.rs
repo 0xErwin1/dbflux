@@ -37,6 +37,10 @@ impl Workspace {
                 self.open_parquet_file(file, cx);
             }
 
+            Some(FileDocumentFormat::Spreadsheet) => {
+                self.open_spreadsheet_file(file, on_object_saved, cx);
+            }
+
             None => {
                 log::warn!(
                     "Not opening {:?} as a file document: its format is not recognized",

@@ -2033,6 +2033,99 @@ document:
         read_only_file: "파일이 읽기 전용입니다."
     warning:
       cannot_save_in_place: 이 파일은 수정 시간이나 콘텐츠 태그를 제공하지 않아 제자리에 저장할 수 없습니다.
+  spreadsheet:
+    unsaved_summary: "%{name}의 저장하지 않은 편집"
+    formula_warning:
+      one: "수식 셀 %{count}개가 값으로 바뀝니다"
+      many: "수식 셀 %{count}개가 값으로 바뀝니다"
+    read_only:
+      xls: "이 .xls 파일은 읽기 전용입니다. DBFlux는 .xls 형식을 쓸 수 없습니다. 편집하려면 .xlsx로 저장하세요."
+    action:
+      append_row: "행 추가"
+      save: "저장"
+      saving: "저장 중…"
+    error:
+      save_failed: "%{name}을(를) 저장할 수 없습니다"
+      rows_only_at_end: "행은 시트 끝에만 추가할 수 있습니다. 시트 안에서 행을 삽입하거나 삭제하면 수식, 차트, 범위가 가리키는 셀이 이동하므로, 추가한 뒤 아직 저장하지 않은 행만 삭제할 수 있습니다."
+      save_while_reading: "시트를 읽는 중입니다. 시트가 표시되면 다시 저장하세요."
+      input:
+        a1_reference: "시트 %{sheet}의 셀 %{cell}에 A1 형식 참조가 있는 수식이 있습니다. ods 파일은 [.A1] 또는 [.A1:.B3] 같은 OpenFormula 참조를 사용합니다. 수식을 고치거나, 값 앞에 '를 붙여 텍스트로 저장하세요."
+      write:
+        malformed: "이 파일은 DBFlux가 제자리에서 편집할 수 있는 스프레드시트 패키지가 아니어서 아무것도 저장하지 않았습니다."
+        sheet_out_of_range: "저장하려던 시트가 더 이상 파일에 없습니다. 파일을 다시 불러온 뒤 다시 편집하세요."
+        not_a_worksheet: "%{sheet} 시트는 워크시트가 아니어서 편집할 셀이 없습니다."
+        cell_out_of_range: "%{sheet} 시트의 %{row}행 %{column}열은 시트가 담을 수 있는 마지막 셀을 넘어섭니다."
+        text_too_long: "%{sheet} 시트의 %{cell} 셀에 %{length}자가 있어 셀 하나가 담을 수 있는 32767자를 넘습니다. 텍스트를 줄이세요."
+        invalid_character: "%{sheet} 시트의 %{cell} 셀에 스프레드시트 파일이 저장할 수 없는 %{character} 문자가 있습니다. 문자를 제거하세요."
+        non_finite_number: "%{sheet} 시트의 %{cell} 셀 값 %{value}은(는) 셀에 숫자로 저장할 수 없습니다."
+        date_out_of_range: "%{sheet} 시트의 %{cell} 셀 날짜 %{date}은(는) 이 통합 문서가 저장할 수 있는 날짜 범위를 벗어납니다."
+        covered_cell: "%{sheet} 시트의 %{cell} 셀은 병합된 셀에 가려져 있습니다. 병합된 범위의 첫 번째 셀을 편집하세요."
+        shared_formula_master: "%{sheet} 시트의 %{cell} 셀에는 %{range} 셀들이 공유하는 수식이 있어 편집하면 그 셀들도 바뀝니다. 스프레드시트 애플리케이션에서 편집하세요."
+        inside_formula_range: "%{sheet} 시트의 %{cell} 셀은 수식 범위 %{range} 안에 있으며, 이 범위는 스프레드시트 애플리케이션에서만 전체로 편집할 수 있습니다."
+      open_failed: "%{name}을(를) 열 수 없습니다"
+      sheet_failed: "%{name}의 %{sheet} 시트를 읽을 수 없습니다"
+      not_a_spreadsheet: "이 파일은 xlsx, xlsm, xls, ods 통합 문서가 아닙니다."
+      encrypted: "통합 문서가 암호화되어 있거나 열기 암호로 보호되어 있어 DBFlux가 읽을 수 없습니다."
+      chart_sheet: "%{sheet} 시트는 차트 시트라서 표시할 셀이 없습니다."
+      sheet_out_of_range: "%{index}번 시트가 없습니다. 이 통합 문서에는 시트가 %{count}개 있습니다."
+      sheet_too_large: "%{sheet} 시트는 %{rows}행 × %{columns}열, 즉 %{cells}개 셀로, DBFlux가 시트 하나에 불러오는 %{limit}개 셀보다 많습니다."
+      malformed: "통합 문서를 해독할 수 없습니다."
+    loading: "%{name} 불러오는 중…"
+    reading_sheet: "%{sheet} 시트를 읽는 중…"
+    empty:
+      title: "%{sheet} 시트가 비어 있습니다"
+      description: "이 시트에는 값이나 수식이 없습니다."
+    no_worksheet:
+      title: "%{name}에 워크시트가 없습니다"
+      description: "이 통합 문서의 모든 시트가 차트이거나 셀이 없는 시트입니다."
+    summary:
+      sheets:
+        one: "시트 %{count}개"
+        many: "시트 %{count}개"
+      rows:
+        one: "%{count}행"
+        many: "%{count}행"
+      columns:
+        one: "%{count}열"
+        many: "%{count}열"
+      in_memory: "시트 전체를 메모리에 불러옵니다"
+    tab:
+      hidden: "숨김"
+      chart: "차트"
+      chart_tooltip: "차트 시트에는 차트만 있고 셀이 없어서 여기에 표시할 수 없습니다."
+    formula_pending: "열 때 다시 계산됨"
+    formula:
+      no_selection: "수식을 보려면 셀을 선택하세요."
+      none: "수식 없음"
+      unavailable: ".xls 파일에서는 수식을 볼 수 없습니다"
+    view:
+      table: "표"
+      text: "텍스트"
+    text:
+      building: "시트를 CSV로 작성하는 중…"
+      cut:
+        one: "텍스트가 잘렸습니다: 전체 %{total}행 중 처음 %{shown}행을 표시합니다."
+        many: "텍스트가 잘렸습니다: 전체 %{total}행 중 처음 %{shown}행을 표시합니다."
+      render_failed: "시트를 CSV로 표시할 수 없습니다: %{cause}"
+    save_as:
+      action: ".xlsx로 저장"
+      title: "새 .xlsx 파일로 저장할까요?"
+      body: "DBFlux는 %{name}의 모든 시트 값을 편집할 수 있는 새 .xlsx 파일에 씁니다. 새 파일에는 수식(DBFlux가 .xls 수식을 읽을 수 없으므로 각 수식은 표시된 값이 됩니다), 서식, 날짜를 제외한 숫자 형식, 병합된 셀, 열 너비, 차트, 이미지, 매크로가 남지 않습니다. %{name}은(는) 변경되지 않습니다."
+      chart_sheets: "차트 시트에는 셀이 없으므로 쓰지 않습니다: %{sheets}."
+      object: "새 파일은 이 컴퓨터에만 저장되며 버킷에 업로드되지 않습니다."
+      confirm: "파일 선택…"
+      cancel: "취소"
+      dialog_title: ".xlsx로 저장"
+      dialog_title_object: "이 컴퓨터에 .xlsx 사본 저장"
+      dialog_filter: "Excel 통합 문서"
+      saved: "%{name} 저장됨"
+      error:
+        failed: "%{name}을(를) .xlsx로 저장할 수 없습니다"
+        replaces_source: "새 파일이 원본 .xls 파일을 덮어쓰게 됩니다. 원본은 변경되지 않으므로 다른 이름이나 폴더를 선택하세요."
+        dialog_unavailable: "사용할 수 있는 파일 대화 상자가 없습니다: %{error}"
+        sheet: "%{sheet} 시트는 이 이름으로 .xlsx 파일에 쓸 수 없습니다."
+        cell: "%{sheet} 시트의 %{cell} 셀은 .xlsx 파일에 쓸 수 없습니다."
+        write: ".xlsx 파일을 쓰지 못했습니다."
   parquet:
     loading: "%{name} 불러오는 중…"
     empty:
@@ -3599,6 +3692,7 @@ scripts:
       redis: Redis
       delimited: CSV / TSV 파일
       parquet: "Parquet 파일"
+      spreadsheet: "스프레드시트 파일"
       all_files: 모든 파일
   error:
     read_file_failed: "%{path} 파일을 읽지 못했습니다: %{error}"

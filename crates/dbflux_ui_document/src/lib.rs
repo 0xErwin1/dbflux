@@ -23,6 +23,7 @@ pub mod dump_analysis;
 pub mod parquet;
 pub mod query_builder;
 pub mod schema_diff;
+pub mod spreadsheet;
 mod style_guardrails;
 mod syntax_runs;
 
@@ -30,7 +31,9 @@ mod syntax_runs;
 mod governance;
 
 pub mod export_wizard;
+mod file_edit_lifecycle;
 pub mod file_format;
+mod file_save;
 pub mod file_source;
 mod handle;
 pub mod history_panel;
@@ -89,6 +92,7 @@ pub use pane::{
 pub use parquet::ParquetDocument;
 pub use result_view::ResultViewMode;
 pub use schema_viz::{SchemaVizDocument, SchemaVizMode};
+pub use spreadsheet::SpreadsheetDocument;
 pub use tab_bar::{TabBar, TabBarEvent};
 pub use tab_manager::{Tab, TabManager, TabManagerEvent};
 pub use task_runner::{DocumentTaskRunner, MutationCancelHandle};

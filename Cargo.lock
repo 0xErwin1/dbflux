@@ -3465,6 +3465,7 @@ dependencies = [
  "calamine",
  "chrono",
  "dbflux_byte_source",
+ "quick-xml 0.41.0",
  "rust_xlsxwriter",
  "thiserror 2.0.20",
  "zip",
@@ -3634,10 +3635,12 @@ dependencies = [
  "dbflux_parquet",
  "dbflux_policy",
  "dbflux_schema_viz",
+ "dbflux_spreadsheet",
  "dbflux_storage",
  "dbflux_test_support",
  "dbflux_transfer",
  "dbflux_ui_base",
+ "encoding_rs",
  "flate2",
  "gpui-base",
  "gpui-component",
@@ -3649,9 +3652,11 @@ dependencies = [
  "petgraph",
  "rfd",
  "rmp-serde",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "uuid",
+ "zip",
 ]
 
 [[package]]

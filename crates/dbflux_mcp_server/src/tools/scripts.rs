@@ -1142,6 +1142,19 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_read_script_on_a_redis_connection_runs_as_a_read_with_required() {
+            let driver = FakeDriver::new(DbKind::Redis);
+
+            let attempts = govern_and_run(&driver, ExecutionClassification::Read).await;
+
+            assert_eq!(
+                attempts,
+                vec![(ExecutionClassification::Read, ReadOnlyEnforcement::Required)]
+            );
+            assert_eq!(received_flags(&driver), vec![ReadOnlyEnforcement::Required]);
+        }
+
+        #[tokio::test]
         async fn a_read_script_on_a_non_enforcing_driver_is_governed_as_a_write() {
             let driver = FakeDriver::new(DbKind::Postgres);
 

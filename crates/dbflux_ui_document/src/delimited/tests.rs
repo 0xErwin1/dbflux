@@ -19,7 +19,8 @@ use dbflux_delimited::{
 use super::save::{SaveRequest, save_staging_objects_in, verify_version, write_staged};
 use super::{SaveOutcome, save_edited};
 use crate::file_source::{
-    FileLocation, SourceVersion, StorageError, has_changed_since, open_source, read_version,
+    FileLocation, SourceVersion, StorageError, WriteFailure, has_changed_since, open_source,
+    read_version,
 };
 
 pub(super) const BUCKET: &str = "reports";
@@ -721,7 +722,9 @@ fn a_failing_local_write_leaves_the_target_untouched_and_no_temporary_file() {
     assert!(
         matches!(
             error,
-            StorageError::Write(WriteError::UnencodableCharacter { .. })
+            StorageError::Write(WriteFailure::Delimited(
+                WriteError::UnencodableCharacter { .. }
+            ))
         ),
         "{error}"
     );
@@ -1253,7 +1256,10 @@ fn a_local_write_that_fails_after_partial_output_leaves_the_target_untouched_and
         .expect_err("an unclosed quote must fail a column append");
 
     assert!(
-        matches!(error, StorageError::Write(WriteError::UnclosedQuote { .. })),
+        matches!(
+            error,
+            StorageError::Write(WriteFailure::Delimited(WriteError::UnclosedQuote { .. }))
+        ),
         "{error}"
     );
     assert_eq!(std::fs::read(&path).expect("the file reads"), bytes);
@@ -1275,7 +1281,10 @@ fn an_object_write_that_fails_after_partial_output_uploads_nothing_and_leaves_no
         .expect_err("an unclosed quote must fail a column append");
 
     assert!(
-        matches!(error, StorageError::Write(WriteError::UnclosedQuote { .. })),
+        matches!(
+            error,
+            StorageError::Write(WriteFailure::Delimited(WriteError::UnclosedQuote { .. }))
+        ),
         "{error}"
     );
     assert!(connection.store.uploaded_from().is_empty());

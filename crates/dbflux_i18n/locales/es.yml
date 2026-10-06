@@ -2033,6 +2033,99 @@ document:
         read_only_file: "El archivo es de solo lectura."
     warning:
       cannot_save_in_place: Este archivo no informa fecha de modificación ni etiqueta de contenido, por lo que no se puede guardar en su ubicación.
+  spreadsheet:
+    unsaved_summary: "Cambios sin guardar en %{name}"
+    formula_warning:
+      one: "%{count} celda con fórmula se reemplazará por un valor"
+      many: "%{count} celdas con fórmula se reemplazarán por valores"
+    read_only:
+      xls: "Este archivo .xls es de solo lectura: DBFlux no puede escribir el formato .xls. Guárdalo como .xlsx para editarlo."
+    action:
+      append_row: "Agregar fila"
+      save: "Guardar"
+      saving: "Guardando…"
+    error:
+      save_failed: "No se pudo guardar %{name}"
+      rows_only_at_end: "Solo se pueden agregar filas al final de una hoja. Insertar o eliminar una fila dentro de una hoja movería las celdas a las que apuntan fórmulas, gráficos y rangos, así que solo se puede eliminar una fila agregada que aún no se guardó."
+      save_while_reading: "Se está leyendo una hoja. Vuelve a guardar cuando se muestre."
+      input:
+        a1_reference: "La celda %{cell} de la hoja %{sheet} tiene una fórmula con una referencia de estilo A1. Un archivo ods usa referencias OpenFormula como [.A1] o [.A1:.B3]. Corrige la fórmula o empieza el valor con ' para guardarlo como texto."
+      write:
+        malformed: "El archivo no es un paquete de hoja de cálculo que DBFlux pueda editar en su lugar, así que no se guardó nada."
+        sheet_out_of_range: "La hoja que se estaba guardando ya no está en el archivo. Recarga el archivo y vuelve a editarlo."
+        not_a_worksheet: "La hoja %{sheet} no es una hoja de cálculo, así que no tiene celdas para editar."
+        cell_out_of_range: "La fila %{row}, columna %{column} de la hoja %{sheet} está más allá de la última celda que puede tener una hoja."
+        text_too_long: "La celda %{cell} de la hoja %{sheet} tiene %{length} caracteres, más de los 32767 que admite una celda. Acorta el texto."
+        invalid_character: "La celda %{cell} de la hoja %{sheet} contiene %{character}, que un archivo de hoja de cálculo no puede guardar. Quita el carácter."
+        non_finite_number: "La celda %{cell} de la hoja %{sheet} tiene %{value}, que una celda no puede guardar como número."
+        date_out_of_range: "La celda %{cell} de la hoja %{sheet} tiene la fecha %{date}, fuera de las fechas que este libro puede guardar."
+        covered_cell: "La celda %{cell} de la hoja %{sheet} está cubierta por una celda combinada. Edita la primera celda del rango combinado."
+        shared_formula_master: "La celda %{cell} de la hoja %{sheet} tiene una fórmula que comparten las celdas de %{range}, así que editarla también las cambiaría. Edítala en una aplicación de hojas de cálculo."
+        inside_formula_range: "La celda %{cell} de la hoja %{sheet} está dentro del rango de fórmula %{range}, que solo una aplicación de hojas de cálculo puede editar como un todo."
+      open_failed: "No se pudo abrir %{name}"
+      sheet_failed: "No se pudo leer la hoja %{sheet} de %{name}"
+      not_a_spreadsheet: "El archivo no es un libro xlsx, xlsm, xls ni ods."
+      encrypted: "El libro está cifrado o protegido con una contraseña de apertura, y DBFlux no puede leerlo."
+      chart_sheet: "La hoja %{sheet} es una hoja de gráfico y no tiene celdas que mostrar."
+      sheet_out_of_range: "La hoja %{index} no existe. El libro tiene %{count} hojas."
+      sheet_too_large: "La hoja %{sheet} ocupa %{rows} filas por %{columns} columnas, %{cells} celdas, más que las %{limit} celdas que DBFlux carga por hoja."
+      malformed: "No se pudo decodificar el libro."
+    loading: "Cargando %{name}…"
+    reading_sheet: "Leyendo la hoja %{sheet}…"
+    empty:
+      title: "La hoja %{sheet} está vacía"
+      description: "La hoja no tiene valores ni fórmulas."
+    no_worksheet:
+      title: "%{name} no tiene hojas de cálculo"
+      description: "Todas las hojas de este libro son gráficos u otras hojas sin celdas."
+    summary:
+      sheets:
+        one: "%{count} hoja"
+        many: "%{count} hojas"
+      rows:
+        one: "%{count} fila"
+        many: "%{count} filas"
+      columns:
+        one: "%{count} columna"
+        many: "%{count} columnas"
+      in_memory: "la hoja completa se carga en memoria"
+    tab:
+      hidden: "oculta"
+      chart: "gráfico"
+      chart_tooltip: "Una hoja de gráfico contiene un gráfico y ninguna celda, así que no se puede mostrar aquí."
+    formula_pending: "Se recalcula al abrir"
+    formula:
+      no_selection: "Selecciona una celda para ver su fórmula."
+      none: "Sin fórmula"
+      unavailable: "La fórmula no está disponible en archivos .xls"
+    view:
+      table: "Tabla"
+      text: "Texto"
+    text:
+      building: "Escribiendo la hoja como CSV…"
+      cut:
+        one: "El texto se recortó: muestra las primeras %{shown} de %{total} fila."
+        many: "El texto se recortó: muestra las primeras %{shown} de %{total} filas."
+      render_failed: "La hoja no se pudo mostrar como CSV: %{cause}"
+    save_as:
+      action: "Guardar como .xlsx"
+      title: "¿Guardar como un nuevo archivo .xlsx?"
+      body: "DBFlux escribe los valores de todas las hojas de %{name} en un nuevo archivo .xlsx, que se puede editar. El nuevo archivo no conserva las fórmulas (cada una pasa a ser el valor que muestra, porque DBFlux no puede leer las fórmulas de .xls), el formato, los formatos de número salvo las fechas, las celdas combinadas, el ancho de las columnas, los gráficos, las imágenes ni las macros. %{name} no se modifica."
+      chart_sheets: "Las hojas de gráfico no tienen celdas y no se escriben: %{sheets}."
+      object: "El nuevo archivo se guarda solo en este equipo y no se sube al bucket."
+      confirm: "Elegir archivo…"
+      cancel: "Cancelar"
+      dialog_title: "Guardar como .xlsx"
+      dialog_title_object: "Guardar una copia .xlsx en este equipo"
+      dialog_filter: "Libro de Excel"
+      saved: "Se guardó %{name}"
+      error:
+        failed: "No se pudo guardar %{name} como .xlsx"
+        replaces_source: "El nuevo archivo reemplazaría al archivo .xls original, que nunca se modifica. Elige otro nombre u otra carpeta."
+        dialog_unavailable: "No hay un diálogo de archivos disponible: %{error}"
+        sheet: "La hoja %{sheet} no se puede escribir en un archivo .xlsx con su nombre."
+        cell: "La celda %{cell} de la hoja %{sheet} no se puede escribir en un archivo .xlsx."
+        write: "No se pudo escribir el archivo .xlsx."
   parquet:
     loading: "Cargando %{name}…"
     empty:
@@ -3599,6 +3692,7 @@ scripts:
       redis: Redis
       delimited: Archivos CSV / TSV
       parquet: "Archivos Parquet"
+      spreadsheet: "Hojas de cálculo"
       all_files: Todos los archivos
   error:
     read_file_failed: "No se pudo leer el archivo %{path}: %{error}"

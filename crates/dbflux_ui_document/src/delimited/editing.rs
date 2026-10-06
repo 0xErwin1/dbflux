@@ -48,24 +48,16 @@ use super::document::{
     pages_to_read_again, reread_pages,
 };
 use super::page_model::PageModelError;
-use super::save::{SaveOutcome, check_local_save, save_edited, verify_version};
+use super::save::{SaveOutcome, save_edited};
 use crate::dedup::FileDocumentKey;
-use crate::file_source::{FileLocation, StorageError, read_version};
+use crate::file_edit_lifecycle::{local_file_saves_now, quit_disposition};
+use crate::file_source::{FileLocation, StorageError};
 use crate::handle::DocumentEvent;
 use crate::object_text::record_save_audit;
 use crate::pane::{PaneAction, QuitDisposition};
 
-/// The largest local file the shutdown flush saves without asking.
-///
-/// A save reads the whole file and writes it again, then syncs it to disk,
-/// and the shutdown waits 2 s for every pending document write
-/// (`DOCUMENT_FLUSH_TIMEOUT` in the `dbflux` binary) before it stops the
-/// process. At a conservative 16 MiB/s for reading, writing and syncing
-/// together (a slow disk or a network file system), 16 MiB takes 1 s, which
-/// leaves half the budget for the sync's latency and for the scripts that
-/// flush within the same wait. A larger file asks before the quit, where its
-/// save has all the time it needs.
-pub(super) const SHUTDOWN_SAVE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(test)]
+pub(super) use crate::file_edit_lifecycle::SHUTDOWN_SAVE_MAX_BYTES;
 
 /// A cell the table asked the modal editor for: its position as the table
 /// shows it and the value the cell holds now, edits included.
@@ -1028,7 +1020,7 @@ impl DelimitedDocument {
             return false;
         }
 
-        self.close_after_save = true;
+        self.lifecycle.close_after_save();
         self.save(cx);
         true
     }
@@ -1044,11 +1036,12 @@ impl DelimitedDocument {
     /// file whose save would be refused now.
     ///
     /// A local save goes through when no save, reread or load of the rest of
-    /// the file runs, the file is at most [`SHUTDOWN_SAVE_MAX_BYTES`] long,
-    /// it is still the version that was opened and that version can show a
-    /// change ([`super::save::verify_version`]), its permission bits and the
+    /// the file runs, the file is at most
+    /// [`crate::file_edit_lifecycle::SHUTDOWN_SAVE_MAX_BYTES`] long, it is
+    /// still the version that was opened and that version can show a change
+    /// ([`crate::file_save::verify_version`]), its permission bits and the
     /// operating system allow writing it and its directory takes a staging
-    /// file ([`super::save::check_local_save`]), an edit of the text applies, and
+    /// file ([`crate::file_save::check_local_save`]), an edit of the text applies, and
     /// the pending state passes the writer's check
     /// ([`Self::pending_state_writes`]). The file system checks are a few
     /// calls on the UI thread, one of which creates and removes a staging
@@ -1057,18 +1050,10 @@ impl DelimitedDocument {
     /// A save that passes this check can still fail when it writes, which the
     /// save reports itself.
     pub fn quit_disposition(&self, cx: &App) -> QuitDisposition {
-        if !self.is_dirty() {
-            return QuitDisposition::Clean;
-        }
-
-        let local_save_goes_through = matches!(self.file(), FileDocumentKey::Local { .. })
-            && self.local_save_goes_through_now(cx);
-
-        if local_save_goes_through {
-            QuitDisposition::SavedOnQuit
-        } else {
-            QuitDisposition::NeedsDecision
-        }
+        quit_disposition(self.is_dirty(), || {
+            matches!(self.file(), FileDocumentKey::Local { .. })
+                && self.local_save_goes_through_now(cx)
+        })
     }
 
     fn local_save_goes_through_now(&self, cx: &App) -> bool {
@@ -1080,18 +1065,8 @@ impl DelimitedDocument {
             return false;
         }
 
-        if loaded.source_length > SHUTDOWN_SAVE_MAX_BYTES {
-            return false;
-        }
-
-        let FileLocation::Local { path } = &self.location else {
-            return false;
-        };
-
-        let version_matches = read_version(&self.location)
-            .is_ok_and(|current| verify_version(&loaded.version, &current).is_ok());
-
-        version_matches && check_local_save(path).is_ok() && self.pending_state_writes(cx)
+        local_file_saves_now(&self.location, &loaded.version, loaded.source_length)
+            && self.pending_state_writes(cx)
     }
 
     /// Saves as part of a quit the user confirmed. The tab stays open, and
@@ -1107,7 +1082,7 @@ impl DelimitedDocument {
             return false;
         }
 
-        self.close_after_save = false;
+        self.lifecycle.keep_open_after_save();
         self.save(cx);
         true
     }
@@ -1116,7 +1091,7 @@ impl DelimitedDocument {
     /// saving them, and keeps the shutdown flush from writing them even when
     /// the discard itself cannot run (a save or a dialog in the way).
     pub fn discard_for_quit(&mut self, cx: &mut Context<Self>) {
-        self.discarded_for_quit = true;
+        self.lifecycle.discard_for_quit();
         self.discard_changes(cx);
     }
 
@@ -1136,15 +1111,14 @@ impl DelimitedDocument {
     /// that could not ask (a terminal signal), and are then dropped with one
     /// warning in the log naming the object.
     pub fn flush_for_shutdown(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.shutdown_save_started {
-            self.shutdown_save_started = true;
-
-            let pending = self.is_dirty() && !self.saving && !self.discarded_for_quit;
-
+        if self
+            .lifecycle
+            .start_shutdown_flush(self.is_dirty() && !self.saving)
+        {
             match self.file() {
-                FileDocumentKey::Local { .. } if pending => self.start_save(false, cx),
+                FileDocumentKey::Local { .. } => self.start_save(false, cx),
 
-                FileDocumentKey::Object { bucket, key, .. } if pending => {
+                FileDocumentKey::Object { bucket, key, .. } => {
                     let object = format!("{bucket}/{key}");
 
                     log::warn!(
@@ -1154,8 +1128,6 @@ impl DelimitedDocument {
 
                     self.dropped_at_shutdown.push(object);
                 }
-
-                _ => {}
             }
         }
 
@@ -1281,7 +1253,7 @@ impl DelimitedDocument {
     /// succeeded, asks for the tab to close. Every other outcome drops that
     /// intent, so a later save cannot close a tab the user kept.
     fn report_save_outcome(&mut self, succeeded: bool, cx: &mut Context<Self>) {
-        let close_after_save = std::mem::take(&mut self.close_after_save);
+        let close_after_save = self.lifecycle.take_close_after_save();
 
         cx.emit(DocumentEvent::SaveFinished { succeeded });
 

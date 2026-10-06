@@ -783,6 +783,74 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// The spreadsheet document: the table of the shown sheet, the sheet tabs
+/// and the edit bar. Alt+L and Alt+H (`NextResultTab`, `PrevResultTab`) step
+/// through the worksheets; a chart sheet's tab takes no click. Append row is
+/// the table's add-row key (`a a`) and a pane action, and Save is the table's
+/// save key.
+///
+/// For xls, Save as .xlsx is the table's save key (`SaveRow`) and a pane
+/// action; its prompt (`Modal`) goes on with Enter and cancels with Escape.
+///
+/// An object read whole is downloaded after a prompt (`Modal`): Enter
+/// downloads and Escape declines.
+///
+/// `t` switches between the table and the read-only text of the sheet, in
+/// the tab's context: in the text view, Escape first takes the keyboard out
+/// of the text editor, whose context is `TextInput`.
+pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
+    name: "spreadsheet file",
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::TextInput,
+        ContextId::Modal,
+    ],
+    entries: &[
+        ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "segmented-spreadsheet-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "header-col-*",
+            KeyboardPath::MouseOnly(
+                "a header click has no action in this document: rows stay in sheet order",
+            ),
+        ),
+        (
+            "spreadsheet-sheet-*",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        (
+            "spreadsheet-append-row",
+            KeyboardPath::Command(Command::ResultsAddRow),
+        ),
+        ("spreadsheet-save", KeyboardPath::Command(Command::SaveRow)),
+        (
+            "spreadsheet-save-as",
+            KeyboardPath::Command(Command::SaveRow),
+        ),
+        (
+            "spreadsheet-save-as-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "spreadsheet-save-as-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "spreadsheet-download-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "spreadsheet-download-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+    ],
+};
+
 /// The audit viewer: its toolbar ring (`f`), filters, event rows and their
 /// expanded details, and the row menu (`m`).
 pub(crate) const AUDIT: SurfaceRegistry = SurfaceRegistry {

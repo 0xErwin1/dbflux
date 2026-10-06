@@ -2,8 +2,8 @@
 //! which version of it was opened.
 //!
 //! Nothing here depends on the file's format, except that
-//! [`StorageError::Write`] carries the delimited writer's error, because only
-//! the delimited document saves edits. Every function blocks on file
+//! [`StorageError::Write`] carries the error of the writer of each format a
+//! document saves edits to. Every function blocks on file
 //! or network I/O and touches no GPUI state, so callers run it on the
 //! background executor and report the returned errors themselves.
 
@@ -16,7 +16,6 @@ use std::time::SystemTime;
 use dbflux_byte_source::{ByteSource, FileSource, MemorySource, SourceError};
 use dbflux_core::chrono::{DateTime, Utc};
 use dbflux_core::{Connection, DbError, ObjectMetadata, ObjectStoreConnection};
-use dbflux_delimited::WriteError;
 
 /// Where a file lives.
 ///
@@ -76,7 +75,7 @@ impl SourceVersion {
     ///
     /// A local file needs a modification time for that, and an object needs
     /// an etag or a last-modified time. Without them the length is the only
-    /// thing compared, and [`crate::delimited::save_edited`] refuses to save,
+    /// thing compared, and [`crate::file_save::save_file`] refuses to save,
     /// because it could overwrite a change it cannot see. A caller checks this
     /// when the file is opened to tell the user that the file cannot be saved.
     pub fn detects_same_length_change(&self) -> bool {
@@ -109,7 +108,7 @@ pub enum StorageError {
     Read(SourceError),
 
     /// The edited file could not be produced. Nothing replaced the target.
-    Write(WriteError),
+    Write(WriteFailure),
 
     /// A local file operation on `path` failed.
     LocalIo {
@@ -167,9 +166,7 @@ impl fmt::Display for StorageError {
                 formatter.write_str(&crate::labels::file_read_failed_cause(source))
             }
 
-            Self::Write(source) => {
-                formatter.write_str(&crate::labels::delimited_write_error_cause(source))
-            }
+            Self::Write(source) => formatter.write_str(&crate::labels::write_failure_cause(source)),
 
             Self::LocalIo { path, source } => formatter.write_str(&dbflux_i18n::t!(
                 "document.file.error.storage.local_io",
@@ -207,9 +204,29 @@ impl std::error::Error for StorageError {
         match self {
             Self::SourceChanged | Self::VersionUnverifiable => None,
             Self::Read(source) => Some(source),
-            Self::Write(source) => Some(source),
+            Self::Write(source) => Some(source.inner()),
             Self::LocalIo { source, .. } | Self::TemporaryFile { source, .. } => Some(source),
             Self::ObjectStore { source, .. } => Some(source.as_ref()),
+        }
+    }
+}
+
+/// Why the writer of a file's format could not produce the edited file.
+#[derive(Debug)]
+pub enum WriteFailure {
+    /// The delimited (CSV or TSV) writer refused the edits or failed.
+    Delimited(dbflux_delimited::WriteError),
+
+    /// The spreadsheet package patcher refused the edits or failed.
+    Spreadsheet(dbflux_spreadsheet::SheetWriteError),
+}
+
+impl WriteFailure {
+    /// The writer's own error.
+    fn inner(&self) -> &(dyn std::error::Error + 'static) {
+        match self {
+            Self::Delimited(error) => error,
+            Self::Spreadsheet(error) => error,
         }
     }
 }

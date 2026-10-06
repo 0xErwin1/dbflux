@@ -29,6 +29,9 @@ launch to your first query; otherwise pick the page for what you are doing.
   files as a table or as text.
 - [Parquet Files](PARQUET_FILES.md) — reading Parquet files as a read-only,
   paged table and inspecting their columns.
+- [Spreadsheet Files](SPREADSHEET_FILES.md) — opening xlsx, xlsm, xls and
+  ods workbooks sheet by sheet, editing cells of xlsx, xlsm and ods files and
+  saving them in place, and saving a read-only xls file as a new xlsx file.
 - [Charts](CHARTS.md) and [Dashboards](DASHBOARDS.md) — charting results and
   building dashboards.
 - [Keyboard Reference](KEYBOARD.md) — every default binding, including Vim mode.

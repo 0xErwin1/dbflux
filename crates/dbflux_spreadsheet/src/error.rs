@@ -108,3 +108,206 @@ impl From<zip::result::ZipError> for SpreadsheetError {
         }
     }
 }
+
+/// A failure to write edits into an xlsx, xlsm or ods package.
+///
+/// Every refusal of an edit names the sheet and the cell, so the caller can
+/// point the user at it. Refusals come before anything is written; after a
+/// [`SheetWriteError::Source`] or [`SheetWriteError::Sink`] failure the sink
+/// may hold a partial package.
+#[derive(Debug, thiserror::Error)]
+pub enum SheetWriteError {
+    /// Reading the original package failed; the message is the source's own.
+    #[error(transparent)]
+    Source(#[from] SourceError),
+
+    /// Writing the patched package to the sink failed.
+    #[error("cannot write the patched spreadsheet: {0}")]
+    Sink(#[source] std::io::Error),
+
+    /// The package is not an xlsx or ods package DBFlux can patch.
+    #[error("malformed spreadsheet: {message}")]
+    Malformed { message: String },
+
+    /// A sheet index past the last sheet of the workbook.
+    #[error("sheet {index} does not exist; the workbook has {sheet_count} sheets")]
+    SheetOutOfRange { index: usize, sheet_count: usize },
+
+    /// The sheet is a chart sheet or another sheet type without cells.
+    #[error("sheet `{sheet}` is not a worksheet, so it has no cells to edit")]
+    NotAWorksheet { sheet: String },
+
+    /// A zero-based position past `XFD1048576`, the last cell of a sheet.
+    #[error("sheet `{sheet}`: row {row} and column {column} are past the last cell of a sheet")]
+    CellOutOfRange {
+        sheet: String,
+        row: usize,
+        column: usize,
+    },
+
+    /// Text longer than the 32,767 UTF-16 units a cell holds.
+    #[error("{sheet}!{cell}: the text has {length} characters, more than the 32767 a cell holds")]
+    TextTooLong {
+        sheet: String,
+        cell: String,
+        length: usize,
+    },
+
+    /// A character XML 1.0 cannot represent, such as most control characters.
+    #[error("{sheet}!{cell}: the character U+{code:04X} cannot be stored in a spreadsheet file", code = u32::from(*character))]
+    InvalidCharacter {
+        sheet: String,
+        cell: String,
+        character: char,
+    },
+
+    /// NaN or an infinity, which a cell cannot store as a number.
+    #[error("{sheet}!{cell}: {value} is not a number a cell can store")]
+    NonFiniteNumber {
+        sheet: String,
+        cell: String,
+        value: f64,
+    },
+
+    /// A date before the workbook's epoch (for ods, before year 1) or after
+    /// 9999-12-31.
+    #[error("{sheet}!{cell}: {date} is outside the dates this workbook can store")]
+    DateOutOfRange {
+        sheet: String,
+        cell: String,
+        date: chrono::NaiveDateTime,
+    },
+
+    /// The cell is covered by a merged cell, which only its first cell can
+    /// hold a value for.
+    #[error(
+        "{sheet}!{cell} is covered by a merged cell; only the merged range's first cell can be edited"
+    )]
+    CoveredCell { sheet: String, cell: String },
+
+    /// The cell holds the text of a shared formula that other cells reuse.
+    #[error(
+        "{sheet}!{cell} holds a formula shared with the cells of {range}; editing it would change them too"
+    )]
+    SharedFormulaMaster {
+        sheet: String,
+        cell: String,
+        range: String,
+    },
+
+    /// The cell is part of an array or data-table formula, which only the
+    /// spreadsheet application can edit as a whole.
+    #[error(
+        "{sheet}!{cell} is inside the {kind} formula range {range}, which is edited as a whole"
+    )]
+    InsideFormulaRange {
+        sheet: String,
+        cell: String,
+        range: String,
+        kind: FormulaRangeKind,
+    },
+}
+
+/// A failure to write the values of a workbook into a new xlsx package with
+/// [`crate::write_values_xlsx`].
+///
+/// After any of these the sink may hold a partial package.
+#[derive(Debug, thiserror::Error)]
+pub enum ValuesWriteError {
+    /// Reading a sheet of the workbook failed.
+    #[error("cannot read sheet `{sheet}`: {source}")]
+    Read {
+        sheet: String,
+        #[source]
+        source: SpreadsheetError,
+    },
+
+    /// The xlsx format refuses the sheet's name; the message is the
+    /// writer's own.
+    #[error("sheet `{sheet}` cannot be written to xlsx: {message}")]
+    Sheet { sheet: String, message: String },
+
+    /// The xlsx format refuses a cell's value, such as text longer than a
+    /// cell holds or a date before 1900; the message is the writer's own.
+    #[error("{sheet}!{cell} cannot be written to xlsx: {message}")]
+    Cell {
+        sheet: String,
+        cell: String,
+        message: String,
+    },
+
+    /// Writing the package to the sink failed; the message is the writer's
+    /// own.
+    #[error("cannot write the xlsx file: {message}")]
+    Write { message: String },
+}
+
+/// A formula whose result fills a range of cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormulaRangeKind {
+    Array,
+    DataTable,
+}
+
+impl std::fmt::Display for FormulaRangeKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Array => formatter.write_str("array"),
+            Self::DataTable => formatter.write_str("data table"),
+        }
+    }
+}
+
+impl SheetWriteError {
+    pub(crate) fn malformed(message: impl Into<String>) -> Self {
+        Self::Malformed {
+            message: message.into(),
+        }
+    }
+
+    /// Maps a failure reading the original package, keeping a source failure
+    /// apart from a damaged file the way [`from_io`] does for the reader.
+    pub(crate) fn from_read(error: zip::result::ZipError) -> Self {
+        match SpreadsheetError::from(error) {
+            SpreadsheetError::Source(source) => Self::Source(source),
+            SpreadsheetError::Malformed { message } => Self::Malformed { message },
+            other => Self::malformed(other.to_string()),
+        }
+    }
+
+    pub(crate) fn from_read_io(error: std::io::Error) -> Self {
+        Self::from_read(zip::result::ZipError::Io(error))
+    }
+
+    /// Maps a failure writing the patched package.
+    pub(crate) fn from_write(error: zip::result::ZipError) -> Self {
+        match error {
+            zip::result::ZipError::Io(io_error) => Self::Sink(io_error),
+            other => Self::Sink(std::io::Error::other(other)),
+        }
+    }
+}
+
+/// Reports a failure to scan an xlsx or ods package while reading it, such as when
+/// looking for the row where appended rows go.
+impl From<SheetWriteError> for SpreadsheetError {
+    fn from(error: SheetWriteError) -> Self {
+        match error {
+            SheetWriteError::Source(source) => Self::Source(source),
+            SheetWriteError::Malformed { message } => Self::Malformed { message },
+            other => Self::malformed(other.to_string()),
+        }
+    }
+}
+
+impl From<quick_xml::Error> for SheetWriteError {
+    fn from(error: quick_xml::Error) -> Self {
+        Self::malformed(format!("invalid XML: {error}"))
+    }
+}
+
+impl From<quick_xml::events::attributes::AttrError> for SheetWriteError {
+    fn from(error: quick_xml::events::attributes::AttrError) -> Self {
+        Self::malformed(format!("invalid XML attribute: {error}"))
+    }
+}

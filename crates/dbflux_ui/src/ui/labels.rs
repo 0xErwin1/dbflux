@@ -319,6 +319,11 @@ pub(crate) fn scripts_filter_delimited_label() -> String {
     dbflux_i18n::t!("scripts.dialog.filter.delimited")
 }
 
+/// Formats the spreadsheet (xlsx, xlsm, xls, ods) file-dialog filter label.
+pub(crate) fn scripts_filter_spreadsheet_label() -> String {
+    dbflux_i18n::t!("scripts.dialog.filter.spreadsheet")
+}
+
 /// Formats the "All Files" file-dialog filter label.
 pub(crate) fn scripts_filter_all_files_label() -> String {
     dbflux_i18n::t!("scripts.dialog.filter.all_files")

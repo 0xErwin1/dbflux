@@ -17,6 +17,7 @@
 - [文档集合](DOCUMENTS.md) — 文档的表格、树与 JSON 视图。
 - [CSV 和 TSV 文件](CSV_FILES.md) — 以表格或文本形式打开、编辑和保存分隔符文件。
 - [Parquet 文件](PARQUET_FILES.md) — 以只读分页表格形式读取 Parquet 文件并查看其列。
+- [电子表格文件](SPREADSHEET_FILES.md) — 按工作表打开 xlsx、xlsm、xls 和 ods 工作簿，编辑 xlsx、xlsm 和 ods 文件的单元格并原地保存；xls 文件为只读，可另存为新的 xlsx 文件。
 - [图表](CHARTS.md)与[仪表盘](DASHBOARDS.md) — 为结果绘制图表并构建仪表盘。
 - [键盘快捷键](KEYBOARD.md) — 全部默认键位，包括 Vim 模式。
 - [设置](SETTINGS.md) — 每个设置项与连接 Hooks。

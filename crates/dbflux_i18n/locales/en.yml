@@ -2033,6 +2033,99 @@ document:
         read_only_file: "The file is read-only."
     warning:
       cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
+  spreadsheet:
+    unsaved_summary: "Unsaved edits to %{name}"
+    formula_warning:
+      one: "%{count} formula cell will be replaced by a value"
+      many: "%{count} formula cells will be replaced by values"
+    read_only:
+      xls: "This .xls file is read-only: DBFlux cannot write the .xls format. Save it as .xlsx to edit it."
+    action:
+      append_row: "Append row"
+      save: "Save"
+      saving: "Saving…"
+    error:
+      save_failed: "Could not save %{name}"
+      rows_only_at_end: "Rows can only be added at the end of a sheet. Inserting or deleting a row inside a sheet would move the cells that formulas, charts and ranges point at, so only a row appended and not saved yet can be deleted."
+      save_while_reading: "A sheet is being read. Save again once it is shown."
+      input:
+        a1_reference: "Cell %{cell} of sheet %{sheet} holds a formula with an A1-style reference. An ods file takes OpenFormula references such as [.A1] or [.A1:.B3]. Fix the formula, or start the value with ' to store it as text."
+      write:
+        malformed: "The file is not a spreadsheet package DBFlux can edit in place, so nothing was saved."
+        sheet_out_of_range: "The sheet being saved is no longer in the file. Reload the file and edit it again."
+        not_a_worksheet: "Sheet %{sheet} is not a worksheet, so it has no cells to edit."
+        cell_out_of_range: "Row %{row}, column %{column} of sheet %{sheet} is past the last cell a sheet can hold."
+        text_too_long: "Cell %{cell} of sheet %{sheet} holds %{length} characters, more than the 32767 a cell can hold. Shorten the text."
+        invalid_character: "Cell %{cell} of sheet %{sheet} contains %{character}, which a spreadsheet file cannot store. Remove the character."
+        non_finite_number: "Cell %{cell} of sheet %{sheet} holds %{value}, which a cell cannot store as a number."
+        date_out_of_range: "Cell %{cell} of sheet %{sheet} holds the date %{date}, outside the dates this workbook can store."
+        covered_cell: "Cell %{cell} of sheet %{sheet} is covered by a merged cell. Edit the first cell of the merged range instead."
+        shared_formula_master: "Cell %{cell} of sheet %{sheet} holds a formula the cells of %{range} share, so editing it would change them too. Edit it in a spreadsheet application."
+        inside_formula_range: "Cell %{cell} of sheet %{sheet} is inside the formula range %{range}, which only a spreadsheet application can edit as a whole."
+      open_failed: "Could not open %{name}"
+      sheet_failed: "Could not read sheet %{sheet} of %{name}"
+      not_a_spreadsheet: "The file is not an xlsx, xlsm, xls or ods workbook."
+      encrypted: "The workbook is encrypted or protected with a password to open, which DBFlux cannot read."
+      chart_sheet: "Sheet %{sheet} is a chart sheet and has no cells to show."
+      sheet_out_of_range: "Sheet %{index} does not exist. The workbook has %{count} sheets."
+      sheet_too_large: "Sheet %{sheet} spans %{rows} rows by %{columns} columns, %{cells} cells, more than the %{limit} cells DBFlux loads for one sheet."
+      malformed: "The workbook could not be decoded."
+    loading: "Loading %{name}…"
+    reading_sheet: "Reading sheet %{sheet}…"
+    empty:
+      title: "Sheet %{sheet} is empty"
+      description: "The sheet holds no values or formulas."
+    no_worksheet:
+      title: "%{name} has no worksheet"
+      description: "Every sheet of this workbook is a chart or another sheet without cells."
+    summary:
+      sheets:
+        one: "%{count} sheet"
+        many: "%{count} sheets"
+      rows:
+        one: "%{count} row"
+        many: "%{count} rows"
+      columns:
+        one: "%{count} column"
+        many: "%{count} columns"
+      in_memory: "the whole sheet is loaded in memory"
+    tab:
+      hidden: "hidden"
+      chart: "chart"
+      chart_tooltip: "A chart sheet holds a chart and no cells, so it cannot be shown here."
+    formula_pending: "Recalculated when opened"
+    formula:
+      no_selection: "Select a cell to see its formula."
+      none: "No formula"
+      unavailable: "Formula not available for .xls files"
+    view:
+      table: "Table"
+      text: "Text"
+    text:
+      building: "Writing the sheet as CSV…"
+      cut:
+        one: "The text was cut: it shows the first %{shown} of %{total} row."
+        many: "The text was cut: it shows the first %{shown} of %{total} rows."
+      render_failed: "The sheet could not be shown as CSV: %{cause}"
+    save_as:
+      action: "Save as .xlsx"
+      title: "Save as a new .xlsx file?"
+      body: "DBFlux writes the values of every sheet of %{name} into a new .xlsx file, which can be edited. The new file does not keep formulas (each becomes the value it shows, because DBFlux cannot read .xls formulas), formatting, number formats other than dates, merged cells, column widths, charts, images or macros. %{name} is not changed."
+      chart_sheets: "Chart sheets hold no cells and are not written: %{sheets}."
+      object: "The new file is saved on this computer only and is not uploaded to the bucket."
+      confirm: "Choose file…"
+      cancel: "Cancel"
+      dialog_title: "Save as .xlsx"
+      dialog_title_object: "Save a copy as .xlsx on this computer"
+      dialog_filter: "Excel workbook"
+      saved: "Saved %{name}"
+      error:
+        failed: "Could not save %{name} as .xlsx"
+        replaces_source: "The new file would replace the original .xls file, which is never changed. Choose another name or folder."
+        dialog_unavailable: "No file dialog is available: %{error}"
+        sheet: "Sheet %{sheet} cannot be written to an .xlsx file under its name."
+        cell: "Cell %{cell} of sheet %{sheet} cannot be written to an .xlsx file."
+        write: "Writing the .xlsx file failed."
   parquet:
     loading: "Loading %{name}…"
     empty:
@@ -3599,6 +3692,7 @@ scripts:
       redis: Redis
       delimited: CSV / TSV Files
       parquet: "Parquet Files"
+      spreadsheet: "Spreadsheet Files"
       all_files: All Files
   error:
     read_file_failed: "Failed to read file %{path}: %{error}"

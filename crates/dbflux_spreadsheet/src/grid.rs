@@ -15,15 +15,16 @@ pub const MAX_GRID_CELLS: usize = 10_000_000;
 /// One sheet's cells, laid out so that grid `(row, column)` is the sheet's
 /// `(row, column)` counted from A1, both zero-based.
 ///
-/// The grid ends at the last row and column that hold a value or a formula.
-/// Merged ranges and tables can reach further down without holding a value
-/// there, so [`SheetGrid::row_count`] is not by itself the row where new rows
-/// can be appended.
+/// The grid ends at the last row and column that hold a value or a formula,
+/// or for xlsx, xlsm and ods at [`SheetGrid::append_row`] when that is
+/// further down: merged ranges, tables and anchored drawings can reach past
+/// the last value, and the grid is padded with empty rows to cover them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetGrid {
     row_count: usize,
     column_count: usize,
     cells: Vec<SheetCell>,
+    append_row: Option<usize>,
 }
 
 impl SheetGrid {
@@ -33,6 +34,49 @@ impl SheetGrid {
 
     pub fn column_count(&self) -> usize {
         self.column_count
+    }
+
+    /// The zero-based row where appended rows go, so an appended row never
+    /// lands inside existing content. `Some` for xlsx and xlsm worksheets,
+    /// where [`crate::patch_xlsx`] writes appended rows, and for ods sheets,
+    /// where [`crate::patch_ods`] does, unless the sheet's part could not be
+    /// scanned for it; `None` for xls.
+    ///
+    /// For xlsx and xlsm it is one past the last row that holds a cell, a
+    /// merged range or a table. For ods it is one past the last row that
+    /// holds a non-empty cell (a value, a formula, text, a note or an
+    /// anchored drawing), a covered cell or the end of a merged range; the
+    /// empty filler rows LibreOffice writes down to the last row of the sheet
+    /// do not count.
+    pub fn append_row(&self) -> Option<usize> {
+        self.append_row
+    }
+
+    /// Records where appended rows go, padding the grid with empty rows up
+    /// to that row when it is past the last row read.
+    pub(crate) fn with_append_row(mut self, append_row: usize) -> Result<Self, SpreadsheetError> {
+        if append_row > self.row_count {
+            let cell_count = append_row.saturating_mul(self.column_count);
+            if cell_count > MAX_GRID_CELLS {
+                return Err(SpreadsheetError::SheetTooLarge {
+                    rows: append_row,
+                    columns: self.column_count,
+                    limit: MAX_GRID_CELLS,
+                });
+            }
+
+            let empty = SheetCell {
+                value: CellValue::Empty,
+                display: Arc::from(""),
+                formula: CellFormula::None,
+            };
+            self.cells.resize(cell_count, empty);
+            self.row_count = append_row;
+        }
+
+        self.append_row = Some(append_row);
+
+        Ok(self)
     }
 
     /// Returns the cell at a zero-based position, or `None` outside the grid.
@@ -226,6 +270,7 @@ pub(crate) fn build_grid(
         row_count,
         column_count,
         cells,
+        append_row: None,
     })
 }
 
@@ -303,7 +348,7 @@ fn parse_iso_date(text: &str) -> Option<NaiveDateTime> {
 
 /// Shows a date as `2024-01-31`, adding the time of day only when it is not
 /// midnight and the milliseconds only when there are some.
-fn display_date(date: NaiveDateTime) -> String {
+pub(crate) fn display_date(date: NaiveDateTime) -> String {
     if date.time() == NaiveTime::MIN {
         return date.format("%Y-%m-%d").to_string();
     }

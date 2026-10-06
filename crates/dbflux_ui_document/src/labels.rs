@@ -3127,6 +3127,175 @@ pub(crate) fn parquet_error_cause(error: &dbflux_parquet::ParquetError) -> Strin
     }
 }
 
+/// Notice shown while a spreadsheet is opened.
+pub(crate) fn spreadsheet_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.loading", name = file_name)
+}
+
+/// Summary of the error reported when a save of a spreadsheet did not
+/// replace the file.
+pub(crate) fn spreadsheet_save_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.error.save_failed", name = file_name)
+}
+
+/// Summary of a spreadsheet's unsaved edits, for the tab's dirty-dot
+/// tooltip and the unsaved-changes dialog.
+pub(crate) fn spreadsheet_unsaved_summary(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.unsaved_summary", name = file_name)
+}
+
+/// The warning shown while pending edits replace formula cells with values.
+pub(crate) fn spreadsheet_formula_warning(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.spreadsheet.formula_warning.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.formula_warning.many", count = count)
+    }
+}
+
+/// The note below a spreadsheet's text view when the text holds only the
+/// first `shown` of the sheet's `total` rows.
+pub(crate) fn spreadsheet_text_cut(shown: usize, total: usize) -> String {
+    if total == 1 {
+        dbflux_i18n::t!(
+            "document.spreadsheet.text.cut.one",
+            shown = shown,
+            total = total
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.spreadsheet.text.cut.many",
+            shown = shown,
+            total = total
+        )
+    }
+}
+
+/// Notice shown while one sheet of a spreadsheet is read.
+pub(crate) fn spreadsheet_reading_sheet_label(sheet: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.reading_sheet", sheet = sheet)
+}
+
+/// Summary of the error reported when a spreadsheet cannot be opened.
+pub(crate) fn spreadsheet_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when one sheet of a spreadsheet cannot be
+/// read.
+pub(crate) fn spreadsheet_sheet_failed_message(file_name: &str, sheet: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.error.sheet_failed",
+        name = file_name,
+        sheet = sheet
+    )
+}
+
+/// Title of the notice shown for a sheet without values.
+pub(crate) fn spreadsheet_empty_sheet_title(sheet: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.empty.title", sheet = sheet)
+}
+
+/// Title of the notice shown for a workbook with no worksheet to show.
+pub(crate) fn spreadsheet_no_worksheet_title(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.no_worksheet.title", name = file_name)
+}
+
+/// The legend a formula cell without a cached result shows in place of its
+/// value.
+pub(crate) fn spreadsheet_formula_pending() -> String {
+    dbflux_i18n::t!("document.spreadsheet.formula_pending")
+}
+
+/// The summary of a spreadsheet in its header: its sheet count, the shown
+/// sheet's rows and columns, and that the whole sheet is in memory. Without
+/// a shown sheet only the sheet count is given.
+pub(crate) fn spreadsheet_summary(sheet_count: usize, shown: Option<(usize, usize)>) -> String {
+    let sheets = if sheet_count == 1 {
+        dbflux_i18n::t!(
+            "document.spreadsheet.summary.sheets.one",
+            count = sheet_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.spreadsheet.summary.sheets.many",
+            count = sheet_count
+        )
+    };
+
+    let Some((rows, columns)) = shown else {
+        return sheets;
+    };
+
+    let rows = if rows == 1 {
+        dbflux_i18n::t!("document.spreadsheet.summary.rows.one", count = rows)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.summary.rows.many", count = rows)
+    };
+
+    let columns = if columns == 1 {
+        dbflux_i18n::t!("document.spreadsheet.summary.columns.one", count = columns)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.summary.columns.many", count = columns)
+    };
+
+    format!(
+        "{sheets} · {rows} × {columns} · {}",
+        dbflux_i18n::t!("document.spreadsheet.summary.in_memory")
+    )
+}
+
+/// What the user is told about a failure of the spreadsheet reader.
+///
+/// `sheet` names the sheet being read, which the size limit error does not
+/// carry. A file that is not a workbook or does not decode is followed, on
+/// its own line, by the reader's own text.
+pub(crate) fn spreadsheet_error_cause(
+    error: &dbflux_spreadsheet::SpreadsheetError,
+    sheet: Option<&str>,
+) -> String {
+    use dbflux_spreadsheet::SpreadsheetError;
+
+    match error {
+        SpreadsheetError::Source(source) => file_read_failed_cause(source),
+
+        SpreadsheetError::NotASpreadsheet { reason } => with_technical_detail(
+            dbflux_i18n::t!("document.spreadsheet.error.not_a_spreadsheet"),
+            reason,
+        ),
+
+        SpreadsheetError::Encrypted => dbflux_i18n::t!("document.spreadsheet.error.encrypted"),
+
+        SpreadsheetError::ChartSheet { name } => {
+            dbflux_i18n::t!("document.spreadsheet.error.chart_sheet", sheet = name)
+        }
+
+        SpreadsheetError::SheetOutOfRange { index, sheet_count } => dbflux_i18n::t!(
+            "document.spreadsheet.error.sheet_out_of_range",
+            index = index + 1,
+            count = sheet_count
+        ),
+
+        SpreadsheetError::SheetTooLarge {
+            rows,
+            columns,
+            limit,
+        } => dbflux_i18n::t!(
+            "document.spreadsheet.error.sheet_too_large",
+            sheet = sheet.unwrap_or_default(),
+            rows = rows,
+            columns = columns,
+            cells = rows.saturating_mul(*columns),
+            limit = limit
+        ),
+
+        SpreadsheetError::Malformed { message } => with_technical_detail(
+            dbflux_i18n::t!("document.spreadsheet.error.malformed"),
+            message,
+        ),
+    }
+}
+
 /// What the user is told about a failure of the delimited reader.
 ///
 /// A refused dialect is told with what the user can change. Any other
@@ -3208,6 +3377,188 @@ pub(crate) fn delimited_write_error_cause(error: &dbflux_delimited::WriteError) 
 
         WriteError::UnclosedQuote { .. } => {
             dbflux_i18n::t!("document.delimited.error.write.unclosed_quote")
+        }
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// Why a save could not produce the edited file, in the user's words, for
+/// the writer of any format.
+pub(crate) fn write_failure_cause(failure: &crate::file_source::WriteFailure) -> String {
+    use crate::file_source::WriteFailure;
+
+    match failure {
+        WriteFailure::Delimited(error) => delimited_write_error_cause(error),
+        WriteFailure::Spreadsheet(error) => spreadsheet_write_error_cause(error),
+    }
+}
+
+/// Why the spreadsheet patcher refused or failed a save, in the user's
+/// words, followed by the patcher's own text. A refusal of an edit names the
+/// sheet and the cell.
+pub(crate) fn spreadsheet_write_error_cause(error: &dbflux_spreadsheet::SheetWriteError) -> String {
+    use dbflux_spreadsheet::SheetWriteError;
+
+    let key = spreadsheet_write_error_key(error);
+
+    let message = match error {
+        SheetWriteError::Source(source) => return file_read_failed_cause(source),
+
+        SheetWriteError::Sink(source) => return dbflux_i18n::t!(key, cause = source),
+
+        SheetWriteError::Malformed { .. } | SheetWriteError::SheetOutOfRange { .. } => {
+            dbflux_i18n::t!(key)
+        }
+
+        SheetWriteError::NotAWorksheet { sheet } => dbflux_i18n::t!(key, sheet = sheet),
+
+        SheetWriteError::CellOutOfRange { sheet, row, column } => dbflux_i18n::t!(
+            key,
+            sheet = sheet,
+            row = row.saturating_add(1),
+            column = column.saturating_add(1)
+        ),
+
+        SheetWriteError::TextTooLong {
+            sheet,
+            cell,
+            length,
+        } => dbflux_i18n::t!(key, sheet = sheet, cell = cell, length = length),
+
+        SheetWriteError::InvalidCharacter {
+            sheet,
+            cell,
+            character,
+        } => dbflux_i18n::t!(
+            key,
+            sheet = sheet,
+            cell = cell,
+            character = format!("U+{:04X}", u32::from(*character))
+        ),
+
+        SheetWriteError::NonFiniteNumber { sheet, cell, value } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell, value = value)
+        }
+
+        SheetWriteError::DateOutOfRange { sheet, cell, date } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell, date = date)
+        }
+
+        SheetWriteError::CoveredCell { sheet, cell } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell)
+        }
+
+        SheetWriteError::SharedFormulaMaster { sheet, cell, range }
+        | SheetWriteError::InsideFormulaRange {
+            sheet, cell, range, ..
+        } => dbflux_i18n::t!(key, sheet = sheet, cell = cell, range = range),
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// The catalog key of the message [`spreadsheet_write_error_cause`] shows
+/// for `error`.
+fn spreadsheet_write_error_key(error: &dbflux_spreadsheet::SheetWriteError) -> &'static str {
+    use dbflux_spreadsheet::SheetWriteError;
+
+    match error {
+        SheetWriteError::Source(_) => "document.file.error.storage.read",
+        SheetWriteError::Sink(_) => "document.delimited.error.write.sink",
+        SheetWriteError::Malformed { .. } => "document.spreadsheet.error.write.malformed",
+        SheetWriteError::SheetOutOfRange { .. } => {
+            "document.spreadsheet.error.write.sheet_out_of_range"
+        }
+        SheetWriteError::NotAWorksheet { .. } => "document.spreadsheet.error.write.not_a_worksheet",
+        SheetWriteError::CellOutOfRange { .. } => {
+            "document.spreadsheet.error.write.cell_out_of_range"
+        }
+        SheetWriteError::TextTooLong { .. } => "document.spreadsheet.error.write.text_too_long",
+        SheetWriteError::InvalidCharacter { .. } => {
+            "document.spreadsheet.error.write.invalid_character"
+        }
+        SheetWriteError::NonFiniteNumber { .. } => {
+            "document.spreadsheet.error.write.non_finite_number"
+        }
+        SheetWriteError::DateOutOfRange { .. } => {
+            "document.spreadsheet.error.write.date_out_of_range"
+        }
+        SheetWriteError::CoveredCell { .. } => "document.spreadsheet.error.write.covered_cell",
+        SheetWriteError::SharedFormulaMaster { .. } => {
+            "document.spreadsheet.error.write.shared_formula_master"
+        }
+        SheetWriteError::InsideFormulaRange { .. } => {
+            "document.spreadsheet.error.write.inside_formula_range"
+        }
+    }
+}
+
+/// What the Save as .xlsx prompt says before anything is written: that the
+/// values of every sheet go into a new file, what that file does not keep,
+/// and that `file_name` is not changed. `chart_sheets` names the sheets that
+/// are left out, and `object` adds that the new file is written to this
+/// computer only.
+pub(crate) fn spreadsheet_save_as_body(
+    file_name: &str,
+    chart_sheets: &[String],
+    object: bool,
+) -> String {
+    let mut body = dbflux_i18n::t!("document.spreadsheet.save_as.body", name = file_name);
+
+    if !chart_sheets.is_empty() {
+        body.push(' ');
+        body.push_str(&dbflux_i18n::t!(
+            "document.spreadsheet.save_as.chart_sheets",
+            sheets = chart_sheets.join(", ")
+        ));
+    }
+
+    if object {
+        body.push(' ');
+        body.push_str(&dbflux_i18n::t!("document.spreadsheet.save_as.object"));
+    }
+
+    body
+}
+
+/// Summary of the error reported when Save as .xlsx wrote no new file.
+pub(crate) fn spreadsheet_save_as_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.save_as.error.failed",
+        name = file_name
+    )
+}
+
+/// The toast shown once Save as .xlsx wrote the new file `file_name`.
+pub(crate) fn spreadsheet_save_as_saved_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.save_as.saved", name = file_name)
+}
+
+/// Why the values of a workbook could not be written into a new xlsx file,
+/// in the user's words, followed by the writer's own text.
+pub(crate) fn spreadsheet_values_write_error_cause(
+    error: &dbflux_spreadsheet::ValuesWriteError,
+) -> String {
+    use dbflux_spreadsheet::ValuesWriteError;
+
+    let message = match error {
+        ValuesWriteError::Read { sheet, source } => {
+            return spreadsheet_error_cause(source, Some(sheet));
+        }
+
+        ValuesWriteError::Sheet { sheet, .. } => {
+            dbflux_i18n::t!("document.spreadsheet.save_as.error.sheet", sheet = sheet)
+        }
+
+        ValuesWriteError::Cell { sheet, cell, .. } => dbflux_i18n::t!(
+            "document.spreadsheet.save_as.error.cell",
+            sheet = sheet,
+            cell = cell
+        ),
+
+        ValuesWriteError::Write { .. } => {
+            dbflux_i18n::t!("document.spreadsheet.save_as.error.write")
         }
     };
 
@@ -7806,6 +8157,171 @@ mod tests {
             "document.delimited.error.page.out_of_order",
             "document.delimited.error.page.no_header",
             "document.delimited.error.page.column_out_of_range",
+        ]);
+    }
+
+    /// One error of every kind the spreadsheet patcher reports.
+    fn every_spreadsheet_write_error() -> Vec<dbflux_spreadsheet::SheetWriteError> {
+        use dbflux_spreadsheet::{FormulaRangeKind, SheetWriteError};
+
+        let sheet = || "Totals".to_string();
+        let cell = || "C7".to_string();
+
+        vec![
+            SheetWriteError::Source(dbflux_byte_source::SourceError::new("disk gone")),
+            SheetWriteError::Sink(std::io::Error::other("disk full")),
+            SheetWriteError::Malformed {
+                message: "no workbook part".to_string(),
+            },
+            SheetWriteError::SheetOutOfRange {
+                index: 4,
+                sheet_count: 2,
+            },
+            SheetWriteError::NotAWorksheet { sheet: sheet() },
+            SheetWriteError::CellOutOfRange {
+                sheet: sheet(),
+                row: 1_048_576,
+                column: 2,
+            },
+            SheetWriteError::TextTooLong {
+                sheet: sheet(),
+                cell: cell(),
+                length: 40_000,
+            },
+            SheetWriteError::InvalidCharacter {
+                sheet: sheet(),
+                cell: cell(),
+                character: '\u{1}',
+            },
+            SheetWriteError::NonFiniteNumber {
+                sheet: sheet(),
+                cell: cell(),
+                value: f64::NAN,
+            },
+            SheetWriteError::DateOutOfRange {
+                sheet: sheet(),
+                cell: cell(),
+                date: chrono::NaiveDate::from_ymd_opt(1800, 1, 1)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .expect("a valid date"),
+            },
+            SheetWriteError::CoveredCell {
+                sheet: sheet(),
+                cell: cell(),
+            },
+            SheetWriteError::SharedFormulaMaster {
+                sheet: sheet(),
+                cell: cell(),
+                range: "C7:C20".to_string(),
+            },
+            SheetWriteError::InsideFormulaRange {
+                sheet: sheet(),
+                cell: cell(),
+                range: "C7:D9".to_string(),
+                kind: FormulaRangeKind::Array,
+            },
+        ]
+    }
+
+    /// The message of every spreadsheet write error is translated in each
+    /// shipped catalog, and a refusal of one cell names the sheet and the
+    /// cell.
+    #[test]
+    fn spreadsheet_write_errors_resolve_in_every_locale() {
+        use crate::file_source::WriteFailure;
+        use dbflux_spreadsheet::SheetWriteError;
+
+        for error in every_spreadsheet_write_error() {
+            assert_translated_in_every_locale(&[super::spreadsheet_write_error_key(&error)]);
+
+            let names_a_cell = !matches!(
+                error,
+                SheetWriteError::Source(_)
+                    | SheetWriteError::Sink(_)
+                    | SheetWriteError::Malformed { .. }
+                    | SheetWriteError::SheetOutOfRange { .. }
+                    | SheetWriteError::NotAWorksheet { .. }
+                    | SheetWriteError::CellOutOfRange { .. }
+            );
+
+            let cause = super::write_failure_cause(&WriteFailure::Spreadsheet(error));
+
+            assert!(!cause.contains("document."), "{cause}");
+
+            if names_a_cell {
+                let (message, _) = cause.split_once('\n').expect("a message and its detail");
+
+                assert!(message.contains("Totals"), "{message}");
+                assert!(message.contains("C7"), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn spreadsheet_document_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.spreadsheet.loading",
+            "document.spreadsheet.reading_sheet",
+            "document.spreadsheet.empty.title",
+            "document.spreadsheet.empty.description",
+            "document.spreadsheet.no_worksheet.title",
+            "document.spreadsheet.no_worksheet.description",
+            "document.spreadsheet.summary.sheets.one",
+            "document.spreadsheet.summary.sheets.many",
+            "document.spreadsheet.summary.rows.one",
+            "document.spreadsheet.summary.rows.many",
+            "document.spreadsheet.summary.columns.one",
+            "document.spreadsheet.summary.columns.many",
+            "document.spreadsheet.summary.in_memory",
+            "document.spreadsheet.unsaved_summary",
+            "document.spreadsheet.formula_warning.one",
+            "document.spreadsheet.formula_warning.many",
+            "document.spreadsheet.read_only.xls",
+            "document.spreadsheet.action.append_row",
+            "document.spreadsheet.action.save",
+            "document.spreadsheet.action.saving",
+            "document.spreadsheet.error.save_failed",
+            "document.spreadsheet.error.rows_only_at_end",
+            "document.spreadsheet.error.save_while_reading",
+            "document.spreadsheet.error.input.a1_reference",
+            "document.spreadsheet.tab.hidden",
+            "document.spreadsheet.tab.chart",
+            "document.spreadsheet.tab.chart_tooltip",
+            "document.spreadsheet.formula.no_selection",
+            "document.spreadsheet.formula.none",
+            "document.spreadsheet.formula.unavailable",
+            "document.spreadsheet.view.table",
+            "document.spreadsheet.view.text",
+            "document.spreadsheet.text.building",
+            "document.spreadsheet.text.cut.one",
+            "document.spreadsheet.text.cut.many",
+            "document.spreadsheet.text.render_failed",
+            "document.spreadsheet.error.open_failed",
+            "document.spreadsheet.error.sheet_failed",
+            "document.spreadsheet.error.not_a_spreadsheet",
+            "document.spreadsheet.error.encrypted",
+            "document.spreadsheet.error.chart_sheet",
+            "document.spreadsheet.error.sheet_out_of_range",
+            "document.spreadsheet.error.sheet_too_large",
+            "document.spreadsheet.error.malformed",
+            "document.spreadsheet.save_as.action",
+            "document.spreadsheet.save_as.title",
+            "document.spreadsheet.save_as.body",
+            "document.spreadsheet.save_as.chart_sheets",
+            "document.spreadsheet.save_as.object",
+            "document.spreadsheet.save_as.confirm",
+            "document.spreadsheet.save_as.cancel",
+            "document.spreadsheet.save_as.dialog_title",
+            "document.spreadsheet.save_as.dialog_title_object",
+            "document.spreadsheet.save_as.dialog_filter",
+            "document.spreadsheet.save_as.saved",
+            "document.spreadsheet.save_as.error.failed",
+            "document.spreadsheet.save_as.error.replaces_source",
+            "document.spreadsheet.save_as.error.dialog_unavailable",
+            "document.spreadsheet.save_as.error.sheet",
+            "document.spreadsheet.save_as.error.cell",
+            "document.spreadsheet.save_as.error.write",
+            "scripts.dialog.filter.spreadsheet",
         ]);
     }
 

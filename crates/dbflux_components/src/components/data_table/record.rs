@@ -266,6 +266,7 @@ fn render_fields(
 
             let is_null = display_value.is_null();
             let is_auto_generated = display_value.is_auto_generated();
+            let is_placeholder = display_value.is_placeholder();
 
             let name_cell = div()
                 .flex()
@@ -341,7 +342,9 @@ fn render_fields(
                                 .ring(ChamferRing::focus(ChromeColors::tint(theme))),
                         )
                     })
-                    .when(is_null || is_auto_generated, |d| d.italic())
+                    .when(is_null || is_auto_generated || is_placeholder, |d| {
+                        d.italic()
+                    })
                     .when(is_pending_delete, |d| d.line_through())
                     // Values read like the grid's cells: the data face, NULL
                     // in the null colour.
@@ -351,13 +354,15 @@ fn render_fields(
                             .truncate()
                             .font_family(fonts::grid_family(cx))
                             .text_size(fonts::grid_font_size(cx))
-                            .text_color(if is_pending_delete || is_auto_generated {
-                                theme.muted_foreground
-                            } else if is_null {
-                                null_color
-                            } else {
-                                theme.foreground
-                            })
+                            .text_color(
+                                if is_pending_delete || is_auto_generated || is_placeholder {
+                                    theme.muted_foreground
+                                } else if is_null {
+                                    null_color
+                                } else {
+                                    theme.foreground
+                                },
+                            )
                             .child(display_text),
                     )
                     .into_any_element()
