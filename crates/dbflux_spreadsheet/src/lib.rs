@@ -6,6 +6,8 @@
 //! padded to A1, where each cell carries its value, the text to show for it,
 //! and its formula when the format exposes one.
 //!
+//! [`patch_xlsx`] writes cell edits into an xlsx package in place.
+//!
 //! ```
 //! use dbflux_byte_source::MemorySource;
 //! use dbflux_spreadsheet::{SpreadsheetError, open};
@@ -21,10 +23,12 @@
 mod error;
 mod grid;
 mod workbook;
+mod xlsx_patch;
 
-pub use error::SpreadsheetError;
+pub use error::{FormulaRangeKind, SheetWriteError, SpreadsheetError};
 pub use grid::{CellErrorCode, CellFormula, CellValue, MAX_GRID_CELLS, SheetCell, SheetGrid};
 pub use workbook::{SheetInfo, SheetKind, SpreadsheetFormat, Workbook, open};
+pub use xlsx_patch::{CellEdit, XlsxEdits, patch_xlsx};
 
 #[cfg(test)]
 mod grid_tests;
