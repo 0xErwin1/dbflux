@@ -62,7 +62,7 @@
 - 코드 생성은 지원되는 MySQL/MariaDB 구문으로 한정됩니다. 지원되지 않는 생성기 ID는 `NotSupported`를 반환합니다.
 - 루틴 목록은 FUNCTION과 PROCEDURE 타입만 다룹니다. MySQL 집계 함수(`CREATE AGGREGATE FUNCTION` UDF 플러그인으로 등록)와 윈도우 함수는 `information_schema.ROUTINES`에 나타나지 않으므로 목록에 포함되지 않습니다.
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE`는 `SHOW_ROUTINE` 권한(MySQL 8.0+) 또는 해당 루틴의 소유권이 필요합니다. 권한이 충분하지 않으면 정의 열이 `NULL`을 반환하고 뷰어는 소스 대신 알림을 표시합니다.
-- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `START TRANSACTION READ ONLY` 안에서 실행된 뒤 롤백됩니다. 요청에는 실행 가능한 주석(`/*! */`, `/*M! */`)과 `INTO`라는 단어가 없는 `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE`, `VALUES` 문만 들어갈 수 있으며, 서버가 열린 트랜잭션이 없고 세션이 `LOCK TABLES` 잠금을 보유할 수 없음을 증명하지 못하면 거부됩니다. MySQL은 세션의 데이터 변경을 거부하지만 `GET_LOCK`이나 사용자 정의 함수 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다.
+- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `START TRANSACTION READ ONLY` 안에서 실행된 뒤 롤백됩니다. 요청에는 실행 가능한 주석(`/*! */`, `/*M! */`)과 `INTO`라는 단어가 없는 `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE`, `VALUES` 문만 들어갈 수 있으며, 서버가 열린 트랜잭션이 없고 세션이 `LOCK TABLES` 잠금을 보유할 수 없음을 증명하지 못하면 거부됩니다. MySQL은 세션의 데이터 변경을 거부하지만, 읽기 전용 트랜잭션에서도 변경할 수 있는 `TEMPORARY` 테이블은 예외이며 `GET_LOCK`이나 사용자 정의 함수 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다.
 
 ## DDL 지원 범위
 
