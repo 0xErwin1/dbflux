@@ -170,7 +170,7 @@ fn loud_metadata(metadata: &dbflux_core::DriverMetadata) -> dbflux_core::DriverM
 }
 
 impl LoudSqliteDriver {
-    fn new() -> Arc<dyn DbDriver> {
+    fn boxed() -> Arc<dyn DbDriver> {
         let inner = dbflux_driver_sqlite::SqliteDriver::new();
         let metadata = loud_metadata(inner.metadata());
 
@@ -300,7 +300,7 @@ async fn a_loud_dialect_finds_a_projected_pseudo_column_after_the_browse() {
 
     let profile = sqlite_profile(&directory);
     let connection_id = profile.id.to_string();
-    let agent = start_agent(ALLOW_ALL_ROLE, Some((LoudSqliteDriver::new(), profile))).await;
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((LoudSqliteDriver::boxed(), profile))).await;
 
     agent
         .call_json("connect", json!({ "connection_id": connection_id }))

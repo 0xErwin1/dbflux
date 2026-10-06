@@ -3002,10 +3002,10 @@ mod tests {
             _cx: &mut Context<Self>,
         ) -> impl gpui::IntoElement {
             let mut el = gpui::div();
-            if self.show {
-                if let Some(doc) = &self.doc {
-                    el = el.child(doc.clone());
-                }
+            if self.show
+                && let Some(doc) = &self.doc
+            {
+                el = el.child(doc.clone());
             }
             el
         }

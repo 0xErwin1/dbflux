@@ -1,0 +1,14 @@
+# Shared clippy configuration. The workspace `[lints]` tables in Cargo.toml
+# opt crates into `unwrap_used`, `expect_used`, `panic`, `unwrap_in_result`,
+# `dbg_macro`, `todo`, `unimplemented` and `indexing_slicing`; the keys below
+# scope the test-shaped ones to production code so test fixtures can use
+# `unwrap`/`expect`/`panic!`/indexing/`dbg!` without per-site allows. Exempted
+# are code inside `#[cfg(test)]` items (whole modules or any other item
+# carrying the attribute) and code inside `#[test]` functions; plain helper
+# functions in `tests/` targets that are not themselves `#[test]` fns are NOT
+# exempt.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true

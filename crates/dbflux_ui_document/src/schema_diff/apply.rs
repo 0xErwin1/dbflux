@@ -1397,7 +1397,7 @@ mod tests {
                 },
                 generation_calls,
                 calls: Arc::clone(&calls),
-                managed_planner: has_managed_planner.then(|| FakeTableAlterPlanner { calls }),
+                managed_planner: has_managed_planner.then_some(FakeTableAlterPlanner { calls }),
                 fail_on_sql_containing,
                 fail_rollback,
                 supports_table_ddl,

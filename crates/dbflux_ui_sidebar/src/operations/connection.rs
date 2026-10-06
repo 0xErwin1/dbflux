@@ -1154,15 +1154,26 @@ mod tests {
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
 
-    /// Spawns a thread that blocks until the returned gate is released,
-    /// standing in for a driver teardown stuck on cancel/close work.
-    fn gated_teardown_thread() -> (
+    type GatedTeardownThread = (
         std::thread::JoinHandle<Result<(), dbflux_core::DbError>>,
         Arc<(Mutex<bool>, Condvar)>,
-    ) {
+    );
+
+    /// Spawns a thread that blocks until the returned gate is released,
+    /// standing in for a driver teardown stuck on cancel/close work.
+    fn gated_teardown_thread() -> GatedTeardownThread {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
 
         let thread_gate = gate.clone();
+        // The JoinHandle type is fixed by `wait_for_connection_teardown` and the
+        // public `ConnectionTeardownHandle` alias in dbflux_core; boxing the Err
+        // here would change the production API shape these tests exercise.
+        #[expect(
+            clippy::result_large_err,
+            reason = "the thread must return the production Result<(), DbError> because \
+                      wait_for_connection_teardown and the public ConnectionTeardownHandle \
+                      alias fix that type"
+        )]
         let handle = std::thread::spawn(move || {
             let (lock, condvar) = &*thread_gate;
 
@@ -1273,8 +1284,15 @@ mod tests {
 
     #[gpui::test]
     fn wait_for_connection_teardown_returns_cleanup_error_once(cx: &mut TestAppContext) {
-        let teardown =
-            std::thread::spawn(|| Err(dbflux_core::DbError::query_failed("close failed")));
+        let teardown = {
+            #[expect(
+                clippy::result_large_err,
+                reason = "wait_for_connection_teardown joins a JoinHandle<Result<(), DbError>> \
+                          fixed by the public ConnectionTeardownHandle alias, so the spawned \
+                          closure must construct the production-sized DbError"
+            )]
+            std::thread::spawn(|| Err(dbflux_core::DbError::query_failed("close failed")))
+        };
         // The helper polls on the executor's virtual clock while the thread
         // runs in real time; let the thread finish first so the poll loop
         // cannot outrun it and the test observes the join result.

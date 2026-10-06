@@ -98,6 +98,9 @@ pub fn relational_schema(
     })
 }
 
+/// Result of `table_details`, keyed by `(database, schema, table)`.
+type TableDetailsCache = HashMap<(String, Option<String>, String), TableInfo>;
+
 /// A controllable fake connection backing the coordinator tests. All driver
 // work is served from injected maps; call counters let tests assert
 /// deduplicated execution.
@@ -112,7 +115,7 @@ pub struct FakeTreeConnection {
     /// Databases whose next `schema_for_database` call fails once.
     pub schema_failures: Mutex<HashMap<String, usize>>,
     /// Result of `table_details`, keyed by `(database, schema, table)`.
-    pub details: Mutex<HashMap<(String, Option<String>, String), TableInfo>>,
+    pub details: Mutex<TableDetailsCache>,
     pub list_calls: AtomicUsize,
     pub schema_calls: Mutex<Vec<String>>,
     pub details_calls: AtomicUsize,

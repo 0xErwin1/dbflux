@@ -157,10 +157,11 @@ impl PreparedTableAlter for NativeDropPlan {
             ));
         }
         #[cfg(test)]
-        if let Some((_, hook)) = BEFORE_NATIVE_DROP_BEGIN
-            .lock()
-            .expect("native DROP test hook mutex should not be poisoned")
-            .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+        if let Some((_, hook)) = lock_test_hook(
+            &BEFORE_NATIVE_DROP_BEGIN,
+            "native DROP test hook mutex should not be poisoned",
+        )
+        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
         {
             hook();
         }
@@ -304,10 +305,11 @@ fn prepare_rebuild_plan_typed(
     let table = &request.table.name;
     let observation = capture_rebuild_observation(connection, table)?;
     #[cfg(test)]
-    if let Some((_, hook)) = AFTER_REBUILD_OBSERVATION_CAPTURE
-        .lock()
-        .expect("rebuild observation test hook mutex should not be poisoned")
-        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+    if let Some((_, hook)) = lock_test_hook(
+        &AFTER_REBUILD_OBSERVATION_CAPTURE,
+        "rebuild observation test hook mutex should not be poisoned",
+    )
+    .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
     {
         hook();
     }
@@ -1189,10 +1191,11 @@ fn capture_rebuild_observation(
 ) -> Result<RebuildObservation, DbError> {
     let before = capture_rebuild_observation_once(connection, table)?;
     #[cfg(test)]
-    if let Some((_, hook)) = BEFORE_REBUILD_CAPTURE_SECOND_READ
-        .lock()
-        .expect("rebuild capture test hook mutex should not be poisoned")
-        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+    if let Some((_, hook)) = lock_test_hook(
+        &BEFORE_REBUILD_CAPTURE_SECOND_READ,
+        "rebuild capture test hook mutex should not be poisoned",
+    )
+    .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
     {
         hook();
     }
@@ -2096,10 +2099,11 @@ impl RebuildPlan {
         // This operation exclusively owns the shared connection from this point until cleanup.
         self.cancelled.store(false, Ordering::SeqCst);
         #[cfg(test)]
-        if let Some((_, hook)) = BEFORE_REBUILD_WRITE_LOCK
-            .lock()
-            .expect("rebuild write-lock test hook mutex should not be poisoned")
-            .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+        if let Some((_, hook)) = lock_test_hook(
+            &BEFORE_REBUILD_WRITE_LOCK,
+            "rebuild write-lock test hook mutex should not be poisoned",
+        )
+        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
         {
             hook();
         }
@@ -2187,9 +2191,10 @@ fn inject_rebuild_execution_fault(
     let _ = (connection, stage);
     #[cfg(test)]
     {
-        let mut fault = REBUILD_EXECUTION_FAULT
-            .lock()
-            .expect("rebuild execution fault mutex should not be poisoned");
+        let mut fault = lock_test_hook(
+            &REBUILD_EXECUTION_FAULT,
+            "rebuild execution fault mutex should not be poisoned",
+        );
         if fault.as_ref().is_some_and(|(thread_id, selected)| {
             *thread_id == std::thread::current().id() && *selected == stage
         }) {
@@ -2355,16 +2360,12 @@ fn cancel_comparison_after_row(row_number: u64, cancelled: &AtomicBool) {
     if row_number != 1 {
         return;
     }
-    let mut hook = COMPARISON_CANCEL_AFTER_ROW
+    if let Some((_, cancellation)) = COMPARISON_CANCEL_AFTER_ROW
         .lock()
-        .expect("comparison cancellation hook mutex should not be poisoned");
-    if hook
-        .as_ref()
-        .is_some_and(|(thread_id, _)| *thread_id == std::thread::current().id())
+        .expect("comparison cancellation hook mutex should not be poisoned")
+        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
     {
-        if let Some((_, cancellation)) = hook.take() {
-            cancellation.store(true, Ordering::SeqCst);
-        }
+        cancellation.store(true, Ordering::SeqCst);
     }
     let _cancelled = cancelled;
 }
@@ -2513,11 +2514,12 @@ fn validate_single_integrity_text_row(
 fn finalize_integrity_statement(statement: rusqlite::Statement<'_>) -> Result<(), rusqlite::Error> {
     let result = statement.finalize();
     #[cfg(test)]
-    if let Some(code) = INTEGRITY_FINALIZE_FAULT
-        .lock()
-        .expect("integrity finalization fault mutex should not be poisoned")
-        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
-        .map(|(_, code)| code)
+    if let Some(code) = lock_test_hook(
+        &INTEGRITY_FINALIZE_FAULT,
+        "integrity finalization fault mutex should not be poisoned",
+    )
+    .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+    .map(|(_, code)| code)
     {
         return Err(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(code),
@@ -2875,10 +2877,11 @@ fn capture_native_plan(
 ) -> Result<NativePlanCapture, DbError> {
     let before = capture_native_plan_once(connection, table, selected_columns, expected_before)?;
     #[cfg(test)]
-    if let Some((_, hook)) = BEFORE_NATIVE_CAPTURE_SECOND_READ
-        .lock()
-        .expect("native capture test hook mutex should not be poisoned")
-        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+    if let Some((_, hook)) = lock_test_hook(
+        &BEFORE_NATIVE_CAPTURE_SECOND_READ,
+        "native capture test hook mutex should not be poisoned",
+    )
+    .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
     {
         hook();
     }
@@ -4194,32 +4197,46 @@ fn native_error(table: &str, detail: String) -> DbError {
 #[cfg(test)]
 static REBUILD_TEST_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
+/// Locks a test hook mutex for the hook blocks inlined in production fns.
+/// These hooks keep the original fail-on-poison behavior (`expect` on the
+/// poisoned lock); the helper is not `Result`-returning, so `unwrap_in_result`
+/// does not apply to the `expect`.
 #[cfg(test)]
-static BEFORE_REBUILD_CAPTURE_SECOND_READ: Mutex<
-    Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>,
-> = Mutex::new(None);
+fn lock_test_hook<'a, T>(mutex: &'a Mutex<T>, message: &str) -> std::sync::MutexGuard<'a, T> {
+    mutex.lock().expect(message)
+}
 
 #[cfg(test)]
-static AFTER_REBUILD_OBSERVATION_CAPTURE: Mutex<
-    Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>,
-> = Mutex::new(None);
+type ThreadHookSlot = Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>;
 
 #[cfg(test)]
-static BEFORE_NATIVE_DROP_BEGIN: Mutex<Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>> =
-    Mutex::new(None);
+type ComparisonFinalizeFaultSlot = Option<(std::thread::ThreadId, ComparisonFinalizeFaults)>;
 
 #[cfg(test)]
-static BEFORE_REBUILD_WRITE_LOCK: Mutex<Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>> =
-    Mutex::new(None);
+type RebuildStageHookSlot = Option<(
+    std::thread::ThreadId,
+    RebuildExecutionStage,
+    Box<dyn FnOnce(&RusqliteConnection) -> Result<(), rusqlite::Error> + Send>,
+)>;
+
+#[cfg(test)]
+static BEFORE_REBUILD_CAPTURE_SECOND_READ: Mutex<ThreadHookSlot> = Mutex::new(None);
+
+#[cfg(test)]
+static AFTER_REBUILD_OBSERVATION_CAPTURE: Mutex<ThreadHookSlot> = Mutex::new(None);
+
+#[cfg(test)]
+static BEFORE_NATIVE_DROP_BEGIN: Mutex<ThreadHookSlot> = Mutex::new(None);
+
+#[cfg(test)]
+static BEFORE_REBUILD_WRITE_LOCK: Mutex<ThreadHookSlot> = Mutex::new(None);
 
 #[cfg(test)]
 static SQLITE_ENGINE_VERSION_OVERRIDE: Mutex<Option<(std::thread::ThreadId, i32)>> =
     Mutex::new(None);
 
 #[cfg(test)]
-static BEFORE_NATIVE_CAPTURE_SECOND_READ: Mutex<
-    Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>,
-> = Mutex::new(None);
+static BEFORE_NATIVE_CAPTURE_SECOND_READ: Mutex<ThreadHookSlot> = Mutex::new(None);
 
 #[cfg(test)]
 #[derive(Default)]
@@ -4229,9 +4246,7 @@ struct ComparisonFinalizeFaults {
 }
 
 #[cfg(test)]
-static COMPARISON_FINALIZE_FAULTS: Mutex<
-    Option<(std::thread::ThreadId, ComparisonFinalizeFaults)>,
-> = Mutex::new(None);
+static COMPARISON_FINALIZE_FAULTS: Mutex<ComparisonFinalizeFaultSlot> = Mutex::new(None);
 
 #[cfg(test)]
 static COMPARISON_CANCEL_AFTER_ROW: Mutex<Option<(std::thread::ThreadId, Arc<AtomicBool>)>> =
@@ -4245,13 +4260,7 @@ static REBUILD_EXECUTION_FAULT: Mutex<Option<(std::thread::ThreadId, RebuildExec
     Mutex::new(None);
 
 #[cfg(test)]
-static REBUILD_STAGE_HOOK: Mutex<
-    Option<(
-        std::thread::ThreadId,
-        RebuildExecutionStage,
-        Box<dyn FnOnce(&RusqliteConnection) -> Result<(), rusqlite::Error> + Send>,
-    )>,
-> = Mutex::new(None);
+static REBUILD_STAGE_HOOK: Mutex<RebuildStageHookSlot> = Mutex::new(None);
 
 #[cfg(test)]
 static REBUILD_GUARD_FAULTS: Mutex<Option<(std::thread::ThreadId, RebuildGuardFaults)>> =
@@ -4262,12 +4271,13 @@ fn run_rebuild_stage_hook(
     connection: &RusqliteConnection,
     stage: RebuildExecutionStage,
 ) -> Result<(), DbError> {
-    let hook = REBUILD_STAGE_HOOK
-        .lock()
-        .expect("rebuild stage hook mutex should not be poisoned")
-        .take_if(|(thread_id, selected, _)| {
-            *thread_id == std::thread::current().id() && *selected == stage
-        });
+    let hook = lock_test_hook(
+        &REBUILD_STAGE_HOOK,
+        "rebuild stage hook mutex should not be poisoned",
+    )
+    .take_if(|(thread_id, selected, _)| {
+        *thread_id == std::thread::current().id() && *selected == stage
+    });
     if let Some((_, _, hook)) = hook {
         hook(connection).map_err(|error| {
             rebuild_sqlite_execution_error("run rebuild test stage hook", &error)
@@ -4304,6 +4314,24 @@ mod tests {
         Connection, DbError, PreparedTableAlter, TableAlterExpectedColumn, TableAlterOperation,
         TableAlterRequest, TableRef,
     };
+
+    #[test]
+    fn hook_lock_helper_fails_on_poisoned_local_mutex() {
+        let mutex = Mutex::new(0u8);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock();
+            panic!("poison the local test mutex");
+        }))
+        .expect_err("the poisoning panic must be caught");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = super::lock_test_hook(&mutex, "test hook mutex poisoned");
+        }));
+        assert!(
+            result.is_err(),
+            "lock_test_hook must keep the original fail-on-poison behavior"
+        );
+    }
 
     #[test]
     fn rebuild_cancellation_is_typed_before_any_cleanup_is_needed() {
@@ -4655,6 +4683,13 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        unsafe_code,
+        reason = "the raw sqlite3_progress_handler FFI is intentional: the test owns the \
+                  in-memory connection and the callback is a non-capturing function that always \
+                  interrupts; it is registered before the comparison query and explicitly \
+                  unregistered on the same owned connection before the test ends"
+    )]
     fn sqlite_ffi_progress_handler_interrupts_an_actual_comparison_query() {
         unsafe extern "C" fn interrupt_progress(_: *mut std::ffi::c_void) -> std::ffi::c_int {
             1

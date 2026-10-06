@@ -983,7 +983,7 @@ mod tests {
             "foreign bytes must be detected against the baseline"
         );
         assert!(
-            matches!(executed.new_baseline, None),
+            executed.new_baseline.is_none(),
             "a refused write must not adopt a baseline"
         );
         assert_eq!(

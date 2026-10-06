@@ -267,9 +267,8 @@ fn the_context_menu_lists_the_toolbar_view_controls(cx: &mut TestAppContext) {
     );
 
     window.simulate_keystrokes("m j j j j j j j j enter");
-    assert_eq!(
+    assert!(
         window.update(|_, cx| document.read(cx).show_indexes),
-        true,
         "Show indexes flips the Indexes toggle"
     );
 }

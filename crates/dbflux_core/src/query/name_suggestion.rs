@@ -172,7 +172,7 @@ mod tests {
 
         assert_eq!(
             suggest(&longest_checked, &[longest_checked.as_str()]),
-            [longest_checked.clone()]
+            std::slice::from_ref(&longest_checked)
         );
         assert!(suggest(&overlong, &[overlong.as_str(), longest_checked.as_str()]).is_empty());
     }

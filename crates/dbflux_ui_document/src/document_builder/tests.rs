@@ -776,8 +776,10 @@ fn an_emptied_part_clears_its_slot_and_the_limit_is_written_as_text() {
         &parse(spec, Vec::new()),
     );
 
-    let mut emptied = DocumentQuerySpec::default();
-    emptied.limit = Some(50);
+    let emptied = DocumentQuerySpec {
+        limit: Some(50),
+        ..DocumentQuerySpec::default()
+    };
     let write = sync.plan(&emptied, &rendered("{}", "{}", "{}", Some(50)));
 
     assert_eq!(

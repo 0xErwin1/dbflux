@@ -1858,7 +1858,8 @@ mod pending_cell_input_close_tests {
     /// Close Others, Close All, Close to the Left and Close to the Right.
     #[gpui::test]
     fn batch_closes_ask_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
-        let routes: [(&str, fn(DocumentId, DocumentId) -> TabBarEvent); 4] = [
+        type CloseBatchRoute = (&'static str, fn(DocumentId, DocumentId) -> TabBarEvent);
+        let routes: [CloseBatchRoute; 4] = [
             ("close others", |_grid, other| {
                 TabBarEvent::CloseOtherTabs(other)
             }),

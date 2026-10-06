@@ -611,7 +611,7 @@ mod tests {
                     let barrier = barrier.clone();
                     scope.spawn(move || {
                         barrier.wait();
-                        binding.execute(root, None, &request)
+                        binding.execute(root, None, request)
                     })
                 })
                 .collect::<Vec<_>>();
