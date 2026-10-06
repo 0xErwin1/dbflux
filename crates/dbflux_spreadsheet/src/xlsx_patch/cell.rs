@@ -74,6 +74,24 @@ impl CellRange {
         })
     }
 
+    pub(crate) fn single(row: usize, column: usize) -> Self {
+        Self {
+            first_row: row,
+            first_column: column,
+            last_row: row,
+            last_column: column,
+        }
+    }
+
+    pub(crate) fn union(&self, other: &Self) -> Self {
+        Self {
+            first_row: self.first_row.min(other.first_row),
+            first_column: self.first_column.min(other.first_column),
+            last_row: self.last_row.max(other.last_row),
+            last_column: self.last_column.max(other.last_column),
+        }
+    }
+
     pub(crate) fn contains(&self, row: usize, column: usize) -> bool {
         (self.first_row..=self.last_row).contains(&row)
             && (self.first_column..=self.last_column).contains(&column)

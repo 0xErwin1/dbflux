@@ -1,21 +1,24 @@
 //! Writes cell edits into an xlsx or xlsm package without rebuilding it.
 //!
-//! [`patch_xlsx`] rewrites only the worksheet parts that hold an edit and
-//! copies every other zip entry as it is stored: the same compressed bytes,
-//! checksum, compression method and order. Styles, shared strings, charts,
-//! images, comments, tables and VBA projects therefore survive unchanged.
+//! [`patch_xlsx`] rewrites only the worksheet parts that hold an edit, plus
+//! the few workbook parts that ask for a recalculation, and copies every
+//! other zip entry as it is stored: the same compressed bytes, checksum,
+//! compression method and order. Styles, shared strings, charts, images,
+//! comments, tables and VBA projects therefore survive unchanged.
 
 mod cell;
 mod package;
 mod sheet;
+mod workbook;
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::rc::Rc;
 
 use chrono::NaiveDateTime;
-use dbflux_byte_source::{ByteSource, ByteSourceReader};
+use dbflux_byte_source::{ByteSource, ByteSourceReader, SourceError};
 use zip::ZipWriter;
 
 use crate::error::SheetWriteError;
@@ -24,10 +27,13 @@ use cell::{
     is_xml_character,
 };
 use package::{
-    Package, WORKBOOK_PART, WorkbookPart, parse_relationships, parse_workbook, relationships_part,
-    resolve_target,
+    Package, Relationship, WORKBOOK_PART, WorkbookPart, parse_relationships, parse_workbook,
+    relationships_part, resolve_target,
 };
 use sheet::{EncodedCell, SheetPatch, patch_sheet};
+use workbook::{remove_content_type_override, remove_relationships, request_full_calculation};
+
+const CONTENT_TYPES_PART: &str = "[Content_Types].xml";
 
 /// The new content of one cell.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,9 +97,15 @@ impl XlsxEdits {
 /// - falls inside the range of an array or data-table formula.
 ///
 /// An edited cell keeps its style and drops its old value, formula and
-/// value type. Other parts of the package, including `sharedStrings.xml`,
-/// stay byte-identical. Reads block, so a caller with a slow source runs this
-/// off its UI thread.
+/// value type. A new cell at or below the sheet's append row (see
+/// [`crate::SheetGrid::append_row`]) takes the style of the nearest cell
+/// above it in its column; merged ranges and tables are never grown.
+///
+/// When any sheet changes, the workbook asks for a full recalculation on
+/// load (`fullCalcOnLoad`) and loses its calculation chain, whose cell list
+/// the edits may have made wrong. Other parts of the package, including
+/// `sharedStrings.xml`, stay byte-identical. Reads block, so a caller with a
+/// slow source runs this off its UI thread.
 pub fn patch_xlsx<S: ByteSource>(
     source: S,
     edits: &XlsxEdits,
@@ -101,11 +113,13 @@ pub fn patch_xlsx<S: ByteSource>(
 ) -> Result<(), SheetWriteError> {
     let mut package = Package::open(ByteSourceReader::new(source))?;
 
-    let workbook = parse_workbook(&package.require_part(WORKBOOK_PART)?)?;
-    let relationships =
-        parse_relationships(&package.require_part(&relationships_part(WORKBOOK_PART))?)?;
+    let workbook_xml = package.require_part(WORKBOOK_PART)?;
+    let workbook = parse_workbook(&workbook_xml)?;
+    let relationships_xml = package.require_part(&relationships_part(WORKBOOK_PART))?;
+    let relationships = parse_relationships(&relationships_xml)?;
 
     let mut patched_entries = HashMap::new();
+    let mut removed_entries = HashSet::new();
 
     for (&index, cells) in &edits.sheets {
         if cells.is_empty() {
@@ -119,25 +133,145 @@ pub fn patch_xlsx<S: ByteSource>(
             SheetWriteError::malformed(format!("the package has no `{part}` part for `{name}`"))
         })?;
         let xml = package.require_part(&entry_name)?;
+        let append_row = workbook::append_row(&mut package, &part, &xml)?;
 
         let patched = patch_sheet(
             &xml,
             &SheetPatch {
                 sheet_name: name,
                 cells: &encoded,
+                append_row,
             },
         )?;
 
         patched_entries.insert(entry_name, patched);
     }
 
-    write_package(&mut package, &patched_entries, sink)
+    if !patched_entries.is_empty() {
+        let workbook_parts = WorkbookParts {
+            workbook_xml: &workbook_xml,
+            relationships_xml: &relationships_xml,
+            relationships: &relationships,
+        };
+        request_recalculation(
+            &mut package,
+            &workbook_parts,
+            &mut patched_entries,
+            &mut removed_entries,
+        )?;
+    }
+
+    write_package(&mut package, &patched_entries, &removed_entries, sink)
+}
+
+/// Returns the zero-based row where rows appended to the worksheet at
+/// `index` go, or `None` when that sheet is not a worksheet. See
+/// [`workbook::append_row`].
+pub(crate) fn sheet_append_row<S: ByteSource>(
+    source: &S,
+    index: usize,
+) -> Result<Option<usize>, SheetWriteError> {
+    let mut package = Package::open(ByteSourceReader::new(BorrowedSource(source)))?;
+
+    let workbook = parse_workbook(&package.require_part(WORKBOOK_PART)?)?;
+    let relationships =
+        parse_relationships(&package.require_part(&relationships_part(WORKBOOK_PART))?)?;
+
+    let part = match sheet_part(&workbook, &relationships, index) {
+        Ok((_, part)) => part,
+        Err(SheetWriteError::NotAWorksheet { .. }) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+
+    let xml = package.require_part(&part)?;
+
+    workbook::append_row(&mut package, &part, &xml).map(Some)
+}
+
+/// The workbook parts [`patch_xlsx`] has already read.
+struct WorkbookParts<'a> {
+    workbook_xml: &'a [u8],
+    relationships_xml: &'a [u8],
+    relationships: &'a [Relationship],
+}
+
+/// Asks for a full recalculation on load and drops the calculation chain,
+/// with its relationship and its content-type override.
+fn request_recalculation<R: Read + Seek>(
+    package: &mut Package<R>,
+    parts: &WorkbookParts<'_>,
+    patched_entries: &mut HashMap<String, Vec<u8>>,
+    removed_entries: &mut HashSet<String>,
+) -> Result<(), SheetWriteError> {
+    let entry_name =
+        |package: &Package<R>, part: &str| package.entry_name(part).unwrap_or(part.to_string());
+
+    if let Some(workbook_xml) = request_full_calculation(parts.workbook_xml)? {
+        patched_entries.insert(entry_name(package, WORKBOOK_PART), workbook_xml);
+    }
+
+    let calc_chains: Vec<&Relationship> = parts
+        .relationships
+        .iter()
+        .filter(|relationship| relationship.is_kind("calcChain") && !relationship.external)
+        .collect();
+
+    if calc_chains.is_empty() {
+        return Ok(());
+    }
+
+    let ids: Vec<&str> = calc_chains
+        .iter()
+        .map(|relationship| relationship.id.as_str())
+        .collect();
+    let relationships_part = relationships_part(WORKBOOK_PART);
+    patched_entries.insert(
+        entry_name(package, &relationships_part),
+        remove_relationships(parts.relationships_xml, &ids)?,
+    );
+
+    let original_content_types = package.read_part(CONTENT_TYPES_PART)?;
+    let mut content_types = original_content_types.clone();
+
+    for relationship in calc_chains {
+        let part = resolve_target(WORKBOOK_PART, &relationship.target);
+
+        if let Some(name) = package.entry_name(&part) {
+            removed_entries.insert(name);
+        }
+
+        if let Some(xml) = &content_types {
+            content_types = Some(remove_content_type_override(xml, &part)?);
+        }
+    }
+
+    if let Some(xml) = content_types
+        && original_content_types.as_deref() != Some(xml.as_slice())
+    {
+        patched_entries.insert(entry_name(package, CONTENT_TYPES_PART), xml);
+    }
+
+    Ok(())
+}
+
+/// Reads through a borrowed source, so a [`crate::Workbook`] can scan its
+/// package without giving up or cloning the source it keeps.
+struct BorrowedSource<'a, S>(&'a S);
+
+impl<S: ByteSource> ByteSource for BorrowedSource<'_, S> {
+    fn byte_length(&self) -> Result<u64, SourceError> {
+        self.0.byte_length()
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError> {
+        self.0.read_range(range)
+    }
 }
 
 /// Returns the name and part name of the worksheet at `index`.
 fn sheet_part<'a>(
     workbook: &'a WorkbookPart,
-    relationships: &[package::Relationship],
+    relationships: &[Relationship],
     index: usize,
 ) -> Result<(&'a str, String), SheetWriteError> {
     let sheet = workbook
@@ -258,11 +392,13 @@ fn encode_cell(
     }
 }
 
-/// Writes every entry of the package in its original order, the patched ones
-/// with their new bytes and the others copied without recompressing.
+/// Writes the entries of the package in their original order, leaving out
+/// the removed ones, writing the patched ones with their new bytes and
+/// copying the others without recompressing.
 fn write_package<R: Read + Seek>(
     package: &mut Package<R>,
     patched_entries: &HashMap<String, Vec<u8>>,
+    removed_entries: &HashSet<String>,
     sink: impl Write + Seek,
 ) -> Result<(), SheetWriteError> {
     let sink = TrackedSink::new(sink);
@@ -285,6 +421,10 @@ fn write_package<R: Read + Seek>(
         let entry = archive
             .by_index_raw(index)
             .map_err(SheetWriteError::from_read)?;
+
+        if removed_entries.contains(entry.name()) {
+            continue;
+        }
 
         match patched_entries.get(entry.name()) {
             Some(bytes) => {
