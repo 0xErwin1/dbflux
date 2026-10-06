@@ -242,7 +242,7 @@ fn install_bindings<'js>(
         })?;
 
         let operation = ScriptOperation::new(target.clone(), script_method, arguments);
-        let classification = operation.classification();
+        let classification = classify_operation(&operation);
 
         if ceiling.max(classification) != ceiling {
             let message = format!(
@@ -304,6 +304,41 @@ fn install_bindings<'js>(
     globals.set("__print", Function::new(ctx.clone(), print_fn)?)?;
 
     Ok(())
+}
+
+/// Aggregation stages that write their output to a collection.
+const OUTPUT_STAGES: &[&str] = &["$out", "$merge"];
+
+/// Classifies one dispatched operation from its method and, for
+/// `aggregate`, from its arguments.
+///
+/// [`ScriptMethod::classification`] rates `aggregate` as a read, but a
+/// pipeline with a `$out` or `$merge` stage writes to a collection, so it is
+/// a write. Every nested key is checked, not only top-level stages, so the
+/// sub-pipelines of `$facet`, `$lookup` and `$unionWith` are covered too. A
+/// document field that is literally named `$out` over-classifies the
+/// operation; it never lets a write through as a read.
+fn classify_operation(operation: &ScriptOperation) -> ExecutionClassification {
+    let classification = operation.classification();
+
+    let writes_output = operation.method == ScriptMethod::AggregateDocuments
+        && operation.arguments.iter().any(contains_output_stage);
+
+    if writes_output {
+        return classification.max(ExecutionClassification::Write);
+    }
+
+    classification
+}
+
+fn contains_output_stage(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(fields) => fields.iter().any(|(key, nested)| {
+            OUTPUT_STAGES.contains(&key.as_str()) || contains_output_stage(nested)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(contains_output_stage),
+        _ => false,
+    }
 }
 
 fn record_success(
@@ -509,6 +544,71 @@ mod tests {
         assert_eq!(outcome.ledger.len(), 1);
         assert_eq!(outcome.statements.len(), 0);
         assert!(outcome.failure.is_some());
+    }
+
+    #[test]
+    fn aggregate_with_an_output_stage_anywhere_is_a_write_and_aborts_under_a_read_ceiling() {
+        let pipelines = [
+            r#"[{"$match": {}}, {"$out": "archive"}]"#,
+            r#"[{$merge: {into: "archive"}}]"#,
+            r#"[{"$facet": {"copy": [{"$merge": {"into": "archive"}}]}}]"#,
+            r#"[{"$lookup": {"from": "o", "pipeline": [{"$out": "archive"}], "as": "x"}}]"#,
+            r#"[{"$unionWith": {"coll": "o", "pipeline": [{"$merge": "archive"}]}}]"#,
+        ];
+
+        for pipeline in pipelines {
+            let host = FakeHost::with_responses(vec![]);
+            let outcome = run(
+                config(
+                    &format!("db.orders.aggregate({pipeline});"),
+                    ExecutionClassification::Read,
+                ),
+                &host,
+            )
+            .expect("run should not error");
+
+            assert_eq!(host.call_count(), 0, "{pipeline} must never be dispatched");
+            assert!(outcome.failure.is_some(), "{pipeline} must abort the run");
+            assert_eq!(
+                outcome.ledger[0].classification,
+                Some(ExecutionClassification::Write),
+                "{pipeline} must classify as Write"
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_with_an_output_stage_dispatches_under_a_write_ceiling() {
+        let host = FakeHost::with_responses(vec![Ok(ScriptOperationOutcome::default())]);
+        let outcome = run(
+            config(
+                r#"db.orders.aggregate([{"$merge": {"into": "archive"}}]);"#,
+                ExecutionClassification::Write,
+            ),
+            &host,
+        )
+        .expect("run should not error");
+
+        assert!(outcome.failure.is_none());
+        assert_eq!(host.call_count(), 1);
+    }
+
+    #[test]
+    fn reads_without_output_stages_dispatch_under_a_read_ceiling() {
+        let host = FakeHost::with_responses(vec![]);
+        let outcome = run(
+            config(
+                r#"db.orders.aggregate([{"$group": {"_id": "$merge", "out": {"$sum": 1}}}]);
+                   db.orders.find({"$out": {"$exists": false}});
+                   db.orders.countDocuments({});"#,
+                ExecutionClassification::Read,
+            ),
+            &host,
+        )
+        .expect("run should not error");
+
+        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+        assert_eq!(host.call_count(), 3);
     }
 
     #[test]

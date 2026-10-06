@@ -1219,7 +1219,7 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         default_isolation_level: None,
         supports_savepoints: false,
         supports_nested_transactions: false,
-        supports_read_only: false,
+        supports_read_only: true,
         supports_deferrable: false,
     }),
     limits: None,
@@ -1510,6 +1510,17 @@ mod tests {
         assert!(metadata.query.is_some());
         assert!(metadata.mutation.is_none());
         assert!(metadata.enforces_read_only());
+    }
+
+    #[test]
+    fn mongodb_metadata_matches_the_real_driver_read_only_contract() {
+        let driver = FakeDriver::new(DbKind::MongoDB);
+
+        assert!(driver.metadata().enforces_read_only());
+        assert_eq!(
+            driver.metadata().enforces_read_only(),
+            dbflux_driver_mongodb::MONGODB_METADATA.enforces_read_only()
+        );
     }
 
     #[test]

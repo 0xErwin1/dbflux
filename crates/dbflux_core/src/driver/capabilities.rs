@@ -1831,10 +1831,13 @@ pub struct TransactionCapabilities {
 
     /// Whether the driver honours
     /// [`ReadOnlyEnforcement::Required`](crate::ReadOnlyEnforcement::Required):
-    /// it runs such a request in a mode the database enforces, or refuses it
-    /// before running anything. Callers rely on it to decide whether a read
-    /// can run unattended, so it must never be claimed for a mode DBFlux
-    /// emulates on its own.
+    /// it refuses or prevents every write of such a request before the write
+    /// reaches storage. Either the database session enforces it (a read-only
+    /// transaction, a query-only flag, a per-request setting), or the driver
+    /// classifies every typed operation it sends and refuses the ones above
+    /// read and the ones it does not recognise (MongoDB). Matching the query
+    /// text alone never qualifies. Callers rely on it to decide whether a read
+    /// can run unattended.
     pub supports_read_only: bool,
 
     /// Whether the driver supports deferrable transactions.
