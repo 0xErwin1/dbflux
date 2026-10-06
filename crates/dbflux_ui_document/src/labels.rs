@@ -3214,6 +3214,117 @@ pub(crate) fn delimited_write_error_cause(error: &dbflux_delimited::WriteError) 
     with_technical_detail(message, error)
 }
 
+/// Why a save could not produce the edited file, in the user's words, for
+/// the writer of any format.
+pub(crate) fn write_failure_cause(failure: &crate::file_source::WriteFailure) -> String {
+    use crate::file_source::WriteFailure;
+
+    match failure {
+        WriteFailure::Delimited(error) => delimited_write_error_cause(error),
+        WriteFailure::Spreadsheet(error) => spreadsheet_write_error_cause(error),
+    }
+}
+
+/// Why the spreadsheet patcher refused or failed a save, in the user's
+/// words, followed by the patcher's own text. A refusal of an edit names the
+/// sheet and the cell.
+pub(crate) fn spreadsheet_write_error_cause(error: &dbflux_spreadsheet::SheetWriteError) -> String {
+    use dbflux_spreadsheet::SheetWriteError;
+
+    let key = spreadsheet_write_error_key(error);
+
+    let message = match error {
+        SheetWriteError::Source(source) => return file_read_failed_cause(source),
+
+        SheetWriteError::Sink(source) => return dbflux_i18n::t!(key, cause = source),
+
+        SheetWriteError::Malformed { .. } | SheetWriteError::SheetOutOfRange { .. } => {
+            dbflux_i18n::t!(key)
+        }
+
+        SheetWriteError::NotAWorksheet { sheet } => dbflux_i18n::t!(key, sheet = sheet),
+
+        SheetWriteError::CellOutOfRange { sheet, row, column } => dbflux_i18n::t!(
+            key,
+            sheet = sheet,
+            row = row.saturating_add(1),
+            column = column.saturating_add(1)
+        ),
+
+        SheetWriteError::TextTooLong {
+            sheet,
+            cell,
+            length,
+        } => dbflux_i18n::t!(key, sheet = sheet, cell = cell, length = length),
+
+        SheetWriteError::InvalidCharacter {
+            sheet,
+            cell,
+            character,
+        } => dbflux_i18n::t!(
+            key,
+            sheet = sheet,
+            cell = cell,
+            character = format!("U+{:04X}", u32::from(*character))
+        ),
+
+        SheetWriteError::NonFiniteNumber { sheet, cell, value } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell, value = value)
+        }
+
+        SheetWriteError::DateOutOfRange { sheet, cell, date } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell, date = date)
+        }
+
+        SheetWriteError::CoveredCell { sheet, cell } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell)
+        }
+
+        SheetWriteError::SharedFormulaMaster { sheet, cell, range }
+        | SheetWriteError::InsideFormulaRange {
+            sheet, cell, range, ..
+        } => dbflux_i18n::t!(key, sheet = sheet, cell = cell, range = range),
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// The catalog key of the message [`spreadsheet_write_error_cause`] shows
+/// for `error`.
+fn spreadsheet_write_error_key(error: &dbflux_spreadsheet::SheetWriteError) -> &'static str {
+    use dbflux_spreadsheet::SheetWriteError;
+
+    match error {
+        SheetWriteError::Source(_) => "document.file.error.storage.read",
+        SheetWriteError::Sink(_) => "document.delimited.error.write.sink",
+        SheetWriteError::Malformed { .. } => "document.spreadsheet.error.write.malformed",
+        SheetWriteError::SheetOutOfRange { .. } => {
+            "document.spreadsheet.error.write.sheet_out_of_range"
+        }
+        SheetWriteError::NotAWorksheet { .. } => "document.spreadsheet.error.write.not_a_worksheet",
+        SheetWriteError::CellOutOfRange { .. } => {
+            "document.spreadsheet.error.write.cell_out_of_range"
+        }
+        SheetWriteError::TextTooLong { .. } => "document.spreadsheet.error.write.text_too_long",
+        SheetWriteError::InvalidCharacter { .. } => {
+            "document.spreadsheet.error.write.invalid_character"
+        }
+        SheetWriteError::NonFiniteNumber { .. } => {
+            "document.spreadsheet.error.write.non_finite_number"
+        }
+        SheetWriteError::DateOutOfRange { .. } => {
+            "document.spreadsheet.error.write.date_out_of_range"
+        }
+        SheetWriteError::CoveredCell { .. } => "document.spreadsheet.error.write.covered_cell",
+        SheetWriteError::SharedFormulaMaster { .. } => {
+            "document.spreadsheet.error.write.shared_formula_master"
+        }
+        SheetWriteError::InsideFormulaRange { .. } => {
+            "document.spreadsheet.error.write.inside_formula_range"
+        }
+    }
+}
+
 /// `message` followed, on its own line, by `detail`, the untranslated text
 /// of the library error it explains.
 fn with_technical_detail(message: String, detail: &dyn std::fmt::Display) -> String {
@@ -7807,6 +7918,103 @@ mod tests {
             "document.delimited.error.page.no_header",
             "document.delimited.error.page.column_out_of_range",
         ]);
+    }
+
+    /// One error of every kind the spreadsheet patcher reports.
+    fn every_spreadsheet_write_error() -> Vec<dbflux_spreadsheet::SheetWriteError> {
+        use dbflux_spreadsheet::{FormulaRangeKind, SheetWriteError};
+
+        let sheet = || "Totals".to_string();
+        let cell = || "C7".to_string();
+
+        vec![
+            SheetWriteError::Source(dbflux_byte_source::SourceError::new("disk gone")),
+            SheetWriteError::Sink(std::io::Error::other("disk full")),
+            SheetWriteError::Malformed {
+                message: "no workbook part".to_string(),
+            },
+            SheetWriteError::SheetOutOfRange {
+                index: 4,
+                sheet_count: 2,
+            },
+            SheetWriteError::NotAWorksheet { sheet: sheet() },
+            SheetWriteError::CellOutOfRange {
+                sheet: sheet(),
+                row: 1_048_576,
+                column: 2,
+            },
+            SheetWriteError::TextTooLong {
+                sheet: sheet(),
+                cell: cell(),
+                length: 40_000,
+            },
+            SheetWriteError::InvalidCharacter {
+                sheet: sheet(),
+                cell: cell(),
+                character: '\u{1}',
+            },
+            SheetWriteError::NonFiniteNumber {
+                sheet: sheet(),
+                cell: cell(),
+                value: f64::NAN,
+            },
+            SheetWriteError::DateOutOfRange {
+                sheet: sheet(),
+                cell: cell(),
+                date: chrono::NaiveDate::from_ymd_opt(1800, 1, 1)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .expect("a valid date"),
+            },
+            SheetWriteError::CoveredCell {
+                sheet: sheet(),
+                cell: cell(),
+            },
+            SheetWriteError::SharedFormulaMaster {
+                sheet: sheet(),
+                cell: cell(),
+                range: "C7:C20".to_string(),
+            },
+            SheetWriteError::InsideFormulaRange {
+                sheet: sheet(),
+                cell: cell(),
+                range: "C7:D9".to_string(),
+                kind: FormulaRangeKind::Array,
+            },
+        ]
+    }
+
+    /// The message of every spreadsheet write error is translated in each
+    /// shipped catalog, and a refusal of one cell names the sheet and the
+    /// cell.
+    #[test]
+    fn spreadsheet_write_errors_resolve_in_every_locale() {
+        use crate::file_source::WriteFailure;
+        use dbflux_spreadsheet::SheetWriteError;
+
+        for error in every_spreadsheet_write_error() {
+            assert_translated_in_every_locale(&[super::spreadsheet_write_error_key(&error)]);
+
+            let names_a_cell = !matches!(
+                error,
+                SheetWriteError::Source(_)
+                    | SheetWriteError::Sink(_)
+                    | SheetWriteError::Malformed { .. }
+                    | SheetWriteError::SheetOutOfRange { .. }
+                    | SheetWriteError::NotAWorksheet { .. }
+                    | SheetWriteError::CellOutOfRange { .. }
+            );
+
+            let cause = super::write_failure_cause(&WriteFailure::Spreadsheet(error));
+
+            assert!(!cause.contains("document."), "{cause}");
+
+            if names_a_cell {
+                let (message, _) = cause.split_once('\n').expect("a message and its detail");
+
+                assert!(message.contains("Totals"), "{message}");
+                assert!(message.contains("C7"), "{message}");
+            }
+        }
     }
 
     /// A refusal of the writer is told in the user's words, with the

@@ -2033,6 +2033,20 @@ document:
         read_only_file: "El archivo es de solo lectura."
     warning:
       cannot_save_in_place: Este archivo no informa fecha de modificación ni etiqueta de contenido, por lo que no se puede guardar en su ubicación.
+  spreadsheet:
+    error:
+      write:
+        malformed: "El archivo no es un paquete de hoja de cálculo que DBFlux pueda editar en su lugar, así que no se guardó nada."
+        sheet_out_of_range: "La hoja que se estaba guardando ya no está en el archivo. Recarga el archivo y vuelve a editarlo."
+        not_a_worksheet: "La hoja %{sheet} no es una hoja de cálculo, así que no tiene celdas para editar."
+        cell_out_of_range: "La fila %{row}, columna %{column} de la hoja %{sheet} está más allá de la última celda que puede tener una hoja."
+        text_too_long: "La celda %{cell} de la hoja %{sheet} tiene %{length} caracteres, más de los 32767 que admite una celda. Acorta el texto."
+        invalid_character: "La celda %{cell} de la hoja %{sheet} contiene %{character}, que un archivo de hoja de cálculo no puede guardar. Quita el carácter."
+        non_finite_number: "La celda %{cell} de la hoja %{sheet} tiene %{value}, que una celda no puede guardar como número."
+        date_out_of_range: "La celda %{cell} de la hoja %{sheet} tiene la fecha %{date}, fuera de las fechas que este libro puede guardar."
+        covered_cell: "La celda %{cell} de la hoja %{sheet} está cubierta por una celda combinada. Edita la primera celda del rango combinado."
+        shared_formula_master: "La celda %{cell} de la hoja %{sheet} tiene una fórmula que comparten las celdas de %{range}, así que editarla también las cambiaría. Edítala en una aplicación de hojas de cálculo."
+        inside_formula_range: "La celda %{cell} de la hoja %{sheet} está dentro del rango de fórmula %{range}, que solo una aplicación de hojas de cálculo puede editar como un todo."
   parquet:
     loading: "Cargando %{name}…"
     empty:

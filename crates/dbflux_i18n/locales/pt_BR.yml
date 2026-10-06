@@ -2033,6 +2033,20 @@ document:
         read_only_file: "O arquivo é somente leitura."
     warning:
       cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
+  spreadsheet:
+    error:
+      write:
+        malformed: "O arquivo não é um pacote de planilha que o DBFlux consiga editar no próprio local, então nada foi salvo."
+        sheet_out_of_range: "A planilha que estava sendo salva não está mais no arquivo. Recarregue o arquivo e edite-o novamente."
+        not_a_worksheet: "%{sheet} não é uma planilha com células, então não há células para editar."
+        cell_out_of_range: "A linha %{row}, coluna %{column} da planilha %{sheet} fica além da última célula que uma planilha comporta."
+        text_too_long: "A célula %{cell} da planilha %{sheet} tem %{length} caracteres, mais do que os 32767 que uma célula comporta. Encurte o texto."
+        invalid_character: "A célula %{cell} da planilha %{sheet} contém %{character}, que um arquivo de planilha não consegue armazenar. Remova o caractere."
+        non_finite_number: "A célula %{cell} da planilha %{sheet} tem %{value}, que uma célula não consegue armazenar como número."
+        date_out_of_range: "A célula %{cell} da planilha %{sheet} tem a data %{date}, fora das datas que esta pasta de trabalho consegue armazenar."
+        covered_cell: "A célula %{cell} da planilha %{sheet} está coberta por uma célula mesclada. Edite a primeira célula do intervalo mesclado."
+        shared_formula_master: "A célula %{cell} da planilha %{sheet} tem uma fórmula compartilhada pelas células de %{range}, então editá-la também as alteraria. Edite-a em um aplicativo de planilhas."
+        inside_formula_range: "A célula %{cell} da planilha %{sheet} está dentro do intervalo de fórmula %{range}, que só um aplicativo de planilhas consegue editar como um todo."
   parquet:
     loading: "Carregando %{name}…"
     empty:

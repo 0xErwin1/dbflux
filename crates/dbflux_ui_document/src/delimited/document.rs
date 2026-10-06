@@ -57,6 +57,7 @@ use super::text::{MAX_TEXT_BYTES, SourceSpan};
 use super::text_view::TextViewState;
 use super::toolbar::{DELIMITERS, DialectControls, QUOTES};
 use crate::dedup::FileDocumentKey;
+use crate::file_edit_lifecycle::FileEditLifecycle;
 use crate::file_source::{FileLocation, LocationSource, SourceVersion, StorageError, open_source};
 use crate::handle::DocumentEvent;
 use crate::object_text::db_error_to_user_facing;
@@ -473,17 +474,9 @@ pub struct DelimitedDocument {
     /// Whether a save is running. A save asked for meanwhile is ignored.
     pub(super) saving: bool,
 
-    /// Set when a save was started by the interrupted-close flow, so a save
-    /// that lands also asks the workspace to close the tab.
-    pub(super) close_after_save: bool,
-
-    /// Set once the shutdown flush started its save, so the flush polling
-    /// the document starts it once and a refused save is not retried.
-    pub(super) shutdown_save_started: bool,
-
-    /// Set when the user quit without saving the pending changes, so the
-    /// shutdown flush does not write them.
-    pub(super) discarded_for_quit: bool,
+    /// What the interrupted-close flow, a confirmed quit and the shutdown
+    /// flush asked of this document.
+    pub(super) lifecycle: FileEditLifecycle,
 
     /// The object, as `bucket/key`, whose pending changes the shutdown flush
     /// left unsaved, recorded once. Empty for a local file.
@@ -614,9 +607,7 @@ impl DelimitedDocument {
             reader_options,
             phase: DelimitedPhase::Loading,
             saving: false,
-            close_after_save: false,
-            shutdown_save_started: false,
-            discarded_for_quit: false,
+            lifecycle: FileEditLifecycle::default(),
             dropped_at_shutdown: Vec::new(),
             on_object_saved: None,
             pending_table_focus: false,
