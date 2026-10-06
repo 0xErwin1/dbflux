@@ -494,7 +494,7 @@ crates/
   dbflux_ssh/               # SSH 隧道支持
   dbflux_byte_source/       # 供文件读取器使用的随机访问字节源（内存、本地文件）
   dbflux_parquet/           # 基于字节源读取 Parquet 页脚与页索引（不依赖 GPUI）
-  dbflux_spreadsheet/       # 基于字节源用 calamine 读取 xlsx、xlsm、xls 与 ods 工作表，并原地编辑 xlsx 单元格（不依赖 GPUI）
+  dbflux_spreadsheet/       # 基于字节源用 calamine 读取 xlsx、xlsm、xls 与 ods 工作表，并原地编辑 xlsx 与 ods 单元格（不依赖 GPUI）
   dbflux_export/            # 导出（CSV、JSON、文本、二进制）
     src/lib.rs              # 基于形状的导出 API 与格式分发
     src/binary.rs           # 二进制/hex/base64 导出器

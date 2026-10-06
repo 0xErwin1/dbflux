@@ -6,8 +6,8 @@
 //! compression method and order. Styles, shared strings, charts, images,
 //! comments, tables and VBA projects therefore survive unchanged.
 
-mod cell;
-mod package;
+pub(crate) mod cell;
+pub(crate) mod package;
 mod sheet;
 mod workbook;
 
@@ -17,10 +17,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::rc::Rc;
 
-use chrono::NaiveDateTime;
 use dbflux_byte_source::{ByteSource, ByteSourceReader, SourceError};
 use zip::ZipWriter;
 
+use crate::edits::{CellEdit, SheetEdits};
 use crate::error::SheetWriteError;
 use cell::{
     MAX_COLUMNS, MAX_ROWS, MAX_TEXT_LENGTH, cell_name, date_serial, escape_text, format_number,
@@ -34,53 +34,6 @@ use sheet::{EncodedCell, SheetPatch, patch_sheet};
 use workbook::{remove_content_type_override, remove_relationships, request_full_calculation};
 
 const CONTENT_TYPES_PART: &str = "[Content_Types].xml";
-
-/// The new content of one cell.
-#[derive(Debug, Clone, PartialEq)]
-pub enum CellEdit {
-    /// Empties the cell. A cell with a style keeps it, so its formatting stays.
-    Clear,
-    /// Text, stored inline in the cell so the shared string table is not
-    /// rewritten.
-    Text(String),
-    Number(f64),
-    Bool(bool),
-    /// A date and time, stored as a serial number in the workbook's date
-    /// system. The cell keeps its own number format, so it shows as a date
-    /// only when that format is a date format.
-    Date(NaiveDateTime),
-    /// Formula text such as `SUM(A1:A3)`. One leading `=`, as typed into a
-    /// cell, is dropped, because the file stores formulas without it. It is
-    /// written without a cached result.
-    Formula(String),
-}
-
-/// Cell edits for one or more sheets of a workbook.
-///
-/// Sheets are addressed by their index in workbook order (the order of
-/// [`crate::Workbook::sheets`]), and cells by a zero-based `(row, column)`
-/// as in [`crate::SheetGrid`]. Setting a cell twice keeps the last edit.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct XlsxEdits {
-    sheets: BTreeMap<usize, BTreeMap<(usize, usize), CellEdit>>,
-}
-
-impl XlsxEdits {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set(&mut self, sheet: usize, row: usize, column: usize, edit: CellEdit) {
-        self.sheets
-            .entry(sheet)
-            .or_default()
-            .insert((row, column), edit);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.sheets.values().all(BTreeMap::is_empty)
-    }
-}
 
 /// Writes `source` with `edits` applied to `sink` as a new xlsx or xlsm
 /// package.
@@ -108,7 +61,7 @@ impl XlsxEdits {
 /// slow source runs this off its UI thread.
 pub fn patch_xlsx<S: ByteSource>(
     source: S,
-    edits: &XlsxEdits,
+    edits: &SheetEdits,
     sink: impl Write + Seek,
 ) -> Result<(), SheetWriteError> {
     let mut package = Package::open(ByteSourceReader::new(source))?;
@@ -256,7 +209,7 @@ fn request_recalculation<R: Read + Seek>(
 
 /// Reads through a borrowed source, so a [`crate::Workbook`] can scan its
 /// package without giving up or cloning the source it keeps.
-struct BorrowedSource<'a, S>(&'a S);
+pub(crate) struct BorrowedSource<'a, S>(pub(crate) &'a S);
 
 impl<S: ByteSource> ByteSource for BorrowedSource<'_, S> {
     fn byte_length(&self) -> Result<u64, SourceError> {
@@ -395,7 +348,7 @@ fn encode_cell(
 /// Writes the entries of the package in their original order, leaving out
 /// the removed ones, writing the patched ones with their new bytes and
 /// copying the others without recompressing.
-fn write_package<R: Read + Seek>(
+pub(crate) fn write_package<R: Read + Seek>(
     package: &mut Package<R>,
     patched_entries: &HashMap<String, Vec<u8>>,
     removed_entries: &HashSet<String>,

@@ -109,7 +109,7 @@ impl From<zip::result::ZipError> for SpreadsheetError {
     }
 }
 
-/// A failure to write edits into an xlsx or xlsm package.
+/// A failure to write edits into an xlsx, xlsm or ods package.
 ///
 /// Every refusal of an edit names the sheet and the cell, so the caller can
 /// point the user at it. Refusals come before anything is written; after a
@@ -125,7 +125,7 @@ pub enum SheetWriteError {
     #[error("cannot write the patched spreadsheet: {0}")]
     Sink(#[source] std::io::Error),
 
-    /// The package is not an xlsx package DBFlux can patch.
+    /// The package is not an xlsx or ods package DBFlux can patch.
     #[error("malformed spreadsheet: {message}")]
     Malformed { message: String },
 
@@ -154,7 +154,7 @@ pub enum SheetWriteError {
     },
 
     /// A character XML 1.0 cannot represent, such as most control characters.
-    #[error("{sheet}!{cell}: the character U+{code:04X} cannot be stored in an xlsx file", code = u32::from(*character))]
+    #[error("{sheet}!{cell}: the character U+{code:04X} cannot be stored in a spreadsheet file", code = u32::from(*character))]
     InvalidCharacter {
         sheet: String,
         cell: String,
@@ -169,13 +169,21 @@ pub enum SheetWriteError {
         value: f64,
     },
 
-    /// A date before the workbook's epoch or after 9999-12-31.
+    /// A date before the workbook's epoch (for ods, before year 1) or after
+    /// 9999-12-31.
     #[error("{sheet}!{cell}: {date} is outside the dates this workbook can store")]
     DateOutOfRange {
         sheet: String,
         cell: String,
         date: chrono::NaiveDateTime,
     },
+
+    /// The cell is covered by a merged cell, which only its first cell can
+    /// hold a value for.
+    #[error(
+        "{sheet}!{cell} is covered by a merged cell; only the merged range's first cell can be edited"
+    )]
+    CoveredCell { sheet: String, cell: String },
 
     /// The cell holds the text of a shared formula that other cells reuse.
     #[error(
@@ -246,7 +254,7 @@ impl SheetWriteError {
     }
 }
 
-/// Reports a failure to scan an xlsx package while reading it, such as when
+/// Reports a failure to scan an xlsx or ods package while reading it, such as when
 /// looking for the row where appended rows go.
 impl From<SheetWriteError> for SpreadsheetError {
     fn from(error: SheetWriteError) -> Self {
