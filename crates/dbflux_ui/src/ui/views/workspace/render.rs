@@ -459,10 +459,7 @@ impl Render for Workspace {
                 this.set_focus(FocusTarget::Sidebar, window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusEditor, window, cx| {
-                this.set_focus(FocusTarget::Document, window, cx);
-                this.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusUp, window, cx);
-                });
+                this.dispatch(Command::FocusEditor, window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusResults, window, cx| {
                 this.set_focus(FocusTarget::Document, window, cx);
