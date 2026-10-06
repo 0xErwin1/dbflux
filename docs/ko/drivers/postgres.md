@@ -73,7 +73,7 @@ PostgreSQL 시스템 뷰에서 가져온 엄선된 실시간 서버 지표 집�
 - 루틴 편집과 실행은 지원되지 않습니다. 루틴 뷰어는 읽기 전용입니다.
 - 취소는 최선 노력이며 취소 시점의 서버/세션 상태에 따라 달라집니다.
 - 코드 생성은 지원되는 PostgreSQL 구문만 대상으로 합니다. 지원되지 않는 생성기 ID는 `NotSupported`를 반환합니다.
-- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `BEGIN READ ONLY` 안에서 실행된 뒤 롤백되며, 열린 트랜잭션 안에서는 거부됩니다. PostgreSQL은 세션의 데이터 변경을 거부하지만 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다.
+- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `BEGIN READ ONLY` 안에서 실행된 뒤 롤백되며, 열린 트랜잭션 안에서는 거부됩니다. PostgreSQL은 세션의 데이터 변경을 거부하지만, 읽기 전용 트랜잭션에서도 변경할 수 있는 `TEMPORARY` 테이블은 예외이며 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다. 열린 트랜잭션을 감지하기 위해 드라이버는 먼저 `SAVEPOINT` 프로브를 실행하며, 이 프로브는 트랜잭션 밖에서는 SQLSTATE `25P01`(활성 트랜잭션 없음)로 실패합니다. 따라서 트랜잭션 밖에서 실행되는 읽기 전용 요청마다, 편집기 자동 새로 고침의 각 주기를 포함해, 서버 로그에 `ERROR`가 한 줄씩 기록됩니다.
 
 ## DDL 지원 범위
 

@@ -243,7 +243,7 @@ datos, y la llamada se gobierna y se audita como `read` o `metadata`.
 | Driver               | Cómo la sesión queda en solo lectura                                                                                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | PostgreSQL, Redshift | `BEGIN READ ONLY`, revertida al terminar                                                                                                                                                                |
-| MySQL, MariaDB       | `START TRANSACTION READ ONLY`, revertida al terminar. Se rechazan los comentarios ejecutables (`/*! */`, `/*M! */`) y `INTO`, y también el script cuando puede haber una transacción o un bloqueo de `LOCK TABLES` abierto |
+| MySQL, MariaDB       | `START TRANSACTION READ ONLY`, revertida al terminar. Un script con un comentario ejecutable (`/*! */`, `/*M! */`) o `INTO`, o que se ejecuta cuando puede haber una transacción o un bloqueo de `LOCK TABLES` abierto, no se ejecuta en solo lectura y se gobierna como `write` |
 | SQLite               | `PRAGMA query_only`                                                                                                                                                                                     |
 | ClickHouse           | El ajuste por petición `readonly = 2`                                                                                                                                                                   |
 
@@ -253,8 +253,9 @@ cualquier conexión cuya sesión ya tenga una transacción abierta, el script se
 gobierna como `write`: se aplica la decisión de la policy para `write` (Allow,
 Ask o Deny), y el audit registra `write`.
 
-La base de datos detiene la modificación de datos en la sesión, no las
-funciones con efectos externos, como `dblink_exec`, `COPY ... TO PROGRAM`,
+La base de datos detiene la modificación de datos en la sesión, salvo en las
+tablas temporales, que una transacción de solo lectura en PostgreSQL y MySQL
+todavía puede modificar, y no detiene las funciones con efectos externos, como `dblink_exec`, `COPY ... TO PROGRAM`,
 `lo_export`, `pg_terminate_backend` y los advisory locks en PostgreSQL, o
 `GET_LOCK` y las funciones definidas por el usuario en MySQL. Para un cliente
 MCP de solo lectura, las credenciales de base de datos con privilegios mínimos

@@ -184,13 +184,13 @@ MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `appro
 | 드라이버 | 세션을 읽기 전용으로 만드는 방법 |
 |----------|----------------------------------|
 | PostgreSQL, Redshift | `BEGIN READ ONLY`, 실행 후 롤백 |
-| MySQL, MariaDB | `START TRANSACTION READ ONLY`, 실행 후 롤백. 실행 가능한 주석(`/*! */`, `/*M! */`)과 `INTO`는 거부되며, 열린 트랜잭션이나 `LOCK TABLES` 잠금이 있을 수 있는 경우에도 스크립트가 거부됩니다 |
+| MySQL, MariaDB | `START TRANSACTION READ ONLY`, 실행 후 롤백. 실행 가능한 주석(`/*! */`, `/*M! */`)이나 `INTO`가 있는 스크립트, 또는 열린 트랜잭션이나 `LOCK TABLES` 잠금이 있을 수 있을 때 실행되는 스크립트는 읽기 전용으로 실행되지 않고 `write`로 통제됩니다 |
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 요청별 설정 `readonly = 2` |
 
 SQL Server, Turso, 외부 IPC 드라이버, MongoDB, Redis, DynamoDB, CloudWatch, InfluxDB는 읽기 전용을 강제할 수 없습니다. 이러한 연결과, 세션에 이미 열린 트랜잭션이 있는 모든 연결에서는 스크립트가 `write`로 통제됩니다: 정책의 `write` 결정(Allow, Ask 또는 Deny)이 적용되고, 감사에는 `write`가 기록됩니다.
 
-데이터베이스는 세션 안의 데이터 수정을 막을 뿐, 외부 효과가 있는 함수는 막지 않습니다. 예를 들어 PostgreSQL의 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock, 그리고 MySQL의 `GET_LOCK`과 사용자 정의 함수가 그렇습니다. 읽기 전용 MCP 클라이언트의 경우 최소 권한 데이터베이스 자격 증명이 여전히 실제 경계입니다.
+데이터베이스는 세션 안의 데이터 수정을 막지만, PostgreSQL과 MySQL의 읽기 전용 트랜잭션에서도 변경할 수 있는 임시 테이블은 예외이며, 외부 효과가 있는 함수는 막지 않습니다. 예를 들어 PostgreSQL의 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock, 그리고 MySQL의 `GET_LOCK`과 사용자 정의 함수가 그렇습니다. 읽기 전용 MCP 클라이언트의 경우 최소 권한 데이터베이스 자격 증명이 여전히 실제 경계입니다.
 
 편집기의 자동 새로고침도 같은 강제를 사용합니다. 드라이버가 읽기 전용을 강제할 수 없는 연결에서는 자동 새로고침이 Manual로 돌아갑니다.
 
