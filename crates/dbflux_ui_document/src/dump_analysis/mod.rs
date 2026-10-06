@@ -23,6 +23,7 @@ use dbflux_ui_base::AppStateEntity;
 use gpui::*;
 
 use super::handle::DocumentEvent;
+use super::progress_forwarding::progress_fraction;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 
@@ -81,15 +82,6 @@ pub struct DumpAnalysisDocument {
 }
 
 impl EventEmitter<DocumentEvent> for DumpAnalysisDocument {}
-
-/// Computes the fraction (0.0–1.0) of a dump file read so far, for the
-/// task-manager progress bar. Returns `None` when the analyzer could not
-/// determine the dump's total size upfront, in which case progress stays
-/// indeterminate rather than showing a misleading bar.
-pub(crate) fn progress_fraction(bytes_read: u64, total_bytes: Option<u64>) -> Option<f32> {
-    let total = total_bytes.filter(|&total| total > 0)?;
-    Some((bytes_read as f32 / total as f32).clamp(0.0, 1.0))
-}
 
 impl DumpAnalysisDocument {
     pub fn new(
@@ -520,25 +512,6 @@ impl DumpAnalysisDocument {
 
 #[cfg(test)]
 mod tests {
-    // Import only what we need — avoid `use super::*` which pulls in
-    // `gpui::*` and triggers macro recursion (see `task_runner.rs`).
-    use super::progress_fraction;
-
-    #[test]
-    fn progress_fraction_is_none_when_total_unknown() {
-        assert_eq!(progress_fraction(1024, None), None);
-    }
-
-    #[test]
-    fn progress_fraction_is_none_when_total_is_zero() {
-        assert_eq!(progress_fraction(0, Some(0)), None);
-    }
-
-    #[test]
-    fn progress_fraction_computes_ratio_when_total_known() {
-        assert_eq!(progress_fraction(50, Some(200)), Some(0.25));
-    }
-
     mod keyboard {
         use super::super::DumpAnalysisDocument;
         use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
@@ -722,13 +695,5 @@ mod tests {
                 super::super::DumpAnalysisPhase::Cancelled
             )));
         }
-    }
-
-    #[test]
-    fn progress_fraction_clamps_above_one() {
-        // The analyzer's progress callback may briefly overshoot the
-        // reported total (e.g. trailing checksum bytes); the fraction must
-        // never exceed 1.0.
-        assert_eq!(progress_fraction(300, Some(200)), Some(1.0));
     }
 }

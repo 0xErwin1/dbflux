@@ -6,10 +6,16 @@
 //! working XDG desktop portal nor a zenity/kdialog fallback installed, callers
 //! probe `is_native_file_dialog_available()` before invoking rfd and route to
 //! `fallback_export_dir()` when the probe fails.
+//!
+//! Open pickers have no fallback location, so `pick_existing_file()` and
+//! `pick_existing_folder()` report the missing picker to the user instead.
 
 use std::path::PathBuf;
 
+use gpui::AsyncApp;
+
 use crate::app_state_entity::{SaveTargetOutcome, SaveTargetProvider, SaveTargetRequest};
+use crate::user_error::{ErrorKind, UserFacingError, report_error_async};
 
 /// Returns `true` when a native file picker is expected to work on this host.
 ///
@@ -153,5 +159,155 @@ pub async fn resolve_save_target<'a>(
             used_fallback: false,
         },
         None => SaveTargetOutcome::Cancelled,
+    }
+}
+
+/// Result of asking the user for an existing file or folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenTargetOutcome {
+    /// The user picked this path.
+    Selected(PathBuf),
+    /// The user dismissed the picker.
+    Cancelled,
+    /// No native picker is available on this host, so none was shown.
+    Unavailable,
+}
+
+/// Resolves an open-file or open-folder request through the native picker.
+///
+/// The native future is lazy: when no native dialog is available it is never
+/// polled. Dialog construction stays at the call site, the same split as
+/// [`resolve_save_target`].
+pub async fn resolve_open_target(
+    native: impl std::future::Future<Output = Option<PathBuf>>,
+) -> OpenTargetOutcome {
+    resolve_open_target_with(is_native_file_dialog_available(), native).await
+}
+
+async fn resolve_open_target_with(
+    dialog_available: bool,
+    native: impl std::future::Future<Output = Option<PathBuf>>,
+) -> OpenTargetOutcome {
+    if !dialog_available {
+        return OpenTargetOutcome::Unavailable;
+    }
+
+    match native.await {
+        Some(path) => OpenTargetOutcome::Selected(path),
+        None => OpenTargetOutcome::Cancelled,
+    }
+}
+
+/// Asks the user for an existing file through `native`.
+///
+/// Returns `None` when the user cancels. When no native picker is available
+/// the user gets an error toast and `None` is returned.
+pub async fn pick_existing_file(
+    cx: &AsyncApp,
+    native: impl std::future::Future<Output = Option<PathBuf>>,
+) -> Option<PathBuf> {
+    picked_path_or_report(
+        resolve_open_target(native).await,
+        cx,
+        file_picker_unavailable_error,
+    )
+}
+
+/// Asks the user for an existing folder through `native`.
+///
+/// Returns `None` when the user cancels. When no native picker is available
+/// the user gets an error toast and `None` is returned.
+pub async fn pick_existing_folder(
+    cx: &AsyncApp,
+    native: impl std::future::Future<Output = Option<PathBuf>>,
+) -> Option<PathBuf> {
+    picked_path_or_report(
+        resolve_open_target(native).await,
+        cx,
+        folder_picker_unavailable_error,
+    )
+}
+
+fn picked_path_or_report(
+    outcome: OpenTargetOutcome,
+    cx: &AsyncApp,
+    unavailable_error: fn() -> UserFacingError,
+) -> Option<PathBuf> {
+    match outcome {
+        OpenTargetOutcome::Selected(path) => Some(path),
+        OpenTargetOutcome::Cancelled => None,
+        OpenTargetOutcome::Unavailable => {
+            report_error_async(unavailable_error(), cx);
+            None
+        }
+    }
+}
+
+fn file_picker_unavailable_error() -> UserFacingError {
+    UserFacingError::new(
+        ErrorKind::Config,
+        dbflux_i18n::t!("document.object_browser.upload.error.no_file_picker"),
+    )
+}
+
+fn folder_picker_unavailable_error() -> UserFacingError {
+    UserFacingError::new(
+        ErrorKind::Config,
+        dbflux_i18n::t!("document.import_wizard.pick_folder.error.no_dialog"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+
+    use super::{
+        OpenTargetOutcome, file_picker_unavailable_error, folder_picker_unavailable_error,
+        resolve_open_target_with,
+    };
+    use crate::user_error::ErrorKind;
+
+    #[gpui::test]
+    async fn open_target_returns_the_picked_path() {
+        let outcome =
+            resolve_open_target_with(true, async { Some(PathBuf::from("/tmp/script.sql")) }).await;
+
+        assert_eq!(
+            outcome,
+            OpenTargetOutcome::Selected(PathBuf::from("/tmp/script.sql"))
+        );
+    }
+
+    #[gpui::test]
+    async fn open_target_reports_a_dismissed_picker_as_cancelled() {
+        let outcome = resolve_open_target_with(true, async { None }).await;
+
+        assert_eq!(outcome, OpenTargetOutcome::Cancelled);
+    }
+
+    #[gpui::test]
+    async fn open_target_never_shows_the_picker_when_none_is_available() {
+        let polled = Cell::new(false);
+
+        let outcome = resolve_open_target_with(false, async {
+            polled.set(true);
+            Some(PathBuf::from("/tmp/ignored"))
+        })
+        .await;
+
+        assert_eq!(outcome, OpenTargetOutcome::Unavailable);
+        assert!(!polled.get());
+    }
+
+    #[test]
+    fn unavailable_picker_errors_carry_a_message() {
+        let file_error = file_picker_unavailable_error();
+        let folder_error = folder_picker_unavailable_error();
+
+        assert_eq!(file_error.kind, ErrorKind::Config);
+        assert!(!file_error.summary.is_empty());
+        assert_eq!(folder_error.kind, ErrorKind::Config);
+        assert!(!folder_error.summary.is_empty());
     }
 }

@@ -6,6 +6,7 @@ mod export_tables;
 mod migrate_tables;
 mod pipeline;
 pub(crate) mod script_ops;
+mod table_selection;
 mod tree_edit;
 mod tree_ops;
 

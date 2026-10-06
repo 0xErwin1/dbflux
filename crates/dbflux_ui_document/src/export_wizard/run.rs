@@ -13,9 +13,8 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use dbflux_core::{CancelToken, Connection, TaskId, TaskKind, TaskStatus, TaskTarget};
+use dbflux_core::{CancelToken, Connection, TaskId, TaskKind, TaskTarget};
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::export::{
     ExportOptions, ExportOutcome, ExportTable, ExportedTable, run_export,
@@ -29,6 +28,7 @@ use gpui::*;
 use crate::export_wizard::ExportWizard;
 use crate::export_wizard::phases::{ExportPhase, RunState};
 use crate::labels::{export_summary_label, export_table_status_line, export_wizard_task_label};
+use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 /// Live counters for the running export: which table (by the wizard's fixed
 /// table order) is currently streaming, and its row progress — mirrors the
@@ -377,52 +377,19 @@ impl ExportWizard {
     }
 
     fn spawn_progress_ticker(&self, task_id: TaskId, cx: &mut Context<Self>) {
-        let ticker_app_state = self.app_state.clone();
         let ticker_progress = Arc::clone(&self.progress);
 
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(150))
-                    .await;
-
-                let still_running = cx.update(|cx| {
-                    ticker_app_state.update(cx, |state, cx| {
-                        let Some(snapshot) = state.tasks().get(task_id) else {
-                            return false;
-                        };
-                        if snapshot.status != TaskStatus::Running {
-                            return false;
-                        }
-
-                        let progress = *ticker_progress
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if let Some(total) = progress.estimated_total
-                            && total > 0
-                        {
-                            let fraction =
-                                (progress.rows_done as f32 / total as f32).clamp(0.0, 1.0);
-                            state.tasks_mut().update_progress(task_id, fraction);
-                            cx.notify();
-                        }
-
-                        true
-                    })
-                });
-
-                if !still_running {
-                    break;
-                }
-
-                // Re-render the wizard every tick so the running phase's
-                // per-table position and row counters advance while the run
-                // is in flight (the app-state notify above only refreshes
-                // the tasks panel, not this modal).
-                this.update(cx, |_this, cx| cx.notify()).ok();
-            }
-        })
-        .detach();
+        spawn_task_progress_forwarder(
+            self.app_state.clone(),
+            task_id,
+            move || {
+                let progress = *ticker_progress
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                (progress.rows_done, progress.estimated_total)
+            },
+            cx,
+        );
     }
 
     fn spawn_run(&self, run: ExportRunContext, task_id: TaskId, cx: &mut Context<Self>) {
