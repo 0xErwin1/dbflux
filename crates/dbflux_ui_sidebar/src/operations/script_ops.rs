@@ -1,4 +1,5 @@
 use crate::*;
+use dbflux_ui_base::file_dialog;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 fn report_reveal_failure(error: std::io::Error, cx: &mut App) {
@@ -118,18 +119,21 @@ impl Sidebar {
         let title = crate::labels::import_script_dialog_title();
         let filter_name = crate::labels::script_files_filter_label();
 
-        let task = cx.background_executor().spawn(async move {
-            let mut dialog = rfd::FileDialog::new().set_title(title.as_str());
-            for ext in &extensions {
-                dialog = dialog.add_filter(filter_name.as_str(), &[ext]);
-            }
-            dialog.pick_file()
-        });
-
         cx.spawn(async move |_this, cx| {
-            let source = match task.await {
-                Some(path) => path,
-                None => return,
+            let picked = file_dialog::pick_existing_file(cx, async move {
+                let mut dialog = rfd::AsyncFileDialog::new().set_title(title.as_str());
+                for ext in &extensions {
+                    dialog = dialog.add_filter(filter_name.as_str(), &[ext]);
+                }
+                dialog
+                    .pick_file()
+                    .await
+                    .map(|handle| handle.path().to_path_buf())
+            })
+            .await;
+
+            let Some(source) = picked else {
+                return;
             };
 
             cx.update(|cx| {

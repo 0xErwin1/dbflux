@@ -21,20 +21,22 @@ impl Workspace {
             let redis_filter_label = scripts_filter_redis_label();
             let all_files_filter_label = scripts_filter_all_files_label();
 
-            let file_handle = rfd::AsyncFileDialog::new()
-                .set_title(&dialog_title)
-                .add_filter(&sql_filter_label, &["sql"])
-                .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
-                .add_filter(&redis_filter_label, &["redis", "red"])
-                .add_filter(&all_files_filter_label, &["*"])
-                .pick_file()
-                .await;
+            let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async {
+                rfd::AsyncFileDialog::new()
+                    .set_title(&dialog_title)
+                    .add_filter(&sql_filter_label, &["sql"])
+                    .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
+                    .add_filter(&redis_filter_label, &["redis", "red"])
+                    .add_filter(&all_files_filter_label, &["*"])
+                    .pick_file()
+                    .await
+                    .map(|handle| handle.path().to_path_buf())
+            })
+            .await;
 
-            let Some(handle) = file_handle else {
+            let Some(path) = picked else {
                 return;
             };
-
-            let path = handle.path().to_path_buf();
 
             // Check if this file is already open
             let already_open = cx.update(|cx| {
