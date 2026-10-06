@@ -3261,22 +3261,15 @@ impl FetchExplicitDatabaseSchemaParams {
 }
 
 /// Why a `prepare_fetch_*` call produced no fetch parameters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PrepareFetchError {
     /// The requested data is already cached; there is nothing to fetch.
+    #[error("Already cached")]
     AlreadyCached,
     /// The fetch cannot be prepared, for example because the profile is not
     /// connected or the loading strategy does not support it.
+    #[error("{0}")]
     Failed(String),
-}
-
-impl std::fmt::Display for PrepareFetchError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AlreadyCached => formatter.write_str("Already cached"),
-            Self::Failed(message) => formatter.write_str(message),
-        }
-    }
 }
 
 /// Why preparing a fenced table-details fetch failed.
@@ -5541,6 +5534,20 @@ mod tests {
 
         let error = expect_prepare_error(manager.prepare_fetch_database_list(profile.id));
         assert_eq!(error, PrepareFetchError::AlreadyCached);
+    }
+
+    #[test]
+    fn prepare_fetch_error_is_a_std_error_with_its_messages() {
+        let errors: Vec<Box<dyn std::error::Error>> = vec![
+            Box::new(PrepareFetchError::AlreadyCached),
+            Box::new(PrepareFetchError::Failed(
+                "Profile not connected".to_string(),
+            )),
+        ];
+
+        let messages: Vec<String> = errors.iter().map(|error| error.to_string()).collect();
+
+        assert_eq!(messages, vec!["Already cached", "Profile not connected"]);
     }
 
     #[test]
