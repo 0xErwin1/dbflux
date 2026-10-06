@@ -56,7 +56,7 @@ fn connect_sqlite() -> Result<(Box<dyn dbflux_core::Connection>, SqliteDriver, P
 
 fn cleanup_test_tables(conn: &dyn dbflux_core::Connection) {
     conn.execute(&QueryRequest::new("PRAGMA foreign_keys = OFF"))
-        .ok();
+        .unwrap_or_else(|error| panic!("cleanup failed to disable foreign keys: {error}"));
 
     let tables = vec![
         "orders",
@@ -71,19 +71,18 @@ fn cleanup_test_tables(conn: &dyn dbflux_core::Connection) {
     ];
 
     for table in tables {
-        let _ = conn.execute(&QueryRequest::new(format!(
-            "DROP TABLE IF EXISTS {}",
-            table
-        )));
+        conn.execute(&QueryRequest::new(format!("DROP TABLE IF EXISTS {table}")))
+            .unwrap_or_else(|error| panic!("cleanup failed to drop table {table}: {error}"));
     }
 
     let views = vec!["active_users", "test_view"];
     for view in views {
-        let _ = conn.execute(&QueryRequest::new(format!("DROP VIEW IF EXISTS {}", view)));
+        conn.execute(&QueryRequest::new(format!("DROP VIEW IF EXISTS {view}")))
+            .unwrap_or_else(|error| panic!("cleanup failed to drop view {view}: {error}"));
     }
 
     conn.execute(&QueryRequest::new("PRAGMA foreign_keys = ON"))
-        .ok();
+        .unwrap_or_else(|error| panic!("cleanup failed to re-enable foreign keys: {error}"));
 }
 
 #[derive(Debug, PartialEq)]

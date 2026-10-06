@@ -180,12 +180,18 @@ fn sqlite_native_drop_prepare_is_read_only_for_special_shapes_and_attached_catal
         1,
         "an unrelated retained-column view must keep working"
     );
+
+    drop(connection);
+    std::fs::remove_file(&db_path).map_err(|error| {
+        DbError::query_failed(format!("failed to remove the test database: {error}"))
+    })?;
+
     Ok(())
 }
 
 #[test]
 fn sqlite_native_drop_rejects_unsafe_connection_settings_without_mutation() -> Result<(), DbError> {
-    let (connection, _, _db_path) = connect_sqlite()?;
+    let (connection, _, db_path) = connect_sqlite()?;
     connection.execute(&QueryRequest::new(
         "CREATE TABLE people (id INTEGER PRIMARY KEY, obsolete TEXT, retained TEXT);
          INSERT INTO people VALUES (1, 'remove', 'keep');
@@ -227,12 +233,18 @@ fn sqlite_native_drop_rejects_unsafe_connection_settings_without_mutation() -> R
             .rows
     );
     connection.execute(&QueryRequest::new("PRAGMA writable_schema = OFF"))?;
+
+    drop(connection);
+    std::fs::remove_file(&db_path).map_err(|error| {
+        DbError::query_failed(format!("failed to remove the test database: {error}"))
+    })?;
+
     Ok(())
 }
 
 #[test]
 fn sqlite_native_drop_preflights_index_and_foreign_key_dependencies() -> Result<(), DbError> {
-    let (connection, _, _db_path) = connect_sqlite()?;
+    let (connection, _, db_path) = connect_sqlite()?;
     for statement in [
         "PRAGMA foreign_keys = ON",
         "CREATE TABLE indexed (id INTEGER PRIMARY KEY, obsolete TEXT, retained TEXT)",
@@ -292,5 +304,11 @@ fn sqlite_native_drop_preflights_index_and_foreign_key_dependencies() -> Result<
             .rows[0][0],
         Value::Int(1)
     );
+
+    drop(connection);
+    std::fs::remove_file(&db_path).map_err(|error| {
+        DbError::query_failed(format!("failed to remove the test database: {error}"))
+    })?;
+
     Ok(())
 }
