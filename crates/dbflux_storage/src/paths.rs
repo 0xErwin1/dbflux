@@ -169,6 +169,7 @@ pub fn dbflux_db_path() -> Result<PathBuf, StorageError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[cfg(unix)]
