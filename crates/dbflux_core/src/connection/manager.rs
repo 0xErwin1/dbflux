@@ -1283,15 +1283,15 @@ impl ConnectionManager {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaRoutinesParams, String> {
+    ) -> Result<FetchSchemaRoutinesParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let key = CacheKey::schema_routines(database, schema);
         if connected.cache_contains(&key) {
-            return Err("Schema routines already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchSchemaRoutinesParams {
@@ -1721,23 +1721,23 @@ impl ConnectionManager {
         &self,
         profile_id: Uuid,
         database: &str,
-    ) -> Result<FetchDatabaseSchemaParams, String> {
+    ) -> Result<FetchDatabaseSchemaParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let strategy = connected.connection.schema_loading_strategy();
         if strategy != SchemaLoadingStrategy::LazyPerDatabase {
-            return Err(format!(
+            return Err(PrepareFetchError::Failed(format!(
                 "Database schema fetch not supported for {:?} strategy",
                 strategy
-            ));
+            )));
         }
 
         let key = CacheKey::database_schema(database);
         if connected.cache_contains(&key) {
-            return Err("Schema already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchDatabaseSchemaParams {
@@ -1754,11 +1754,11 @@ impl ConnectionManager {
         database: &str,
         schema: Option<&str>,
         table: &str,
-    ) -> Result<FetchTableDetailsParams, String> {
+    ) -> Result<FetchTableDetailsParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let cache_key = (
             database.to_string(),
@@ -1768,7 +1768,7 @@ impl ConnectionManager {
         if let Some(details) = connected.table_details.get(&cache_key)
             && (details.columns.is_some() || details.sample_fields.is_some())
         {
-            return Err("Table details already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchTableDetailsParams {
@@ -1824,15 +1824,15 @@ impl ConnectionManager {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaTypesParams, String> {
+    ) -> Result<FetchSchemaTypesParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let key = CacheKey::schema_types(database, schema);
         if connected.cache_contains(&key) {
-            return Err("Schema types already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchSchemaTypesParams {
@@ -1848,15 +1848,15 @@ impl ConnectionManager {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaColumnsParams, String> {
+    ) -> Result<FetchSchemaColumnsParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let key = CacheKey::schema_columns(database, schema);
         if connected.cache_contains(&key) {
-            return Err("Schema columns already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchSchemaColumnsParams {
@@ -1872,15 +1872,15 @@ impl ConnectionManager {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaIndexesParams, String> {
+    ) -> Result<FetchSchemaIndexesParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let key = CacheKey::schema_indexes(database, schema);
         if connected.cache_contains(&key) {
-            return Err("Schema indexes already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchSchemaIndexesParams {
@@ -1896,15 +1896,15 @@ impl ConnectionManager {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaForeignKeysParams, String> {
+    ) -> Result<FetchSchemaForeignKeysParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let key = CacheKey::schema_foreign_keys(database, schema);
         if connected.cache_contains(&key) {
-            return Err("Schema foreign keys already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchSchemaForeignKeysParams {
@@ -2074,14 +2074,14 @@ impl ConnectionManager {
     pub fn prepare_fetch_database_list(
         &self,
         profile_id: Uuid,
-    ) -> Result<FetchDatabaseListParams, String> {
+    ) -> Result<FetchDatabaseListParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         if self.database_lists.contains_key(&profile_id) {
-            return Err("Database list already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         Ok(FetchDatabaseListParams {
@@ -2131,23 +2131,23 @@ impl ConnectionManager {
         &self,
         profile_id: Uuid,
         database: &str,
-    ) -> Result<FetchExplicitDatabaseSchemaParams, String> {
+    ) -> Result<FetchExplicitDatabaseSchemaParams, PrepareFetchError> {
         let connected = self
             .connections
             .get(&profile_id)
-            .ok_or_else(|| "Profile not connected".to_string())?;
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
 
         let key = CacheKey::database_schema(database);
         if connected.cache_contains(&key) {
-            return Err("Schema already cached".to_string());
+            return Err(PrepareFetchError::AlreadyCached);
         }
 
         let connection = match connected.resolve_connection_for_execution(Some(database)) {
             Ok(connection) => connection,
             Err(ConnectionResolutionError::PendingDatabaseConnection { database: missing }) => {
-                return Err(format!(
+                return Err(PrepareFetchError::Failed(format!(
                     "No prepared connection for database '{missing}'; prepare it before fetching its schema"
-                ));
+                )));
             }
         };
 
@@ -3258,6 +3258,18 @@ impl FetchExplicitDatabaseSchemaParams {
             session,
         })
     }
+}
+
+/// Why a `prepare_fetch_*` call produced no fetch parameters.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PrepareFetchError {
+    /// The requested data is already cached; there is nothing to fetch.
+    #[error("Already cached")]
+    AlreadyCached,
+    /// The fetch cannot be prepared, for example because the profile is not
+    /// connected or the loading strategy does not support it.
+    #[error("{0}")]
+    Failed(String),
 }
 
 /// Why preparing a fenced table-details fetch failed.
@@ -5203,10 +5215,17 @@ mod tests {
         (manager, profile)
     }
 
-    fn expect_prepare_error<T>(result: Result<T, String>) -> String {
+    fn expect_prepare_error<T, E>(result: Result<T, E>) -> E {
         match result {
             Ok(_) => panic!("expected prepare to fail"),
             Err(error) => error,
+        }
+    }
+
+    fn expect_prepare_failure<T>(result: Result<T, PrepareFetchError>) -> String {
+        match expect_prepare_error(result) {
+            PrepareFetchError::Failed(message) => message,
+            PrepareFetchError::AlreadyCached => panic!("expected a failure, not a cache hit"),
         }
     }
 
@@ -5514,9 +5533,148 @@ mod tests {
         );
 
         let error = expect_prepare_error(manager.prepare_fetch_database_list(profile.id));
+        assert_eq!(error, PrepareFetchError::AlreadyCached);
+    }
+
+    #[test]
+    fn prepare_fetch_error_is_a_std_error_with_its_messages() {
+        let errors: Vec<Box<dyn std::error::Error>> = vec![
+            Box::new(PrepareFetchError::AlreadyCached),
+            Box::new(PrepareFetchError::Failed(
+                "Profile not connected".to_string(),
+            )),
+        ];
+
+        let messages: Vec<String> = errors.iter().map(|error| error.to_string()).collect();
+
+        assert_eq!(messages, vec!["Already cached", "Profile not connected"]);
+    }
+
+    #[test]
+    fn schema_metadata_prepare_reports_cache_hit_as_typed_outcome() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
         assert!(
-            error.contains("already cached"),
-            "unexpected error: {error}"
+            manager
+                .prepare_fetch_schema_types(profile.id, "app", Some("public"))
+                .is_ok()
+        );
+        assert!(
+            manager
+                .prepare_fetch_schema_columns(profile.id, "app", Some("public"))
+                .is_ok()
+        );
+        assert!(
+            manager
+                .prepare_fetch_schema_indexes(profile.id, "app", Some("public"))
+                .is_ok()
+        );
+        assert!(
+            manager
+                .prepare_fetch_schema_foreign_keys(profile.id, "app", Some("public"))
+                .is_ok()
+        );
+        assert!(
+            manager
+                .prepare_fetch_schema_routines(profile.id, "app", Some("public"))
+                .is_ok()
+        );
+
+        let schema = Some("public".to_string());
+        manager.set_schema_types(profile.id, "app".to_string(), schema.clone(), Vec::new());
+        manager.set_schema_columns(profile.id, "app".to_string(), schema.clone(), Vec::new());
+        manager.set_schema_indexes(profile.id, "app".to_string(), schema.clone(), Vec::new());
+        manager.set_schema_foreign_keys(profile.id, "app".to_string(), schema.clone(), Vec::new());
+        manager.set_schema_routines(profile.id, "app".to_string(), schema, Vec::new());
+
+        assert_eq!(
+            expect_prepare_error(manager.prepare_fetch_schema_types(
+                profile.id,
+                "app",
+                Some("public")
+            )),
+            PrepareFetchError::AlreadyCached
+        );
+        assert_eq!(
+            expect_prepare_error(manager.prepare_fetch_schema_columns(
+                profile.id,
+                "app",
+                Some("public")
+            )),
+            PrepareFetchError::AlreadyCached
+        );
+        assert_eq!(
+            expect_prepare_error(manager.prepare_fetch_schema_indexes(
+                profile.id,
+                "app",
+                Some("public")
+            )),
+            PrepareFetchError::AlreadyCached
+        );
+        assert_eq!(
+            expect_prepare_error(manager.prepare_fetch_schema_foreign_keys(
+                profile.id,
+                "app",
+                Some("public")
+            )),
+            PrepareFetchError::AlreadyCached
+        );
+        assert_eq!(
+            expect_prepare_error(manager.prepare_fetch_schema_routines(
+                profile.id,
+                "app",
+                Some("public")
+            )),
+            PrepareFetchError::AlreadyCached
+        );
+    }
+
+    #[test]
+    fn table_details_prepare_reports_cache_hit_as_typed_outcome() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        assert!(
+            manager
+                .prepare_fetch_table_details(profile.id, "app", None, "users")
+                .is_ok()
+        );
+
+        let details = TableInfo {
+            name: "users".to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+            pseudo_columns: Box::default(),
+        };
+        manager.set_table_details(
+            profile.id,
+            "app".to_string(),
+            None,
+            "users".to_string(),
+            details,
+        );
+
+        assert_eq!(
+            expect_prepare_error(
+                manager.prepare_fetch_table_details(profile.id, "app", None, "users")
+            ),
+            PrepareFetchError::AlreadyCached
         );
     }
 
@@ -5525,11 +5683,12 @@ mod tests {
         let manager = ConnectionManager::new(HashMap::new());
         let profile_id = Uuid::new_v4();
 
-        let list_error = expect_prepare_error(manager.prepare_fetch_database_list(profile_id));
+        let list_error = expect_prepare_failure(manager.prepare_fetch_database_list(profile_id));
         assert!(list_error.contains("not connected"));
 
-        let schema_error =
-            expect_prepare_error(manager.prepare_fetch_explicit_database_schema(profile_id, "app"));
+        let schema_error = expect_prepare_failure(
+            manager.prepare_fetch_explicit_database_schema(profile_id, "app"),
+        );
         assert!(schema_error.contains("not connected"));
     }
 
@@ -5567,10 +5726,7 @@ mod tests {
 
         let error =
             expect_prepare_error(manager.prepare_fetch_explicit_database_schema(profile.id, "app"));
-        assert!(
-            error.contains("already cached"),
-            "unexpected error: {error}"
-        );
+        assert_eq!(error, PrepareFetchError::AlreadyCached);
     }
 
     #[test]
@@ -5583,7 +5739,7 @@ mod tests {
 
         // No per-database slot exists for "analytics": the primary connection
         // is bound to "app" and would label its own tables as "analytics".
-        let error = expect_prepare_error(
+        let error = expect_prepare_failure(
             manager.prepare_fetch_explicit_database_schema(profile.id, "analytics"),
         );
         assert!(
@@ -5863,7 +6019,7 @@ mod tests {
         let (manager, profile) = new_manager_with_connection(primary);
 
         let error =
-            expect_prepare_error(manager.prepare_fetch_database_schema(profile.id, "analytics"));
+            expect_prepare_failure(manager.prepare_fetch_database_schema(profile.id, "analytics"));
         assert!(error.contains("not supported"), "unexpected error: {error}");
     }
 
