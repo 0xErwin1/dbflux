@@ -4085,16 +4085,15 @@ pub(crate) fn browse_ssh_key_into<T: 'static>(
 /// Shows `dialog` through the shared native picker resolver and hands the
 /// picked path to `apply` on the entity that asked, then re-renders it.
 ///
-/// A cancelled picker changes nothing. A host without a native picker gets the
-/// resolver's error toast.
+/// A cancelled picker, or one that returns after the entity was dropped,
+/// changes nothing. A host without a native picker gets the resolver's error
+/// toast.
 fn pick_file_into<T: 'static>(
     dialog: rfd::AsyncFileDialog,
     cx: &mut Context<T>,
     apply: impl FnOnce(&mut T, String) + 'static,
 ) {
-    let entity = cx.entity().clone();
-
-    cx.spawn(async move |_this, cx| {
+    cx.spawn(async move |this, cx| {
         let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async move {
             dialog
                 .pick_file()
@@ -4104,6 +4103,10 @@ fn pick_file_into<T: 'static>(
         .await;
 
         let Some(path) = picked else {
+            return;
+        };
+
+        let Some(entity) = this.upgrade() else {
             return;
         };
 
