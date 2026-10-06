@@ -181,7 +181,7 @@ MCP clients can never approve or reject: `approve_execution` and `reject_executi
 
 ### Read scripts run read-only
 
-`execute_script` derives its class from the script body. A script classified `read` or `metadata` runs with read-only enforcement: the driver runs it in a session where the database itself rejects data modification (on MongoDB, DBFlux rejects it, as the table shows), and the call is governed and audited as `read` or `metadata`.
+`execute_script` derives its class from the script body. A script classified `read` or `metadata` runs with read-only enforcement: the driver runs it in a session where the database itself rejects data modification (on MongoDB and Redis, DBFlux rejects it, as the table shows), and the call is governed and audited as `read` or `metadata`.
 
 | Driver | How the session is made read-only |
 |--------|-----------------------------------|
@@ -190,8 +190,9 @@ MCP clients can never approve or reject: `approve_execution` and `reject_executi
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | The per-request setting `readonly = 2` |
 | MongoDB | MongoDB has no read-only session, so DBFlux enforces it per operation: every operation is classified before it is sent and refused above the script's class (`read` or `metadata`), including `runCommand`, `adminCommand` and an `aggregate` with a `$out` or `$merge` stage. Change streams and operations DBFlux does not recognise are refused |
+| Redis | Redis has no read-only session, so DBFlux checks the single command a script sends against the flags the server reports for it in `COMMAND INFO`, before sending it. The command runs only if the server flags it `readonly` (or it is `PING`, `ECHO`, `TIME` or `INFO`) and reports no flag that marks a side effect, such as `write`, `admin`, `blocking`, `pubsub` or `may_replicate`. Commands with subcommands, such as `CONFIG` or `OBJECT`, are judged by the subcommand, which needs Redis 7 or later. Transactions, `SELECT`, subscriptions, `EVAL`, `EVALSHA`, `FCALL` and commands the server does not describe are refused |
 
-SQL Server, Turso, external IPC drivers, Redis, DynamoDB, CloudWatch and InfluxDB cannot enforce read-only. On those connections, and on any connection whose session already has an open transaction, the script is governed as `write`: the policy's decision for `write` applies (Allow, Ask or Deny), and the audit records `write`.
+SQL Server, Turso, external IPC drivers, DynamoDB, CloudWatch and InfluxDB cannot enforce read-only, and neither can Redis Cluster connections or Redis servers that cannot answer `COMMAND INFO`. On those connections, and on any connection whose session already has an open transaction, the script is governed as `write`: the policy's decision for `write` applies (Allow, Ask or Deny), and the audit records `write`.
 
 The database stops data modification in the session, except on temporary tables, which a read-only transaction in PostgreSQL and MySQL may still change, and it does not stop functions with external effects, such as PostgreSQL `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK` and user-defined functions. For a read-only MCP client, least-privilege database credentials remain the real boundary.
 

@@ -179,7 +179,7 @@ MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `appro
 
 ### 읽기 스크립트는 읽기 전용으로 실행됩니다
 
-`execute_script`는 스크립트 본문에서 클래스를 도출합니다. `read` 또는 `metadata`로 분류된 스크립트는 읽기 전용 강제와 함께 실행됩니다: 드라이버는 데이터베이스 자체가 데이터 수정을 거부하는 세션에서 스크립트를 실행하며(MongoDB에서는 표와 같이 DBFlux가 거부합니다), 호출은 `read` 또는 `metadata`로 통제되고 감사됩니다.
+`execute_script`는 스크립트 본문에서 클래스를 도출합니다. `read` 또는 `metadata`로 분류된 스크립트는 읽기 전용 강제와 함께 실행됩니다: 드라이버는 데이터베이스 자체가 데이터 수정을 거부하는 세션에서 스크립트를 실행하며(MongoDB와 Redis에서는 표와 같이 DBFlux가 거부합니다), 호출은 `read` 또는 `metadata`로 통제되고 감사됩니다.
 
 | 드라이버 | 세션을 읽기 전용으로 만드는 방법 |
 |----------|----------------------------------|
@@ -188,8 +188,9 @@ MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `appro
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 요청별 설정 `readonly = 2` |
 | MongoDB | MongoDB에는 읽기 전용 세션이 없으므로 DBFlux가 작업마다 강제합니다: 모든 작업은 전송 전에 분류되며 스크립트 클래스(`read` 또는 `metadata`)보다 높으면 거부됩니다. `runCommand`, `adminCommand`, `$out` 또는 `$merge` 스테이지가 있는 `aggregate`도 포함됩니다. 변경 스트림과 DBFlux가 인식하지 못하는 작업도 거부됩니다 |
+| Redis | Redis에는 읽기 전용 세션이 없으므로 DBFlux는 스크립트가 보내는 단일 명령을 전송하기 전에 서버가 `COMMAND INFO`에서 그 명령에 대해 보고하는 플래그로 검사합니다. 서버가 `readonly`로 표시하고(또는 `PING`, `ECHO`, `TIME`, `INFO`인 경우) `write`, `admin`, `blocking`, `pubsub`, `may_replicate`처럼 부수 효과를 나타내는 플래그를 보고하지 않을 때만 명령이 실행됩니다. `CONFIG`나 `OBJECT`처럼 하위 명령이 있는 명령은 하위 명령으로 판단하며, 이는 Redis 7 이상이 필요합니다. 트랜잭션, `SELECT`, 구독, `EVAL`, `EVALSHA`, `FCALL`, 서버가 설명하지 못하는 명령은 거부됩니다 |
 
-SQL Server, Turso, 외부 IPC 드라이버, Redis, DynamoDB, CloudWatch, InfluxDB는 읽기 전용을 강제할 수 없습니다. 이러한 연결과, 세션에 이미 열린 트랜잭션이 있는 모든 연결에서는 스크립트가 `write`로 통제됩니다: 정책의 `write` 결정(Allow, Ask 또는 Deny)이 적용되고, 감사에는 `write`가 기록됩니다.
+SQL Server, Turso, 외부 IPC 드라이버, DynamoDB, CloudWatch, InfluxDB는 읽기 전용을 강제할 수 없으며, Redis Cluster 연결과 `COMMAND INFO`에 응답하지 못하는 Redis 서버도 마찬가지입니다. 이러한 연결과, 세션에 이미 열린 트랜잭션이 있는 모든 연결에서는 스크립트가 `write`로 통제됩니다: 정책의 `write` 결정(Allow, Ask 또는 Deny)이 적용되고, 감사에는 `write`가 기록됩니다.
 
 데이터베이스는 세션 안의 데이터 수정을 막지만, PostgreSQL과 MySQL의 읽기 전용 트랜잭션에서도 변경할 수 있는 임시 테이블은 예외이며, 외부 효과가 있는 함수는 막지 않습니다. 예를 들어 PostgreSQL의 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock, 그리고 MySQL의 `GET_LOCK`과 사용자 정의 함수가 그렇습니다. 읽기 전용 MCP 클라이언트의 경우 최소 권한 데이터베이스 자격 증명이 여전히 실제 경계입니다.
 

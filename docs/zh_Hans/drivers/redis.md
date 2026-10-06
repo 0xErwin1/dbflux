@@ -94,7 +94,8 @@ Schema 探查会为每个逻辑数据库报告键数；`INFO keyspace` 中没有
 - 不支持查询取消（未设置 `QUERY_CANCELLATION`）；长时间运行的命令无法从界面中止。
 - 不支持 upsert（`supports_upsert: false`）、不支持 `RETURNING`，也不支持批量更新（`supports_bulk_update: false`）。
 - DDL 能力全部禁用（没有表、视图、索引、schema）—— 这是键值存储，不是关系型数据库。
-- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务、只读事务与可延迟（deferrable）事务。
+- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务与可延迟（deferrable）事务。
+- 只读请求（`ReadOnlyEnforcement::Required`，用于 MCP 读取类脚本和编辑器自动刷新）由 DBFlux 强制，而不是由服务器强制。发送命令之前，驱动程序通过 `COMMAND INFO` 向服务器查询其标志；除非服务器将其标记为 `readonly`（或命令为 `PING`、`ECHO`、`TIME`、`INFO`）且没有报告其他标志（如 `write`、`admin`、`blocking`、`pubsub` 或 `may_replicate`），否则拒绝该命令；驱动程序不认识的标志同样会导致拒绝。事务、`SELECT`、订阅、`MONITOR`、`EVAL`、`EVALSHA`、`FCALL` 以及服务器无法描述的命令都会被拒绝。当服务器将 `EVAL_RO`、`EVALSHA_RO` 和 `FCALL_RO` 标记为 `readonly` 时它们可以运行，此时由服务器拒绝脚本内的写入，但脚本的运行时间不受限制。带子命令的命令（如 `CONFIG`、`CLIENT` 或 `OBJECT`）按子命令自己的条目判断，只有 Redis 7 及更高版本提供该条目，因此在更旧的服务器上会被拒绝。Redis Cluster 连接以及无法响应 `COMMAND INFO` 的服务器会以 `NotSupported` 拒绝只读请求。对于兼容服务器（Valkey、KeyDB、DragonflyDB），仅依据它们报告的标志。没有写权限的 Redis ACL 用户才是真正的边界。
 - 未暴露 Pub/Sub（未设置 `PUBSUB` 能力）。
 - 启用 URI 模式时无法使用 SSH 隧道；隧道路径只为手动连接模式接入。不支持把 SSH 隧道与 Cluster/Sentinel 的额外种子节点组合使用：隧道只转发主主机/端口，因此额外节点无法通过它访问。
 - 可以列出、检查流消费组并从中认领条目，但不能通过键值 API 创建、删除或重置消费组；请在控制台或编辑器中使用 `XGROUP` 命令。

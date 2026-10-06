@@ -181,7 +181,7 @@ MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_e
 
 ### 读取类脚本以只读方式运行
 
-`execute_script` 根据脚本内容推导执行类别。被归类为 `read` 或 `metadata` 的脚本会以只读强制方式运行：驱动程序在一个由数据库自身拒绝数据修改的会话中运行它（在 MongoDB 上由 DBFlux 拒绝，见下表），该调用按 `read` 或 `metadata` 进行治理和审计。
+`execute_script` 根据脚本内容推导执行类别。被归类为 `read` 或 `metadata` 的脚本会以只读强制方式运行：驱动程序在一个由数据库自身拒绝数据修改的会话中运行它（在 MongoDB 和 Redis 上由 DBFlux 拒绝，见下表），该调用按 `read` 或 `metadata` 进行治理和审计。
 
 | 驱动程序 | 会话如何变为只读 |
 |----------|------------------|
@@ -190,8 +190,9 @@ MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_e
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 按请求设置 `readonly = 2` |
 | MongoDB | MongoDB 没有只读会话，因此由 DBFlux 按操作强制：每个操作在发送前分类，高于脚本类别（`read` 或 `metadata`）的会被拒绝，包括 `runCommand`、`adminCommand` 以及包含 `$out` 或 `$merge` 阶段的 `aggregate`。变更流和 DBFlux 无法识别的操作也会被拒绝 |
+| Redis | Redis 没有只读会话，因此 DBFlux 在发送脚本的那一条命令之前，用服务器在 `COMMAND INFO` 中为它报告的标志进行检查。只有当服务器将其标记为 `readonly`（或命令为 `PING`、`ECHO`、`TIME`、`INFO`），且没有报告任何表示副作用的标志（如 `write`、`admin`、`blocking`、`pubsub` 或 `may_replicate`）时，命令才会运行。带子命令的命令（如 `CONFIG` 或 `OBJECT`）按子命令判断，这需要 Redis 7 或更高版本。事务、`SELECT`、订阅、`EVAL`、`EVALSHA`、`FCALL` 以及服务器无法描述的命令都会被拒绝 |
 
-SQL Server、Turso、外部 IPC 驱动程序、Redis、DynamoDB、CloudWatch 和 InfluxDB 无法强制只读。在这些连接上，以及在会话中已有未结束事务的任何连接上，脚本按 `write` 进行治理：适用策略对 `write` 的决定（Allow、Ask 或 Deny），审计记录为 `write`。
+SQL Server、Turso、外部 IPC 驱动程序、DynamoDB、CloudWatch 和 InfluxDB 无法强制只读，Redis Cluster 连接以及无法响应 `COMMAND INFO` 的 Redis 服务器也不能。在这些连接上，以及在会话中已有未结束事务的任何连接上，脚本按 `write` 进行治理：适用策略对 `write` 的决定（Allow、Ask 或 Deny），审计记录为 `write`。
 
 数据库阻止的是会话中的数据修改，但临时表除外，PostgreSQL 和 MySQL 的只读事务仍可修改它们；数据库也不会阻止具有外部影响的函数，例如 PostgreSQL 的 `dblink_exec`、`COPY ... TO PROGRAM`、`lo_export`、`pg_terminate_backend` 和咨询锁（advisory lock），或 MySQL 的 `GET_LOCK` 和用户定义函数。对于只读的 MCP 客户端，最小权限的数据库凭据仍然是真正的边界。
 
