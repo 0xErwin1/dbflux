@@ -359,6 +359,7 @@ impl Connection for InfluxConnection {
                     .to_string(),
             ));
         }
+        req.refuse_read_only_enforcement("InfluxDB")?;
 
         if let Some(source) = req
             .execution_context
@@ -1179,6 +1180,15 @@ mod tests {
                 );
             }
         }
+        let read_only = QueryRequest::new("SELECT * FROM cpu")
+            .with_read_only(dbflux_core::ReadOnlyEnforcement::Required);
+        let error = conn
+            .execute(&read_only)
+            .expect_err("read-only enforcement must be refused");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+        assert_eq!(received.load(Ordering::SeqCst), 0);
+        assert!(!conn.metadata().enforces_read_only());
+
         let result = conn
             .execute(&QueryRequest::new("SELECT * FROM cpu"))
             .expect("unprotected dispatch");

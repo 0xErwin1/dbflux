@@ -8,9 +8,9 @@
 
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, DescribeRequest, ExplainRequest,
-    OrderByColumn, Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote,
-    Value,
+    OrderByColumn, Pagination, QueryRequest, ReadOnlyEnforcement, RecordIdentity, RowDelete,
+    RowInsert, RowPatch, SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef,
+    TransactionStateNote, Value,
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::containers;
@@ -1034,6 +1034,204 @@ fn mysql_query_safety_statement_timeout_rejected_before_execution() -> Result<()
                 .len(),
             1
         );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Read-only enforcement
+// ---------------------------------------------------------------------------
+
+fn read_only_request(sql: &str) -> QueryRequest {
+    QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+}
+
+fn read_only_fixture(connection: &dyn dbflux_core::Connection) -> Result<(), DbError> {
+    connection.execute(&QueryRequest::new(
+        "CREATE DATABASE IF NOT EXISTS read_only_db",
+    ))?;
+    connection.execute(&QueryRequest::new("USE read_only_db"))?;
+    connection.execute(&QueryRequest::new("DROP TABLE IF EXISTS read_only_items"))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE read_only_items (id INT PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new("INSERT INTO read_only_items VALUES (1)"))?;
+    Ok(())
+}
+
+fn read_only_item_count(connection: &dyn dbflux_core::Connection) -> Result<usize, DbError> {
+    let result = connection.execute(&QueryRequest::new("SELECT id FROM read_only_items"))?;
+    Ok(result.rows.len())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_cannot_write() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        for sql in [
+            "WITH doomed AS (SELECT id FROM read_only_items) \
+             DELETE FROM read_only_items WHERE id IN (SELECT id FROM doomed)",
+            "EXPLAIN ANALYZE DELETE FROM read_only_items",
+            "SELECT 1; DELETE FROM read_only_items",
+        ] {
+            let outcome = connection.execute(&read_only_request(sql));
+            assert!(outcome.is_err(), "{sql} must fail, got {outcome:?}");
+            assert_eq!(read_only_item_count(connection.as_ref())?, 1, "{sql}");
+        }
+
+        let error = connection
+            .execute(&read_only_request("DELETE FROM read_only_items"))
+            .expect_err("a plain DELETE is refused before it reaches the transaction");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+        let error = connection
+            .execute(&read_only_request(
+                "WITH doomed AS (SELECT id FROM read_only_items) \
+                 DELETE FROM read_only_items WHERE id IN (SELECT id FROM doomed)",
+            ))
+            .expect_err("a CTE DELETE fails inside the read-only transaction");
+        assert!(
+            error.to_string().contains("READ ONLY transaction"),
+            "expected the server's read-only error, got {error}"
+        );
+
+        let hidden = connection.execute(&read_only_request(
+            "/*!CREATE TABLE read_only_stolen AS*/ SELECT * FROM read_only_items",
+        ));
+        assert!(
+            matches!(hidden, Err(DbError::NotSupported(_))),
+            "{hidden:?}"
+        );
+        let stolen = connection.execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'read_only_stolen'",
+        ))?;
+        assert_eq!(
+            stolen.rows[0][0],
+            Value::Int(0),
+            "the hidden DDL must not run"
+        );
+
+        let refused = connection.execute(&read_only_request("COMMIT; DELETE FROM read_only_items"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+        assert_eq!(read_only_item_count(connection.as_ref())?, 1);
+
+        let read = connection.execute(&read_only_request(
+            "SELECT id FROM read_only_items; SELECT 2 AS two",
+        ))?;
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.additional_results.len(), 1);
+
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, 0);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_are_refused_inside_an_open_transaction() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        connection.execute(&QueryRequest::new("START TRANSACTION"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, 1);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_are_refused_when_transaction_instrumentation_is_off()
+-> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+        connection.execute(&QueryRequest::new(
+            "UPDATE performance_schema.setup_consumers SET ENABLED = 'NO' \
+             WHERE NAME = 'events_transactions_current'",
+        ))?;
+
+        connection.execute(&QueryRequest::new("START TRANSACTION"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(
+            read_only_item_count(connection.as_ref())?,
+            1,
+            "the user's transaction must not have been committed"
+        );
+
+        connection.execute(&QueryRequest::new("SET autocommit = 0"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        connection.execute(&QueryRequest::new("SET autocommit = 1"))?;
+        assert_eq!(
+            read_only_item_count(connection.as_ref())?,
+            1,
+            "an implicit autocommit = 0 transaction must not have been committed"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_are_refused_while_table_locks_may_be_held() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE read_only_other (id INT PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new("LOCK TABLES read_only_items READ"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT id FROM read_only_items"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        let outside_lock = connection.execute(&QueryRequest::new("SELECT id FROM read_only_other"));
+        assert!(
+            outside_lock.is_err(),
+            "LOCK TABLES must still be in effect, got {outside_lock:?}"
+        );
+
+        connection.execute(&QueryRequest::new("UNLOCK TABLES"))?;
+        let read = connection.execute(&read_only_request("SELECT id FROM read_only_items"))?;
+        assert_eq!(read.rows.len(), 1);
+
         Ok(())
     })
 }

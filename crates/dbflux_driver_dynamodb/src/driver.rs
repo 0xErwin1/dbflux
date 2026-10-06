@@ -585,6 +585,7 @@ impl Connection for DynamoConnection {
                 "DynamoDB query execution does not support statement timeouts".to_string(),
             ));
         }
+        req.refuse_read_only_enforcement("DynamoDB")?;
 
         if let Some(verb) = partiql_verb(&req.sql) {
             if req.limit.is_some() && verb != PartiqlVerb::Select {

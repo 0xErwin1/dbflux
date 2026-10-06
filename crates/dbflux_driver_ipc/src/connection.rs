@@ -48,7 +48,7 @@ impl IpcConnection {
             client,
             session_id,
             kind,
-            metadata,
+            metadata: without_read_only_enforcement(metadata),
             capabilities,
             schema_loading_strategy,
             schema_features,
@@ -546,7 +546,20 @@ fn reject_protected_query(request: &QueryRequest) -> Result<(), DbError> {
             "IPC drivers cannot certify query limit or statement timeout enforcement".into(),
         ));
     }
-    Ok(())
+    request.refuse_read_only_enforcement("IPC driver")
+}
+
+/// Clears `supports_read_only` from metadata a driver host reported.
+///
+/// The request DTO has no read-only field and the handshake certifies no
+/// enforcement, so an IPC connection refuses every request that requires it
+/// and must not advertise otherwise, whatever the remote driver declares.
+pub(crate) fn without_read_only_enforcement(mut metadata: DriverMetadata) -> DriverMetadata {
+    if let Some(transactions) = metadata.transactions.as_mut() {
+        transactions.supports_read_only = false;
+    }
+
+    metadata
 }
 
 /// Whether bulk schema column loads (`SchemaColumns`) are available on the
@@ -635,13 +648,14 @@ mod tests {
             dbflux_core::CodeGenCapabilities::empty(),
         );
 
-        for mut request in [
+        let mut timed = QueryRequest::new("SELECT 1");
+        timed.statement_timeout = Some(Duration::ZERO);
+        for request in [
             QueryRequest::new("SELECT 1").with_limit(0),
-            QueryRequest::new("SELECT 1"),
+            timed,
+            QueryRequest::new("SELECT 1")
+                .with_read_only(dbflux_core::ReadOnlyEnforcement::Required),
         ] {
-            if request.limit.is_none() {
-                request.statement_timeout = Some(Duration::ZERO);
-            }
             assert!(matches!(
                 connection.execute(&request),
                 Err(DbError::NotSupported(_))
@@ -655,6 +669,25 @@ mod tests {
         assert!(connection.ping().is_ok());
         assert!(connection.ping().is_ok());
         server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn ipc_metadata_never_claims_read_only_enforcement() {
+        let mut metadata = DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+        metadata.transactions = Some(dbflux_core::TransactionCapabilities {
+            supports_read_only: true,
+            ..dbflux_core::TransactionCapabilities::default()
+        });
+
+        let sanitized = super::without_read_only_enforcement(metadata);
+
+        assert!(!sanitized.enforces_read_only());
     }
 
     #[test]

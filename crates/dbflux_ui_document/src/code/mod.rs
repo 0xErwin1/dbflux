@@ -32,8 +32,8 @@ use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic,
     EditorLanguageProfile, ExecutionContext, ExecutionSourceContext, HistoryEntry, OutputReceiver,
-    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaDriftDetected,
-    SchemaLoadingStrategy, TaskTarget, ValidationResult, check_schema_drift,
+    QueryLanguage, QueryRequest, QueryResult, ReadOnlyEnforcement, RefreshPolicy,
+    SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult, check_schema_drift,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -500,6 +500,8 @@ struct PendingQueryResult {
     /// Whether this execution is a script (vs a database query).
     /// Determines the audit event category and whether connection context is required.
     is_script: bool,
+    /// The read-only enforcement the execution requested.
+    read_only: ReadOnlyEnforcement,
 }
 
 pub(super) struct ActiveQueryTask {
@@ -548,6 +550,7 @@ struct PendingDriftQuery {
     /// after "Refresh & re-run". Each entry is `(TableKey, TableInfo)`, where
     /// `TableKey` is `(database, schema, table)`.
     cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
+    read_only: ReadOnlyEnforcement,
 }
 
 /// Record of a query execution.
@@ -1116,8 +1119,20 @@ impl CodeDocument {
         document
     }
 
+    /// Whether the query an auto-refresh would run may run unattended: it is a
+    /// single read, checked on exactly the text that runs (the selection when
+    /// there is one), and the connection's driver enforces read-only
+    /// execution for it.
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
-        dbflux_core::is_safe_read_query(&self.editor.input_state.read(cx).value())
+        let (query, _from_selection) = self.auto_refresh_query(cx);
+
+        self.connection_enforces_read_only(cx) && dbflux_core::is_safe_read_query(&query)
+    }
+
+    fn connection_enforces_read_only(&self, cx: &App) -> bool {
+        self.connection_id
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .is_some_and(|connected| connected.connection.metadata().enforces_read_only())
     }
 
     /// Returns the full editor content trimmed, or `None` when blank.

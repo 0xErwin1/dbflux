@@ -96,6 +96,8 @@ impl From<QueryRequestDto> for QueryRequest {
             // this DTO (see `QueryRequest::confirmed_ceiling`'s invariant) —
             // an RPC-backed driver always sees the restrictive `None`
             // default rather than a value that crossed a process boundary.
+            // `read_only` has none either: `IpcConnection` refuses a request
+            // that requires it before anything is sent.
             ..Default::default()
         }
     }
