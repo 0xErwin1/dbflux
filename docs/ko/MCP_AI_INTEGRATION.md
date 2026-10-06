@@ -188,7 +188,7 @@ MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `appro
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 요청별 설정 `readonly = 2` |
 | MongoDB | MongoDB에는 읽기 전용 세션이 없으므로 DBFlux가 작업마다 강제합니다: 모든 작업은 전송 전에 분류되며 스크립트 클래스(`read` 또는 `metadata`)보다 높으면 거부됩니다. `runCommand`, `adminCommand`, `$out` 또는 `$merge` 스테이지가 있는 `aggregate`도 포함됩니다. 변경 스트림과 DBFlux가 인식하지 못하는 작업도 거부됩니다 |
-| Redis | Redis에는 읽기 전용 세션이 없으므로 DBFlux는 스크립트가 보내는 단일 명령을 전송하기 전에 서버가 `COMMAND INFO`에서 그 명령에 대해 보고하는 플래그로 검사합니다. 서버가 `readonly`로 표시하고(또는 `PING`, `ECHO`, `TIME`, `INFO`인 경우) `write`, `admin`, `blocking`, `pubsub`, `may_replicate`처럼 부수 효과를 나타내는 플래그를 보고하지 않을 때만 명령이 실행됩니다. `CONFIG`나 `OBJECT`처럼 하위 명령이 있는 명령은 하위 명령으로 판단하며, 이는 Redis 7 이상이 필요합니다. 트랜잭션, `SELECT`, 구독, `EVAL`, `EVALSHA`, `FCALL`, 서버가 설명하지 못하는 명령은 거부됩니다 |
+| Redis | Redis에는 읽기 전용 세션이 없으므로 DBFlux는 스크립트가 보내는 단일 명령을 전송하기 전에 서버가 `COMMAND INFO`에서 그 명령에 대해 보고하는 플래그로 검사합니다. 서버가 `readonly`로 표시하고(또는 `PING`, `ECHO`, `TIME`, `INFO`인 경우) `write`, `admin`, `blocking`, `pubsub`, `may_replicate`처럼 부수 효과를 나타내는 플래그를 보고하지 않을 때만 명령이 실행됩니다. `CONFIG`나 `OBJECT`처럼 하위 명령이 있는 명령은 하위 명령으로 판단하며, 이는 Redis 7 이상이 필요합니다. 트랜잭션, `SELECT`, 구독, 모든 스크립트 명령(`EVAL`, `EVALSHA`, `FCALL`과 그 `_RO` 형태), `PFCOUNT`, 모듈 명령, 서버가 설명하지 못하는 명령, 음수 개수를 지정한 `SRANDMEMBER`, `HRANDFIELD`, `ZRANDMEMBER`는 거부됩니다. 이는 가용성이 아니라 데이터를 보호합니다: `KEYS *` 같은 비용이 큰 읽기는 계속 실행되며, DBFlux는 Redis 읽기 시간 제한을 설정하지 않습니다 |
 
 SQL Server, Turso, 외부 IPC 드라이버, DynamoDB, CloudWatch, InfluxDB는 읽기 전용을 강제할 수 없으며, Redis Cluster 연결과 `COMMAND INFO`에 응답하지 못하는 Redis 서버도 마찬가지입니다. 이러한 연결과, 세션에 이미 열린 트랜잭션이 있는 모든 연결에서는 스크립트가 `write`로 통제됩니다: 정책의 `write` 결정(Allow, Ask 또는 Deny)이 적용되고, 감사에는 `write`가 기록됩니다.
 

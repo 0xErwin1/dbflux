@@ -190,7 +190,7 @@ MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_e
 | SQLite | `PRAGMA query_only` |
 | ClickHouse | 按请求设置 `readonly = 2` |
 | MongoDB | MongoDB 没有只读会话，因此由 DBFlux 按操作强制：每个操作在发送前分类，高于脚本类别（`read` 或 `metadata`）的会被拒绝，包括 `runCommand`、`adminCommand` 以及包含 `$out` 或 `$merge` 阶段的 `aggregate`。变更流和 DBFlux 无法识别的操作也会被拒绝 |
-| Redis | Redis 没有只读会话，因此 DBFlux 在发送脚本的那一条命令之前，用服务器在 `COMMAND INFO` 中为它报告的标志进行检查。只有当服务器将其标记为 `readonly`（或命令为 `PING`、`ECHO`、`TIME`、`INFO`），且没有报告任何表示副作用的标志（如 `write`、`admin`、`blocking`、`pubsub` 或 `may_replicate`）时，命令才会运行。带子命令的命令（如 `CONFIG` 或 `OBJECT`）按子命令判断，这需要 Redis 7 或更高版本。事务、`SELECT`、订阅、`EVAL`、`EVALSHA`、`FCALL` 以及服务器无法描述的命令都会被拒绝 |
+| Redis | Redis 没有只读会话，因此 DBFlux 在发送脚本的那一条命令之前，用服务器在 `COMMAND INFO` 中为它报告的标志进行检查。只有当服务器将其标记为 `readonly`（或命令为 `PING`、`ECHO`、`TIME`、`INFO`），且没有报告任何表示副作用的标志（如 `write`、`admin`、`blocking`、`pubsub` 或 `may_replicate`）时，命令才会运行。带子命令的命令（如 `CONFIG` 或 `OBJECT`）按子命令判断，这需要 Redis 7 或更高版本。事务、`SELECT`、订阅、所有脚本命令（`EVAL`、`EVALSHA`、`FCALL` 及其 `_RO` 形式）、`PFCOUNT`、模块命令、服务器无法描述的命令，以及计数为负的 `SRANDMEMBER`、`HRANDFIELD` 或 `ZRANDMEMBER` 都会被拒绝。这保护的是数据，而不是可用性：`KEYS *` 等开销较大的读取仍会运行，并且 DBFlux 不设置 Redis 读取超时 |
 
 SQL Server、Turso、外部 IPC 驱动程序、DynamoDB、CloudWatch 和 InfluxDB 无法强制只读，Redis Cluster 连接以及无法响应 `COMMAND INFO` 的 Redis 服务器也不能。在这些连接上，以及在会话中已有未结束事务的任何连接上，脚本按 `write` 进行治理：适用策略对 `write` 的决定（Allow、Ask 或 Deny），审计记录为 `write`。
 

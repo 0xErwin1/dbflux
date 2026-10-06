@@ -231,11 +231,16 @@ evitar exponer direcciones IP y hostnames de clientes.
   `readonly` (o sea `PING`, `ECHO`, `TIME` o `INFO`) y no informe ningún otro
   flag, como `write`, `admin`, `blocking`, `pubsub` o `may_replicate`; un flag
   que el driver no conoce también rechaza el comando. Se rechazan las
-  transacciones, `SELECT`, las suscripciones, `MONITOR`, `EVAL`, `EVALSHA`,
-  `FCALL` y los comandos que el servidor no describe. `EVAL_RO`, `EVALSHA_RO`
-  y `FCALL_RO` se ejecutan cuando el servidor los marca `readonly`, y el
-  servidor rechaza entonces las escrituras dentro del script, pero nada limita
-  cuánto tiempo se ejecuta. Los comandos con subcomandos, como `CONFIG`,
+  transacciones, `SELECT`, las suscripciones, `MONITOR`, todos los comandos de
+  script (`EVAL`, `EVALSHA`, `FCALL` y sus formas de solo lectura `EVAL_RO`,
+  `EVALSHA_RO` y `FCALL_RO`), `PFCOUNT` (que reescribe un valor en caché en
+  Redis 6.0 y anteriores), los comandos de módulos y los comandos que el
+  servidor no describe, y también `SRANDMEMBER`, `HRANDFIELD` y `ZRANDMEMBER`
+  con un conteo negativo. El modo de solo lectura protege los datos, no la
+  disponibilidad: las lecturas costosas como `KEYS *` o un `SMEMBERS` o
+  `HGETALL` grande se siguen ejecutando, y DBFlux no fija ningún tiempo máximo
+  de lectura en Redis, así que un comando lento retiene la conexión hasta que
+  el servidor responde. Los comandos con subcomandos, como `CONFIG`,
   `CLIENT` u `OBJECT`, se juzgan por la entrada propia del subcomando, que
   solo describen Redis 7 y posteriores, así que en servidores anteriores se
   rechazan. Las conexiones a Redis Cluster y los servidores que no responden a
