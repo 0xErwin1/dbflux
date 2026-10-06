@@ -15,6 +15,10 @@ pub enum FileDocumentFormat {
 
     /// An Apache Parquet file, opened read-only in the Parquet document.
     Parquet,
+
+    /// An xlsx, xlsm, xls or ods workbook, opened in the spreadsheet
+    /// document.
+    Spreadsheet,
 }
 
 impl FileDocumentFormat {
@@ -24,6 +28,7 @@ impl FileDocumentFormat {
         match self {
             Self::Delimited => DELIMITED_EXTENSIONS,
             Self::Parquet => PARQUET_EXTENSIONS,
+            Self::Spreadsheet => SPREADSHEET_EXTENSIONS,
         }
     }
 }
@@ -36,19 +41,25 @@ impl FileDocumentFormat {
 pub fn file_document_format(path: &Path) -> Option<FileDocumentFormat> {
     let extension = path.extension()?;
 
-    [FileDocumentFormat::Delimited, FileDocumentFormat::Parquet]
-        .into_iter()
-        .find(|format| {
-            format
-                .extensions()
-                .iter()
-                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-        })
+    [
+        FileDocumentFormat::Delimited,
+        FileDocumentFormat::Parquet,
+        FileDocumentFormat::Spreadsheet,
+    ]
+    .into_iter()
+    .find(|format| {
+        format
+            .extensions()
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
 }
 
 const DELIMITED_EXTENSIONS: &[&str] = &["csv", "tsv"];
 
 const PARQUET_EXTENSIONS: &[&str] = &["parquet"];
+
+const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls", "ods"];
 
 #[cfg(test)]
 mod tests {
@@ -79,6 +90,38 @@ mod tests {
             "csv",
             ".csv",
             "reports/csv/",
+        ] {
+            assert_eq!(file_document_format(Path::new(name)), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn spreadsheet_formats_are_recognized_in_any_case() {
+        for name in [
+            "budget.xlsx",
+            "BUDGET.XLSX",
+            "macros.xlsm",
+            "Macros.XlSm",
+            "legacy.xls",
+            "LEGACY.XLS",
+            "calc.ods",
+            "Calc.ODS",
+            "/home/ana/exports/q1.xlsx",
+            "2026/q1/report.Ods",
+        ] {
+            assert_eq!(
+                file_document_format(Path::new(name)),
+                Some(FileDocumentFormat::Spreadsheet),
+                "{name}"
+            );
+        }
+
+        for name in [
+            "budget.xlsx.zip",
+            "xlsx",
+            ".ods",
+            "template.xltx",
+            "calc.fods",
         ] {
             assert_eq!(file_document_format(Path::new(name)), None, "{name}");
         }

@@ -783,6 +783,27 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// The spreadsheet document: the table of the shown sheet and the sheet
+/// tabs. Alt+L and Alt+H (`NextResultTab`, `PrevResultTab`) step through the
+/// worksheets; a chart sheet's tab takes no click.
+pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
+    name: "spreadsheet file",
+    contexts: &[ContextId::Results, ContextId::DataTable],
+    entries: &[
+        ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "header-col-*",
+            KeyboardPath::MouseOnly(
+                "a header click has no action in this document: rows stay in sheet order",
+            ),
+        ),
+        (
+            "spreadsheet-sheet-*",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+    ],
+};
+
 /// The audit viewer: its toolbar ring (`f`), filters, event rows and their
 /// expanded details, and the row menu (`m`).
 pub(crate) const AUDIT: SurfaceRegistry = SurfaceRegistry {

@@ -3127,6 +3127,136 @@ pub(crate) fn parquet_error_cause(error: &dbflux_parquet::ParquetError) -> Strin
     }
 }
 
+/// Notice shown while a spreadsheet is opened.
+pub(crate) fn spreadsheet_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.loading", name = file_name)
+}
+
+/// Notice shown while one sheet of a spreadsheet is read.
+pub(crate) fn spreadsheet_reading_sheet_label(sheet: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.reading_sheet", sheet = sheet)
+}
+
+/// Summary of the error reported when a spreadsheet cannot be opened.
+pub(crate) fn spreadsheet_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when one sheet of a spreadsheet cannot be
+/// read.
+pub(crate) fn spreadsheet_sheet_failed_message(file_name: &str, sheet: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.error.sheet_failed",
+        name = file_name,
+        sheet = sheet
+    )
+}
+
+/// Title of the notice shown for a sheet without values.
+pub(crate) fn spreadsheet_empty_sheet_title(sheet: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.empty.title", sheet = sheet)
+}
+
+/// Title of the notice shown for a workbook with no worksheet to show.
+pub(crate) fn spreadsheet_no_worksheet_title(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.no_worksheet.title", name = file_name)
+}
+
+/// The legend a formula cell without a cached result shows in place of its
+/// value.
+pub(crate) fn spreadsheet_formula_pending() -> String {
+    dbflux_i18n::t!("document.spreadsheet.formula_pending")
+}
+
+/// The summary of a spreadsheet in its header: its sheet count, the shown
+/// sheet's rows and columns, and that the whole sheet is in memory. Without
+/// a shown sheet only the sheet count is given.
+pub(crate) fn spreadsheet_summary(sheet_count: usize, shown: Option<(usize, usize)>) -> String {
+    let sheets = if sheet_count == 1 {
+        dbflux_i18n::t!(
+            "document.spreadsheet.summary.sheets.one",
+            count = sheet_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.spreadsheet.summary.sheets.many",
+            count = sheet_count
+        )
+    };
+
+    let Some((rows, columns)) = shown else {
+        return sheets;
+    };
+
+    let rows = if rows == 1 {
+        dbflux_i18n::t!("document.spreadsheet.summary.rows.one", count = rows)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.summary.rows.many", count = rows)
+    };
+
+    let columns = if columns == 1 {
+        dbflux_i18n::t!("document.spreadsheet.summary.columns.one", count = columns)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.summary.columns.many", count = columns)
+    };
+
+    format!(
+        "{sheets} · {rows} × {columns} · {}",
+        dbflux_i18n::t!("document.spreadsheet.summary.in_memory")
+    )
+}
+
+/// What the user is told about a failure of the spreadsheet reader.
+///
+/// `sheet` names the sheet being read, which the size limit error does not
+/// carry. A file that is not a workbook or does not decode is followed, on
+/// its own line, by the reader's own text.
+pub(crate) fn spreadsheet_error_cause(
+    error: &dbflux_spreadsheet::SpreadsheetError,
+    sheet: Option<&str>,
+) -> String {
+    use dbflux_spreadsheet::SpreadsheetError;
+
+    match error {
+        SpreadsheetError::Source(source) => file_read_failed_cause(source),
+
+        SpreadsheetError::NotASpreadsheet { reason } => with_technical_detail(
+            dbflux_i18n::t!("document.spreadsheet.error.not_a_spreadsheet"),
+            reason,
+        ),
+
+        SpreadsheetError::Encrypted => dbflux_i18n::t!("document.spreadsheet.error.encrypted"),
+
+        SpreadsheetError::ChartSheet { name } => {
+            dbflux_i18n::t!("document.spreadsheet.error.chart_sheet", sheet = name)
+        }
+
+        SpreadsheetError::SheetOutOfRange { index, sheet_count } => dbflux_i18n::t!(
+            "document.spreadsheet.error.sheet_out_of_range",
+            index = index + 1,
+            count = sheet_count
+        ),
+
+        SpreadsheetError::SheetTooLarge {
+            rows,
+            columns,
+            limit,
+        } => dbflux_i18n::t!(
+            "document.spreadsheet.error.sheet_too_large",
+            sheet = sheet.unwrap_or_default(),
+            rows = rows,
+            columns = columns,
+            cells = rows.saturating_mul(*columns),
+            limit = limit
+        ),
+
+        SpreadsheetError::Malformed { message } => with_technical_detail(
+            dbflux_i18n::t!("document.spreadsheet.error.malformed"),
+            message,
+        ),
+    }
+}
+
 /// What the user is told about a failure of the delimited reader.
 ///
 /// A refused dialect is told with what the user can change. Any other
@@ -8015,6 +8145,41 @@ mod tests {
                 assert!(message.contains("C7"), "{message}");
             }
         }
+    }
+
+    #[test]
+    fn spreadsheet_document_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.spreadsheet.loading",
+            "document.spreadsheet.reading_sheet",
+            "document.spreadsheet.empty.title",
+            "document.spreadsheet.empty.description",
+            "document.spreadsheet.no_worksheet.title",
+            "document.spreadsheet.no_worksheet.description",
+            "document.spreadsheet.summary.sheets.one",
+            "document.spreadsheet.summary.sheets.many",
+            "document.spreadsheet.summary.rows.one",
+            "document.spreadsheet.summary.rows.many",
+            "document.spreadsheet.summary.columns.one",
+            "document.spreadsheet.summary.columns.many",
+            "document.spreadsheet.summary.in_memory",
+            "document.spreadsheet.tab.hidden",
+            "document.spreadsheet.tab.chart",
+            "document.spreadsheet.tab.chart_tooltip",
+            "document.spreadsheet.formula.no_selection",
+            "document.spreadsheet.formula.none",
+            "document.spreadsheet.formula.unavailable",
+            "document.spreadsheet.error.open_failed",
+            "document.spreadsheet.error.sheet_failed",
+            "document.spreadsheet.error.objects_unsupported",
+            "document.spreadsheet.error.not_a_spreadsheet",
+            "document.spreadsheet.error.encrypted",
+            "document.spreadsheet.error.chart_sheet",
+            "document.spreadsheet.error.sheet_out_of_range",
+            "document.spreadsheet.error.sheet_too_large",
+            "document.spreadsheet.error.malformed",
+            "scripts.dialog.filter.spreadsheet",
+        ]);
     }
 
     /// A refusal of the writer is told in the user's words, with the

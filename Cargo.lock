@@ -3651,6 +3651,7 @@ dependencies = [
  "petgraph",
  "rfd",
  "rmp-serde",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "uuid",

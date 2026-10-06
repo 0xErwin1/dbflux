@@ -2047,6 +2047,43 @@ document:
         covered_cell: "Cell %{cell} of sheet %{sheet} is covered by a merged cell. Edit the first cell of the merged range instead."
         shared_formula_master: "Cell %{cell} of sheet %{sheet} holds a formula the cells of %{range} share, so editing it would change them too. Edit it in a spreadsheet application."
         inside_formula_range: "Cell %{cell} of sheet %{sheet} is inside the formula range %{range}, which only a spreadsheet application can edit as a whole."
+      open_failed: "Could not open %{name}"
+      sheet_failed: "Could not read sheet %{sheet} of %{name}"
+      objects_unsupported: "Spreadsheets stored in object storage cannot be opened yet. Download %{name} and open the local copy."
+      not_a_spreadsheet: "The file is not an xlsx, xlsm, xls or ods workbook."
+      encrypted: "The workbook is encrypted or protected with a password to open, which DBFlux cannot read."
+      chart_sheet: "Sheet %{sheet} is a chart sheet and has no cells to show."
+      sheet_out_of_range: "Sheet %{index} does not exist. The workbook has %{count} sheets."
+      sheet_too_large: "Sheet %{sheet} spans %{rows} rows by %{columns} columns, %{cells} cells, more than the %{limit} cells DBFlux loads for one sheet."
+      malformed: "The workbook could not be decoded."
+    loading: "Loading %{name}…"
+    reading_sheet: "Reading sheet %{sheet}…"
+    empty:
+      title: "Sheet %{sheet} is empty"
+      description: "The sheet holds no values or formulas."
+    no_worksheet:
+      title: "%{name} has no worksheet"
+      description: "Every sheet of this workbook is a chart or another sheet without cells."
+    summary:
+      sheets:
+        one: "%{count} sheet"
+        many: "%{count} sheets"
+      rows:
+        one: "%{count} row"
+        many: "%{count} rows"
+      columns:
+        one: "%{count} column"
+        many: "%{count} columns"
+      in_memory: "the whole sheet is loaded in memory"
+    tab:
+      hidden: "hidden"
+      chart: "chart"
+      chart_tooltip: "A chart sheet holds a chart and no cells, so it cannot be shown here."
+    formula_pending: "Recalculated when opened"
+    formula:
+      no_selection: "Select a cell to see its formula."
+      none: "No formula"
+      unavailable: "Formula not available for .xls files"
   parquet:
     loading: "Loading %{name}…"
     empty:
@@ -3613,6 +3650,7 @@ scripts:
       redis: Redis
       delimited: CSV / TSV Files
       parquet: "Parquet Files"
+      spreadsheet: "Spreadsheet Files"
       all_files: All Files
   error:
     read_file_failed: "Failed to read file %{path}: %{error}"
