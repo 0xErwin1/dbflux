@@ -1,6 +1,5 @@
 use super::*;
-use crate::ui::document::{DelimitedDocument, DocumentKey, FileDocumentKey, ObjectSavedCallback};
-use crate::ui::labels::{NoActiveConnectionKind, documents_no_active_connection_message};
+use crate::ui::document::{DelimitedDocument, FileDocumentKey, ObjectSavedCallback};
 
 impl Workspace {
     /// Opens a CSV or TSV file as a table in its own tab, or focuses the tab
@@ -25,82 +24,15 @@ impl Workspace {
         on_object_saved: Option<ObjectSavedCallback>,
         cx: &mut Context<Self>,
     ) {
-        let file = match file {
-            FileDocumentKey::Local { path } => match std::fs::canonicalize(&path) {
-                Ok(resolved) => {
-                    self.app_state.update(cx, |state, cx| {
-                        state.record_recent_file(resolved.clone());
-                        cx.emit(AppStateChanged);
-                    });
-
-                    FileDocumentKey::Local { path: resolved }
+        self.open_local_file_tab::<DelimitedDocument>(
+            file,
+            |document| {
+                if let Some(on_saved) = on_object_saved {
+                    document.set_on_object_saved(on_saved);
                 }
-                Err(_) => FileDocumentKey::Local { path },
             },
-            object @ FileDocumentKey::Object { .. } => object,
-        };
-
-        let existing_id = self
-            .tab_manager
-            .read(cx)
-            .find_by_key(&DocumentKey::FileDocument(file.clone()), cx);
-
-        if let Some(id) = existing_id {
-            self.tab_manager.update(cx, |mgr, cx| {
-                mgr.activate(id, cx);
-            });
-            return;
-        }
-
-        let doc = match file {
-            FileDocumentKey::Local { path } => cx.new(|cx| DelimitedDocument::open_local(path, cx)),
-
-            FileDocumentKey::Object {
-                profile_id,
-                bucket,
-                key,
-            } => {
-                let connection = self
-                    .app_state
-                    .read(cx)
-                    .connections()
-                    .get(&profile_id)
-                    .map(|connected| connected.connection.clone());
-
-                let Some(connection) = connection else {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::User,
-                            documents_no_active_connection_message(NoActiveConnectionKind::Object),
-                        ),
-                        cx,
-                    );
-                    return;
-                };
-
-                let app_state = self.app_state.clone();
-
-                cx.new(|cx| {
-                    let mut document = DelimitedDocument::open_object(
-                        app_state, profile_id, connection, bucket, key, cx,
-                    );
-
-                    if let Some(on_saved) = on_object_saved {
-                        document.set_on_object_saved(on_saved);
-                    }
-
-                    document
-                })
-            }
-        };
-        let pane = DelimitedDocument::into_pane(doc, cx);
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Pane(Box::new(pane)), cx);
-        });
-
-        self.pending_focus = Some(FocusTarget::Document);
-        cx.notify();
+            cx,
+        );
     }
 
     /// Reopens a local file the workspace session recorded, with its dialect
@@ -118,47 +50,7 @@ impl Workspace {
         tab: &dbflux_storage::repositories::state::sessions::RestoredTab,
         cx: &mut Context<Self>,
     ) {
-        let Some(stored_path) = tab.file_path.as_ref() else {
-            log::warn!(
-                "Delimited tab '{}' has no file_path in restored session — skipping",
-                tab.title
-            );
-            return;
-        };
-
-        let path = match std::fs::canonicalize(stored_path) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                log::warn!(
-                    "Delimited tab '{}' cannot resolve {}: {error} — skipping",
-                    tab.title,
-                    stored_path.display()
-                );
-                return;
-            }
-        };
-
-        if let Err(error) = std::fs::File::open(&path) {
-            log::warn!(
-                "Delimited tab '{}' cannot open {}: {error} — skipping",
-                tab.title,
-                path.display()
-            );
-            return;
-        }
-
-        let key = DocumentKey::FileDocument(FileDocumentKey::Local { path: path.clone() });
-
-        if self.tab_manager.read(cx).find_by_key(&key, cx).is_some() {
-            return;
-        }
-
-        let doc = cx.new(|cx| DelimitedDocument::open_local(path, cx));
-        let pane = DelimitedDocument::into_pane(doc, cx);
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Pane(Box::new(pane)), cx);
-        });
+        self.restore_local_file_tab::<DelimitedDocument>(tab, cx);
     }
 }
 
@@ -563,76 +455,16 @@ pub(super) mod tests {
         DelimitedDocument, DocumentId, DocumentKind, DocumentState, FileDocumentKey, Tab,
     };
     use crate::ui::overlays::modals::UnsavedChangesOutcome;
+    use crate::ui::views::workspace::actions::local_file::tests::{
+        TestFile, active_title, new_workspace, open_path, restore, session_tab, session_tabs,
+        tab_kinds, tab_states, tab_titles, toast_count,
+    };
     use crate::ui::views::workspace::{QuitConfirmed, Workspace};
     use dbflux_components::components::data_table::model::CellValue;
     use dbflux_components::components::data_table::selection::CellCoord;
-    use dbflux_ui_base::AppStateEntity;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-    use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
-
-    pub(in crate::ui::views::workspace::actions) fn new_workspace(
-        cx: &mut TestAppContext,
-    ) -> (Entity<Workspace>, &mut VisualTestContext) {
-        cx.update(gpui_component::init);
-        cx.update(dbflux_components::theme::init);
-
-        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
-                    .expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
-            })
-        });
-
-        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
-        let workspace_ref = holder.clone();
-
-        let (_, window) = cx.add_window_view(|window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
-            workspace_ref.replace(Some(workspace.clone()));
-            gpui_component::Root::new(workspace, window, cx)
-        });
-
-        let workspace = holder
-            .borrow()
-            .clone()
-            .expect("workspace should be created");
-        (workspace, window)
-    }
-
-    /// A CSV file in a private directory that is removed when the test ends.
-    struct TestFile {
-        directory: PathBuf,
-        path: PathBuf,
-    }
-
-    impl TestFile {
-        fn new(name: &str) -> Self {
-            let directory = std::env::temp_dir()
-                .join(format!("dbflux-open-delimited-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&directory).expect("the test directory must be creatable");
-
-            let path = directory.join(name);
-            std::fs::write(&path, b"name,city\nAna,Lima\n")
-                .expect("the test file must be writable");
-
-            Self { directory, path }
-        }
-
-        fn key(&self) -> FileDocumentKey {
-            FileDocumentKey::Local {
-                path: self.path.clone(),
-            }
-        }
-    }
-
-    impl Drop for TestFile {
-        fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.directory).ok();
-        }
-    }
 
     fn open(window: &mut VisualTestContext, workspace: &Entity<Workspace>, file: FileDocumentKey) {
         window.update(|_, cx| {
@@ -641,33 +473,6 @@ pub(super) mod tests {
             });
         });
         window.run_until_parked();
-    }
-
-    pub(in crate::ui::views::workspace::actions) fn toast_count(
-        window: &mut VisualTestContext,
-    ) -> usize {
-        window.update(|_, cx| {
-            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
-                .host
-                .read(cx)
-                .toast_count()
-        })
-    }
-
-    pub(in crate::ui::views::workspace::actions) fn tab_titles(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Vec<String> {
-        window.update(|_, cx| {
-            workspace
-                .read(cx)
-                .tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .map(|tab| tab.tab_title(cx))
-                .collect()
-        })
     }
 
     #[gpui::test]
@@ -684,49 +489,6 @@ pub(super) mod tests {
             tab_manager.documents()[0].kind()
         });
         assert_eq!(kind, DocumentKind::Delimited);
-    }
-
-    #[gpui::test]
-    fn opening_the_same_file_again_focuses_its_tab(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-        let first = TestFile::new("cities.csv");
-        let second = TestFile::new("people.csv");
-
-        open(window, &workspace, first.key());
-        open(window, &workspace, second.key());
-        open(window, &workspace, first.key());
-
-        assert_eq!(tab_titles(window, &workspace), ["cities.csv", "people.csv"]);
-
-        let active_title = window.update(|_, cx| {
-            let tab_manager = workspace.read(cx).tab_manager.read(cx);
-            let active_id = tab_manager.active_id();
-
-            tab_manager
-                .documents()
-                .iter()
-                .find(|tab| Some(tab.id()) == active_id)
-                .map(|tab| tab.tab_title(cx))
-        });
-        assert_eq!(active_title.as_deref(), Some("cities.csv"));
-    }
-
-    #[gpui::test]
-    fn an_object_of_a_profile_that_is_not_connected_opens_no_tab(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-
-        open(
-            window,
-            &workspace,
-            FileDocumentKey::Object {
-                profile_id: uuid::Uuid::new_v4(),
-                bucket: "reports".to_string(),
-                key: "2026/cities.csv".to_string(),
-            },
-        );
-
-        assert!(tab_titles(window, &workspace).is_empty());
-        assert_eq!(toast_count(window), 1);
     }
 
     #[cfg(unix)]
@@ -762,91 +524,6 @@ pub(super) mod tests {
     }
 
     // -- Entry points ----------------------------------------------------------
-
-    /// Opens `path` the way recent files, the command palette, the scripts
-    /// sidebar, the settings window, IPC and the file dialog do.
-    pub(in crate::ui::views::workspace::actions) fn open_path(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        path: PathBuf,
-    ) {
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.open_script_from_path(path, cx);
-            });
-        });
-        window.run_until_parked();
-    }
-
-    pub(in crate::ui::views::workspace::actions) fn tab_kinds(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Vec<DocumentKind> {
-        window.update(|_, cx| {
-            workspace
-                .read(cx)
-                .tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .map(|tab| tab.kind())
-                .collect()
-        })
-    }
-
-    pub(in crate::ui::views::workspace::actions) fn tab_states(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Vec<DocumentState> {
-        window.update(|_, cx| {
-            workspace
-                .read(cx)
-                .tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .map(|tab| tab.meta_snapshot(cx).state)
-                .collect()
-        })
-    }
-
-    pub(in crate::ui::views::workspace::actions) fn close_every_tab(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) {
-        window.update(|_, cx| {
-            let tab_manager = workspace.read(cx).tab_manager.clone();
-            let ids: Vec<_> = tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .map(|tab| tab.id())
-                .collect();
-
-            tab_manager.update(cx, |tab_manager, cx| {
-                for id in ids {
-                    tab_manager.close(id, cx);
-                }
-            });
-        });
-        window.run_until_parked();
-    }
-
-    pub(in crate::ui::views::workspace::actions) fn recent_paths(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Vec<PathBuf> {
-        window.update(|_, cx| {
-            workspace
-                .read(cx)
-                .app_state
-                .read(cx)
-                .recent_files()
-                .iter()
-                .map(|recent| recent.path.clone())
-                .collect()
-        })
-    }
 
     #[gpui::test]
     fn a_path_ending_in_csv_or_tsv_opens_the_delimited_document_and_others_the_editor(
@@ -899,111 +576,6 @@ pub(super) mod tests {
                 .map(|tab| tab.tab_title(cx))
         });
         assert_eq!(active_title.as_deref(), Some("cities.csv"));
-    }
-
-    #[gpui::test]
-    fn a_csv_is_kept_in_recent_files_and_reopens_from_there_as_a_table(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-        let file = TestFile::new("cities.csv");
-
-        open(window, &workspace, file.key());
-
-        let canonical = std::fs::canonicalize(&file.path).expect("the test file resolves");
-        let recent = recent_paths(window, &workspace);
-        assert_eq!(recent, [canonical]);
-
-        close_every_tab(window, &workspace);
-        assert!(tab_titles(window, &workspace).is_empty());
-
-        open_path(window, &workspace, recent[0].clone());
-
-        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Delimited]);
-        assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
-    }
-
-    /// The scripts sidebar lists every file of the managed folder, a CSV
-    /// included, and opening one used to be refused as an unsupported type.
-    #[gpui::test]
-    fn a_csv_opened_from_the_scripts_sidebar_opens_the_delimited_document(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-        let file = TestFile::new("cities.csv");
-
-        window.update(|_, cx| {
-            let sidebar = workspace.read(cx).sidebar.clone();
-
-            sidebar.update(cx, |_, cx| {
-                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenScript {
-                    path: file.path.clone(),
-                });
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Delimited]);
-        assert_eq!(toast_count(window), 0);
-    }
-
-    #[gpui::test]
-    fn a_csv_sent_over_ipc_opens_the_delimited_document(cx: &mut TestAppContext) {
-        use dbflux_ipc::framing;
-        use dbflux_ipc::protocol::{
-            AppControlRequest, AppControlResponse, IpcMessage, IpcResponse,
-        };
-        use interprocess::local_socket::{
-            GenericNamespaced, ListenerNonblockingMode, ListenerOptions, Stream as IpcStream,
-            prelude::*,
-        };
-
-        let (workspace, window) = new_workspace(cx);
-        let file = TestFile::new("cities.csv");
-
-        let socket = format!("dbflux-test-{}.sock", uuid::Uuid::new_v4());
-        let listener = ListenerOptions::new()
-            .name(
-                socket
-                    .clone()
-                    .to_ns_name::<GenericNamespaced>()
-                    .expect("a valid socket name"),
-            )
-            .nonblocking(ListenerNonblockingMode::Accept)
-            .create_sync()
-            .expect("the test socket binds");
-
-        window.update(|window, cx| {
-            crate::ipc_server::IpcServer::start_with_listener(
-                listener,
-                workspace.clone(),
-                window.window_handle(),
-                "token".to_string(),
-                cx,
-            );
-        });
-
-        let mut stream = IpcStream::connect(
-            socket
-                .to_ns_name::<GenericNamespaced>()
-                .expect("a valid socket name"),
-        )
-        .expect("the test socket accepts");
-        let request = AppControlRequest::new(
-            1,
-            Some("token".to_string()),
-            IpcMessage::OpenScript {
-                path: file.path.clone(),
-            },
-        );
-        framing::send_msg(&mut stream, &request).expect("the request is sent");
-        let response: AppControlResponse =
-            framing::recv_msg(&mut stream).expect("the response arrives");
-        assert!(matches!(response.body, IpcResponse::Ok));
-
-        window
-            .executor()
-            .advance_clock(std::time::Duration::from_millis(50));
-        window.run_until_parked();
-
-        assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
-        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Delimited]);
     }
 
     // -- Objects ---------------------------------------------------------------
@@ -1434,106 +1006,6 @@ pub(super) mod tests {
 
     // -- Session ---------------------------------------------------------------
 
-    /// The tabs the workspace session holds in its storage, in their order.
-    fn session_tabs(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Vec<dbflux_storage::repositories::state::sessions::RestoredTab> {
-        window.update(|_, cx| {
-            let runtime = workspace.read(cx).app_state.read(cx).storage_runtime();
-
-            runtime
-                .sessions()
-                .restore_session(runtime.artifacts())
-                .expect("the session must be readable")
-                .map(|session| session.tabs)
-                .unwrap_or_default()
-        })
-    }
-
-    /// A session tab of `tab_kind` on `file_path`, as `write_session_manifest`
-    /// records it.
-    fn session_tab(
-        tab_kind: &str,
-        title: &str,
-        file_path: Option<PathBuf>,
-        position: usize,
-    ) -> dbflux_storage::repositories::state::sessions::WorkspaceTab {
-        dbflux_storage::repositories::state::sessions::WorkspaceTab {
-            id: uuid::Uuid::new_v4().to_string(),
-            tab_kind: tab_kind.to_string(),
-            language: "sql".to_string(),
-            exec_ctx: dbflux_core::ExecutionContext::default(),
-            scratch_path: None,
-            shadow_path: None,
-            file_path,
-            title: title.to_string(),
-            position,
-            is_pinned: false,
-        }
-    }
-
-    /// Stores a session holding `tabs`, then restores it into the workspace
-    /// the way startup does.
-    fn restore(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        tabs: Vec<dbflux_storage::repositories::state::sessions::WorkspaceTab>,
-        active_index: Option<usize>,
-    ) {
-        window.update(|_, cx| {
-            let runtime = workspace.read(cx).app_state.read(cx).storage_runtime();
-
-            runtime
-                .sessions()
-                .save_workspace_session(
-                    &dbflux_storage::repositories::state::sessions::WorkspaceSessionManifest {
-                        version: 1,
-                        active_index,
-                        tabs,
-                    },
-                )
-                .expect("the session must be storable");
-        });
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| workspace.restore_session(window, cx));
-        });
-        window.run_until_parked();
-    }
-
-    fn active_title(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Option<String> {
-        window.update(|_, cx| {
-            let tab_manager = workspace.read(cx).tab_manager.read(cx);
-            let active_id = tab_manager.active_id();
-
-            tab_manager
-                .documents()
-                .iter()
-                .find(|tab| Some(tab.id()) == active_id)
-                .map(|tab| tab.tab_title(cx))
-        })
-    }
-
-    #[gpui::test]
-    fn an_open_local_file_is_recorded_in_the_session_by_its_path(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-        let file = TestFile::new("cities.csv");
-
-        open(window, &workspace, file.key());
-
-        let tabs = session_tabs(window, &workspace);
-        let resolved = std::fs::canonicalize(&file.path).expect("the test file must resolve");
-
-        assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].tab_kind, "Delimited");
-        assert_eq!(tabs[0].file_path.as_deref(), Some(resolved.as_path()));
-        assert_eq!(tabs[0].title, "cities.csv");
-    }
-
     #[gpui::test]
     fn an_object_is_not_recorded_in_the_session(cx: &mut TestAppContext) {
         let (workspace, window) = new_workspace(cx);
@@ -1610,56 +1082,6 @@ pub(super) mod tests {
             .map(|tab| tab.tab_kind)
             .collect();
         assert_eq!(kinds, ["FileBacked", "Delimited", "FileBacked"]);
-    }
-
-    /// A file that is gone at startup is skipped, as a file-backed script is,
-    /// without a toast for a failure the user did not just cause.
-    #[gpui::test]
-    fn a_file_missing_at_restore_is_skipped_without_a_report(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-        let file = TestFile::new("cities.csv");
-        let missing = file.directory.join("absent.csv");
-
-        restore(
-            window,
-            &workspace,
-            vec![
-                session_tab("Delimited", "absent.csv", Some(missing), 0),
-                session_tab("Delimited", "no-path.csv", None, 1),
-            ],
-            Some(0),
-        );
-
-        assert!(tab_titles(window, &workspace).is_empty());
-        assert_eq!(toast_count(window), 0);
-    }
-
-    /// A session can hold a path spelled differently from the one opening the
-    /// file uses, written by an earlier build or by hand. Restoring resolves
-    /// it, so the file keeps one tab and a later open focuses that tab.
-    #[cfg(unix)]
-    #[gpui::test]
-    fn a_restored_link_and_the_file_it_names_share_one_tab(cx: &mut TestAppContext) {
-        let (workspace, window) = new_workspace(cx);
-        let file = TestFile::new("cities.csv");
-
-        let link = file.directory.join("link.csv");
-        std::os::unix::fs::symlink(&file.path, &link).expect("the test link must be creatable");
-        let dotted = file.directory.join(".").join("cities.csv");
-
-        restore(
-            window,
-            &workspace,
-            vec![
-                session_tab("Delimited", "link.csv", Some(link), 0),
-                session_tab("Delimited", "cities.csv", Some(dotted), 1),
-            ],
-            Some(0),
-        );
-        open(window, &workspace, file.key());
-
-        assert_eq!(tab_titles(window, &workspace), ["cities.csv"]);
-        assert_eq!(toast_count(window), 0);
     }
 
     /// A session stored before delimited tabs took part holds only script
