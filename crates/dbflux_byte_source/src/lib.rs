@@ -14,9 +14,26 @@
 //! assert_eq!(source.read_range(2..5).unwrap(), b"234");
 //! assert_eq!(source.read_range(8..50).unwrap(), b"89");
 //! ```
+//!
+//! Parsers that want [`std::io::Read`] and [`std::io::Seek`] read through a
+//! [`ByteSourceReader`]:
+//!
+//! ```
+//! use std::io::{Read, Seek, SeekFrom};
+//!
+//! use dbflux_byte_source::{ByteSourceReader, MemorySource};
+//!
+//! let mut reader = ByteSourceReader::new(MemorySource::new(b"0123456789".to_vec()));
+//! reader.seek(SeekFrom::End(-3)).unwrap();
+//!
+//! let mut tail = String::new();
+//! reader.read_to_string(&mut tail).unwrap();
+//! assert_eq!(tail, "789");
+//! ```
 
 use std::error::Error;
 use std::fmt;
+use std::io;
 use std::ops::Range;
 
 /// A failure reported by a [`ByteSource`].
@@ -194,6 +211,165 @@ impl ByteSource for FileSource {
         bytes.truncate(filled);
 
         Ok(bytes)
+    }
+}
+
+/// The smallest range a [`ByteSourceReader`] asks its source for.
+///
+/// Zip and spreadsheet parsers issue many reads of a few bytes, and 64 KiB
+/// turns those into one request each while keeping a reader's buffer small.
+pub const READ_AHEAD_BLOCK: usize = 64 * 1024;
+
+/// Reads a [`ByteSource`] through [`io::Read`] and [`io::Seek`], for parsers
+/// such as zip and spreadsheet readers that need both.
+///
+/// Reads are served from a buffered block of at least [`READ_AHEAD_BLOCK`]
+/// bytes, so small sequential reads do not each become a range request. The
+/// source's length is read once, on the first read or end-relative seek.
+///
+/// A source that returns fewer bytes than its length promises makes a read
+/// fail with [`io::ErrorKind::UnexpectedEof`]. A [`SourceError`] becomes an
+/// [`io::Error`] with the same message.
+#[derive(Debug, Clone)]
+pub struct ByteSourceReader<S> {
+    source: S,
+    position: u64,
+    length: Option<u64>,
+    block_start: u64,
+    block: Vec<u8>,
+}
+
+impl<S: ByteSource> ByteSourceReader<S> {
+    /// Wraps `source`, positioned at its first byte.
+    pub fn new(source: S) -> Self {
+        Self {
+            source,
+            position: 0,
+            length: None,
+            block_start: 0,
+            block: Vec::new(),
+        }
+    }
+
+    pub fn get_ref(&self) -> &S {
+        &self.source
+    }
+
+    pub fn into_inner(self) -> S {
+        self.source
+    }
+
+    fn length(&mut self) -> io::Result<u64> {
+        if let Some(length) = self.length {
+            return Ok(length);
+        }
+
+        let length = self.source.byte_length().map_err(source_error_to_io)?;
+        self.length = Some(length);
+
+        Ok(length)
+    }
+
+    fn buffered(&self) -> &[u8] {
+        self.position
+            .checked_sub(self.block_start)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .and_then(|offset| self.block.get(offset..))
+            .unwrap_or_default()
+    }
+
+    fn fill_block(&mut self, wanted: usize) -> io::Result<()> {
+        let length = self.length()?;
+
+        self.block_start = self.position;
+        self.block.clear();
+
+        if self.position >= length {
+            return Ok(());
+        }
+
+        let request = u64::try_from(wanted.max(READ_AHEAD_BLOCK)).unwrap_or(u64::MAX);
+        let end = self.position.saturating_add(request).min(length);
+
+        let bytes = self
+            .source
+            .read_range(self.position..end)
+            .map_err(source_error_to_io)?;
+
+        let expected = end - self.position;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) < expected {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "the source returned {} of the {expected} bytes asked for at offset {}",
+                    bytes.len(),
+                    self.position
+                ),
+            ));
+        }
+
+        self.block = bytes;
+
+        Ok(())
+    }
+}
+
+impl<S: ByteSource> io::Read for ByteSourceReader<S> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+
+        if self.buffered().is_empty() {
+            self.fill_block(buffer.len())?;
+        }
+
+        let available = self.buffered();
+        let count = available.len().min(buffer.len());
+
+        if let (Some(target), Some(bytes)) = (buffer.get_mut(..count), available.get(..count)) {
+            target.copy_from_slice(bytes);
+        }
+
+        self.position = self
+            .position
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+
+        Ok(count)
+    }
+}
+
+impl<S: ByteSource> io::Seek for ByteSourceReader<S> {
+    fn seek(&mut self, target: io::SeekFrom) -> io::Result<u64> {
+        let position = match target {
+            io::SeekFrom::Start(offset) => Some(offset),
+            io::SeekFrom::Current(delta) => self.position.checked_add_signed(delta),
+            io::SeekFrom::End(delta) => self.length()?.checked_add_signed(delta),
+        };
+
+        let position = position.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot seek to a position before the start of the source",
+            )
+        })?;
+
+        self.position = position;
+
+        Ok(position)
+    }
+
+    fn stream_position(&mut self) -> io::Result<u64> {
+        Ok(self.position)
+    }
+}
+
+/// Converts a [`SourceError`] to an [`io::Error`] with the same message,
+/// keeping the original when the source failed with an [`io::Error`].
+fn source_error_to_io(error: SourceError) -> io::Error {
+    match error.into_inner().downcast::<io::Error>() {
+        Ok(io_error) => *io_error,
+        Err(other) => io::Error::other(other),
     }
 }
 
