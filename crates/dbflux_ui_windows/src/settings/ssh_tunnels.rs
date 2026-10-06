@@ -397,33 +397,9 @@ impl SshTunnelsSection {
     }
 
     pub(super) fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().clone();
-
-        let start_dir = dirs::home_dir()
-            .map(|home| home.join(".ssh"))
-            .unwrap_or_default();
-
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
-                .set_directory(&start_dir);
-
-            dialog.pick_file()
+        crate::connection_manager::browse_ssh_key_into(cx, |this, path| {
+            this.pending_ssh_key_path = Some(path);
         });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.pending_ssh_key_path = Some(path.to_string_lossy().to_string());
-                        cx.notify();
-                    });
-                });
-            }
-        })
-        .detach();
     }
 
     pub(super) fn ssh_tunnel_count(&self, cx: &App) -> usize {

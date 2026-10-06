@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::{
     CacheKey, ConnectionResolutionError, DbError, StaleFetchReason, StaleInstallReason,
     TableDetailsPrepareError,
@@ -580,7 +581,11 @@ impl AppStateEntity {
     ) -> ObjectTreeRequestStatus {
         let profile_id = key.profile_id();
         match self.prepare_fetch_database_list(profile_id) {
-            Err(error) => {
+            Err(PrepareFetchError::AlreadyCached) => {
+                self.object_tree_settle(key, ObjectTreeOutcome::Cached, cx);
+                ObjectTreeRequestStatus::Cached
+            }
+            Err(PrepareFetchError::Failed(error)) => {
                 let message = format!("Failed to prepare the database list load: {error}");
                 self.object_tree_report_failure("Failed to load the database list", error, cx);
                 self.object_tree_settle(key, ObjectTreeOutcome::Failed(message.clone()), cx);
@@ -614,7 +619,11 @@ impl AppStateEntity {
     ) -> ObjectTreeRequestStatus {
         let profile_id = key.profile_id();
         match self.prepare_fetch_explicit_database_schema(profile_id, &database) {
-            Err(error) => {
+            Err(PrepareFetchError::AlreadyCached) => {
+                self.object_tree_settle(key, ObjectTreeOutcome::Cached, cx);
+                ObjectTreeRequestStatus::Cached
+            }
+            Err(PrepareFetchError::Failed(error)) => {
                 let message = format!("Failed to prepare the schema load: {error}");
                 self.object_tree_report_failure("Failed to load the database schema", error, cx);
                 self.object_tree_settle(key, ObjectTreeOutcome::Failed(message.clone()), cx);

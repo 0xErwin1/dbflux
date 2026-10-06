@@ -29,6 +29,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::{
     ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
     SchemaForeignKeyInfo, TableInfo, TableRef, TransferColumn, topological_order,
@@ -56,19 +57,6 @@ use phases::{
     tables_mapping_confirm_warnings,
 };
 use source_target::{SourceTargetChanged, SourceTargetPhase};
-
-/// Whether an `Err(String)` returned by one of the shared
-/// `AppStateEntity::prepare_fetch_*` seams means "the data is already cached"
-/// rather than a real failure — mirrors the sidebar's `spawn_fetch_*`
-/// handling (`crates/dbflux_ui_sidebar/src/table_loading.rs`), where the same
-/// sentinel strings gate whether to report an error or simply proceed with
-/// what is already cached.
-fn is_already_cached_sentinel(error: &str) -> bool {
-    matches!(
-        error,
-        "Table details already cached" | "Schema foreign keys already cached"
-    )
-}
 
 /// Converts driver-reported column metadata into the transfer engine's
 /// column shape — identical to the wizard's original inline conversion.
@@ -156,8 +144,8 @@ enum TableDetailsFetch {
 
 /// Reads (or fetches, on the background executor) one table's details
 /// through the shared `AppStateEntity::prepare_fetch_table_details` seam,
-/// treating the "already cached" sentinel as success by reading the already
-/// populated `ConnectedProfile` cache instead of re-fetching — mirrors the
+/// treating [`PrepareFetchError::AlreadyCached`] as success by reading the
+/// already populated `ConnectedProfile` cache instead of re-fetching — mirrors the
 /// sidebar's `spawn_fetch_table_details` (Reuse Audit: replaces the wizard's
 /// former bespoke `Connection::table_details` closure).
 async fn fetch_table_details_via_seam(
@@ -178,7 +166,7 @@ async fn fetch_table_details_via_seam(
 
     let params = match prepared {
         Ok(params) => params,
-        Err(e) if is_already_cached_sentinel(&e) => {
+        Err(PrepareFetchError::AlreadyCached) => {
             let cached = cx.update(|cx| {
                 app_state
                     .read(cx)
@@ -197,7 +185,7 @@ async fn fetch_table_details_via_seam(
                 ),
             });
         }
-        Err(e) => return Err(e),
+        Err(PrepareFetchError::Failed(error)) => return Err(error),
     };
 
     let execute_result = cx
@@ -237,8 +225,8 @@ async fn fetch_table_details_via_seam(
 
 /// Reads (or fetches, on the background executor) one schema's foreign keys
 /// through the shared `AppStateEntity::prepare_fetch_schema_foreign_keys`
-/// seam, treating the "already cached" sentinel as success by reading the
-/// already populated `ConnectedProfile` cache — mirrors
+/// seam, treating [`PrepareFetchError::AlreadyCached`] as success by reading
+/// the already populated `ConnectedProfile` cache — mirrors
 /// [`fetch_table_details_via_seam`]. Replaces the wizard's former
 /// synchronous foreground `Connection::schema_foreign_keys` call.
 async fn fetch_schema_foreign_keys_via_seam(
@@ -256,7 +244,7 @@ async fn fetch_schema_foreign_keys_via_seam(
 
     let params = match prepared {
         Ok(params) => params,
-        Err(e) if is_already_cached_sentinel(&e) => {
+        Err(PrepareFetchError::AlreadyCached) => {
             let key = SchemaCacheKey::new(database, schema.map(str::to_string));
             return Ok(cx.update(|cx| {
                 app_state
@@ -268,7 +256,7 @@ async fn fetch_schema_foreign_keys_via_seam(
                     .unwrap_or_default()
             }));
         }
-        Err(e) => return Err(e),
+        Err(PrepareFetchError::Failed(error)) => return Err(error),
     };
 
     let execute_result = cx
@@ -1741,7 +1729,7 @@ impl MigrateWizard {
 mod tests {
     use super::{
         TableMigrationConfig, WizardPhase, build_migration_options, build_migration_table_plans,
-        is_already_cached_sentinel, next_phase, target_columns_prove_existing,
+        next_phase, target_columns_prove_existing,
     };
     use dbflux_core::{ColumnInfo, TableRef, TransferColumn};
 
@@ -1775,16 +1763,6 @@ mod tests {
         // never-loaded column set both mean the target must be created.
         assert!(!target_columns_prove_existing(Some(&[])));
         assert!(!target_columns_prove_existing(None));
-    }
-
-    #[test]
-    fn is_already_cached_sentinel_matches_only_the_known_sentinel_strings() {
-        assert!(is_already_cached_sentinel("Table details already cached"));
-        assert!(is_already_cached_sentinel(
-            "Schema foreign keys already cached"
-        ));
-        assert!(!is_already_cached_sentinel("Profile not connected"));
-        assert!(!is_already_cached_sentinel(""));
     }
 
     #[test]

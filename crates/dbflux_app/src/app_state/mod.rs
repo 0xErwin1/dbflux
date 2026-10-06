@@ -3,6 +3,7 @@
 //! This module contains the core `AppState` struct which manages all application-level
 //! state including connections, profiles, settings, and audit services.
 
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::observability::actions::{
     CONFIG_CHANGE, CONFIG_CREATE, CONFIG_DELETE, CONFIG_UPDATE,
 };
@@ -459,7 +460,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaRoutinesParams, String> {
+    ) -> Result<FetchSchemaRoutinesParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_routines(profile_id, database, schema)
@@ -732,7 +733,7 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
-    ) -> Result<FetchDatabaseSchemaParams, String> {
+    ) -> Result<FetchDatabaseSchemaParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_database_schema(profile_id, database)
@@ -767,7 +768,7 @@ impl AppState {
     pub fn prepare_fetch_database_list(
         &self,
         profile_id: Uuid,
-    ) -> Result<FetchDatabaseListParams, String> {
+    ) -> Result<FetchDatabaseListParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_database_list(profile_id)
@@ -781,7 +782,7 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
-    ) -> Result<FetchExplicitDatabaseSchemaParams, String> {
+    ) -> Result<FetchExplicitDatabaseSchemaParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_explicit_database_schema(profile_id, database)
@@ -878,7 +879,7 @@ impl AppState {
         database: &str,
         schema: Option<&str>,
         table: &str,
-    ) -> Result<FetchTableDetailsParams, String> {
+    ) -> Result<FetchTableDetailsParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_table_details(profile_id, database, schema, table)
@@ -1002,7 +1003,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaTypesParams, String> {
+    ) -> Result<FetchSchemaTypesParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_types(profile_id, database, schema)
@@ -1013,7 +1014,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaColumnsParams, String> {
+    ) -> Result<FetchSchemaColumnsParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_columns(profile_id, database, schema)
@@ -1024,7 +1025,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaIndexesParams, String> {
+    ) -> Result<FetchSchemaIndexesParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_indexes(profile_id, database, schema)
@@ -1035,7 +1036,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaForeignKeysParams, String> {
+    ) -> Result<FetchSchemaForeignKeysParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_foreign_keys(profile_id, database, schema)

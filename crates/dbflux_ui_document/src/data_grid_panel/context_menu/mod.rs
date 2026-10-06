@@ -4179,11 +4179,13 @@ async fn cached_or_fetched_schema_foreign_keys(
         return Ok(foreign_keys);
     }
 
-    let params = cx.update(|cx| {
-        app_state
-            .read(cx)
-            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
-    })?;
+    let params = cx
+        .update(|cx| {
+            app_state
+                .read(cx)
+                .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+        })
+        .map_err(|error| error.to_string())?;
 
     let fetched = cx
         .background_executor()

@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::{TaskKind, TaskTarget};
 use dbflux_ui_base::object_tree::{
     ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey, ObjectTreeRequestStatus,
@@ -760,44 +761,21 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_types(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema types already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_types_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
-                return false;
-            }
-        };
+            .prepare_fetch_schema_types(profile_id, database, schema);
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
-
-        self.spawn_fetch_with_result(
-            pending_action,
-            None,
-            task,
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_types_label,
             "Failed to fetch schema types",
             crate::labels::data_types_load_failed_label,
-            |app_state, res, cx| {
-                app_state.update(cx, |state, cx| {
-                    state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
-                    cx.emit(AppStateChanged);
-                });
+            |state, res| {
+                state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
             },
-            |_app_state, _cx| {},
+            pending_action,
             cx,
         )
     }
@@ -811,44 +789,21 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_indexes(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema indexes already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_indexes_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
-                return false;
-            }
-        };
+            .prepare_fetch_schema_indexes(profile_id, database, schema);
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
-
-        self.spawn_fetch_with_result(
-            pending_action,
-            None,
-            task,
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_indexes_label,
             "Failed to fetch schema indexes",
             crate::labels::indexes_load_failed_label,
-            |app_state, res, cx| {
-                app_state.update(cx, |state, cx| {
-                    state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
-                    cx.emit(AppStateChanged);
-                });
+            |state, res| {
+                state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
             },
-            |_app_state, _cx| {},
+            pending_action,
             cx,
         )
     }
@@ -862,49 +817,26 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema foreign keys already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_foreign_keys_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
-                return false;
-            }
-        };
+            .prepare_fetch_schema_foreign_keys(profile_id, database, schema);
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
-
-        self.spawn_fetch_with_result(
-            pending_action,
-            None,
-            task,
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_foreign_keys_label,
             "Failed to fetch schema foreign keys",
             crate::labels::foreign_keys_load_failed_label,
-            |app_state, res, cx| {
-                app_state.update(cx, |state, cx| {
-                    state.set_schema_foreign_keys(
-                        res.profile_id,
-                        res.database,
-                        res.schema,
-                        res.foreign_keys,
-                    );
-                    cx.emit(AppStateChanged);
-                });
+            |state, res| {
+                state.set_schema_foreign_keys(
+                    res.profile_id,
+                    res.database,
+                    res.schema,
+                    res.foreign_keys,
+                );
             },
-            |_app_state, _cx| {},
+            pending_action,
             cx,
         )
     }
@@ -917,45 +849,72 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_routines(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema routines already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_routines_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
+            .prepare_fetch_schema_routines(profile_id, database, schema);
+
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_routines_label,
+            "Failed to fetch schema routines",
+            crate::labels::routines_load_failed_label,
+            |state, res| {
+                state.set_schema_routines(res.profile_id, res.database, res.schema, res.routines);
+            },
+            pending_action,
+            cx,
+        )
+    }
+
+    /// Runs one prepared schema-metadata fetch on the background executor and
+    /// applies its result to the app state.
+    ///
+    /// A cache hit starts nothing and reports nothing. A preparation failure
+    /// is reported to the user under `cannot_load_label`. Returns `true` only
+    /// when the fetch was started.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_fetch_schema_metadata<P, R>(
+        &mut self,
+        prepared: Result<P, PrepareFetchError>,
+        execute: fn(P) -> Result<R, String>,
+        cannot_load_label: fn() -> String,
+        error_log_prefix: &'static str,
+        load_failed_label: fn(&str) -> String,
+        apply: fn(&mut dbflux_ui_base::app_state_entity::AppStateEntity, R),
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) -> bool
+    where
+        P: Send + 'static,
+        R: Send + 'static,
+    {
+        let params = match prepared {
+            Ok(params) => params,
+            Err(PrepareFetchError::AlreadyCached) => return false,
+            Err(PrepareFetchError::Failed(error)) => {
+                report_error(
+                    UserFacingError::new(ErrorKind::Network, cannot_load_label()).with_cause(error),
+                    cx,
+                );
                 return false;
             }
         };
 
         let task = cx
             .background_executor()
-            .spawn(async move { params.execute() });
+            .spawn(async move { execute(params) });
 
         self.spawn_fetch_with_result(
             pending_action,
             None,
             task,
-            "Failed to fetch schema routines",
-            crate::labels::routines_load_failed_label,
-            |app_state, res, cx| {
+            error_log_prefix,
+            load_failed_label,
+            move |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
-                    state.set_schema_routines(
-                        res.profile_id,
-                        res.database,
-                        res.schema,
-                        res.routines,
-                    );
+                    apply(state, res);
                     cx.emit(AppStateChanged);
                 });
             },
