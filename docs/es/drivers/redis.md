@@ -216,8 +216,32 @@ evitar exponer direcciones IP y hostnames de clientes.
 - Las capacidades DDL están todas deshabilitadas (sin tables, views, indexes,
   schemas) — esto es un almacén clave-valor, no relacional.
 - Las transacciones se anuncian a nivel de capacidad (`supports_transactions:
-  true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas,
-  read-only ni soporte deferrable.
+  true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas
+  ni soporte deferrable.
+- Las peticiones de solo lectura (`ReadOnlyEnforcement::Required`, usadas por
+  los scripts de lectura de MCP y el auto-refresh del editor) las aplica
+  DBFlux, no el servidor. Antes de enviar el comando, el driver pide sus flags
+  al servidor con `COMMAND INFO` y lo rechaza salvo que el servidor lo marque
+  `readonly` (o sea `PING`, `ECHO`, `TIME` o `INFO`) y no informe ningún otro
+  flag, como `write`, `admin`, `blocking`, `pubsub` o `may_replicate`; un flag
+  que el driver no conoce también rechaza el comando. Se rechazan las
+  transacciones, `SELECT`, las suscripciones, `MONITOR`, todos los comandos de
+  script (`EVAL`, `EVALSHA`, `FCALL` y sus formas de solo lectura `EVAL_RO`,
+  `EVALSHA_RO` y `FCALL_RO`), `PFCOUNT` (que reescribe un valor en caché en
+  Redis 6.0 y anteriores), los comandos de módulos y los comandos que el
+  servidor no describe, y también `SRANDMEMBER`, `HRANDFIELD` y `ZRANDMEMBER`
+  con un conteo negativo. El modo de solo lectura protege los datos, no la
+  disponibilidad: las lecturas costosas como `KEYS *` o un `SMEMBERS` o
+  `HGETALL` grande se siguen ejecutando, y DBFlux no fija ningún tiempo máximo
+  de lectura en Redis, así que un comando lento retiene la conexión hasta que
+  el servidor responde. Los comandos con subcomandos, como `CONFIG`,
+  `CLIENT` u `OBJECT`, se juzgan por la entrada propia del subcomando, que
+  solo describen Redis 7 y posteriores, así que en servidores anteriores se
+  rechazan. Las conexiones a Redis Cluster y los servidores que no responden a
+  `COMMAND INFO` rechazan las peticiones de solo lectura con `NotSupported`.
+  En los servidores compatibles (Valkey, KeyDB, DragonflyDB) se confía en los
+  flags que informan. Un usuario ACL de Redis sin permisos de escritura sigue
+  siendo el límite real.
 - Pub/Sub no está expuesto (la capacidad `PUBSUB` no está establecida).
 - El túnel SSH no está disponible cuando el modo URI está habilitado; la ruta
   del túnel solo está conectada para el modo de conexión manual. Combinar un

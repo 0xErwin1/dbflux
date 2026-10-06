@@ -24,15 +24,16 @@ use dbflux_core::{
     KeyValuePrefixRequest, KeyValueSchema, LanguageService, ListEnd, ListPushRequest,
     ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, OrderByColumn,
     PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RangeOrder, RelationalConnection, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan, SemanticRequest,
-    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
-    StreamClaimRequest, StreamConsumerGroup, StreamDeleteRequest, StreamEntry, StreamEntryId,
-    StreamGroupsRequest, StreamPendingEntry, StreamPendingRequest, StreamRangePage,
-    StreamRangeRequest, TextPosition, TextPositionRange, TransactionCapabilities, TransferFamily,
-    Value, ValueRepr, WritePrivilege, ZSetAddRequest, ZSetMember, ZSetRangePage, ZSetRangeRequest,
-    ZSetRemoveRequest, field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
-    when_checked, when_field_equals, when_unchecked, with_default,
+    QueryLanguage, QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement,
+    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption,
+    SemanticPlan, SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
+    SshTunnelConfig, StreamAddRequest, StreamClaimRequest, StreamConsumerGroup,
+    StreamDeleteRequest, StreamEntry, StreamEntryId, StreamGroupsRequest, StreamPendingEntry,
+    StreamPendingRequest, StreamRangePage, StreamRangeRequest, TextPosition, TextPositionRange,
+    TransactionCapabilities, TransferFamily, Value, ValueRepr, WritePrivilege, ZSetAddRequest,
+    ZSetMember, ZSetRangePage, ZSetRangeRequest, ZSetRemoveRequest, field, field_password,
+    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_field_equals,
+    when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -268,7 +269,10 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         default_isolation_level: None,
         supports_savepoints: false,
         supports_nested_transactions: false,
-        supports_read_only: false,
+        // Honoured by DBFlux, not by the server: every command of a
+        // `Required` request is checked against the flags the server reports
+        // in `COMMAND INFO` before it is sent; see `crate::read_only`.
+        supports_read_only: true,
         supports_deferrable: false,
     }),
     limits: Some(DriverLimits {
@@ -1501,7 +1505,14 @@ impl Connection for RedisConnection {
                     .to_string(),
             ));
         }
-        req.refuse_read_only_enforcement("Redis")?;
+        if req.read_only.is_required() && self.is_cluster()? {
+            return Err(DbError::NotSupported(
+                "Redis: read-only enforcement is unsupported on Redis Cluster connections, \
+                 because the node that describes a command may not be the node that runs it; \
+                 the request was rejected before execution"
+                    .to_string(),
+            ));
+        }
 
         if let Some(source) = req
             .execution_context
@@ -1559,16 +1570,7 @@ impl Connection for RedisConnection {
             .transpose()?;
 
         let value = self.with_connection(query_db, |conn| {
-            // Invariant: parts is non-empty — guarded by `if parts.is_empty()` above.
-            #[allow(clippy::indexing_slicing)]
-            let mut command = redis::cmd(&parts[0]);
-            for arg in parts.iter().skip(1) {
-                command.arg(arg);
-            }
-
-            command
-                .query::<redis::Value>(conn)
-                .map_err(|e| format_redis_query_error(&e))
+            send_parsed_command(conn, &parts, req.read_only)
         })?;
 
         Ok(redis_value_to_result(value, start.elapsed()))
@@ -3193,7 +3195,7 @@ fn format_redis_uri_error(error: &redis::RedisError, uri: &str) -> DbError {
 /// (`should_retry_sentinel_command`) recognize it without needing the raw
 /// `redis::RedisError` at that choke point — command closures already convert
 /// to `DbError` via this function before it is reached.
-fn format_redis_query_error(error: &redis::RedisError) -> DbError {
+pub(crate) fn format_redis_query_error(error: &redis::RedisError) -> DbError {
     let formatted = REDIS_ERROR_FORMATTER.format_query_error(error);
 
     if is_connection_level_error(error) {
@@ -4201,6 +4203,35 @@ fn split_command(input: &str) -> Result<Vec<String>, DbError> {
     }
 
     Ok(items)
+}
+
+/// Sends one command parsed by [`parse_command`] and returns its reply.
+///
+/// With [`ReadOnlyEnforcement::Required`] the command is first checked
+/// against the flags the server reports for it, on the same connection and
+/// with the same tokens that are then sent, and a command that is not a read
+/// is refused before it is sent. See [`crate::read_only`].
+pub(crate) fn send_parsed_command(
+    conn: &mut dyn redis::ConnectionLike,
+    parts: &[String],
+    read_only: ReadOnlyEnforcement,
+) -> Result<redis::Value, DbError> {
+    let Some((name, arguments)) = parts.split_first() else {
+        return Ok(redis::Value::Nil);
+    };
+
+    if read_only.is_required() {
+        crate::read_only::ensure_read_only_command(conn, parts)?;
+    }
+
+    let mut command = redis::cmd(name);
+    for argument in arguments {
+        command.arg(argument);
+    }
+
+    command
+        .query::<redis::Value>(conn)
+        .map_err(|e| format_redis_query_error(&e))
 }
 
 pub(crate) fn parse_command(input: &str) -> Result<Vec<String>, DbError> {
