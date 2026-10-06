@@ -153,6 +153,9 @@ fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Resul
         let connection = connect_redis(uri)?;
         let key = "redis:read-only";
         connection.execute(&QueryRequest::new(format!("SET {key} original")))?;
+        connection.execute(&QueryRequest::new(
+            "SADD redis:read-only-set a b c".to_string(),
+        ))?;
 
         let read_only =
             |query: String| QueryRequest::new(query).with_read_only(ReadOnlyEnforcement::Required);
@@ -164,6 +167,7 @@ fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Resul
             format!("EVAL_RO \"return redis.call('get', KEYS[1])\" 1 {key}"),
             "EVAL_RO \"return redis.call('SLOWLOG', 'RESET')\" 0".to_string(),
             format!("PFCOUNT {key}"),
+            "SRANDMEMBER redis:read-only-set -9223372036854775807".to_string(),
             "CONFIG SET maxmemory-policy allkeys-lru".to_string(),
             "SELECT 1".to_string(),
         ] {
@@ -173,6 +177,10 @@ fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Resul
                 "{query} must be refused by the read-only gate, got {outcome:?}"
             );
         }
+
+        let sampled =
+            connection.execute(&read_only("SRANDMEMBER redis:read-only-set 2".to_string()))?;
+        assert_eq!(sampled.rows.len(), 2, "a positive count is still a read");
 
         let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
         assert_eq!(current.text_body.as_deref(), Some("original"));

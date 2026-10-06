@@ -63,6 +63,13 @@ const REFUSED_COMMANDS: &[&str] = &[
     "READWRITE",
 ];
 
+/// Random-member reads whose count is their second argument. A negative
+/// count returns that many members, repeats allowed, whatever the key's
+/// size, so `SRANDMEMBER key -9223372036854775807` builds an unbounded reply
+/// on a key of one member. They are refused with a negative count; a positive
+/// count is bounded by the key's size.
+const RANDOM_MEMBER_COMMANDS: &[&str] = &["SRANDMEMBER", "HRANDFIELD", "ZRANDMEMBER"];
+
 /// Commands whose effect depends on their subcommand. They are judged by the
 /// subcommand's own `COMMAND INFO` entry (`name|subcommand`, Redis 7 and
 /// later), and refused when the server cannot describe it. Servers that list
@@ -141,6 +148,16 @@ pub(crate) fn ensure_read_only_command(
         return Err(refusal(
             &name,
             "it changes the connection's state, holds the connection, or runs a script that may write",
+        ));
+    }
+
+    let negative_count = arguments
+        .get(1)
+        .is_some_and(|count| count.trim_start().starts_with('-'));
+    if negative_count && RANDOM_MEMBER_COMMANDS.contains(&name.as_str()) {
+        return Err(refusal(
+            &name,
+            "a negative count returns that many members whatever the key's size",
         ));
     }
 
@@ -340,6 +357,9 @@ mod tests {
                 ("ping", &["fast", "sentinel"]),
                 ("blpop", &["write", "blocking"]),
                 ("pfcount", &["readonly"]),
+                ("srandmember", &["readonly"]),
+                ("hrandfield", &["readonly"]),
+                ("zrandmember", &["readonly"]),
                 (
                     "evalsha_ro",
                     &["readonly", "noscript", "skip_monitor", "stale"],
@@ -653,6 +673,34 @@ mod tests {
             let mut server = FakeServer::redis_7();
             assert_refused(&mut server, input);
             assert!(server.lookups.is_empty(), "{input} is refused by name");
+        }
+    }
+
+    #[test]
+    fn random_member_reads_with_a_negative_count_are_refused() {
+        for input in [
+            "SRANDMEMBER tags -9223372036854775807",
+            "HRANDFIELD user:1 -5 WITHVALUES",
+            "ZRANDMEMBER scores -1 WITHSCORES",
+        ] {
+            let mut server = FakeServer::redis_7();
+            assert_refused(&mut server, input);
+        }
+    }
+
+    #[test]
+    fn random_member_reads_with_a_positive_or_no_count_are_sent() {
+        for input in [
+            "SRANDMEMBER tags",
+            "SRANDMEMBER tags 5",
+            "HRANDFIELD user:1 5 WITHVALUES",
+            "ZRANDMEMBER scores 3 WITHSCORES",
+        ] {
+            let mut server = FakeServer::redis_7();
+
+            run(&mut server, input).unwrap_or_else(|error| panic!("{input}: {error:?}"));
+
+            assert_eq!(server.sent.len(), 1, "{input}");
         }
     }
 
