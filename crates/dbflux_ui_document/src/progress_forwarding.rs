@@ -11,7 +11,6 @@ use dbflux_core::{TaskId, TaskStatus};
 use dbflux_ui_base::AppStateEntity;
 use gpui::{Context, Entity};
 
-/// Interval between two progress polls.
 pub(crate) const PROGRESS_TICK: Duration = Duration::from_millis(150);
 
 /// Computes the fraction (0.0–1.0) of a run done so far, for the task-manager
