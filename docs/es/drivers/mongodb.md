@@ -142,6 +142,12 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   siguen siendo el límite real.
 - El DDL no es transaccional (`transactional_ddl: false`); create-database,
   create-collection, alter, views y triggers no están soportados.
+- Límites del sandbox de scripts: 64 MiB de memoria, 512 KiB de pila y un
+  plazo de 30 segundos de reloj por ejecución. El plazo solo cuenta tiempo de
+  JavaScript: una llamada a la base de datos en curso no se puede interrumpir.
+  DBFlux no configura `maxTimeMS` en el servidor, así que esa llamada sigue
+  hasta que el servidor la termina o hasta que se observa la cancelación de la
+  conexión entre documentos.
 - La vista Agregación muestra como máximo 1.000 documentos de resultado por ejecución; una etapa que falla en el servidor (un operador desconocido, un `$merge` hacia un destino que el usuario no puede escribir) se informa como error del driver, no se valida de antemano. Antes de ejecutar solo se comprueba la forma de las etapas: un arreglo JSON cuyos elementos nombran cada uno un operador `$`.
 - Los campos de los documentos embebidos vuelven ordenados por clave, no en el orden almacenado: el modelo de valores guarda los documentos embebidos en un mapa ordenado. Los campos de primer nivel conservan el orden del documento.
 - Un campo de primer nivel con `null` y uno ausente se ven igual en el grid (la exploración rellena con `null` los campos de primer nivel ausentes); los campos anidados sí se distinguen y se muestran como `missing`. Por el mismo motivo, la comprobación de cambios en el servidor ignora los nulos de primer nivel.
