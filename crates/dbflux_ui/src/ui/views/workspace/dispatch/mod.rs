@@ -248,8 +248,8 @@ pub(crate) fn route_confirm_modal_command(
     cmd: Command,
     delete_connection: &Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
     unsaved_changes: &Entity<crate::ui::overlays::modals::ModalUnsavedChanges>,
-    delete_dashboard: &Entity<ModalDeleteDashboardConfirm>,
-    delete_saved_chart: &Entity<ModalDeleteSavedChartConfirm>,
+    delete_dashboard: &Entity<ModalDeleteConfirm>,
+    delete_saved_chart: &Entity<ModalDeleteConfirm>,
     cx: &mut App,
 ) -> bool {
     if delete_connection.read(cx).is_visible() {
@@ -300,8 +300,7 @@ mod confirm_modal_routing_tests {
     };
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::modals::{
-        DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
-        DeleteSavedChartRequest, ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm,
+        DeleteConfirmOutcome, DeleteConfirmRequest, DeleteTarget, ModalDeleteConfirm,
     };
     use gpui::AppContext;
     use std::cell::RefCell;
@@ -347,8 +346,8 @@ mod confirm_modal_routing_tests {
                 Command::Execute,
                 &modal,
                 &cx.new(ModalUnsavedChanges::new),
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
@@ -378,8 +377,8 @@ mod confirm_modal_routing_tests {
                 Command::Cancel,
                 &modal,
                 &cx.new(ModalUnsavedChanges::new),
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
@@ -427,8 +426,8 @@ mod confirm_modal_routing_tests {
                 Command::Execute,
                 &cx.new(ModalDeleteConnection::new),
                 &modal,
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
@@ -446,26 +445,26 @@ mod confirm_modal_routing_tests {
     fn dashboard_and_chart_delete_modals_resolve_on_execute_and_cancel(
         cx: &mut gpui::TestAppContext,
     ) {
-        let dashboard_outcomes: Rc<RefCell<Vec<DeleteDashboardOutcome>>> =
+        let dashboard_outcomes: Rc<RefCell<Vec<DeleteConfirmOutcome>>> =
             Rc::new(RefCell::new(Vec::new()));
-        let chart_outcomes: Rc<RefCell<Vec<DeleteSavedChartOutcome>>> =
+        let chart_outcomes: Rc<RefCell<Vec<DeleteConfirmOutcome>>> =
             Rc::new(RefCell::new(Vec::new()));
         let (dashboard, chart) = cx.update(|cx| {
-            let dashboard = cx.new(ModalDeleteDashboardConfirm::new);
-            let chart = cx.new(ModalDeleteSavedChartConfirm::new);
+            let dashboard = cx.new(ModalDeleteConfirm::new);
+            let chart = cx.new(ModalDeleteConfirm::new);
             let d_sink = dashboard_outcomes.clone();
             let c_sink = chart_outcomes.clone();
-            cx.subscribe(&dashboard, move |_, event: &DeleteDashboardOutcome, _| {
+            cx.subscribe(&dashboard, move |_, event: &DeleteConfirmOutcome, _| {
                 d_sink.borrow_mut().push(event.clone());
             })
             .detach();
-            cx.subscribe(&chart, move |_, event: &DeleteSavedChartOutcome, _| {
+            cx.subscribe(&chart, move |_, event: &DeleteConfirmOutcome, _| {
                 c_sink.borrow_mut().push(event.clone());
             })
             .detach();
             dashboard.update(cx, |modal, cx| {
                 modal.open(
-                    DeleteDashboardRequest {
+                    DeleteConfirmRequest::Dashboard {
                         dashboard_id: test_uuid(),
                         dashboard_name: "Ops".to_string(),
                     },
@@ -474,7 +473,7 @@ mod confirm_modal_routing_tests {
             });
             chart.update(cx, |modal, cx| {
                 modal.open(
-                    DeleteSavedChartRequest {
+                    DeleteConfirmRequest::SavedChart {
                         chart_id: test_uuid(),
                         chart_name: "Latency".to_string(),
                         referencing_dashboards: Vec::new(),
@@ -500,7 +499,8 @@ mod confirm_modal_routing_tests {
         assert!(handled);
         assert!(matches!(
             dashboard_outcomes.borrow().first(),
-            Some(DeleteDashboardOutcome::Confirmed { dashboard_id }) if *dashboard_id == test_uuid()
+            Some(DeleteConfirmOutcome::Confirmed(DeleteTarget::Dashboard { dashboard_id }))
+                if *dashboard_id == test_uuid()
         ));
         assert_eq!(chart_outcomes.borrow().len(), 0);
         let dashboard_visible = cx.update(|cx| dashboard.read(cx).is_visible());
@@ -522,7 +522,7 @@ mod confirm_modal_routing_tests {
         assert!(handled);
         assert_eq!(
             chart_outcomes.borrow().as_slice(),
-            vec![DeleteSavedChartOutcome::Cancelled]
+            vec![DeleteConfirmOutcome::Cancelled]
         );
         let chart_visible = cx.update(|cx| chart.read(cx).is_visible());
         assert!(!chart_visible);
@@ -535,8 +535,8 @@ mod confirm_modal_routing_tests {
                 Command::Execute,
                 &cx.new(ModalDeleteConnection::new),
                 &cx.new(ModalUnsavedChanges::new),
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
