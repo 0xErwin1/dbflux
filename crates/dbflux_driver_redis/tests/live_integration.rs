@@ -161,13 +161,16 @@ fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Resul
             format!("SET {key} changed"),
             format!("EVAL \"redis.call('set', KEYS[1], 'x')\" 1 {key}"),
             format!("EVAL_RO \"return redis.call('set', KEYS[1], 'x')\" 1 {key}"),
+            format!("EVAL_RO \"return redis.call('get', KEYS[1])\" 1 {key}"),
+            "EVAL_RO \"return redis.call('SLOWLOG', 'RESET')\" 0".to_string(),
+            format!("PFCOUNT {key}"),
             "CONFIG SET maxmemory-policy allkeys-lru".to_string(),
             "SELECT 1".to_string(),
         ] {
             let outcome = connection.execute(&read_only(query.clone()));
             assert!(
-                matches!(&outcome, Err(DbError::QueryFailed(_))),
-                "{query} must fail under a read-only request, got {outcome:?}"
+                matches!(&outcome, Err(DbError::QueryFailed(error)) if error.to_string().contains("read-only request")),
+                "{query} must be refused by the read-only gate, got {outcome:?}"
             );
         }
 
@@ -176,11 +179,6 @@ fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Resul
 
         let read = connection.execute(&read_only(format!("GET {key}")))?;
         assert_eq!(read.text_body.as_deref(), Some("original"));
-
-        let script = connection.execute(&read_only(format!(
-            "EVAL_RO \"return redis.call('get', KEYS[1])\" 1 {key}"
-        )))?;
-        assert_eq!(script.text_body.as_deref(), Some("original"));
 
         let encoding = connection.execute(&read_only(format!("OBJECT ENCODING {key}")))?;
         assert!(encoding.text_body.is_some());

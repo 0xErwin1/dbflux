@@ -24,7 +24,13 @@ use crate::driver::format_redis_query_error;
 /// Commands refused by name whatever their flags: they change the
 /// connection's state (transactions, the selected database, protocol and
 /// authentication, cluster read routing), hold the connection
-/// (subscriptions, `MONITOR`, replication), or run a script that may write.
+/// (subscriptions, `MONITOR`, replication), or run a script. A script is
+/// refused even in its `_RO` form: Redis only rejects `write`,
+/// `may_replicate` and `noscript` commands inside it, so it can still call
+/// admin commands such as `SLOWLOG RESET`, and a script that never returns
+/// makes the server answer `BUSY` to every client. `PFCOUNT` is flagged
+/// `readonly` but rewrites the key's cached cardinality on Redis 6.0 and
+/// earlier.
 const REFUSED_COMMANDS: &[&str] = &[
     "MULTI",
     "EXEC",
@@ -34,6 +40,10 @@ const REFUSED_COMMANDS: &[&str] = &[
     "EVAL",
     "EVALSHA",
     "FCALL",
+    "EVAL_RO",
+    "EVALSHA_RO",
+    "FCALL_RO",
+    "PFCOUNT",
     "SELECT",
     "SWAPDB",
     "SUBSCRIBE",
@@ -70,7 +80,9 @@ const METADATA_COMMANDS: &[&str] = &["PING", "ECHO", "TIME", "INFO"];
 /// Flags that describe how a command may be called, not what it changes.
 /// A command carrying any other flag (`write`, `admin`, `blocking`,
 /// `pubsub`, `may_replicate`, `denyoom`, `no_multi`, `no_auth`, or a flag
-/// this list does not know) is refused.
+/// this list does not know) is refused. `module` is not benign: a module
+/// declares its own flags, and its command filters can rewrite a command
+/// after this check, so DBFlux cannot classify what a module command does.
 const BENIGN_FLAGS: &[&str] = &[
     "readonly",
     "fast",
@@ -85,7 +97,6 @@ const BENIGN_FLAGS: &[&str] = &[
     "allow_busy",
     "noscript",
     "sentinel",
-    "module",
     "allow_cross_slot",
 ];
 
@@ -328,6 +339,16 @@ mod tests {
                 ("select", &["loading", "stale", "fast"]),
                 ("ping", &["fast", "sentinel"]),
                 ("blpop", &["write", "blocking"]),
+                ("pfcount", &["readonly"]),
+                (
+                    "evalsha_ro",
+                    &["readonly", "noscript", "skip_monitor", "stale"],
+                ),
+                (
+                    "fcall_ro",
+                    &["readonly", "noscript", "skip_monitor", "stale"],
+                ),
+                ("module.read", &["readonly", "module"]),
                 ("xread", &["readonly", "blocking", "movablekeys"]),
             ] {
                 table.insert(name.to_string(), entry(name, flags, Vec::new()));
@@ -520,7 +541,6 @@ mod tests {
             "HGETALL user:1",
             "SCAN 0 MATCH user:* COUNT 10",
             "TTL session:1",
-            "EVAL_RO \"return redis.call('get', KEYS[1])\" 1 session:1",
             "OBJECT ENCODING session:1",
             "PING",
         ] {
@@ -620,6 +640,34 @@ mod tests {
         );
 
         assert_refused(&mut server, "GET session:1");
+    }
+
+    #[test]
+    fn read_only_scripts_are_refused_even_when_the_server_flags_them_readonly() {
+        for input in [
+            "EVAL_RO \"return redis.call('get', KEYS[1])\" 1 session:1",
+            "EVAL_RO \"while true do end\" 0",
+            "EVALSHA_RO abc 0",
+            "FCALL_RO reader 0",
+        ] {
+            let mut server = FakeServer::redis_7();
+            assert_refused(&mut server, input);
+            assert!(server.lookups.is_empty(), "{input} is refused by name");
+        }
+    }
+
+    #[test]
+    fn pfcount_is_refused_because_older_servers_write_its_cached_cardinality() {
+        let mut server = FakeServer::redis_7();
+
+        assert_refused(&mut server, "PFCOUNT visitors");
+    }
+
+    #[test]
+    fn a_command_a_module_declares_readonly_is_refused() {
+        let mut server = FakeServer::redis_7();
+
+        assert_refused(&mut server, "MODULE.READ session:1");
     }
 
     #[test]
