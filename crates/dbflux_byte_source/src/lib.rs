@@ -93,6 +93,19 @@ pub trait ByteSource {
     fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError>;
 }
 
+/// A shared source reads like the source it holds, so a reader that needs a
+/// `Clone` source (such as a spreadsheet reader that opens the file more than
+/// once) can take any source wrapped in an `Arc`.
+impl<T: ByteSource + ?Sized> ByteSource for std::sync::Arc<T> {
+    fn byte_length(&self) -> Result<u64, SourceError> {
+        (**self).byte_length()
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, SourceError> {
+        (**self).read_range(range)
+    }
+}
+
 /// Clamps `range` to a source of `length` bytes. The result is never inverted.
 fn clamp_range(range: Range<u64>, length: u64) -> Range<u64> {
     let end = range.end.min(length);

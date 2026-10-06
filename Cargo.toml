@@ -33,6 +33,7 @@ members = [
     "crates/dbflux_byte_source",
     "crates/dbflux_delimited",
     "crates/dbflux_parquet",
+    "crates/dbflux_spreadsheet",
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
     "crates/dbflux_ssm",
@@ -93,6 +94,7 @@ dbflux_export = { path = "crates/dbflux_export" }
 dbflux_byte_source = { path = "crates/dbflux_byte_source" }
 dbflux_delimited = { path = "crates/dbflux_delimited" }
 dbflux_parquet = { path = "crates/dbflux_parquet" }
+dbflux_spreadsheet = { path = "crates/dbflux_spreadsheet" }
 dbflux_ipc = { path = "crates/dbflux_ipc" }
 dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
 dbflux_aws = { path = "crates/dbflux_aws" }
@@ -209,6 +211,11 @@ parquet = { version = "59.3", default-features = false, features = [
 ] }
 arrow-array = "59.3"
 arrow-schema = "59.3"
+# Spreadsheet reading. `zip` matches calamine's own zip dependency, so format
+# detection adds no second copy; `rust_xlsxwriter` only builds test fixtures.
+calamine = "0.36"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = "0.99"
 bytes = "1"
 snap = "1"
 lz4_flex = "0.14"
