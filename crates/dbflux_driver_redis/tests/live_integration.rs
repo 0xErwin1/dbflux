@@ -12,10 +12,10 @@ use dbflux_core::{
     KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyLoadState, KeyMetadataRequest,
     KeyPersistRequest, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, KeyValuePrefixRequest, ListEnd, ListPushRequest, ListRemoveRequest,
-    ListSetRequest, QueryRequest, RangeOrder, SchemaLoadingStrategy, SetAddRequest,
-    SetRemoveRequest, StreamAddRequest, StreamClaimRequest, StreamDeleteRequest, StreamEntryId,
-    StreamGroupsRequest, StreamPendingRequest, StreamRangeRequest, ValueRepr, ZSetAddRequest,
-    ZSetRangeRequest, ZSetRemoveRequest,
+    ListSetRequest, QueryRequest, RangeOrder, ReadOnlyEnforcement, SchemaLoadingStrategy,
+    SetAddRequest, SetRemoveRequest, StreamAddRequest, StreamClaimRequest, StreamDeleteRequest,
+    StreamEntryId, StreamGroupsRequest, StreamPendingRequest, StreamRangeRequest, ValueRepr,
+    ZSetAddRequest, ZSetRangeRequest, ZSetRemoveRequest,
 };
 use dbflux_driver_redis::RedisDriver;
 use dbflux_test_support::containers;
@@ -145,6 +145,51 @@ fn redis_query_safety_refuses_protected_commands_before_effects() -> Result<(), 
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let key = "redis:read-only";
+        connection.execute(&QueryRequest::new(format!("SET {key} original")))?;
+
+        let read_only =
+            |query: String| QueryRequest::new(query).with_read_only(ReadOnlyEnforcement::Required);
+
+        for query in [
+            format!("SET {key} changed"),
+            format!("EVAL \"redis.call('set', KEYS[1], 'x')\" 1 {key}"),
+            format!("EVAL_RO \"return redis.call('set', KEYS[1], 'x')\" 1 {key}"),
+            "CONFIG SET maxmemory-policy allkeys-lru".to_string(),
+            "SELECT 1".to_string(),
+        ] {
+            let outcome = connection.execute(&read_only(query.clone()));
+            assert!(
+                matches!(&outcome, Err(DbError::QueryFailed(_))),
+                "{query} must fail under a read-only request, got {outcome:?}"
+            );
+        }
+
+        let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
+        assert_eq!(current.text_body.as_deref(), Some("original"));
+
+        let read = connection.execute(&read_only(format!("GET {key}")))?;
+        assert_eq!(read.text_body.as_deref(), Some("original"));
+
+        let script = connection.execute(&read_only(format!(
+            "EVAL_RO \"return redis.call('get', KEYS[1])\" 1 {key}"
+        )))?;
+        assert_eq!(script.text_body.as_deref(), Some("original"));
+
+        let encoding = connection.execute(&read_only(format!("OBJECT ENCODING {key}")))?;
+        assert!(encoding.text_body.is_some());
+
+        connection.execute(&read_only("PING".to_string()))?;
+
+        Ok(())
+    })
+}
 
 #[test]
 #[ignore = "requires Docker daemon"]
