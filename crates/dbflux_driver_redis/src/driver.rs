@@ -1502,6 +1502,7 @@ impl Connection for RedisConnection {
                     .to_string(),
             ));
         }
+        req.refuse_read_only_enforcement("Redis")?;
 
         if let Some(source) = req
             .execution_context

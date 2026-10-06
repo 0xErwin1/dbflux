@@ -159,6 +159,8 @@ pub use driver::{
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
+pub use query::types::ReadOnlyEnforcement;
+
 pub use query::{
     AggFn, AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, Assignment,
     AssignmentValue, BoolOp, ClassifiedMutation, CodeAction, CodeActionEdit,

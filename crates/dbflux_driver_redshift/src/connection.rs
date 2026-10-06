@@ -333,6 +333,67 @@ fn ensure_read_only(sql: &str) -> Result<(), DbError> {
     }
 }
 
+fn map_statement_error(error: &postgres::Error) -> DbError {
+    if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+        DbError::Cancelled
+    } else {
+        format_redshift_query_error(error)
+    }
+}
+
+/// Prepares and runs one statement, returning its column metadata and rows.
+fn run_statement(
+    client: &mut postgres::Client,
+    sql: &str,
+) -> Result<(Vec<ColumnMeta>, Vec<postgres::Row>), DbError> {
+    let statement = client
+        .prepare(sql)
+        .map_err(|error| map_statement_error(&error))?;
+
+    let columns: Vec<ColumnMeta> = statement
+        .columns()
+        .iter()
+        .map(|col| ColumnMeta {
+            name: col.name().to_string(),
+            type_name: col.type_().name().to_string(),
+            kind: redshift_oid_to_kind(col.type_().oid()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect();
+
+    let rows = client
+        .query(&statement, &[])
+        .map_err(|error| map_statement_error(&error))?;
+
+    Ok((columns, rows))
+}
+
+/// Runs one statement inside `BEGIN READ ONLY` and always rolls it back, so
+/// the server refuses any write the local read-only check missed.
+///
+/// No user transaction can be open on this session: [`ensure_read_only`]
+/// refuses `BEGIN`, `START TRANSACTION` and every other statement that is not
+/// a read, so nothing the driver ran before left a block open.
+fn run_read_only_statement(
+    client: &mut postgres::Client,
+    sql: &str,
+) -> Result<(Vec<ColumnMeta>, Vec<postgres::Row>), DbError> {
+    client
+        .batch_execute("BEGIN READ ONLY")
+        .map_err(|error| format_redshift_query_error(&error))?;
+
+    let outcome = run_statement(client, sql);
+
+    match client.batch_execute("ROLLBACK") {
+        Ok(()) => outcome,
+        Err(error) => {
+            log::warn!("[QUERY] ROLLBACK of a read-only Redshift request failed: {error}");
+            outcome.and(Err(format_redshift_query_error(&error)))
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SqlScanState {
     Normal,
@@ -657,33 +718,11 @@ impl Connection for RedshiftConnection {
         // would land on the next statement run on this connection.
         let active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
-        let stmt = client.prepare(&req.sql).map_err(|e| {
-            if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-                DbError::Cancelled
-            } else {
-                format_redshift_query_error(&e)
-            }
-        })?;
-
-        let columns: Vec<ColumnMeta> = stmt
-            .columns()
-            .iter()
-            .map(|col| ColumnMeta {
-                name: col.name().to_string(),
-                type_name: col.type_().name().to_string(),
-                kind: redshift_oid_to_kind(col.type_().oid()),
-                nullable: true,
-                is_primary_key: false,
-            })
-            .collect();
-
-        let rows = client.query(&stmt, &[]).map_err(|e| {
-            if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-                DbError::Cancelled
-            } else {
-                format_redshift_query_error(&e)
-            }
-        })?;
+        let (columns, rows) = if req.read_only.is_required() {
+            run_read_only_statement(&mut client, &req.sql)?
+        } else {
+            run_statement(&mut client, &req.sql)?
+        };
 
         drop(active_query_guard);
         drop(client);

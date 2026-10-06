@@ -74,6 +74,7 @@ Exposes tabular snapshots of running server state:
 - Routine editing and execution are not supported; the routine viewer is read-only.
 - Cancellation is best effort and depends on server/session state at cancellation time.
 - Code generation targets supported PostgreSQL constructs only; unsupported generator IDs return `NotSupported`.
+- Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs in `BEGIN READ ONLY` and is rolled back, and is refused inside an open transaction. PostgreSQL then rejects data modification in the session, except on `TEMPORARY` tables, which a read-only transaction may still change, and it does not stop functions with external effects such as `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` or advisory locks; least-privilege database credentials remain the real boundary. To detect an open transaction, the driver first runs a `SAVEPOINT` probe, which fails with SQLSTATE `25P01` (no active transaction) outside a transaction, so the server logs one `ERROR` for every read-only request that runs outside a transaction, including each editor auto-refresh tick.
 
 ## DDL Capabilities
 

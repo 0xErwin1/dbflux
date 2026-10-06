@@ -239,6 +239,7 @@ impl DbFluxServer {
                                 database: None,
                                 execution_context: None,
                                 confirmed_ceiling: Some(ExecutionClassification::Metadata),
+                                read_only: dbflux_core::ReadOnlyEnforcement::None,
                             });
 
                             result.ok().and_then(|r| {

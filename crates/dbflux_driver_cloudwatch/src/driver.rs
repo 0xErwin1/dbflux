@@ -280,6 +280,7 @@ impl Connection for CloudWatchConnection {
                 "CloudWatch query row limits and statement timeouts are not supported".to_string(),
             ));
         }
+        req.refuse_read_only_enforcement("CloudWatch")?;
 
         let started = Instant::now();
 
@@ -2018,6 +2019,15 @@ mod tests {
                 if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
                     failures.push(format!("timeout {timeout:?} was not refused"));
                 }
+            }
+            let read_only = QueryRequest::new("fields @message".to_string())
+                .with_execution_context(Some(context.clone()))
+                .with_read_only(dbflux_core::ReadOnlyEnforcement::Required);
+            if !matches!(
+                connection.execute(&read_only),
+                Err(DbError::NotSupported(_))
+            ) {
+                failures.push("read-only enforcement was not refused".to_string());
             }
         }
         let healthy = connection.execute(

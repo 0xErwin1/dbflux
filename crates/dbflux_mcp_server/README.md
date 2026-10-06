@@ -204,6 +204,8 @@ See [DDL Safety Guide](./docs/DDL_SAFETY.md) for detailed classification rules.
 | `delete_script` | Delete script file | Destructive |
 | `execute_script` | Execute script against connection | Read / Write / Destructive |
 
+`execute_script` classifies the script body. A script classified as `Read` or `Metadata` runs where the database rejects data modification for the session: a read-only transaction on PostgreSQL, Redshift and MySQL/MariaDB, `PRAGMA query_only` on SQLite, and `readonly = 2` on ClickHouse. Where the driver cannot provide that, or the connection is already inside a transaction, the script is governed as a `Write`, so the policy approves or denies it like any other write. This does not stop functions with external effects, such as PostgreSQL `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK` and user-defined functions. Least-privilege database credentials remain the real boundary.
+
 ### Approval & Audit
 
 | Tool | Description | Classification |

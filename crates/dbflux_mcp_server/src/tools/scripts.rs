@@ -10,7 +10,10 @@ use crate::{
     helper::{IntoErrorData, to_json_content},
     state::ServerState,
 };
-use dbflux_core::{LanguageService, QueryLanguage, QueryRequest};
+use dbflux_core::{
+    Connection, DbError, LanguageService, QueryLanguage, QueryRequest, ReadOnlyEnforcement,
+};
+use dbflux_policy::ExecutionClassification;
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -19,7 +22,9 @@ use rmcp::{
     tool, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListScriptsParams {
@@ -318,30 +323,185 @@ impl DbFluxServer {
                 .map(|connection| connection.language_service()),
         );
 
-        let connection_id = params.connection_id.clone();
-        let state_clone = state.clone();
+        let enforces_read_only = connection_for_classification
+            .as_deref()
+            .is_some_and(|connection| connection.metadata().enforces_read_only());
+        let (classification, read_only) = govern_read_only(classification, enforces_read_only);
 
-        self.governance
-            .authorize_and_execute(
-                "execute_script",
-                Some(&params.connection_id),
-                classification,
-                move || async move {
-                    let result = Self::execute_script_impl(
-                        state_clone,
-                        &content,
-                        &connection_id,
-                        &language,
+        let governance = &self.governance;
+        let connection_id = params.connection_id.as_str();
+
+        govern_script_attempts(classification, read_only, |classification, read_only| {
+            let state = state.clone();
+            let content = content.clone();
+            let language = language.clone();
+            let connection_id = connection_id.to_string();
+
+            async move {
+                let refusal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+                let handler_refusal = refusal.clone();
+                let handler_connection_id = connection_id.clone();
+
+                let result = governance
+                    .authorize_and_execute(
+                        "execute_script",
+                        Some(&connection_id),
                         classification,
-                    )
-                    .await
-                    .map_err(|e| e.into_error_data())?;
+                        move || async move {
+                            let outcome = Self::execute_script_impl(
+                                state,
+                                &content,
+                                &handler_connection_id,
+                                &language,
+                                classification,
+                                read_only,
+                            )
+                            .await
+                            .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
-                },
-            )
-            .await
+                            match outcome {
+                                ScriptOutcome::Completed(value) => {
+                                    Ok(CallToolResult::success(vec![to_json_content(&value)?]))
+                                }
+                                ScriptOutcome::ReadOnlyRefused(reason) => {
+                                    if let Ok(mut slot) = handler_refusal.lock() {
+                                        *slot = Some(reason.clone());
+                                    }
+                                    Err(ErrorData::internal_error(reason, None))
+                                }
+                            }
+                        },
+                    )
+                    .await;
+
+                let refused = refusal.lock().ok().and_then(|mut slot| slot.take());
+                match refused {
+                    Some(reason) => ScriptAttempt::ReadOnlyRefused(reason),
+                    None => ScriptAttempt::Completed(result),
+                }
+            }
+        })
+        .await
     }
+}
+
+/// What running a script's query produced.
+#[derive(Debug)]
+enum ScriptOutcome {
+    /// The query ran; the value is its serialized result.
+    Completed(serde_json::Value),
+
+    /// The driver refused to enforce read-only execution and ran nothing.
+    ReadOnlyRefused(String),
+}
+
+/// What one governed attempt at a script produced.
+enum ScriptAttempt {
+    /// The attempt was authorized or denied and, when authorized, ran.
+    Completed(Result<CallToolResult, ErrorData>),
+
+    /// The attempt was authorized as a read, but the driver refused to
+    /// enforce read-only execution and ran nothing.
+    ReadOnlyRefused(String),
+}
+
+/// Decides how a script is governed and run from its classification and
+/// whether the connection's driver enforces read-only execution.
+///
+/// A `Read` or `Metadata` script runs with
+/// [`ReadOnlyEnforcement::Required`] when the driver enforces it. Otherwise
+/// it is governed as `Write`, so the policy decides whether it may run
+/// without the database refusing writes. A script is never run as a read
+/// without that enforcement. Other classifications are unchanged.
+fn govern_read_only(
+    classification: ExecutionClassification,
+    enforces_read_only: bool,
+) -> (ExecutionClassification, ReadOnlyEnforcement) {
+    match classification {
+        ExecutionClassification::Read | ExecutionClassification::Metadata if enforces_read_only => {
+            (classification, ReadOnlyEnforcement::Required)
+        }
+        ExecutionClassification::Read | ExecutionClassification::Metadata => {
+            (ExecutionClassification::Write, ReadOnlyEnforcement::None)
+        }
+        _ => (classification, ReadOnlyEnforcement::None),
+    }
+}
+
+/// Runs a governed script attempt and, when the driver refused read-only
+/// enforcement at execution time (for example because the session is inside
+/// a transaction), runs it once more governed as `Write` without it.
+///
+/// The refused attempt ran nothing, and the second attempt goes through the
+/// policy again, so a refusal can only lead to a run the policy allows for a
+/// write: approval, denial, or execution.
+async fn govern_script_attempts<F, Fut>(
+    classification: ExecutionClassification,
+    read_only: ReadOnlyEnforcement,
+    mut attempt: F,
+) -> Result<CallToolResult, ErrorData>
+where
+    F: FnMut(ExecutionClassification, ReadOnlyEnforcement) -> Fut,
+    Fut: Future<Output = ScriptAttempt>,
+{
+    let reason = match attempt(classification, read_only).await {
+        ScriptAttempt::Completed(result) => return result,
+        ScriptAttempt::ReadOnlyRefused(reason) => reason,
+    };
+
+    log::info!(
+        "execute_script: read-only enforcement was refused ({reason}); governing the script as a write"
+    );
+
+    match attempt(ExecutionClassification::Write, ReadOnlyEnforcement::None).await {
+        ScriptAttempt::Completed(result) => result,
+        ScriptAttempt::ReadOnlyRefused(reason) => Err(ErrorData::internal_error(reason, None)),
+    }
+}
+
+/// Runs a script's query on `connection`, reporting a read-only refusal
+/// apart from other failures.
+///
+/// `confirmed_ceiling` and `read_only` come from the policy decision this
+/// call follows, never from the MCP client. See
+/// `QueryRequest::confirmed_ceiling` and `QueryRequest::read_only`. With
+/// `Required`, any `NotSupported` means the driver ran nothing, so the caller
+/// may govern the script again.
+async fn run_script_query(
+    connection: Arc<dyn Connection>,
+    query: &str,
+    classification: ExecutionClassification,
+    read_only: ReadOnlyEnforcement,
+) -> Result<ScriptOutcome, String> {
+    use crate::helper::serialize_query_result;
+
+    let request = QueryRequest {
+        sql: query.to_string(),
+        params: Vec::new(),
+        limit: None,
+        offset: None,
+        statement_timeout: None,
+        database: None,
+        execution_context: None,
+        confirmed_ceiling: Some(classification),
+        read_only,
+    };
+
+    let outcome = DbFluxServer::execute_connection_blocking(connection, move |connection| {
+        match connection.execute(&request) {
+            Ok(result) => Ok(Ok(result)),
+            Err(DbError::NotSupported(reason)) if request.read_only.is_required() => {
+                Ok(Err(reason))
+            }
+            Err(error) => Err(format!("Query execution failed: {}", error)),
+        }
+    })
+    .await?;
+
+    Ok(match outcome {
+        Ok(result) => ScriptOutcome::Completed(serialize_query_result(&result)),
+        Err(reason) => ScriptOutcome::ReadOnlyRefused(reason),
+    })
 }
 
 /// Resolves a client-supplied path against the scripts root.
@@ -676,7 +836,8 @@ impl DbFluxServer {
         connection_id: &str,
         language: &QueryLanguage,
         classification: dbflux_policy::ExecutionClassification,
-    ) -> Result<serde_json::Value, String> {
+        read_only: ReadOnlyEnforcement,
+    ) -> Result<ScriptOutcome, String> {
         // Only SQL/MongoDB/Redis queries are supported for execution
         match language {
             QueryLanguage::Sql
@@ -690,7 +851,14 @@ impl DbFluxServer {
             | QueryLanguage::InfluxQuery
             | QueryLanguage::Flux => {
                 // Execute as query
-                Self::execute_query_content(state, connection_id, content, classification).await
+                Self::execute_query_content(
+                    state,
+                    connection_id,
+                    content,
+                    classification,
+                    read_only,
+                )
+                .await
             }
             QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash => Err(
                 "Script language not supported for execution (only database queries)".to_string(),
@@ -707,35 +875,11 @@ impl DbFluxServer {
         connection_id: &str,
         query: &str,
         classification: dbflux_policy::ExecutionClassification,
-    ) -> Result<serde_json::Value, String> {
-        use crate::helper::serialize_query_result;
-
+        read_only: ReadOnlyEnforcement,
+    ) -> Result<ScriptOutcome, String> {
         let conn = Self::get_or_connect(state, connection_id).await?;
 
-        // `confirmed_ceiling` is the classification the policy engine already
-        // approved for this actor/connection (the caller only reaches this
-        // point after `GovernanceMiddleware::authorize_and_execute` allowed
-        // it) — never a value the MCP client supplied. See
-        // `QueryRequest::confirmed_ceiling`'s invariant.
-        let request = QueryRequest {
-            sql: query.to_string(),
-            params: Vec::new(),
-            limit: None,
-            offset: None,
-            statement_timeout: None,
-            database: None,
-            execution_context: None,
-            confirmed_ceiling: Some(classification),
-        };
-
-        let result = Self::execute_connection_blocking(conn.clone(), move |connection| {
-            connection
-                .execute(&request)
-                .map_err(|e| format!("Query execution failed: {}", e))
-        })
-        .await?;
-
-        Ok(serialize_query_result(&result))
+        run_script_query(conn, query, classification, read_only).await
     }
 }
 
@@ -855,6 +999,178 @@ mod tests {
             assert!(
                 validate_script_file_name(name, extension).is_err(),
                 "{name:?} with {extension:?} must be rejected"
+            );
+        }
+    }
+
+    mod read_only {
+        use super::super::{
+            ScriptAttempt, ScriptOutcome, govern_read_only, govern_script_attempts,
+            run_script_query,
+        };
+        use dbflux_core::{
+            Connection, ConnectionProfile, DbConfig, DbKind, ExecutionClassification,
+            ReadOnlyEnforcement,
+        };
+        use dbflux_test_support::FakeDriver;
+        use rmcp::model::CallToolResult;
+        use std::sync::{Arc, Mutex};
+
+        type Attempts = Arc<Mutex<Vec<(ExecutionClassification, ReadOnlyEnforcement)>>>;
+
+        fn connect(driver: &FakeDriver) -> Arc<dyn Connection> {
+            let profile = ConnectionProfile::new("fake", DbConfig::default_postgres());
+            driver.connect_arc(&profile).expect("fake connection")
+        }
+
+        fn received_flags(driver: &FakeDriver) -> Vec<ReadOnlyEnforcement> {
+            driver
+                .stats()
+                .executed_requests
+                .iter()
+                .map(|request| request.read_only)
+                .collect()
+        }
+
+        /// Governs and runs `SELECT 1` the way `execute_script` does, with
+        /// the authorization step replaced by a recorder of the
+        /// classification and read-only flag each attempt was governed with.
+        async fn govern_and_run(
+            driver: &FakeDriver,
+            classification: ExecutionClassification,
+        ) -> Vec<(ExecutionClassification, ReadOnlyEnforcement)> {
+            let connection = connect(driver);
+            let (classification, read_only) =
+                govern_read_only(classification, connection.metadata().enforces_read_only());
+
+            let attempts: Attempts = Arc::new(Mutex::new(Vec::new()));
+            let result =
+                govern_script_attempts(classification, read_only, |classification, read_only| {
+                    attempts
+                        .lock()
+                        .expect("attempts mutex")
+                        .push((classification, read_only));
+                    let connection = connection.clone();
+                    async move {
+                        match run_script_query(connection, "SELECT 1", classification, read_only)
+                            .await
+                        {
+                            Ok(ScriptOutcome::Completed(_)) => {
+                                ScriptAttempt::Completed(Ok(CallToolResult::success(Vec::new())))
+                            }
+                            Ok(ScriptOutcome::ReadOnlyRefused(reason)) => {
+                                ScriptAttempt::ReadOnlyRefused(reason)
+                            }
+                            Err(error) => ScriptAttempt::Completed(Err(
+                                rmcp::ErrorData::internal_error(error, None),
+                            )),
+                        }
+                    }
+                })
+                .await;
+
+            assert!(result.is_ok(), "the script should run: {result:?}");
+            attempts.lock().expect("attempts mutex").clone()
+        }
+
+        #[test]
+        fn read_scripts_require_enforcement_only_where_the_driver_provides_it() {
+            for classification in [
+                ExecutionClassification::Read,
+                ExecutionClassification::Metadata,
+            ] {
+                assert_eq!(
+                    govern_read_only(classification, true),
+                    (classification, ReadOnlyEnforcement::Required)
+                );
+                assert_eq!(
+                    govern_read_only(classification, false),
+                    (ExecutionClassification::Write, ReadOnlyEnforcement::None)
+                );
+            }
+
+            for classification in [
+                ExecutionClassification::Write,
+                ExecutionClassification::Destructive,
+                ExecutionClassification::AdminSafe,
+                ExecutionClassification::Admin,
+                ExecutionClassification::AdminDestructive,
+            ] {
+                for enforces in [true, false] {
+                    assert_eq!(
+                        govern_read_only(classification, enforces),
+                        (classification, ReadOnlyEnforcement::None)
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_read_script_on_an_enforcing_driver_carries_required() {
+            let driver = FakeDriver::new(DbKind::Postgres).with_read_only_enforcement();
+
+            let attempts = govern_and_run(&driver, ExecutionClassification::Read).await;
+
+            assert_eq!(
+                attempts,
+                vec![(ExecutionClassification::Read, ReadOnlyEnforcement::Required)]
+            );
+            assert_eq!(received_flags(&driver), vec![ReadOnlyEnforcement::Required]);
+        }
+
+        #[tokio::test]
+        async fn a_read_script_on_a_non_enforcing_driver_is_governed_as_a_write() {
+            let driver = FakeDriver::new(DbKind::Postgres);
+
+            let attempts = govern_and_run(&driver, ExecutionClassification::Read).await;
+
+            assert_eq!(
+                attempts,
+                vec![(ExecutionClassification::Write, ReadOnlyEnforcement::None)]
+            );
+            assert_eq!(received_flags(&driver), vec![ReadOnlyEnforcement::None]);
+        }
+
+        #[tokio::test]
+        async fn a_read_script_refused_at_execution_is_governed_again_as_a_write() {
+            let driver = FakeDriver::new(DbKind::Postgres).with_read_only_refusal();
+
+            let attempts = govern_and_run(&driver, ExecutionClassification::Metadata).await;
+
+            assert_eq!(
+                attempts,
+                vec![
+                    (
+                        ExecutionClassification::Metadata,
+                        ReadOnlyEnforcement::Required
+                    ),
+                    (ExecutionClassification::Write, ReadOnlyEnforcement::None),
+                ]
+            );
+            assert_eq!(
+                received_flags(&driver),
+                vec![ReadOnlyEnforcement::Required, ReadOnlyEnforcement::None]
+            );
+        }
+
+        #[tokio::test]
+        async fn other_failures_are_reported_without_a_second_attempt() {
+            let driver = FakeDriver::new(DbKind::Postgres)
+                .with_read_only_enforcement()
+                .with_default_error("boom");
+            let connection = connect(&driver);
+
+            let outcome = run_script_query(
+                connection,
+                "SELECT 1",
+                ExecutionClassification::Read,
+                ReadOnlyEnforcement::Required,
+            )
+            .await;
+
+            assert!(
+                matches!(outcome, Err(ref message) if message.contains("boom")),
+                "{outcome:?}"
             );
         }
     }

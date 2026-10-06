@@ -371,3 +371,4 @@ Requires the `VIEW SERVER STATE` permission.
   Server disables FK checking per-table via `ALTER TABLE ... NOCHECK
   CONSTRAINT`, which does not fit the engine's single global toggle; a
   per-table variant is a possible future addition.
+- No database-enforced read-only mode: requests that require one are refused, so MCP `execute_script` governs scripts classified `Read` or `Metadata` as writes, and editor auto-refresh is unavailable on SQL Server connections.

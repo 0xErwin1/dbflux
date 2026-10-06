@@ -414,3 +414,4 @@ Requiere el permiso `VIEW SERVER STATE`.
   Server deshabilita la comprobación de FK por tabla vía `ALTER TABLE ...
   NOCHECK CONSTRAINT`, lo cual no encaja con el toggle global único del motor;
   una variante por tabla es una posible mejora futura.
+- Sin modo de solo lectura aplicado por la base de datos: las peticiones que lo requieren se rechazan, así que `execute_script` en MCP gobierna como escrituras los scripts clasificados `Read` o `Metadata`, y el auto-refresh del editor no está disponible en conexiones de SQL Server.

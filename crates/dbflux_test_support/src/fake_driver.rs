@@ -20,7 +20,7 @@ use dbflux_driver_redshift::{METADATA as REDSHIFT_METADATA, REDSHIFT_FORM};
 use dbflux_driver_sqlite::SQLITE_FORM;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]
@@ -76,12 +76,14 @@ struct FakeDriverState {
     close_calls: AtomicUsize,
     ping_error: RwLock<Option<String>>,
     connect_error: RwLock<Option<String>>,
+    refuse_read_only: AtomicBool,
 }
 
 #[derive(Clone)]
 pub struct FakeDriver {
     kind: DbKind,
     state: Arc<FakeDriverState>,
+    metadata: Arc<DriverMetadata>,
 }
 
 impl FakeDriver {
@@ -92,7 +94,33 @@ impl FakeDriver {
                 schema: RwLock::new(SchemaSnapshot::default()),
                 ..FakeDriverState::default()
             }),
+            metadata: Arc::new(metadata_for_kind(kind).clone()),
         }
+    }
+
+    /// Declares `supports_read_only` and runs requests that require read-only
+    /// enforcement. The fake enforces nothing: it only lets callers observe
+    /// that the flag reached the connection.
+    pub fn with_read_only_enforcement(mut self) -> Self {
+        self.set_read_only_capability(true);
+        self
+    }
+
+    /// Declares `supports_read_only` but refuses every request that requires
+    /// it with `NotSupported`, the way a driver does when the session is
+    /// already inside a user transaction.
+    pub fn with_read_only_refusal(mut self) -> Self {
+        self.set_read_only_capability(true);
+        self.state.refuse_read_only.store(true, Ordering::Relaxed);
+        self
+    }
+
+    fn set_read_only_capability(&mut self, supported: bool) {
+        let metadata = Arc::make_mut(&mut self.metadata);
+        let transactions = metadata
+            .transactions
+            .get_or_insert_with(TransactionCapabilities::default);
+        transactions.supports_read_only = supported;
     }
 
     pub fn with_schema(self, schema: SchemaSnapshot) -> Self {
@@ -164,7 +192,7 @@ impl DbDriver for FakeDriver {
     }
 
     fn metadata(&self) -> &DriverMetadata {
-        metadata_for_kind(self.kind)
+        &self.metadata
     }
 
     fn driver_key(&self) -> dbflux_core::DriverKey {
@@ -507,6 +535,7 @@ impl DbDriver for FakeDriver {
             self.kind,
             profile,
             self.state.clone(),
+            self.metadata.clone(),
         )))
     }
 
@@ -522,20 +551,34 @@ impl DbDriver for FakeDriver {
 struct FakeConnection {
     kind: DbKind,
     state: Arc<FakeDriverState>,
+    metadata: Arc<DriverMetadata>,
     active_database: RwLock<Option<String>>,
 }
 
 impl FakeConnection {
-    fn new(kind: DbKind, profile: &ConnectionProfile, state: Arc<FakeDriverState>) -> Self {
+    fn new(
+        kind: DbKind,
+        profile: &ConnectionProfile,
+        state: Arc<FakeDriverState>,
+        metadata: Arc<DriverMetadata>,
+    ) -> Self {
         Self {
             kind,
             state,
+            metadata,
             active_database: RwLock::new(active_database_from_profile(profile)),
         }
     }
 
     fn execute_internal(&self, req: &QueryRequest) -> Result<QueryResult, Box<DbError>> {
         mutex_lock(&self.state.executed_requests).push(req.clone());
+
+        let refuses_read_only = !self.metadata.enforces_read_only()
+            || self.state.refuse_read_only.load(Ordering::Relaxed);
+        if refuses_read_only {
+            req.refuse_read_only_enforcement("Fake driver")
+                .map_err(Box::new)?;
+        }
 
         if let Some(database) = req.database.clone() {
             *rwlock_write(&self.active_database) = Some(database);
@@ -558,7 +601,7 @@ impl FakeConnection {
 
 impl Connection for FakeConnection {
     fn metadata(&self) -> &DriverMetadata {
-        metadata_for_kind(self.kind)
+        &self.metadata
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -898,7 +941,15 @@ static FAKE_CLICKHOUSE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     }),
     mutation: None,
     ddl: None,
-    transactions: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: Vec::new(),
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
     limits: None,
     ssl_modes: None,
     ssl_cert_fields: None,
@@ -1425,7 +1476,8 @@ mod tests {
     use crate::fixtures;
     use dbflux_core::{
         ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-        DriverCapabilities, QueryRequest, SchemaLoadingStrategy, TransferFamily,
+        DriverCapabilities, QueryRequest, ReadOnlyEnforcement, SchemaLoadingStrategy,
+        TransferFamily,
     };
 
     #[test]
@@ -1457,7 +1509,7 @@ mod tests {
         assert!(!metadata.syntax.as_ref().expect("syntax").supports_schemas);
         assert!(metadata.query.is_some());
         assert!(metadata.mutation.is_none());
-        assert!(metadata.transactions.is_none());
+        assert!(metadata.enforces_read_only());
     }
 
     #[test]
@@ -1661,5 +1713,58 @@ mod tests {
                 .contains(DriverCapabilities::TRANSACTIONS)
         );
         assert!(driver.metadata().transactions.is_none());
+    }
+
+    fn connect_postgres(driver: &FakeDriver) -> Box<dyn dbflux_core::Connection> {
+        let profile = ConnectionProfile::new("fake", DbConfig::default_postgres());
+        driver
+            .connect(&profile)
+            .expect("fake connection should work")
+    }
+
+    fn read_only_request() -> QueryRequest {
+        QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required)
+    }
+
+    #[test]
+    fn fake_without_enforcement_records_and_refuses_read_only_requests() {
+        let driver = FakeDriver::new(DbKind::Postgres);
+        let connection = connect_postgres(&driver);
+
+        assert!(!connection.metadata().enforces_read_only());
+
+        let result = connection.execute(&read_only_request());
+
+        assert!(matches!(result, Err(DbError::NotSupported(_))));
+        let executed = driver.stats().executed_requests;
+        assert_eq!(executed.len(), 1);
+        assert_eq!(executed[0].read_only, ReadOnlyEnforcement::Required);
+    }
+
+    #[test]
+    fn fake_with_read_only_enforcement_declares_it_and_runs_the_request() {
+        let driver = FakeDriver::new(DbKind::Postgres).with_read_only_enforcement();
+        let connection = connect_postgres(&driver);
+
+        assert!(driver.metadata().enforces_read_only());
+        assert!(connection.metadata().enforces_read_only());
+        assert!(connection.execute(&read_only_request()).is_ok());
+        assert_eq!(
+            driver.stats().executed_requests[0].read_only,
+            ReadOnlyEnforcement::Required
+        );
+    }
+
+    #[test]
+    fn fake_with_read_only_refusal_declares_enforcement_but_refuses_at_execution() {
+        let driver = FakeDriver::new(DbKind::Postgres).with_read_only_refusal();
+        let connection = connect_postgres(&driver);
+
+        assert!(connection.metadata().enforces_read_only());
+        assert!(matches!(
+            connection.execute(&read_only_request()),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(connection.execute(&QueryRequest::new("SELECT 1")).is_ok());
     }
 }

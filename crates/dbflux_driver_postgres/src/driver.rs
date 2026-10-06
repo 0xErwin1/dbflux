@@ -1710,6 +1710,10 @@ impl Connection for PostgresConnection {
         {
             return Err(DbError::NotSupported("PostgreSQL: row limits on instance catalog queries are unsupported; rejected before execution".to_string()));
         }
+        req.refuse_read_only_for_instance_catalog("PostgreSQL")?;
+        if req.read_only.is_required() {
+            ensure_no_transaction_control(&req.sql)?;
+        }
 
         self.cancelled.store(false, Ordering::SeqCst);
 
@@ -1754,6 +1758,17 @@ impl Connection for PostgresConnection {
             query_id,
             sql_preview.replace('\n', " ")
         );
+
+        if req.read_only.is_required() {
+            return execute_read_only_request(
+                &mut client,
+                &req.sql,
+                req.limit,
+                query_id,
+                start,
+                &self.cancelled,
+            );
+        }
 
         // A multi-statement batch cannot use the extended (prepared) protocol,
         // which rejects more than one command per statement (SQLSTATE 42601).
@@ -5056,6 +5071,136 @@ fn split_leading_keyword(sql: &str) -> (&str, &str) {
     stripped.split_at(keyword_end)
 }
 
+/// Refuses a read-only request that contains a transaction-control statement.
+///
+/// The request runs inside a `BEGIN READ ONLY` block the driver opens, so a
+/// `COMMIT` or `ROLLBACK` in it would end that block and let every later
+/// statement run read-write. Statements are split with
+/// [`QueryLanguage::split_statements`] and each one is prepared on its own by
+/// [`execute_bounded_request`], so a statement the splitter merged with the
+/// next one is rejected by the server instead of running.
+fn ensure_no_transaction_control(sql: &str) -> Result<(), DbError> {
+    let has_transaction_control = QueryLanguage::Sql
+        .split_statements(sql)
+        .iter()
+        .any(|statement| classify_transaction_control(statement) != TransactionControl::None);
+
+    if has_transaction_control {
+        return Err(DbError::NotSupported("PostgreSQL: a read-only request cannot run transaction-control statements (BEGIN, COMMIT, ROLLBACK, SAVEPOINT, RELEASE, PREPARE TRANSACTION); rejected before execution".to_string()));
+    }
+
+    Ok(())
+}
+
+/// Refuses read-only execution when the session is inside a transaction
+/// block, open or aborted.
+///
+/// `BEGIN READ ONLY` inside an open block only raises a warning and leaves the
+/// block read-write, and the closing `ROLLBACK` would discard the user's work,
+/// so the request must not run there. `SAVEPOINT` is rejected with SQLSTATE
+/// 25P01 only outside a block, which reads the state the `postgres` crate does
+/// not expose.
+fn ensure_outside_transaction_block(client: &mut Client) -> Result<(), DbError> {
+    let refusal = || {
+        DbError::NotSupported("PostgreSQL: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string())
+    };
+
+    match client.batch_execute("SAVEPOINT dbflux_read_only_probe") {
+        Err(error)
+            if error.code() == Some(&postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+        {
+            Ok(())
+        }
+        Err(error) if is_in_failed_transaction(&error) => Err(refusal()),
+        Err(error) => Err(format_pg_query_error(&error)),
+        Ok(()) => {
+            if let Err(error) = client.batch_execute("RELEASE SAVEPOINT dbflux_read_only_probe") {
+                log::warn!("[QUERY] Releasing the read-only probe savepoint failed: {error}");
+            }
+            Err(refusal())
+        }
+    }
+}
+
+/// Runs a request that requires read-only enforcement inside a `BEGIN READ
+/// ONLY` block and always rolls the block back.
+///
+/// The block takes a snapshot (`SELECT 1`) before the request runs, because
+/// PostgreSQL only lets `SET TRANSACTION READ WRITE` change the access mode
+/// before the first query. Every statement goes through the extended protocol
+/// via [`execute_bounded_request`], one prepared statement at a time, inside
+/// the block the driver opened.
+fn execute_read_only_request(
+    client: &mut Client,
+    sql: &str,
+    limit: Option<u32>,
+    query_id: Uuid,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    ensure_outside_transaction_block(client)?;
+
+    if let Err(error) = client.batch_execute("BEGIN READ ONLY; SELECT 1") {
+        rollback_read_only_block(client);
+        return Err(format_pg_query_error(&error));
+    }
+
+    let outcome = execute_bounded_request(
+        client,
+        sql,
+        query_id,
+        start,
+        limit.unwrap_or(u32::MAX),
+        cancelled,
+    )
+    .map_err(|error| without_transaction_note(error, TransactionStateNote::Aborted));
+
+    match client.batch_execute("ROLLBACK") {
+        Ok(()) => outcome,
+        Err(error) => {
+            log::warn!("[QUERY] ROLLBACK of a read-only request failed: {error}");
+            outcome.and(Err(format_pg_query_error(&error)))
+        }
+    }
+}
+
+fn rollback_read_only_block(client: &mut Client) {
+    if let Err(error) = client.batch_execute("ROLLBACK") {
+        log::warn!("[QUERY] ROLLBACK of a read-only request failed: {error}");
+    }
+}
+
+/// Removes a transaction note the shared batch recovery attached to an error.
+///
+/// A failed read-only request leaves the driver's own block aborted, and the
+/// recovery path reports that as the user's aborted transaction. The driver
+/// rolls that block back right after, so the note would send the user to end
+/// a transaction that no longer exists.
+fn without_transaction_note(mut error: DbError, note: TransactionStateNote) -> DbError {
+    let formatted = match &mut error {
+        DbError::ConnectionFailed(formatted)
+        | DbError::QueryFailed(formatted)
+        | DbError::AuthFailed(formatted)
+        | DbError::ConstraintViolation(formatted)
+        | DbError::SyntaxError(formatted)
+        | DbError::PermissionDenied(formatted)
+        | DbError::ObjectNotFound(formatted) => formatted,
+        _ => return error,
+    };
+
+    let message = note.message();
+    formatted.hint = match formatted.hint.take() {
+        Some(hint) if hint == message => None,
+        Some(hint) => match hint.strip_suffix(message) {
+            Some(rest) => Some(rest.trim_end().to_string()),
+            None => Some(hint),
+        },
+        None => None,
+    };
+
+    error
+}
+
 /// Executes a multi-statement batch via the simple query protocol.
 ///
 /// The extended (prepared) protocol used by [`PostgresConnection::execute`]
@@ -8173,5 +8318,77 @@ mod picker_tests {
 
         assert_eq!(driver.picker_hint(), ":5432");
         assert_eq!(driver.picker_rank(), 0);
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{ensure_no_transaction_control, without_transaction_note};
+    use dbflux_core::{DbError, FormattedError, TransactionStateNote};
+
+    #[test]
+    fn read_only_requests_refuse_transaction_control_statements() {
+        for sql in [
+            "COMMIT; DELETE FROM items",
+            "SELECT 1; ROLLBACK",
+            "BEGIN",
+            "START TRANSACTION",
+            "END",
+            "ABORT",
+            "SAVEPOINT s",
+            "RELEASE SAVEPOINT s",
+            "PREPARE TRANSACTION 'x'",
+            "/* note */ commit",
+        ] {
+            assert!(
+                matches!(
+                    ensure_no_transaction_control(sql),
+                    Err(DbError::NotSupported(_))
+                ),
+                "{sql} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_accept_ordinary_statements() {
+        for sql in [
+            "SELECT 1",
+            "WITH d AS (DELETE FROM items RETURNING *) SELECT * FROM d",
+            "EXPLAIN ANALYZE DELETE FROM items",
+            "SELECT 'COMMIT'; SELECT 2",
+            "DO $$ BEGIN PERFORM 1; END $$",
+            "SET TRANSACTION READ WRITE",
+        ] {
+            assert!(
+                ensure_no_transaction_control(sql).is_ok(),
+                "{sql} must reach the read-only transaction"
+            );
+        }
+    }
+
+    #[test]
+    fn the_aborted_note_is_removed_from_a_read_only_failure() {
+        let error = DbError::QueryFailed(FormattedError::new("boom").with_hint("check the table"))
+            .with_transaction_note(TransactionStateNote::Aborted);
+
+        let cleaned = without_transaction_note(error, TransactionStateNote::Aborted);
+
+        assert_eq!(
+            cleaned
+                .formatted()
+                .and_then(|formatted| formatted.hint.as_deref()),
+            Some("check the table")
+        );
+
+        let only_note = DbError::QueryFailed(FormattedError::new("boom"))
+            .with_transaction_note(TransactionStateNote::Aborted);
+        let cleaned = without_transaction_note(only_note, TransactionStateNote::Aborted);
+        assert_eq!(
+            cleaned
+                .formatted()
+                .and_then(|formatted| formatted.hint.as_deref()),
+            None
+        );
     }
 }

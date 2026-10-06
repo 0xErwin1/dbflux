@@ -8,8 +8,8 @@ use dbflux_core::{
     DriverFormDef, DriverKey, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues,
     Icon, MutationRequest, OrderByMode, PaginationStyle, PlaceholderStyle, QueryCapabilities,
     QueryGenError, QueryGenerator, QueryLanguage, ReadTemplateRequest, SelectQuery,
-    SqlMutationGenerator, SyntaxInfo, TransferFamily, VisualQuerySpec, WhereOperator, field,
-    field_password, field_required, with_default, with_help,
+    SqlMutationGenerator, SyntaxInfo, TransactionCapabilities, TransferFamily, VisualQuerySpec,
+    WhereOperator, field, field_password, field_required, with_default, with_help,
 };
 
 use crate::connection::ClickHouseConnection;
@@ -93,7 +93,17 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     }),
     mutation: None,
     ddl: None,
-    transactions: None,
+    // No transactions; declared only so callers can see that `readonly = 2`
+    // enforces `ReadOnlyEnforcement::Required` per request.
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: Vec::new(),
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
     limits: None,
     ssl_modes: None,
     ssl_cert_fields: None,
@@ -366,7 +376,12 @@ mod tests {
             assert!(!METADATA.capabilities.contains(capability));
         }
         assert!(METADATA.mutation.is_none());
-        assert!(METADATA.transactions.is_none());
+        let transactions = METADATA
+            .transactions
+            .as_ref()
+            .expect("ClickHouse declares its read-only enforcement");
+        assert!(!transactions.supports_transactions);
+        assert!(METADATA.enforces_read_only());
         assert!(
             METADATA
                 .capabilities

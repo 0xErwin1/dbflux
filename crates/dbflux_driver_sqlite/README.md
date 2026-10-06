@@ -32,6 +32,7 @@ Embedded file-based database.
 - SQL-only driver; it does not expose document or key-value APIs.
 - SQLite schema model has no server-side multi-schema namespace equivalent.
 - No `TRUNCATE TABLE` statement; the data-transfer engine's Truncate load option is unavailable for SQLite targets (`DriverCapabilities::TRUNCATE_TABLE` is not set).
+- Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs under `PRAGMA query_only`, which is checked before every statement and restored afterwards, and it is refused inside an open transaction. SQLite then rejects writes to the database, but not side effects of loaded extensions or application-defined functions; file permissions remain the real boundary.
 
 ## DDL Capabilities
 

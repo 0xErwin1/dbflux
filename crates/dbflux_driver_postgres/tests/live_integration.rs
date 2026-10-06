@@ -9,9 +9,9 @@
 use dbflux_core::{
     CollectionRef, ColumnAssignment, ConnectionProfile, DbConfig, DbDriver, DbError,
     DescribeRequest, ExplainRequest, MutationRequest, OrderByColumn, Pagination, QueryRequest,
-    RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, SemanticFilter,
-    SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableBrowseRequest, TableCountRequest,
-    TableRef, TransactionStateNote, Value, WhereOperator,
+    ReadOnlyEnforcement, RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy,
+    SemanticFilter, SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableBrowseRequest,
+    TableCountRequest, TableRef, TransactionStateNote, Value, WhereOperator,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -2409,6 +2409,109 @@ fn postgres_query_safety_invalid_single_statement_with_trailing_nested_comment_r
             matches!(result, Err(DbError::SyntaxError(_))),
             "invalid single statement must report PostgreSQL query failure: {result:?}"
         );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Read-only enforcement
+// ---------------------------------------------------------------------------
+
+fn read_only_request(sql: &str) -> QueryRequest {
+    QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+}
+
+fn read_only_fixture(connection: &dyn dbflux_core::Connection) -> Result<(), DbError> {
+    connection.execute(&QueryRequest::new(
+        "DROP TABLE IF EXISTS read_only_items; \
+         CREATE TABLE read_only_items (id INT PRIMARY KEY); \
+         INSERT INTO read_only_items VALUES (1);",
+    ))?;
+    Ok(())
+}
+
+fn read_only_item_count(connection: &dyn dbflux_core::Connection) -> Result<String, DbError> {
+    let result = connection.execute(&QueryRequest::new(
+        "SELECT COUNT(*)::text FROM read_only_items",
+    ))?;
+    match result.rows.first().and_then(|row| row.first()) {
+        Some(Value::Text(count)) => Ok(count.clone()),
+        other => panic!("expected a text count, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_read_only_requests_cannot_write() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        for sql in [
+            "WITH doomed AS (DELETE FROM read_only_items RETURNING *) SELECT * FROM doomed",
+            "EXPLAIN ANALYZE DELETE FROM read_only_items",
+            "SET TRANSACTION READ WRITE; DELETE FROM read_only_items",
+            "SELECT 1; DELETE FROM read_only_items",
+        ] {
+            let error = connection
+                .execute(&read_only_request(sql))
+                .expect_err("a write must fail under read-only enforcement");
+            assert_eq!(
+                error_code(&error),
+                if sql.starts_with("SET TRANSACTION") {
+                    Some("25001")
+                } else {
+                    Some("25006")
+                },
+                "{sql}: {error}"
+            );
+            assert_eq!(read_only_item_count(connection.as_ref())?, "1", "{sql}");
+        }
+
+        let bounded = connection
+            .execute(&read_only_request("SELECT 1; DELETE FROM read_only_items").with_limit(10));
+        assert!(bounded.is_err(), "bounded write must fail, got {bounded:?}");
+        assert_eq!(read_only_item_count(connection.as_ref())?, "1");
+
+        let refused = connection.execute(&read_only_request("COMMIT; DELETE FROM read_only_items"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+        assert_eq!(read_only_item_count(connection.as_ref())?, "1");
+
+        let read = connection.execute(&read_only_request(
+            "SELECT id FROM read_only_items; SELECT 2 AS two",
+        ))?;
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.additional_results.len(), 1);
+
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, "0");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_read_only_requests_are_refused_inside_an_open_transaction() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, "1");
+
         Ok(())
     })
 }

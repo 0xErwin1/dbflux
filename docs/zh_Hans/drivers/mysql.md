@@ -63,6 +63,7 @@
 - 代码生成只覆盖受支持的 MySQL/MariaDB 结构；不受支持的生成器 ID 会返回 `NotSupported`。
 - 例程列表仅涵盖 FUNCTION 与 PROCEDURE 类型。MySQL 的聚合函数（通过 `CREATE AGGREGATE FUNCTION` UDF 插件注册）与窗口函数不会出现在 `information_schema.ROUTINES` 中，因此也不会被列出。
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` 需要 `SHOW_ROUTINE` 权限（MySQL 8.0+）或该例程的所有权；权限不足时，定义列会返回 `NULL`，查看器会显示一条提示，而不是源码。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `START TRANSACTION READ ONLY` 中运行并回滚。请求只能包含不带可执行注释（`/*! */`、`/*M! */`）且不含 `INTO` 一词的 `SELECT`、`WITH`、`SHOW`、`DESCRIBE`、`EXPLAIN`、`TABLE` 和 `VALUES` 语句；除非服务器证明没有打开的事务且会话不可能持有 `LOCK TABLES` 锁，否则会被拒绝。MySQL 会拒绝该会话中的数据修改，但 `TEMPORARY` 表除外，只读事务仍可修改它们；它也不会阻止具有外部效果的函数，例如 `GET_LOCK` 或用户定义函数；真正的边界仍是最小权限的数据库凭据。
 
 ## DDL 能力
 

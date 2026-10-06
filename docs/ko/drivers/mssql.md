@@ -161,3 +161,4 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - 루틴에 대해 `parameter_types`가 채워지지 않습니다. 이 구현은 `sys.parameters`를 질의하지 않습니다.
 - SQL Server에는 `sys.objects.type` 분류에 `Window` 함수 종류가 없으므로, 이 드라이버는 `RoutineKind::Window`를 절대 내보내지 않습니다.
 - 데이터 전송 엔진의 마이그레이션 경로에 대한 참조 무결성 토글이 없습니다(`DriverCapabilities::DISABLE_FK_CHECKS`가 설정되지 않음; `Connection::set_referential_integrity`는 `NotSupported`를 반환합니다). SQL Server는 `ALTER TABLE ... NOCHECK CONSTRAINT`로 테이블별로 FK 검사를 비활성화하는데, 이는 엔진의 단일 전역 토글에 맞지 않습니다. 테이블별 변형은 향후 추가 가능성이 있습니다.
+- 데이터베이스가 강제하는 읽기 전용 모드가 없습니다. 이를 요구하는 요청은 거부되므로 MCP `execute_script`는 `Read` 또는 `Metadata`로 분류된 스크립트를 쓰기로 처리하며, SQL Server 연결에서는 편집기 자동 새로 고침을 사용할 수 없습니다.

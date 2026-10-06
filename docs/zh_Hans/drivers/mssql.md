@@ -160,3 +160,4 @@ Microsoft SQL Server 关系型数据库。
 - 例程的 `parameter_types` 不会被填充；本实现不查询 `sys.parameters`。
 - SQL Server 在 `sys.objects.type` 分类中没有 `Window` 函数类型；该驱动程序从不产生 `RoutineKind::Window`。
 - 数据传输引擎的迁移路径没有参照完整性开关（未设置 `DriverCapabilities::DISABLE_FK_CHECKS`；`Connection::set_referential_integrity` 返回 `NotSupported`）。SQL Server 是通过 `ALTER TABLE ... NOCHECK CONSTRAINT` 按表禁用外键检查的，这与引擎的单一全局开关不匹配；按表的变体可作为未来的扩展方向。
+- 没有由数据库强制的只读模式：需要该模式的请求会被拒绝，因此 MCP `execute_script` 会把分类为 `Read` 或 `Metadata` 的脚本按写入处理，SQL Server 连接上也无法使用编辑器自动刷新。

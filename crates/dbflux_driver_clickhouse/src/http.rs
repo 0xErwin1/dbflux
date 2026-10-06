@@ -93,6 +93,20 @@ impl ClickHouseHttpClient {
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> Result<HttpResponse, ClickHouseHttpError> {
+        self.execute_with_settings(sql, database, timeout, limit, offset, &[])
+    }
+
+    /// Runs `sql` with extra ClickHouse settings, sent as query parameters so
+    /// they apply to this request only.
+    pub(crate) fn execute_with_settings(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        timeout: Option<Duration>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        settings: &[(&str, &str)],
+    ) -> Result<HttpResponse, ClickHouseHttpError> {
         let effective_timeout = timeout.unwrap_or(self.default_timeout);
         let max_execution_time = effective_timeout
             .as_secs()
@@ -130,6 +144,9 @@ impl ClickHouseHttpClient {
         }
         if let Some(offset) = offset {
             request = request.query(&[("offset", offset)]);
+        }
+        if !settings.is_empty() {
+            request = request.query(settings);
         }
 
         request = request.timeout(effective_timeout);
@@ -356,5 +373,78 @@ mod tests {
             success_exception(&HeaderMap::new(), br#"{"data":[["__exception__"]]}"#),
             None
         );
+    }
+
+    /// Serves one HTTP request on a local port, answers it with an empty
+    /// JSONCompact result and hands back the request line.
+    fn serve_one_request() -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let address = listener.local_addr().expect("listener address");
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .expect("read request line");
+
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).expect("read header");
+                if header.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            std::io::Read::read_exact(&mut reader, &mut body).expect("read body");
+
+            let response_body = r#"{"meta":[],"data":[],"rows":0}"#;
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            )
+            .expect("write response");
+
+            request_line
+        });
+
+        (format!("http://{address}"), server)
+    }
+
+    #[test]
+    fn extra_settings_are_sent_as_query_parameters() {
+        let (endpoint, server) = serve_one_request();
+        let client = client(&endpoint).expect("loopback endpoint");
+
+        client
+            .execute_with_settings("SELECT 1", None, None, None, None, &[("readonly", "2")])
+            .expect("the local server answers");
+
+        let request_line = server.join().expect("server thread");
+        assert!(request_line.contains("readonly=2"), "{request_line}");
+    }
+
+    #[test]
+    fn plain_execution_sends_no_readonly_setting() {
+        let (endpoint, server) = serve_one_request();
+        let client = client(&endpoint).expect("loopback endpoint");
+
+        client
+            .execute("SELECT 1", None, None, None, None)
+            .expect("the local server answers");
+
+        let request_line = server.join().expect("server thread");
+        assert!(!request_line.contains("readonly="), "{request_line}");
     }
 }

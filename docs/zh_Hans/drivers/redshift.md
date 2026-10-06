@@ -40,3 +40,4 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - 没有写入权限探测：`Connection::probe_write_privilege` 有意保持 trait 默认值（`WritePrivilege::Unknown`），因为该驱动程序已在线协议层拒绝所有变更语句，与所连角色的实际授权无关。
 - `SUPER`/`VARBYTE`/`GEOMETRY`/`GEOGRAPHY`/`HLLSKETCH` 所用的扩展类型 OID 取值，以及用于获取存储提示的 `SVV_TABLE_INFO`/`PG_TABLE_DEF` 查询形状，只由 `#[ignore]` 的真实集成测试（`crates/dbflux_driver_redshift/tests/live_integration.rs`）验证，因为不存在本地或基于 Docker 的 Redshift 引擎。可针对真实集群显式运行：`cargo nextest run -p dbflux_driver_redshift --run-ignored all`。
 - `NUMERIC`/`DECIMAL` 值**会被**解码：驱动程序直接把 PostgreSQL 二进制 `NUMERIC` 线格式解析为精确的 `Value::Decimal` 字符串（按列声明的小数位重建整数/小数部分，并处理 `NaN`/±`Infinity`）。格式错误的载荷会安全回退，而不会损坏数据。该二进制解码器由基于合成线载荷的单元测试覆盖；端到端的保真度仍只通过那些 `#[ignore]` 的集成测试针对真实集群验证。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）除了驱动自身拒绝非读取语句外，还会在 `BEGIN READ ONLY` 中运行并回滚。具有外部效果的函数不会被阻止；真正的边界仍是最小权限的数据库凭据。
