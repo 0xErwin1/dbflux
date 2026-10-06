@@ -2098,6 +2098,25 @@ document:
       no_selection: "Select a cell to see its formula."
       none: "No formula"
       unavailable: "Formula not available for .xls files"
+    save_as:
+      action: "Save as .xlsx"
+      title: "Save as a new .xlsx file?"
+      body: "DBFlux writes the values of every sheet of %{name} into a new .xlsx file, which can be edited. The new file does not keep formulas (each becomes the value it shows, because DBFlux cannot read .xls formulas), formatting, number formats other than dates, merged cells, column widths, charts, images or macros. %{name} is not changed."
+      chart_sheets: "Chart sheets hold no cells and are not written: %{sheets}."
+      object: "The new file is saved on this computer only and is not uploaded to the bucket."
+      confirm: "Choose file…"
+      cancel: "Cancel"
+      dialog_title: "Save as .xlsx"
+      dialog_title_object: "Save a copy as .xlsx on this computer"
+      dialog_filter: "Excel workbook"
+      saved: "Saved %{name}"
+      error:
+        failed: "Could not save %{name} as .xlsx"
+        replaces_source: "The new file would replace the original .xls file, which is never changed. Choose another name or folder."
+        dialog_unavailable: "No file dialog is available: %{error}"
+        sheet: "Sheet %{sheet} cannot be written to an .xlsx file under its name."
+        cell: "Cell %{cell} of sheet %{sheet} cannot be written to an .xlsx file."
+        write: "Writing the .xlsx file failed."
   parquet:
     loading: "Loading %{name}…"
     empty:

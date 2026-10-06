@@ -2098,6 +2098,25 @@ document:
       no_selection: "Selecione uma célula para ver sua fórmula."
       none: "Sem fórmula"
       unavailable: "Fórmula indisponível em arquivos .xls"
+    save_as:
+      action: "Salvar como .xlsx"
+      title: "Salvar como um novo arquivo .xlsx?"
+      body: "O DBFlux grava os valores de todas as planilhas de %{name} em um novo arquivo .xlsx, que pode ser editado. O novo arquivo não mantém as fórmulas (cada uma vira o valor que mostra, porque o DBFlux não consegue ler fórmulas de .xls), a formatação, os formatos de número exceto datas, as células mescladas, a largura das colunas, os gráficos, as imagens nem as macros. %{name} não é alterado."
+      chart_sheets: "Planilhas de gráfico não têm células e não são gravadas: %{sheets}."
+      object: "O novo arquivo é salvo somente neste computador e não é enviado ao bucket."
+      confirm: "Escolher arquivo…"
+      cancel: "Cancelar"
+      dialog_title: "Salvar como .xlsx"
+      dialog_title_object: "Salvar uma cópia .xlsx neste computador"
+      dialog_filter: "Pasta de trabalho do Excel"
+      saved: "%{name} salvo"
+      error:
+        failed: "Não foi possível salvar %{name} como .xlsx"
+        replaces_source: "O novo arquivo substituiria o arquivo .xls original, que nunca é alterado. Escolha outro nome ou outra pasta."
+        dialog_unavailable: "Nenhuma caixa de diálogo de arquivos está disponível: %{error}"
+        sheet: "A planilha %{sheet} não pode ser gravada em um arquivo .xlsx com esse nome."
+        cell: "A célula %{cell} da planilha %{sheet} não pode ser gravada em um arquivo .xlsx."
+        write: "Não foi possível gravar o arquivo .xlsx."
   parquet:
     loading: "Carregando %{name}…"
     empty:

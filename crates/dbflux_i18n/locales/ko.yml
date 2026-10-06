@@ -2098,6 +2098,25 @@ document:
       no_selection: "수식을 보려면 셀을 선택하세요."
       none: "수식 없음"
       unavailable: ".xls 파일에서는 수식을 볼 수 없습니다"
+    save_as:
+      action: ".xlsx로 저장"
+      title: "새 .xlsx 파일로 저장할까요?"
+      body: "DBFlux는 %{name}의 모든 시트 값을 편집할 수 있는 새 .xlsx 파일에 씁니다. 새 파일에는 수식(DBFlux가 .xls 수식을 읽을 수 없으므로 각 수식은 표시된 값이 됩니다), 서식, 날짜를 제외한 숫자 형식, 병합된 셀, 열 너비, 차트, 이미지, 매크로가 남지 않습니다. %{name}은(는) 변경되지 않습니다."
+      chart_sheets: "차트 시트에는 셀이 없으므로 쓰지 않습니다: %{sheets}."
+      object: "새 파일은 이 컴퓨터에만 저장되며 버킷에 업로드되지 않습니다."
+      confirm: "파일 선택…"
+      cancel: "취소"
+      dialog_title: ".xlsx로 저장"
+      dialog_title_object: "이 컴퓨터에 .xlsx 사본 저장"
+      dialog_filter: "Excel 통합 문서"
+      saved: "%{name} 저장됨"
+      error:
+        failed: "%{name}을(를) .xlsx로 저장할 수 없습니다"
+        replaces_source: "새 파일이 원본 .xls 파일을 덮어쓰게 됩니다. 원본은 변경되지 않으므로 다른 이름이나 폴더를 선택하세요."
+        dialog_unavailable: "사용할 수 있는 파일 대화 상자가 없습니다: %{error}"
+        sheet: "%{sheet} 시트는 이 이름으로 .xlsx 파일에 쓸 수 없습니다."
+        cell: "%{sheet} 시트의 %{cell} 셀은 .xlsx 파일에 쓸 수 없습니다."
+        write: ".xlsx 파일을 쓰지 못했습니다."
   parquet:
     loading: "%{name} 불러오는 중…"
     empty:

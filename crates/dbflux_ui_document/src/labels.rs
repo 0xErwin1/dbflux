@@ -3476,6 +3476,77 @@ fn spreadsheet_write_error_key(error: &dbflux_spreadsheet::SheetWriteError) -> &
     }
 }
 
+/// What the Save as .xlsx prompt says before anything is written: that the
+/// values of every sheet go into a new file, what that file does not keep,
+/// and that `file_name` is not changed. `chart_sheets` names the sheets that
+/// are left out, and `object` adds that the new file is written to this
+/// computer only.
+pub(crate) fn spreadsheet_save_as_body(
+    file_name: &str,
+    chart_sheets: &[String],
+    object: bool,
+) -> String {
+    let mut body = dbflux_i18n::t!("document.spreadsheet.save_as.body", name = file_name);
+
+    if !chart_sheets.is_empty() {
+        body.push(' ');
+        body.push_str(&dbflux_i18n::t!(
+            "document.spreadsheet.save_as.chart_sheets",
+            sheets = chart_sheets.join(", ")
+        ));
+    }
+
+    if object {
+        body.push(' ');
+        body.push_str(&dbflux_i18n::t!("document.spreadsheet.save_as.object"));
+    }
+
+    body
+}
+
+/// Summary of the error reported when Save as .xlsx wrote no new file.
+pub(crate) fn spreadsheet_save_as_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.save_as.error.failed",
+        name = file_name
+    )
+}
+
+/// The toast shown once Save as .xlsx wrote the new file `file_name`.
+pub(crate) fn spreadsheet_save_as_saved_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.save_as.saved", name = file_name)
+}
+
+/// Why the values of a workbook could not be written into a new xlsx file,
+/// in the user's words, followed by the writer's own text.
+pub(crate) fn spreadsheet_values_write_error_cause(
+    error: &dbflux_spreadsheet::ValuesWriteError,
+) -> String {
+    use dbflux_spreadsheet::ValuesWriteError;
+
+    let message = match error {
+        ValuesWriteError::Read { sheet, source } => {
+            return spreadsheet_error_cause(source, Some(sheet));
+        }
+
+        ValuesWriteError::Sheet { sheet, .. } => {
+            dbflux_i18n::t!("document.spreadsheet.save_as.error.sheet", sheet = sheet)
+        }
+
+        ValuesWriteError::Cell { sheet, cell, .. } => dbflux_i18n::t!(
+            "document.spreadsheet.save_as.error.cell",
+            sheet = sheet,
+            cell = cell
+        ),
+
+        ValuesWriteError::Write { .. } => {
+            dbflux_i18n::t!("document.spreadsheet.save_as.error.write")
+        }
+    };
+
+    with_technical_detail(message, error)
+}
+
 /// `message` followed, on its own line, by `detail`, the untranslated text
 /// of the library error it explains.
 fn with_technical_detail(message: String, detail: &dyn std::fmt::Display) -> String {
@@ -8209,6 +8280,23 @@ mod tests {
             "document.spreadsheet.error.sheet_out_of_range",
             "document.spreadsheet.error.sheet_too_large",
             "document.spreadsheet.error.malformed",
+            "document.spreadsheet.save_as.action",
+            "document.spreadsheet.save_as.title",
+            "document.spreadsheet.save_as.body",
+            "document.spreadsheet.save_as.chart_sheets",
+            "document.spreadsheet.save_as.object",
+            "document.spreadsheet.save_as.confirm",
+            "document.spreadsheet.save_as.cancel",
+            "document.spreadsheet.save_as.dialog_title",
+            "document.spreadsheet.save_as.dialog_title_object",
+            "document.spreadsheet.save_as.dialog_filter",
+            "document.spreadsheet.save_as.saved",
+            "document.spreadsheet.save_as.error.failed",
+            "document.spreadsheet.save_as.error.replaces_source",
+            "document.spreadsheet.save_as.error.dialog_unavailable",
+            "document.spreadsheet.save_as.error.sheet",
+            "document.spreadsheet.save_as.error.cell",
+            "document.spreadsheet.save_as.error.write",
             "scripts.dialog.filter.spreadsheet",
         ]);
     }

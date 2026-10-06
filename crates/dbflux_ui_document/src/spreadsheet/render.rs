@@ -16,6 +16,10 @@
 //!
 //! An object that is only read whole is downloaded after a prompt over the
 //! document says how large it is. Enter downloads and Escape declines.
+//!
+//! The xls banner carries Save as .xlsx, which first opens a prompt over the
+//! document saying what the new file does not keep. Enter goes on to the
+//! file dialog and Escape cancels.
 
 use dbflux_components::composites::{EmptyState, result_tab, result_tab_bar};
 use dbflux_components::controls::Button;
@@ -35,6 +39,7 @@ use super::grid_model::FormulaReadout;
 use crate::chrome::document_bar;
 
 const DOWNLOAD_PROMPT_WIDTH: Pixels = px(440.0);
+const SAVE_AS_PROMPT_WIDTH: Pixels = px(520.0);
 
 impl SpreadsheetDocument {
     /// The open prompt before a whole download: the object's size, and
@@ -100,6 +105,68 @@ impl SpreadsheetDocument {
         )
     }
 
+    /// The Save as .xlsx prompt: what the new file does not keep, and
+    /// Cancel and the button that goes on to the file dialog.
+    fn render_save_as_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let message = self.save_as_prompt_message()?;
+
+        let prompt = self.save_as_prompt.as_mut()?;
+        prompt.focus_mut().apply_pending(window, cx);
+        let focus_handle = prompt.focus_mut().handle().clone();
+
+        let footer = div()
+            .flex()
+            .gap(DocumentMetrics::GAP)
+            .child(
+                Button::new(
+                    "spreadsheet-save-as-cancel",
+                    dbflux_i18n::t!("document.spreadsheet.save_as.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dismiss_save_as_prompt(cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "spreadsheet-save-as-confirm",
+                    dbflux_i18n::t!("document.spreadsheet.save_as.confirm"),
+                )
+                .primary()
+                .icon(AppIcon::Save)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_save_as(cx);
+                })),
+            );
+
+        let document = cx.weak_entity();
+        let confirm_target = document.clone();
+
+        Some(
+            Modal::new(dbflux_i18n::t!("document.spreadsheet.save_as.title"))
+                .id("spreadsheet-save-as-prompt")
+                .icon(AppIcon::Save)
+                .width(SAVE_AS_PROMPT_WIDTH)
+                .focus_handle(&focus_handle)
+                .on_close(move |_window, cx| {
+                    document
+                        .update(cx, |this, cx| this.dismiss_save_as_prompt(cx))
+                        .log_err();
+                })
+                .on_confirm(move |_window, cx| {
+                    confirm_target
+                        .update(cx, |this, cx| this.confirm_save_as(cx))
+                        .log_err();
+                })
+                .body(Text::body(message))
+                .footer(footer)
+                .into_any_element(),
+        )
+    }
+
     fn render_notice(
         &self,
         id: &'static str,
@@ -138,11 +205,34 @@ impl SpreadsheetDocument {
 
     /// Append row and Save, after the warning that pending edits replace
     /// formula cells with values. For xls, whose format has no writer, a
-    /// banner saying the file is read-only takes its place.
+    /// banner saying the file is read-only takes its place, with Save as
+    /// .xlsx.
     fn render_edit_bar(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
 
         if !self.is_editable_format() {
+            let save_as = Button::new(
+                "spreadsheet-save-as",
+                dbflux_i18n::t!("document.spreadsheet.save_as.action"),
+            )
+            .inline()
+            .icon(if self.saving_as {
+                AppIcon::Loader
+            } else {
+                AppIcon::Save
+            })
+            .when_some(
+                dbflux_ui_base::keymap::shortcut_label(
+                    dbflux_app::keymap::ContextId::DataTable,
+                    dbflux_app::keymap::Command::SaveRow,
+                ),
+                Button::kbd,
+            )
+            .disabled(!self.can_save_as_xlsx())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.save_as_xlsx(cx);
+            }));
+
             return document_bar(DocumentMetrics::TOOLBAR_HEIGHT, cx)
                 .id("spreadsheet-read-only")
                 .debug_selector(|| "spreadsheet-read-only".to_string())
@@ -150,10 +240,12 @@ impl SpreadsheetDocument {
                 .text_color(theme.muted_foreground)
                 .child(
                     div()
+                        .flex_1()
                         .min_w_0()
                         .truncate()
                         .child(dbflux_i18n::t!("document.spreadsheet.read_only.xls")),
                 )
+                .child(save_as)
                 .into_any_element();
         }
 
@@ -400,6 +492,7 @@ impl Render for SpreadsheetDocument {
 
         let title = self.title();
         let download_prompt = self.render_download_prompt(window, cx);
+        let save_as_prompt = self.render_save_as_prompt(window, cx);
 
         let body = match self.phase() {
             SpreadsheetPhase::Loaded(_) => div()
@@ -452,5 +545,6 @@ impl Render for SpreadsheetDocument {
             .bg(cx.theme().background)
             .child(body)
             .children(download_prompt)
+            .children(save_as_prompt)
     }
 }

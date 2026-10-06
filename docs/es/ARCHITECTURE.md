@@ -519,7 +519,7 @@ crates/
   dbflux_ssh/               # SSH tunnel support
   dbflux_byte_source/       # Fuentes de bytes de acceso aleatorio para lectores de archivos (memoria, archivo local)
   dbflux_parquet/           # Lectura del footer y el índice de páginas de Parquet sobre un byte source (sin GPUI)
-  dbflux_spreadsheet/       # Lectura de hojas xlsx, xlsm, xls y ods sobre un byte source con calamine y edición en sitio de celdas xlsx y ods (sin GPUI)
+  dbflux_spreadsheet/       # Lectura de hojas xlsx, xlsm, xls y ods sobre un byte source con calamine, edición en sitio de celdas xlsx y ods, y escritura de valores en un xlsx nuevo (sin GPUI)
   dbflux_export/            # Export (CSV, JSON, Text, Binary)
     src/lib.rs              # Shape-based export API and format dispatch
     src/binary.rs           # Binary/hex/base64 exporter
