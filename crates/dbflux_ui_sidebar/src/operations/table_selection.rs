@@ -71,7 +71,9 @@ fn select_tables(item_id: &str, active_selection: &HashSet<String>) -> SelectedT
     let (tables, skipped): (Vec<SelectedTable>, Vec<SelectedTable>) = ids
         .iter()
         .filter_map(|id| table_node(id))
-        .partition(|t| t.profile_id == anchor.profile_id && t.database == anchor.database);
+        .partition(|selected| {
+            selected.profile_id == anchor.profile_id && selected.database == anchor.database
+        });
 
     SelectedTablesResolution {
         tables,
@@ -115,10 +117,12 @@ impl Sidebar {
             .push(cx);
         }
 
-        let Some(profile_id) = tables.first().map(|t| t.profile_id) else {
+        let Some(profile_id) = tables.first().map(|selected| selected.profile_id) else {
             return;
         };
-        let database = tables.first().and_then(|t| t.database.clone());
+        let database = tables
+            .first()
+            .and_then(|selected| selected.database.clone());
 
         let state = self.app_state.read(cx);
         let Some(connected) = state.connections().get(&profile_id) else {
@@ -128,7 +132,7 @@ impl Sidebar {
             return;
         }
 
-        let table_refs: Vec<TableRef> = tables.into_iter().map(|t| t.table).collect();
+        let table_refs: Vec<TableRef> = tables.into_iter().map(|selected| selected.table).collect();
 
         cx.emit(request(profile_id, database, table_refs));
     }
@@ -185,7 +189,7 @@ mod tests {
         let mut names: Vec<&str> = resolved
             .tables
             .iter()
-            .map(|t| t.table.name.as_str())
+            .map(|selected| selected.table.name.as_str())
             .collect();
         names.sort_unstable();
         assert_eq!(names, vec!["items", "orders", "users"]);
