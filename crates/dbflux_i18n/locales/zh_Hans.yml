@@ -2098,6 +2098,15 @@ document:
       no_selection: "选择一个单元格以查看其公式。"
       none: "无公式"
       unavailable: ".xls 文件不提供公式"
+    view:
+      table: "表格"
+      text: "文本"
+    text:
+      building: "正在将工作表写为 CSV…"
+      cut:
+        one: "文本已截断：显示全部 %{total} 行中的前 %{shown} 行。"
+        many: "文本已截断：显示全部 %{total} 行中的前 %{shown} 行。"
+      render_failed: "无法将工作表显示为 CSV：%{cause}"
     save_as:
       action: "另存为 .xlsx"
       title: "另存为新的 .xlsx 文件？"

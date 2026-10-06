@@ -154,6 +154,12 @@ impl SpreadsheetDocument {
             Box::new(move |cx| entity.update(cx, |document, cx| document.flush_for_shutdown(cx)))
         });
 
+        // The Vim mode of the text view's editor.
+        pane.key_context_entries = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| entity.read(cx).key_context_entries(cx))
+        });
+
         // Append row, which the pane actions menu reaches from the keyboard.
         pane.pane_actions = Some({
             let entity = entity.clone();

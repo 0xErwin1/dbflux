@@ -3153,6 +3153,24 @@ pub(crate) fn spreadsheet_formula_warning(count: usize) -> String {
     }
 }
 
+/// The note below a spreadsheet's text view when the text holds only the
+/// first `shown` of the sheet's `total` rows.
+pub(crate) fn spreadsheet_text_cut(shown: usize, total: usize) -> String {
+    if total == 1 {
+        dbflux_i18n::t!(
+            "document.spreadsheet.text.cut.one",
+            shown = shown,
+            total = total
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.spreadsheet.text.cut.many",
+            shown = shown,
+            total = total
+        )
+    }
+}
+
 /// Notice shown while one sheet of a spreadsheet is read.
 pub(crate) fn spreadsheet_reading_sheet_label(sheet: &str) -> String {
     dbflux_i18n::t!("document.spreadsheet.reading_sheet", sheet = sheet)
@@ -8272,6 +8290,12 @@ mod tests {
             "document.spreadsheet.formula.no_selection",
             "document.spreadsheet.formula.none",
             "document.spreadsheet.formula.unavailable",
+            "document.spreadsheet.view.table",
+            "document.spreadsheet.view.text",
+            "document.spreadsheet.text.building",
+            "document.spreadsheet.text.cut.one",
+            "document.spreadsheet.text.cut.many",
+            "document.spreadsheet.text.render_failed",
             "document.spreadsheet.error.open_failed",
             "document.spreadsheet.error.sheet_failed",
             "document.spreadsheet.error.not_a_spreadsheet",

@@ -2098,6 +2098,15 @@ document:
       no_selection: "Selecione uma célula para ver sua fórmula."
       none: "Sem fórmula"
       unavailable: "Fórmula indisponível em arquivos .xls"
+    view:
+      table: "Tabela"
+      text: "Texto"
+    text:
+      building: "Escrevendo a planilha como CSV…"
+      cut:
+        one: "O texto foi cortado: mostra as primeiras %{shown} de %{total} linha."
+        many: "O texto foi cortado: mostra as primeiras %{shown} de %{total} linhas."
+      render_failed: "Não foi possível mostrar a planilha como CSV: %{cause}"
     save_as:
       action: "Salvar como .xlsx"
       title: "Salvar como um novo arquivo .xlsx?"

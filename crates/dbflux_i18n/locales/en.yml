@@ -2098,6 +2098,15 @@ document:
       no_selection: "Select a cell to see its formula."
       none: "No formula"
       unavailable: "Formula not available for .xls files"
+    view:
+      table: "Table"
+      text: "Text"
+    text:
+      building: "Writing the sheet as CSV…"
+      cut:
+        one: "The text was cut: it shows the first %{shown} of %{total} row."
+        many: "The text was cut: it shows the first %{shown} of %{total} rows."
+      render_failed: "The sheet could not be shown as CSV: %{cause}"
     save_as:
       action: "Save as .xlsx"
       title: "Save as a new .xlsx file?"
