@@ -48,6 +48,7 @@ pub mod object_browser;
 pub mod object_editor;
 pub mod object_text;
 pub mod pane;
+mod progress_forwarding;
 pub mod refresh;
 mod result_view;
 mod result_warnings;
