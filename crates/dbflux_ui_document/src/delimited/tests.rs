@@ -16,7 +16,9 @@ use dbflux_delimited::{
     ReaderOptions, Record, Replacement, WriteError,
 };
 
-use super::save::{SaveRequest, save_staging_objects_in, verify_version, write_staged};
+#[cfg(all(test, target_os = "linux"))]
+use super::save::write_staged;
+use super::save::{SaveRequest, save_staging_objects_in, verify_version};
 use super::{SaveOutcome, save_edited};
 use crate::file_source::{
     FileLocation, SourceVersion, StorageError, WriteFailure, has_changed_since, open_source,
@@ -178,6 +180,7 @@ pub(super) struct FakeObjectStore {
     range_reads: AtomicUsize,
     change_etag_at_range_read: AtomicUsize,
     omit_identity: AtomicBool,
+    #[cfg(unix)]
     uploaded_modes: Mutex<Vec<u32>>,
 }
 
@@ -280,6 +283,7 @@ impl FakeObjectStore {
         self.omit_identity.store(true, Ordering::SeqCst);
     }
 
+    #[cfg(unix)]
     fn uploaded_modes(&self) -> Vec<u32> {
         self.uploaded_modes.lock().expect("the mode log").clone()
     }

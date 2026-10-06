@@ -3026,7 +3026,7 @@ pub(crate) mod object_tree_adapter_tests {
                     "the rejected attempt must release the loading state"
                 );
                 assert!(
-                    sidebar.pending_actions.get(&table_item).is_none(),
+                    !sidebar.pending_actions.contains_key(&table_item),
                     "a fenced attempt must not keep a pending action alive"
                 );
             })
@@ -4523,7 +4523,7 @@ pub(crate) mod object_tree_adapter_tests {
         window
             .update(cx, |sidebar, _, _| {
                 assert!(
-                    sidebar.pending_actions.get(&db_item).is_none(),
+                    !sidebar.pending_actions.contains_key(&db_item),
                     "stale schema completion must not restore a selection action"
                 );
             })
@@ -5480,7 +5480,7 @@ pub(crate) mod object_tree_adapter_tests {
         assert_eq!(connect_calls.load(Ordering::SeqCst), 1);
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("new session");
-            assert!(connected.database_connections.get("analytics").is_none());
+            assert!(!connected.database_connections.contains_key("analytics"));
             assert_eq!(connected.active_database.as_deref(), Some("main"));
             assert!(state.is_operation_pending(profile_id, Some("analytics")));
         });
@@ -5496,7 +5496,7 @@ pub(crate) mod object_tree_adapter_tests {
         assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("new session");
-            assert!(connected.database_connections.get("analytics").is_some());
+            assert!(connected.database_connections.contains_key("analytics"));
             assert_eq!(connected.active_database.as_deref(), Some("analytics"));
             assert!(!state.is_operation_pending(profile_id, Some("analytics")));
         });

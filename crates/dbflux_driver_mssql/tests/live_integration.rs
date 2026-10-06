@@ -429,12 +429,13 @@ fn run_builder_select(
     connection: &dyn Connection,
     spec: &VisualQuerySpec,
 ) -> Result<Vec<Vec<Value>>, DbError> {
-    let select = connection
-        .query_generator()
-        .expect("mssql connection must expose a query generator")
+    let generator = connection.query_generator().ok_or_else(|| {
+        DbError::NotSupported("mssql connection must expose a query generator".to_string())
+    })?;
+    let select = generator
         .generate_select(spec)
-        .expect("spec must be valid")
-        .expect("mssql generator must render a SELECT");
+        .map_err(|error| DbError::NotSupported(format!("spec must be valid: {error}")))?
+        .ok_or_else(|| DbError::NotSupported("mssql generator must render a SELECT".to_string()))?;
 
     assert!(
         select.params.is_empty(),

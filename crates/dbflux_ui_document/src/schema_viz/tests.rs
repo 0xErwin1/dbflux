@@ -1085,10 +1085,10 @@ fn users_focused_load(source: &FakeSource) -> (Vec<TableInfo>, bool, usize) {
     (result.tables, result.capped, result.tables_loaded)
 }
 
-fn sorted_table_summaries(
-    tables: &[TableInfo],
-) -> Vec<(String, Vec<String>, Vec<String>, Vec<String>)> {
-    let mut summaries: Vec<(String, Vec<String>, Vec<String>, Vec<String>)> = tables
+type TableSummary = (String, Vec<String>, Vec<String>, Vec<String>);
+
+fn sorted_table_summaries(tables: &[TableInfo]) -> Vec<TableSummary> {
+    let mut summaries: Vec<TableSummary> = tables
         .iter()
         .map(|table| {
             let columns = table

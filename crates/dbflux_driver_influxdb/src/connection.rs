@@ -1121,7 +1121,10 @@ mod tests {
                             .set_read_timeout(Some(Duration::from_secs(1)))
                             .expect("read timeout");
                         let mut buffer = [0; 4096];
-                        stream.read(&mut buffer).expect("request bytes");
+                        // One read consumes whatever the client flushed so far;
+                        // the fixture answers with a canned body regardless of
+                        // request framing, so the count is deliberately unused.
+                        let _request_bytes = stream.read(&mut buffer).expect("request bytes");
                         let body = r#"{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[[1,2]]}]}]}"#;
                         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("response");
                     }

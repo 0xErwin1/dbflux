@@ -6287,7 +6287,7 @@ mod tests {
                     ssl_client_cert_path: ssl_client_cert_path.clone(),
                     ssl_client_key_path: ssl_client_key_path.clone(),
                     ssh_tunnel: ssh_tunnel.clone(),
-                    ssh_tunnel_profile_id: ssh_tunnel_profile_id.clone(),
+                    ssh_tunnel_profile_id: *ssh_tunnel_profile_id,
                 }),
                 _ => None,
             }

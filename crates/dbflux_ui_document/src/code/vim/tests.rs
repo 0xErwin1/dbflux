@@ -103,6 +103,7 @@ impl Fixture<'_> {
         })
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn native_replace_mode(&mut self) -> bool {
         let document = self.document.clone();
         self.window.update(|_, cx| {

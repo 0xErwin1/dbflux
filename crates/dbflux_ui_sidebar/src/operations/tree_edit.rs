@@ -572,6 +572,12 @@ mod tests {
         seed_source(&app_state, &source, cx);
         fixture.set_outcome(PasswordWriteOutcome::FailBeforeWrite);
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "duplicate_profile_in_state is production API returning DbError; the test \
+                      only asserts is_err, so boxing the Err just to shrink the closure would \
+                      diverge from the exercised signature"
+        )]
         let result = app_state.update(cx, |state, cx| {
             duplicate_profile_in_state(state, source.id, cx)
         });
@@ -616,6 +622,12 @@ mod tests {
         seed_source(&app_state, &source, cx);
         fixture.set_outcome(PasswordWriteOutcome::WriteThenFail);
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "duplicate_profile_in_state is production API returning DbError; the test \
+                      only asserts is_err, so boxing the Err just to shrink the closure would \
+                      diverge from the exercised signature"
+        )]
         let result = app_state.update(cx, |state, cx| {
             duplicate_profile_in_state(state, source.id, cx)
         });
@@ -645,9 +657,18 @@ mod tests {
         seed_source(&app_state, &source, cx);
 
         let cloned_id = app_state
-            .update(cx, |state, cx| {
-                duplicate_profile_in_state(state, source.id, cx)
-            })
+            .update(
+                cx,
+                // The inner Err is the production `DbError`, only unwrapped in
+                // this test, so the large-variant lint is deliberately expected.
+                #[expect(
+                    clippy::result_large_err,
+                    reason = "duplicate_profile_in_state is production API returning DbError; \
+                              the test unwraps both Result layers, so the closure must keep \
+                              the production error type"
+                )]
+                |state, cx| duplicate_profile_in_state(state, source.id, cx),
+            )
             .expect("clone succeeds")
             .expect("source profile exists");
         let persisted_profiles = profiles(&app_state, cx);

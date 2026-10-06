@@ -888,7 +888,7 @@ mod tests {
         let (_, visual) = cx.add_window_view({
             let shell_holder = shell_holder.clone();
             move |_window, cx| {
-                let shell = cx.new(|cx| ChartShell::new_standalone(cx));
+                let shell = cx.new(ChartShell::new_standalone);
                 shell_holder.replace(Some(shell.clone()));
                 DomainHarness { shell }
             }

@@ -223,6 +223,10 @@ mod tests {
     fn fake_pins_v1_3_below_the_current_protocol_version() {
         assert_eq!(FAKE_DRIVER_PROTOCOL_VERSION, ProtocolVersion::new(1, 3));
         assert_eq!(FAKE_DRIVER_PROTOCOL_VERSION.major, DRIVER_RPC_VERSION.major);
-        assert!(FAKE_DRIVER_PROTOCOL_VERSION.minor < DRIVER_RPC_VERSION.minor);
+        // Compile-time pin: the fake protocol version must stay below the
+        // current protocol version, so a bump that breaks the fake fails here.
+        const {
+            assert!(FAKE_DRIVER_PROTOCOL_VERSION.minor < DRIVER_RPC_VERSION.minor);
+        }
     }
 }

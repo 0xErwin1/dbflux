@@ -1044,7 +1044,6 @@ mod tests {
     }
 
     /// Decodes a hex string into bytes for the golden fixtures below.
-
     fn hex_bytes(hex: &str) -> Vec<u8> {
         (0..hex.len())
             .step_by(2)
@@ -1156,7 +1155,7 @@ mod tests {
         assert!(columns[0].is_primary_key);
         assert_eq!(columns[1].default_value.as_deref(), Some("'new'"));
         assert_eq!(
-            columns[1].enum_values.as_ref().map(|v| v.as_slice()),
+            columns[1].enum_values.as_deref(),
             Some(["new".to_string(), "paid".to_string()].as_slice())
         );
         let fks = table.foreign_keys.as_ref().expect("fks decoded");
