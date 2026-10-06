@@ -115,10 +115,31 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 - Sin joins, subqueries, uniones, CTEs, funciones de ventana ni `EXPLAIN` a
   nivel de capacidad de query.
 - Las transacciones se anuncian a nivel de capacidad (`supports_transactions:
-  true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas,
-  read-only ni soporte deferrable.
+  true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas ni
+  soporte deferrable.
+- La aplicación de solo lectura la hace DBFlux por operación, no el servidor,
+  porque MongoDB no tiene un modo de sesión de solo lectura. Una solicitud que
+  DBFlux ejecuta sin supervisión como lectura (scripts de MCP `execute_script`
+  clasificados `Read` o `Metadata`) se ejecuta con el techo de su clase, nunca
+  por encima de `Read`: cada operación, en un
+  script o en una sentencia única, se clasifica antes de enviarse y se rechaza
+  cuando supera el techo. Se rechazan inserts, updates, replaces, deletes,
+  drops, `createCollection`, cualquier `runCommand`/`adminCommand` y un
+  `aggregate` con una etapa `$out` o `$merge` a cualquier profundidad; también
+  se rechazan las operaciones que los parsers no reconocen (`findOneAndUpdate`,
+  `bulkWrite`, `mapReduce`, `createIndex`, `renameCollection`, `getSiblingDB`,
+  `distinct`, `watch`, …). También se rechaza un `aggregate` que abre un change
+  stream (`$changeStream`), porque nunca termina. El JavaScript del servidor dentro de una lectura (`$where`,
+  `$function`) sigue ejecutándose, y las credenciales con privilegios mínimos
+  siguen siendo el límite real.
 - El DDL no es transaccional (`transactional_ddl: false`); create-database,
   create-collection, alter, views y triggers no están soportados.
+- Límites del sandbox de scripts: 64 MiB de memoria, 512 KiB de pila y un
+  plazo de 30 segundos de reloj por ejecución. El plazo solo cuenta tiempo de
+  JavaScript: una llamada a la base de datos en curso no se puede interrumpir.
+  DBFlux no configura `maxTimeMS` en el servidor, así que esa llamada sigue
+  hasta que el servidor la termina o hasta que se observa la cancelación de la
+  conexión entre documentos.
 - La vista Agregación muestra como máximo 1.000 documentos de resultado por ejecución; una etapa que falla en el servidor (un operador desconocido, un `$merge` hacia un destino que el usuario no puede escribir) se informa como error del driver, no se valida de antemano. Antes de ejecutar solo se comprueba la forma de las etapas: un arreglo JSON cuyos elementos nombran cada uno un operador `$`.
 - Los campos de los documentos embebidos vuelven ordenados por clave, no en el orden almacenado: el modelo de valores guarda los documentos embebidos en un mapa ordenado. Los campos de primer nivel conservan el orden del documento.
 - Un campo de primer nivel con `null` y uno ausente se ven igual en el grid (la exploración rellena con `null` los campos de primer nivel ausentes); los campos anidados sí se distinguen y se muestran como `missing`. Por el mismo motivo, la comprobación de cambios en el servidor ignora los nulos de primer nivel.

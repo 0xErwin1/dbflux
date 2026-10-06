@@ -71,11 +71,12 @@ MongoDB `serverStatus` 명령에서 가져온 엄선된 실시간 서버 지표�
 - `RETURNING`은 지원되지 않습니다. 변경 기능도 기능 수준에서는 배치, 벌크 업데이트, 벌크 삭제가 없다고 보고합니다(`supports_batch`, `supports_bulk_update`, `supports_bulk_delete`가 모두 `false`). 생성기가 `updateMany`/`deleteMany` 텍스트를 만들어 낼 수 있음에도 그렇습니다.
 - 파서 범위는 전체 대화형 셸 언어가 아니라 위에 나열된 지원 메서드 집합으로 의도적으로 한정됩니다. `distinct`는 쿼리 기능으로 노출되지 않습니다(`supports_distinct: false`).
 - 쿼리 기능 수준에서 조인, 서브쿼리, 유니온, CTE, 윈도우 함수, `EXPLAIN`이 없습니다.
-- 트랜잭션은 기능 수준에서 알려집니다(`supports_transactions: true`). 하지만 격리 수준, 저장점, 중첩 트랜잭션, 읽기 전용, deferrable 지원은 없습니다.
+- 트랜잭션은 기능 수준에서 알려집니다(`supports_transactions: true`). 하지만 격리 수준, 저장점, 중첩 트랜잭션, deferrable 지원은 없습니다.
+- MongoDB에는 읽기 전용 세션 모드가 없으므로 읽기 전용 강제는 서버가 아니라 DBFlux가 작업마다 수행합니다. DBFlux가 무인으로 읽기로 실행하는 요청(`Read` 또는 `Metadata`로 분류된 MCP `execute_script` 스크립트)은 자기 클래스의 상한으로 실행되며 `Read`를 넘지 않습니다: 스크립트든 단일 문이든 모든 작업은 전송 전에 분류되며 상한을 넘으면 거부됩니다. insert, update, replace, delete, drop, `createCollection`, 모든 `runCommand`/`adminCommand`, 그리고 어느 깊이에든 `$out` 또는 `$merge` 스테이지가 있는 `aggregate`는 거부됩니다. 파서가 인식하지 못하는 작업(`findOneAndUpdate`, `bulkWrite`, `mapReduce`, `createIndex`, `renameCollection`, `getSiblingDB`, `distinct`, `watch` 등)도 거부됩니다. 변경 스트림(`$changeStream`)을 여는 `aggregate`도 끝나지 않으므로 거부됩니다. 읽기 안의 서버 측 JavaScript(`$where`, `$function`)는 여전히 실행되며, 최소 권한 자격 증명이 여전히 실제 경계입니다.
 - DDL은 트랜잭션으로 보호되지 않습니다(`transactional_ddl: false`). 데이터베이스 생성, 컬렉션 생성, alter, 뷰, 트리거는 지원되지 않습니다.
 
 - 스크립트 엔진은 생략(omission)으로 샌드박스를 만듭니다. `require`, 모듈 로더, 파일시스템/네트워크/프로세스 생성 전역은 스크립트 코드에서 도달할 수 없습니다. 최상위 `await`, `require(...)`, `import` 문은 무엇이든 디스패치되기 전에 이름으로 거부됩니다.
-- 샌드박스 리소스 제한: 스크립트 실행당 64 MiB 메모리, 512 KiB 스택, 30초 벽시계 데드라인. 데드라인은 JS 시간에만 적용됩니다. 진행 중인 데이터베이스 호출은 도중에 중단될 수 없으며, 서버 측 `maxTimeMS`와 연결 자체의 취소 플래그로 별도로 제한됩니다.
+- 샌드박스 리소스 제한: 스크립트 실행당 64 MiB 메모리, 512 KiB 스택, 30초 벽시계 데드라인. 데드라인은 JS 시간에만 적용됩니다. 진행 중인 데이터베이스 호출은 도중에 중단될 수 없습니다. DBFlux는 서버 측 `maxTimeMS`를 설정하지 않으므로, 이러한 호출은 서버가 완료하거나 문서 사이에서 연결의 취소 플래그가 확인될 때까지 실행됩니다.
 - 스크립트 안의 단일 `find()`/`aggregate()` 호출은 문서 10 000개로 제한됩니다. 한도를 초과하면 결과를 조용히 잘라내는 대신 한도를 명시하는 오류로 실패합니다. 지연/스트리밍 커서 의미론(`find()`/`aggregate()` 결과에 연결하는 `hasNext`, `next`, `limit`, `skip`, `sort`, `count`)는 v1 범위 밖이며 호출된 메서드 이름을 밝히며 예외를 던집니다. 대신 동일한 limit/skip/sort를 `find()`에 추가 인수로 디스패치하거나 유계 결과에 `.toArray()`를 사용하세요.
 - 스크립트로 반환되는 문서는 canonical extJSON이 아니라 relaxed extJSON으로 변환됩니다. 일반 JSON 숫자는 숫자로 유지되므로(`doc.qty + 1`이 문자열 연결이 아니라 산술) JSON이 표현하지 못하는 타입(ObjectId, Date 등)은 감싸집니다(`{"$oid": ...}`, `{"$date": ...}`). 이 변환은 정확히 왕복되지 않습니다. `1.0`인 BSON `Double`은 JSON `1`이 됩니다. 읽은 문서를 검사하는 용도로는 괜찮지만, 읽기 결과를 그대로 쓰기로 되돌려 보내서는 안 된다는 뜻입니다.
 - 스크립트 도중 서버에서 실패하는 문(예: 중복 키 오류)은 그 지점에서 실행을 중단합니다. 이미 실행된 문은 롤백되지 않고, 이후 문은 디스패치되지 않습니다.
