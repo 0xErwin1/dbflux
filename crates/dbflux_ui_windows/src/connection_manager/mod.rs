@@ -3821,31 +3821,9 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().clone();
-
-        let start_dir = dirs::home_dir().map(|h| h.join(".ssh")).unwrap_or_default();
-
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
-                .set_directory(&start_dir);
-
-            dialog.pick_file()
+        browse_ssh_key_into(cx, |this, path| {
+            this.pending.ssh_key_path = Some(path);
         });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.pending.ssh_key_path = Some(path.to_string_lossy().to_string());
-                        cx.notify();
-                    });
-                });
-            }
-        })
-        .detach();
     }
 
     /// Open a native file picker filtered to common cert/key extensions and write the
@@ -3858,8 +3836,6 @@ impl ConnectionManagerWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let this = cx.entity().clone();
-
         let title = match slot {
             SslCertSlot::CaCert => dbflux_i18n::t!("connection_manager.select_ca_cert"),
             SslCertSlot::ClientCert => dbflux_i18n::t!("connection_manager.select_client_cert"),
@@ -3873,46 +3849,29 @@ impl ConnectionManagerWindow {
             .or_else(dirs::home_dir)
             .unwrap_or_default();
 
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(title)
-                .set_directory(&start_dir)
-                .add_filter(
-                    dbflux_i18n::t!("connection_manager.filter_certificates"),
-                    &["pem", "crt", "cer", "key", "der"],
-                )
-                .add_filter(
-                    dbflux_i18n::t!("connection_manager.filter_all_files"),
-                    &["*"],
-                );
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title(title)
+            .set_directory(&start_dir)
+            .add_filter(
+                dbflux_i18n::t!("connection_manager.filter_certificates"),
+                &["pem", "crt", "cer", "key", "der"],
+            )
+            .add_filter(
+                dbflux_i18n::t!("connection_manager.filter_all_files"),
+                &["*"],
+            );
 
-            dialog.pick_file()
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        let path_str = path.to_string_lossy().to_string();
-                        match slot {
-                            SslCertSlot::CaCert => {
-                                this.pending.ssl_ca_cert_path = Some(path_str);
-                            }
-                            SslCertSlot::ClientCert => {
-                                this.pending.ssl_client_cert_path = Some(path_str);
-                            }
-                            SslCertSlot::ClientKey => {
-                                this.pending.ssl_client_key_path = Some(path_str);
-                            }
-                        }
-                        cx.notify();
-                    });
-                });
+        pick_file_into(dialog, cx, move |this, path| match slot {
+            SslCertSlot::CaCert => {
+                this.pending.ssl_ca_cert_path = Some(path);
             }
-        })
-        .detach();
+            SslCertSlot::ClientCert => {
+                this.pending.ssl_client_cert_path = Some(path);
+            }
+            SslCertSlot::ClientKey => {
+                this.pending.ssl_client_key_path = Some(path);
+            }
+        });
     }
 
     /// Clear the value of an SSL cert input.
@@ -3934,8 +3893,6 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn browse_file_path(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().clone();
-
         let current_value = self
             .form
             .driver_inputs
@@ -3952,26 +3909,13 @@ impl ConnectionManagerWindow {
             .or_else(dirs::home_dir)
             .unwrap_or_default();
 
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(dbflux_i18n::t!("connection_manager.select_database_file"))
-                .set_directory(&start_dir);
-            dialog.pick_file()
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title(dbflux_i18n::t!("connection_manager.select_database_file"))
+            .set_directory(&start_dir);
+
+        pick_file_into(dialog, cx, |this, path| {
+            this.pending.file_path = Some(path);
         });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.pending.file_path = Some(path.to_string_lossy().to_string());
-                        cx.notify();
-                    });
-                });
-            }
-        })
-        .detach();
     }
 
     // -----------------------------------------------------------------
@@ -4120,6 +4064,61 @@ impl ConnectionManagerWindow {
 pub struct DismissEvent;
 
 impl EventEmitter<DismissEvent> for ConnectionManagerWindow {}
+
+/// Opens the SSH private key picker, starting in `~/.ssh`, and hands the picked
+/// path to `apply` on the entity that asked.
+pub(crate) fn browse_ssh_key_into<T: 'static>(
+    cx: &mut Context<T>,
+    apply: impl FnOnce(&mut T, String) + 'static,
+) {
+    let start_dir = dirs::home_dir()
+        .map(|home| home.join(".ssh"))
+        .unwrap_or_default();
+
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
+        .set_directory(&start_dir);
+
+    pick_file_into(dialog, cx, apply);
+}
+
+/// Shows `dialog` through the shared native picker resolver and hands the
+/// picked path to `apply` on the entity that asked, then re-renders it.
+///
+/// A cancelled picker, or one that returns after the entity was dropped,
+/// changes nothing. A host without a native picker gets the resolver's error
+/// toast.
+fn pick_file_into<T: 'static>(
+    dialog: rfd::AsyncFileDialog,
+    cx: &mut Context<T>,
+    apply: impl FnOnce(&mut T, String) + 'static,
+) {
+    cx.spawn(async move |this, cx| {
+        let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async move {
+            dialog
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        })
+        .await;
+
+        let Some(path) = picked else {
+            return;
+        };
+
+        let Some(entity) = this.upgrade() else {
+            return;
+        };
+
+        cx.update(|cx| {
+            entity.update(cx, |this, cx| {
+                apply(this, path.to_string_lossy().to_string());
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
 
 #[cfg(test)]
 mod tests {
