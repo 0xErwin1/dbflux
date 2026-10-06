@@ -1795,6 +1795,14 @@ impl CodeDocument {
         cx.notify();
     }
 
+    /// Restores the split when maximized results hide the editor, so moving
+    /// the keyboard to the query text never focuses an input that is not shown.
+    pub(super) fn reveal_editor(&mut self, cx: &mut Context<Self>) {
+        if self.layout == SqlQueryLayout::ResultsOnly {
+            self.toggle_maximize_results(cx);
+        }
+    }
+
     pub fn run_query_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
@@ -3393,7 +3401,7 @@ mod result_tab_keyboard_tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use crate::code::{CodeDocument, SqlQueryLayout};
+    use crate::code::{CodeDocument, SqlQueryFocus, SqlQueryLayout};
     use crate::pane::PaneActionRun;
     use dbflux_app::keymap::Command;
     use dbflux_components::theme;
@@ -3593,6 +3601,47 @@ mod result_tab_keyboard_tests {
 
         dispatch(window, &document, Command::ToggleEditor);
         assert!(state(window) == (SqlQueryLayout::Split, false));
+    }
+
+    /// Moving the keyboard to the query text while the results fill the
+    /// document brings the editor back into view instead of focusing it
+    /// hidden.
+    #[gpui::test]
+    fn focusing_the_text_restores_the_editor_hidden_by_maximized_results(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 1);
+        let state = |window: &mut VisualTestContext| {
+            window.update(|window, cx| {
+                let document = document.read(cx);
+                let editor_focused = document
+                    .editor
+                    .input_state
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window);
+
+                (
+                    document.layout,
+                    document.results_maximized,
+                    document.focus_mode,
+                    editor_focused,
+                )
+            })
+        };
+
+        dispatch(window, &document, Command::ToggleResults);
+        dispatch(window, &document, Command::FocusEditor);
+        assert!(
+            state(window) == (SqlQueryLayout::Split, false, SqlQueryFocus::Editor, true),
+            "Focus editor shows the text it focuses"
+        );
+
+        dispatch(window, &document, Command::FocusDown);
+        dispatch(window, &document, Command::ToggleResults);
+        dispatch(window, &document, Command::FocusUp);
+        assert!(
+            state(window) == (SqlQueryLayout::Split, false, SqlQueryFocus::Editor, true),
+            "stepping up out of maximized results shows the text"
+        );
     }
 
     #[gpui::test]
