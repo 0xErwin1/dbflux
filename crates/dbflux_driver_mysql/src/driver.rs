@@ -2124,19 +2124,8 @@ impl Connection for MysqlConnection {
             }
         }
 
+        req.refuse_read_only_for_instance_catalog("MySQL/MariaDB")?;
         if req.read_only.is_required() {
-            if let Some(
-                ExecutionSourceContext::InstanceMetricQuery { .. }
-                | ExecutionSourceContext::InstanceInspectorQuery { .. },
-            ) = req
-                .execution_context
-                .as_ref()
-                .and_then(|ctx| ctx.source.as_ref())
-            {
-                return Err(DbError::NotSupported(
-                    "MySQL/MariaDB: read-only enforcement cannot be applied to an instance catalog query; the request was rejected before execution".to_string(),
-                ));
-            }
             ensure_read_only_statements(&QueryLanguage::Sql.split_statements(&req.sql))?;
         }
 

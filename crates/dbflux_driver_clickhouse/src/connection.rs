@@ -280,19 +280,7 @@ impl Connection for ClickHouseConnection {
             .execution_context
             .as_ref()
             .and_then(|context| context.source.as_ref());
-        if request.read_only.is_required()
-            && matches!(
-                source,
-                Some(
-                    ExecutionSourceContext::InstanceMetricQuery { .. }
-                        | ExecutionSourceContext::InstanceInspectorQuery { .. }
-                )
-            )
-        {
-            return Err(DbError::NotSupported(
-                "ClickHouse: read-only enforcement cannot be applied to an instance catalog query; the request was rejected before execution".to_string(),
-            ));
-        }
+        request.refuse_read_only_for_instance_catalog("ClickHouse")?;
 
         if let Some(source) = source {
             match source {

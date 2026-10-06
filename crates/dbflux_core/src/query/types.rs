@@ -233,6 +233,33 @@ impl QueryRequest {
         Ok(())
     }
 
+    /// Refuses a request that requires read-only enforcement when its source
+    /// is an instance metric or inspector query, which a driver runs outside
+    /// its read-only session. Call it before anything runs, so the refusal has
+    /// no side effects.
+    pub fn refuse_read_only_for_instance_catalog(
+        &self,
+        driver: &str,
+    ) -> Result<(), crate::DbError> {
+        let is_instance_catalog = matches!(
+            self.execution_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref()),
+            Some(
+                crate::ExecutionSourceContext::InstanceMetricQuery { .. }
+                    | crate::ExecutionSourceContext::InstanceInspectorQuery { .. }
+            )
+        );
+
+        if self.read_only.is_required() && is_instance_catalog {
+            return Err(crate::DbError::NotSupported(format!(
+                "{driver}: read-only enforcement cannot be applied to an instance catalog query; the request was rejected before execution"
+            )));
+        }
+
+        Ok(())
+    }
+
     pub fn with_limit(mut self, limit: u32) -> Self {
         self.limit = Some(limit);
         self
@@ -791,6 +818,47 @@ mod tests {
         let request = QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
 
         assert!(request.read_only.is_required());
+    }
+
+    #[test]
+    fn refuse_read_only_for_instance_catalog_rejects_only_required_catalog_requests() {
+        let catalog_context = |source| ExecutionContext {
+            source: Some(source),
+            ..Default::default()
+        };
+        let metric = catalog_context(crate::ExecutionSourceContext::InstanceMetricQuery {
+            metric_id: "metric".to_string(),
+            start_ms: 0,
+            end_ms: 1,
+        });
+        let inspector = catalog_context(crate::ExecutionSourceContext::InstanceInspectorQuery {
+            metric_id: "inspector".to_string(),
+        });
+
+        for context in [metric, inspector] {
+            let plain = QueryRequest::new("SELECT 1").with_execution_context(Some(context.clone()));
+            assert!(
+                plain
+                    .refuse_read_only_for_instance_catalog("Test driver")
+                    .is_ok()
+            );
+
+            let required = plain.with_read_only(ReadOnlyEnforcement::Required);
+            match required.refuse_read_only_for_instance_catalog("Test driver") {
+                Err(crate::DbError::NotSupported(message)) => {
+                    assert!(message.starts_with("Test driver"), "{message}");
+                }
+                other => panic!("expected NotSupported, got {other:?}"),
+            }
+        }
+
+        let required_query =
+            QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
+        assert!(
+            required_query
+                .refuse_read_only_for_instance_catalog("Test driver")
+                .is_ok()
+        );
     }
 
     #[test]

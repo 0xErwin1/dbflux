@@ -1710,17 +1710,8 @@ impl Connection for PostgresConnection {
         {
             return Err(DbError::NotSupported("PostgreSQL: row limits on instance catalog queries are unsupported; rejected before execution".to_string()));
         }
+        req.refuse_read_only_for_instance_catalog("PostgreSQL")?;
         if req.read_only.is_required() {
-            if let Some(
-                ExecutionSourceContext::InstanceMetricQuery { .. }
-                | ExecutionSourceContext::InstanceInspectorQuery { .. },
-            ) = req
-                .execution_context
-                .as_ref()
-                .and_then(|context| context.source.as_ref())
-            {
-                return Err(DbError::NotSupported("PostgreSQL: read-only enforcement on instance catalog queries is unsupported; rejected before execution".to_string()));
-            }
             ensure_no_transaction_control(&req.sql)?;
         }
 
