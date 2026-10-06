@@ -65,3 +65,4 @@ parquet.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 rust_xlsxwriter.workspace = true
+zip.workspace = true

@@ -783,9 +783,11 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
-/// The spreadsheet document: the table of the shown sheet and the sheet
-/// tabs. Alt+L and Alt+H (`NextResultTab`, `PrevResultTab`) step through the
-/// worksheets; a chart sheet's tab takes no click.
+/// The spreadsheet document: the table of the shown sheet, the sheet tabs
+/// and the edit bar. Alt+L and Alt+H (`NextResultTab`, `PrevResultTab`) step
+/// through the worksheets; a chart sheet's tab takes no click. Append row is
+/// the table's add-row key (`a a`) and a pane action, and Save is the table's
+/// save key.
 pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
     name: "spreadsheet file",
     contexts: &[ContextId::Results, ContextId::DataTable],
@@ -801,6 +803,11 @@ pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
             "spreadsheet-sheet-*",
             KeyboardPath::Command(Command::NextResultTab),
         ),
+        (
+            "spreadsheet-append-row",
+            KeyboardPath::Command(Command::ResultsAddRow),
+        ),
+        ("spreadsheet-save", KeyboardPath::Command(Command::SaveRow)),
     ],
 };
 

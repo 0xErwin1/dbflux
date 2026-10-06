@@ -7,10 +7,11 @@
 //! when DBFlux writes a formula or patches an ods file: it shows a legend
 //! saying it is recalculated when opened, as empty text in every other
 //! respect, so it is neither an edit nor written back. The formula of each
-//! cell is kept apart, sparsely, for the formula readout. Nothing here does
-//! I/O.
+//! cell is kept apart, sparsely, for the formula readout, and so is what an
+//! edit needs to know about a cell: which cells hold a boolean or a date, and
+//! where appended rows go. Nothing here does I/O.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dbflux_components::components::data_table::TableModel;
@@ -19,6 +20,9 @@ use dbflux_components::components::data_table::model::{
 };
 use dbflux_spreadsheet::{CellFormula, CellValue as SheetValue, SheetGrid};
 use gpui::TextAlign;
+
+/// How many columns an empty sheet that can be edited is shown with.
+pub(super) const BLANK_SHEET_COLUMNS: usize = 10;
 
 /// The resident sheet: its table, and the formulas of its cells.
 pub(super) struct SheetModel {
@@ -32,8 +36,33 @@ pub(super) struct SheetModel {
     /// known to hold or not hold a formula.
     formulas_unavailable: bool,
 
+    /// The cells that hold a boolean, by zero-based `(row, column)`.
+    booleans: HashSet<(usize, usize)>,
+
+    /// The cells that hold a date, which the reader reports only for a cell
+    /// whose number format is a date format.
+    dates: HashSet<(usize, usize)>,
+
+    /// Per column, whether the lowest cell holding a value holds a date.
+    column_ends_in_date: Vec<bool>,
+
+    /// The zero-based file row of the first appended row. `None` for a
+    /// format without a writer.
+    append_row: Option<usize>,
+
     rows: usize,
     columns: usize,
+}
+
+/// What an edit needs to know about the cell it writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CellTarget {
+    /// The cell holds a boolean, so `true` and `false` stay booleans.
+    pub(super) holds_boolean: bool,
+
+    /// The cell's number format is a date format, so an ISO date typed into
+    /// it is a date.
+    pub(super) date_format: bool,
 }
 
 /// What the formula readout says about one cell.
@@ -58,6 +87,9 @@ impl SheetModel {
         let mut formulas = HashMap::new();
         let mut formulas_unavailable = false;
         let mut pending_legend: Option<String> = None;
+        let mut booleans = HashSet::new();
+        let mut dates = HashSet::new();
+        let mut column_ends_in_date = vec![false; columns];
         let mut table_rows = Vec::with_capacity(rows);
 
         for row in 0..rows {
@@ -72,6 +104,23 @@ impl SheetModel {
 
                 if let Some(scan) = kinds.get_mut(column) {
                     *scan = scan.with(&cell.value);
+                }
+
+                match &cell.value {
+                    SheetValue::Empty => {}
+                    SheetValue::Bool(_) => {
+                        booleans.insert((row, column));
+                    }
+                    SheetValue::Date(_) => {
+                        dates.insert((row, column));
+                    }
+                    _ => {}
+                }
+
+                if cell.value != SheetValue::Empty
+                    && let Some(ends_in_date) = column_ends_in_date.get_mut(column)
+                {
+                    *ends_in_date = matches!(cell.value, SheetValue::Date(_));
                 }
 
                 match &cell.formula {
@@ -107,8 +156,73 @@ impl SheetModel {
             table: Arc::new(TableModel::new(specs, table_rows)),
             formulas,
             formulas_unavailable,
+            booleans,
+            dates,
+            column_ends_in_date,
+            append_row: grid.append_row().map(|append_row| append_row.max(rows)),
             rows,
             columns,
+        }
+    }
+
+    /// An empty sheet as `columns` blank columns, so rows can be appended to
+    /// it. The `rows` empty rows the reader padded the sheet with stay, so
+    /// every row of the table is still the file row of its number, and
+    /// appended rows are written from `append_row` on.
+    pub(super) fn blank(rows: usize, columns: usize, append_row: usize) -> Self {
+        let specs = (0..columns)
+            .map(|index| column_spec(index, KindScan::Empty))
+            .collect();
+
+        let table_rows = (0..rows)
+            .map(|_| RowData {
+                cells: vec![CellValue::text(""); columns],
+            })
+            .collect();
+
+        Self {
+            table: Arc::new(TableModel::new(specs, table_rows)),
+            formulas: HashMap::new(),
+            formulas_unavailable: false,
+            booleans: HashSet::new(),
+            dates: HashSet::new(),
+            column_ends_in_date: vec![false; columns],
+            append_row: Some(append_row.max(rows)),
+            rows,
+            columns,
+        }
+    }
+
+    /// The zero-based file row the first appended row is written at, past
+    /// every row the table shows. `None` for a format without a writer.
+    pub(super) fn append_row(&self) -> Option<usize> {
+        self.append_row
+    }
+
+    /// Whether the cell at zero-based `row` and `column` holds a formula.
+    pub(super) fn has_formula(&self, row: usize, column: usize) -> bool {
+        self.formulas.contains_key(&(row, column))
+    }
+
+    /// What an edit of the cell at zero-based `row` and `column` needs to
+    /// know. `row` is `None` for a cell of an appended row, which is given a
+    /// date format when the lowest value of its column is a date: the
+    /// patcher gives a new xlsx cell the style of the cell above it.
+    pub(super) fn target(&self, row: Option<usize>, column: usize) -> CellTarget {
+        match row {
+            Some(row) => CellTarget {
+                holds_boolean: self.booleans.contains(&(row, column)),
+                date_format: self.dates.contains(&(row, column)),
+            },
+
+            None => CellTarget {
+                holds_boolean: false,
+                date_format: self
+                    .column_ends_in_date
+                    .get(column)
+                    .copied()
+                    .unwrap_or(false),
+            },
         }
     }
 
@@ -217,7 +331,8 @@ fn is_whole(number: f64) -> bool {
 }
 
 /// The header of one column. The kind decides alignment only: the rows are
-/// never sorted and, in this document, never edited.
+/// never sorted, and a typed value is written by the cell input rules, not by
+/// the kind of its column.
 fn column_spec(index: usize, scan: KindScan) -> ColumnSpec {
     let (kind, type_name) = match scan {
         KindScan::Empty => (ColumnKind::Unknown, ""),

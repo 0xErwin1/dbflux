@@ -3,8 +3,10 @@ use crate::ui::document::{DocumentKey, FileDocumentKey, SpreadsheetDocument};
 use crate::ui::labels::spreadsheet_objects_unsupported_message;
 
 impl Workspace {
-    /// Opens a local spreadsheet read-only, one sheet at a time, in its own
-    /// tab, or focuses the tab that already shows it: one tab per local path.
+    /// Opens a local spreadsheet one sheet at a time in its own tab, or
+    /// focuses the tab that already shows it: one tab per local path. Its
+    /// cells can be edited and saved in place, except in an xls file, which
+    /// opens read-only.
     ///
     /// The path is resolved first, so two spellings of one file and a
     /// symlink to it share a tab. A path that resolves is kept in recent

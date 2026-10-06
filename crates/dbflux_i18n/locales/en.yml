@@ -2034,7 +2034,22 @@ document:
     warning:
       cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
   spreadsheet:
+    unsaved_summary: "Unsaved edits to %{name}"
+    formula_warning:
+      one: "%{count} formula cell will be replaced by a value"
+      many: "%{count} formula cells will be replaced by values"
+    read_only:
+      xls: "This .xls file is read-only: DBFlux cannot write the .xls format. Save it as .xlsx to edit it."
+    action:
+      append_row: "Append row"
+      save: "Save"
+      saving: "Saving…"
     error:
+      save_failed: "Could not save %{name}"
+      rows_only_at_end: "Rows can only be added at the end of a sheet. Inserting or deleting a row inside a sheet would move the cells that formulas, charts and ranges point at, so only a row appended and not saved yet can be deleted."
+      save_while_reading: "A sheet is being read. Save again once it is shown."
+      input:
+        a1_reference: "Cell %{cell} of sheet %{sheet} holds a formula with an A1-style reference. An ods file takes OpenFormula references such as [.A1] or [.A1:.B3]. Fix the formula, or start the value with ' to store it as text."
       write:
         malformed: "The file is not a spreadsheet package DBFlux can edit in place, so nothing was saved."
         sheet_out_of_range: "The sheet being saved is no longer in the file. Reload the file and edit it again."

@@ -3655,6 +3655,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "zip",
 ]
 
 [[package]]

@@ -2,15 +2,19 @@
 //!
 //! Layout of an opened workbook, top to bottom: a header with the summary
 //! ("N sheets · R rows × C columns · the whole sheet is loaded in memory"),
-//! the formula readout of the selected cell, the table of the shown sheet,
-//! and the sheet tabs. A hidden sheet's tab says so; a chart sheet's tab is
-//! listed but takes no click, and its tooltip says why.
+//! the edit bar (the formula replacement warning, Append row and Save) or,
+//! for xls, a banner saying the file is read-only, the formula readout of
+//! the selected cell, the table of the shown sheet, and the sheet tabs. A
+//! hidden sheet's tab says so; a sheet with pending edits ends its name with
+//! a dot; a chart sheet's tab is listed but takes no click, and its tooltip
+//! says why.
 //!
 //! While the file is opened and when opening failed, a centered notice takes
 //! the place of all of it. While a sheet is read, when reading it failed and
 //! when it is empty, a notice takes the place of the readout and the table.
 
 use dbflux_components::composites::{EmptyState, result_tab, result_tab_bar};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::{DocumentMetrics, FontSizes};
 use dbflux_spreadsheet::SheetKind;
@@ -57,6 +61,98 @@ impl SpreadsheetDocument {
                     .text_color(cx.theme().muted_foreground)
                     .children(self.summary()),
             )
+            .into_any_element()
+    }
+
+    /// Append row and Save, after the warning that pending edits replace
+    /// formula cells with values. For xls, whose format has no writer, a
+    /// banner saying the file is read-only takes its place.
+    fn render_edit_bar(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+
+        if !self.is_editable_format() {
+            return document_bar(DocumentMetrics::TOOLBAR_HEIGHT, cx)
+                .id("spreadsheet-read-only")
+                .debug_selector(|| "spreadsheet-read-only".to_string())
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(dbflux_i18n::t!("document.spreadsheet.read_only.xls")),
+                )
+                .into_any_element();
+        }
+
+        let replaced = self.formula_replacement_count(cx);
+
+        let warning = (replaced > 0).then(|| {
+            div()
+                .id("spreadsheet-formula-warning")
+                .debug_selector(|| "spreadsheet-formula-warning".to_string())
+                .min_w_0()
+                .truncate()
+                .text_color(theme.warning)
+                .child(crate::labels::spreadsheet_formula_warning(replaced))
+        });
+
+        let append_row = Button::new(
+            "spreadsheet-append-row",
+            dbflux_i18n::t!("document.spreadsheet.action.append_row"),
+        )
+        .inline()
+        .icon(AppIcon::Plus)
+        .when_some(
+            dbflux_ui_base::keymap::shortcut_label(
+                dbflux_app::keymap::ContextId::DataTable,
+                dbflux_app::keymap::Command::ResultsAddRow,
+            ),
+            Button::kbd,
+        )
+        .disabled(!self.can_append_row())
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.append_row(cx);
+        }));
+
+        let (save_label, save_icon) = if self.is_saving() {
+            (
+                dbflux_i18n::t!("document.spreadsheet.action.saving"),
+                AppIcon::Loader,
+            )
+        } else {
+            (
+                dbflux_i18n::t!("document.spreadsheet.action.save"),
+                AppIcon::Save,
+            )
+        };
+
+        // A disabled primary button keeps its fill, which reads as a live
+        // control, so Save takes the primary style only while it can save.
+        let can_save = self.can_save();
+
+        let save = Button::new("spreadsheet-save", save_label)
+            .inline()
+            .when(can_save, Button::primary)
+            .icon(save_icon)
+            .when_some(
+                dbflux_ui_base::keymap::shortcut_label(
+                    dbflux_app::keymap::ContextId::DataTable,
+                    dbflux_app::keymap::Command::SaveRow,
+                ),
+                Button::kbd,
+            )
+            .disabled(!can_save)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.save(cx);
+            }));
+
+        document_bar(DocumentMetrics::TOOLBAR_HEIGHT, cx)
+            .id("spreadsheet-edit-bar")
+            .text_size(FontSizes::XS)
+            .child(div().flex_1().min_w_0().children(warning))
+            .child(append_row)
+            .child(save)
             .into_any_element()
     }
 
@@ -117,6 +213,12 @@ impl SpreadsheetDocument {
         let active = self.active_sheet();
 
         let tabs = self.sheets().iter().enumerate().map(|(index, sheet)| {
+            let label = if self.sheet_has_pending_edits(index, cx) {
+                format!("{} •", sheet.name)
+            } else {
+                sheet.name.clone()
+            };
+
             let meta = match (sheet.kind, sheet.visible) {
                 (SheetKind::Worksheet, true) => None,
                 (SheetKind::Worksheet, false) => {
@@ -129,7 +231,7 @@ impl SpreadsheetDocument {
 
             let tab = result_tab(
                 ("spreadsheet-sheet", index),
-                sheet.name.clone(),
+                label,
                 meta,
                 active == Some(index),
                 cx,
@@ -233,6 +335,7 @@ impl Render for SpreadsheetDocument {
                 .flex_1()
                 .min_h_0()
                 .child(self.render_header(cx))
+                .child(self.render_edit_bar(cx))
                 .child(self.render_sheet_body(cx))
                 .child(self.render_sheet_tabs(cx))
                 .into_any_element(),
@@ -258,6 +361,7 @@ impl Render for SpreadsheetDocument {
         div()
             .id("spreadsheet-document")
             .track_focus(self.focus_handle())
+            .capture_action(cx.listener(Self::take_save_key))
             .flex()
             .flex_col()
             .size_full()

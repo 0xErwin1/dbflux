@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::DataTableState;
-use dbflux_components::components::data_table::model::ColumnKind;
+use dbflux_components::components::data_table::model::{CellValue, ColumnKind};
 use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
 use dbflux_ui_base::toast::ToastGlobal;
@@ -16,12 +16,12 @@ use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
 use crate::types::{DocumentKind, DocumentState};
 
 /// A directory removed when the test ends.
-struct TestDirectory {
+pub(super) struct TestDirectory {
     path: PathBuf,
 }
 
 impl TestDirectory {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
             "dbflux-spreadsheet-{name}-{}",
             uuid::Uuid::new_v4()
@@ -31,7 +31,7 @@ impl TestDirectory {
         Self { path }
     }
 
-    fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+    pub(super) fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let path = self.path.join(name);
         std::fs::write(&path, bytes).expect("the test file must be writable");
         path
@@ -45,7 +45,7 @@ impl Drop for TestDirectory {
 }
 
 /// The bytes of a file checked in under `dbflux_spreadsheet/tests/fixtures/`.
-fn fixture(name: &str) -> Vec<u8> {
+pub(super) fn fixture(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../dbflux_spreadsheet/tests/fixtures")
         .join(name);
@@ -54,7 +54,7 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 /// Builds an xlsx in memory.
-fn xlsx_bytes(
+pub(super) fn xlsx_bytes(
     build: impl FnOnce(&mut rust_xlsxwriter::Workbook) -> Result<(), XlsxError>,
 ) -> Vec<u8> {
     let mut workbook = rust_xlsxwriter::Workbook::new();
@@ -67,7 +67,7 @@ fn xlsx_bytes(
 /// A workbook of four sheets: `Items` with a header row, numbers and a
 /// formula; `Notes`, a second worksheet; `Archive`, hidden; and `Chart`, a
 /// chart sheet.
-fn items_workbook() -> Vec<u8> {
+pub(super) fn items_workbook() -> Vec<u8> {
     xlsx_bytes(|workbook| {
         let items = workbook.add_worksheet().set_name("Items")?;
         items.write(0, 0, "Name")?;
@@ -108,7 +108,7 @@ fn items_workbook() -> Vec<u8> {
     })
 }
 
-fn open_local(
+pub(super) fn open_local(
     cx: &mut TestAppContext,
     path: PathBuf,
 ) -> (Entity<SpreadsheetDocument>, &mut VisualTestContext) {
@@ -128,7 +128,7 @@ fn open_local(
     (document, window)
 }
 
-fn table_state(
+pub(super) fn table_state(
     document: &Entity<SpreadsheetDocument>,
     window: &mut VisualTestContext,
 ) -> Entity<DataTableState> {
@@ -172,7 +172,7 @@ fn kinds(
     })
 }
 
-fn display(
+pub(super) fn display(
     document: &Entity<SpreadsheetDocument>,
     window: &mut VisualTestContext,
     row: usize,
@@ -191,7 +191,10 @@ fn display(
     })
 }
 
-fn row_count(document: &Entity<SpreadsheetDocument>, window: &mut VisualTestContext) -> usize {
+pub(super) fn row_count(
+    document: &Entity<SpreadsheetDocument>,
+    window: &mut VisualTestContext,
+) -> usize {
     let table_state = table_state(document, window);
 
     window.update(|_, cx| table_state.read(cx).model().row_count())
@@ -211,7 +214,7 @@ fn sheet_names(
     })
 }
 
-fn active_sheet(
+pub(super) fn active_sheet(
     document: &Entity<SpreadsheetDocument>,
     window: &mut VisualTestContext,
 ) -> Option<usize> {
@@ -224,13 +227,13 @@ fn failure(document: &Entity<SpreadsheetDocument>, window: &mut VisualTestContex
         .expect("the document reports a failure")
 }
 
-fn toast_count(window: &mut VisualTestContext) -> usize {
+pub(super) fn toast_count(window: &mut VisualTestContext) -> usize {
     window.update(|_, cx| cx.global::<ToastGlobal>().host.read(cx).toast_count())
 }
 
 /// Selects the cell at zero-based `row` and `column` and returns what the
 /// formula readout says about it.
-fn readout_at(
+pub(super) fn readout_at(
     document: &Entity<SpreadsheetDocument>,
     window: &mut VisualTestContext,
     row: usize,
@@ -281,7 +284,7 @@ fn xlsx_opens_with_its_sheets_as_tabs(cx: &mut TestAppContext) {
         let state = table_state.read(cx);
         (state.is_editable(), state.is_insertable())
     });
-    assert!(!editable && !insertable);
+    assert!(editable && insertable, "xlsx cells can be edited");
 
     window.update(|_, cx| table_state.update(cx, |state, cx| state.cycle_sort(1, cx)));
     window.run_until_parked();
@@ -613,23 +616,7 @@ fn a_file_that_is_not_a_spreadsheet_shows_the_typed_error(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn an_empty_sheet_shows_the_empty_state(cx: &mut TestAppContext) {
-    let directory = TestDirectory::new("empty");
-    let bytes = xlsx_bytes(|workbook| {
-        workbook.add_worksheet().set_name("Blank")?;
-        Ok(())
-    });
-    let path = directory.file("blank.xlsx", &bytes);
-
-    let (document, window) = open_local(cx, path);
-
-    assert!(window.update(|_, cx| document.read(cx).is_empty_sheet()));
-    assert!(window.debug_bounds("spreadsheet-empty").is_some());
-    assert_eq!(toast_count(window), 0);
-}
-
-#[gpui::test]
-fn the_pane_is_a_read_only_spreadsheet_tab(cx: &mut TestAppContext) {
+fn the_pane_carries_the_close_and_quit_hooks(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("pane");
     let path = directory.file("items.xlsx", &items_workbook());
 
@@ -639,9 +626,12 @@ fn the_pane_is_a_read_only_spreadsheet_tab(cx: &mut TestAppContext) {
 
     assert_eq!(pane.kind(), DocumentKind::Spreadsheet);
     window.update(|_, cx| assert_eq!(pane.tab_title(cx), "items.xlsx"));
-    assert!(pane.commit_pending_input.is_none());
-    assert!(pane.save_for_close.is_none());
-    assert!(pane.quit_disposition.is_none());
+    assert!(pane.commit_pending_input.is_some());
+    assert!(pane.save_for_close.is_some());
+    assert!(pane.quit_disposition.is_some());
+    assert!(pane.save_for_quit.is_some());
+    assert!(pane.discard_for_quit.is_some());
+    assert!(pane.flush_for_shutdown.is_some());
 }
 
 #[gpui::test]
@@ -649,7 +639,17 @@ fn the_spreadsheet_document_is_covered(cx: &mut TestAppContext) {
     let directory = TestDirectory::new("coverage");
     let path = directory.file("items.xlsx", &items_workbook());
 
-    let (_document, window) = open_local(cx, path);
+    let (document, window) = open_local(cx, path);
+
+    // Save takes a click only while there is an edit to save.
+    let table_state = table_state(&document, window);
+    window.update(|_, cx| {
+        table_state.update(cx, |state, cx| {
+            state.stage_cell_value(1, 0, CellValue::text("Quill"));
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
 
     let capture = FrameCapture::observe(window);
     let checked: Vec<String> = Coverage::new(SPREADSHEET)
@@ -665,12 +665,17 @@ fn the_spreadsheet_document_is_covered(cx: &mut TestAppContext) {
         );
     }
 
-    for tab in [
+    for id in [
         "spreadsheet-sheet-0",
         "spreadsheet-sheet-1",
         "spreadsheet-sheet-2",
+        "spreadsheet-append-row",
+        "spreadsheet-save",
     ] {
-        assert!(checked.iter().any(|id| id == tab), "{checked:?}");
+        assert!(
+            checked.iter().any(|checked_id| checked_id == id),
+            "{checked:?}"
+        );
     }
 
     assert!(

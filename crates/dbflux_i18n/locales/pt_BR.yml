@@ -2034,7 +2034,22 @@ document:
     warning:
       cannot_save_in_place: Este arquivo não informa data de modificação nem etiqueta de conteúdo, por isso não pode ser salvo no próprio local.
   spreadsheet:
+    unsaved_summary: "Edições não salvas em %{name}"
+    formula_warning:
+      one: "%{count} célula com fórmula será substituída por um valor"
+      many: "%{count} células com fórmula serão substituídas por valores"
+    read_only:
+      xls: "Este arquivo .xls é somente leitura: o DBFlux não consegue gravar o formato .xls. Salve-o como .xlsx para editá-lo."
+    action:
+      append_row: "Adicionar linha"
+      save: "Salvar"
+      saving: "Salvando…"
     error:
+      save_failed: "Não foi possível salvar %{name}"
+      rows_only_at_end: "Só é possível adicionar linhas no fim de uma planilha. Inserir ou excluir uma linha dentro da planilha moveria as células para as quais fórmulas, gráficos e intervalos apontam, então só uma linha adicionada e ainda não salva pode ser excluída."
+      save_while_reading: "Uma planilha está sendo lida. Salve de novo quando ela for exibida."
+      input:
+        a1_reference: "A célula %{cell} da planilha %{sheet} tem uma fórmula com uma referência no estilo A1. Um arquivo ods usa referências OpenFormula como [.A1] ou [.A1:.B3]. Corrija a fórmula ou comece o valor com ' para salvá-lo como texto."
       write:
         malformed: "O arquivo não é um pacote de planilha que o DBFlux consiga editar no próprio local, então nada foi salvo."
         sheet_out_of_range: "A planilha que estava sendo salva não está mais no arquivo. Recarregue o arquivo e edite-o novamente."
