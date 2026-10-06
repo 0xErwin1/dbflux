@@ -95,7 +95,6 @@ enum TokenKind {
 #[derive(Clone, Debug)]
 struct Token {
     kind: TokenKind,
-    offset: usize,
 }
 
 impl Token {
@@ -170,7 +169,7 @@ fn classify_with_rules(sql: &str, rules: &LexRules) -> ExecutionClassification {
 
     let classification = statements
         .iter()
-        .map(|statement| classify_statement(sql, statement, rules))
+        .map(|statement| classify_statement(statement))
         .fold(
             ExecutionClassification::Metadata,
             ExecutionClassification::max,
@@ -183,24 +182,32 @@ fn classify_with_rules(sql: &str, rules: &LexRules) -> ExecutionClassification {
     }
 }
 
-fn classify_statement(sql: &str, tokens: &[Token], rules: &LexRules) -> ExecutionClassification {
-    let Some(first_index) = tokens
-        .iter()
-        .position(|token| !matches!(token.kind, TokenKind::Symbol(_)))
-    else {
+fn classify_statement(tokens: &[Token]) -> ExecutionClassification {
+    let Some((first, rest)) = skip_leading_symbols(tokens).split_first() else {
         return ExecutionClassification::Write;
     };
 
-    let Some(keyword) = tokens[first_index].word() else {
+    let Some(keyword) = first.word() else {
         return ExecutionClassification::Write;
     };
 
     match keyword {
-        "EXPLAIN" | "DESC" | "DESCRIBE" => classify_explain(sql, &tokens[first_index + 1..], rules),
+        "EXPLAIN" | "DESC" | "DESCRIBE" => classify_explain(rest),
         "SHOW" => ExecutionClassification::Metadata,
-        "SELECT" | "WITH" => classify_read_body(&tokens[first_index + 1..]),
+        "SELECT" | "WITH" => classify_read_body(rest),
         _ => classify_leading_keyword(keyword),
     }
+}
+
+/// Drops the symbols, such as opening parentheses, that precede a statement's
+/// first word or quoted token.
+fn skip_leading_symbols(tokens: &[Token]) -> &[Token] {
+    let first_index = tokens
+        .iter()
+        .position(|token| !matches!(token.kind, TokenKind::Symbol(_)))
+        .unwrap_or(tokens.len());
+
+    tokens.get(first_index..).unwrap_or_default()
 }
 
 fn classify_leading_keyword(keyword: &str) -> ExecutionClassification {
@@ -216,7 +223,10 @@ fn classify_leading_keyword(keyword: &str) -> ExecutionClassification {
 
 /// `EXPLAIN` only plans a statement, unless `ANALYZE` makes it execute the
 /// statement, in which case the explained statement decides the class.
-fn classify_explain(sql: &str, tokens: &[Token], rules: &LexRules) -> ExecutionClassification {
+///
+/// A quoted name in the parenthesized option list counts as `ANALYZE`, because
+/// PostgreSQL accepts `EXPLAIN ("analyze") ...`.
+fn classify_explain(tokens: &[Token]) -> ExecutionClassification {
     let mut analyze = false;
     let mut index = 0;
 
@@ -234,7 +244,9 @@ fn classify_explain(sql: &str, tokens: &[Token], rules: &LexRules) -> ExecutionC
                 if depth == 0 {
                     break;
                 }
-            } else if matches!(token.word(), Some("ANALYZE" | "ANALYSE")) {
+            } else if matches!(token.word(), Some("ANALYZE" | "ANALYSE"))
+                || token.kind == TokenKind::Quoted
+            {
                 analyze = true;
             }
         }
@@ -271,16 +283,24 @@ fn classify_explain(sql: &str, tokens: &[Token], rules: &LexRules) -> ExecutionC
         index += 1;
     }
 
-    let Some(target) = tokens.get(index).filter(|_| analyze) else {
-        return ExecutionClassification::Metadata;
-    };
+    let target = tokens.get(index..).unwrap_or_default();
 
-    // No dialect explains an EXPLAIN; refusing it also bounds the recursion.
-    if matches!(target.word(), Some("EXPLAIN" | "DESC" | "DESCRIBE")) {
+    if !analyze || target.is_empty() {
+        return ExecutionClassification::Metadata;
+    }
+
+    // No dialect explains an EXPLAIN; refusing it also bounds the recursion to
+    // one level, even when the nested EXPLAIN sits inside parentheses.
+    let explains_an_explain = skip_leading_symbols(target)
+        .first()
+        .and_then(Token::word)
+        .is_some_and(|word| matches!(word, "EXPLAIN" | "DESC" | "DESCRIBE"));
+
+    if explains_an_explain {
         return ExecutionClassification::Write;
     }
 
-    classify_with_rules(&sql[target.offset..], rules)
+    classify_statement(target)
 }
 
 /// Classifies the body of a `SELECT` or `WITH` statement: a write keyword
@@ -300,7 +320,19 @@ fn classify_read_body(tokens: &[Token]) -> ExecutionClassification {
             .and_then(|previous| tokens.get(previous));
         let next = tokens.get(index + 1);
 
-        let is_qualified_name = previous.is_some_and(|previous| previous.is_symbol('.'));
+        let qualifier = index
+            .checked_sub(2)
+            .and_then(|qualifier| tokens.get(qualifier));
+
+        // `1.` is a numeric literal, so a word after it is not a qualified name.
+        let is_qualified_name = previous.is_some_and(|previous| previous.is_symbol('.'))
+            && qualifier.is_some_and(|qualifier| match &qualifier.kind {
+                TokenKind::Word(word) => {
+                    !word.starts_with(|character: char| character.is_ascii_digit())
+                }
+                TokenKind::Quoted => true,
+                TokenKind::Symbol(_) => false,
+            });
         let is_lone_bracketed_name = previous.is_some_and(|previous| previous.is_symbol('['))
             && next.is_some_and(|next| next.is_symbol(']'));
 
@@ -373,7 +405,7 @@ fn tokenize(sql: &str, rules: &LexRules) -> Vec<Token> {
     let mut state = ScanState::Normal;
     let mut index = 0;
 
-    while let Some(&(offset, current)) = chars.get(index) {
+    while let Some(&(_, current)) = chars.get(index) {
         let next = char_at(index + 1);
 
         match state {
@@ -407,9 +439,18 @@ fn tokenize(sql: &str, rules: &LexRules) -> Vec<Token> {
                 }
 
                 if current == '/' && next == Some('*') {
-                    // MySQL executes the body of `/*! ... */`, so it is scanned as code.
-                    if rules.executable_comments && char_at(index + 2) == Some('!') {
-                        index += 3;
+                    // MySQL executes the body of `/*! ... */` and MariaDB also that of
+                    // `/*M! ... */`, so it is scanned as code.
+                    let executable_prefix_len = match (char_at(index + 2), char_at(index + 3)) {
+                        (Some('!'), _) => Some(3),
+                        (Some('M' | 'm'), Some('!')) => Some(4),
+                        _ => None,
+                    };
+
+                    if rules.executable_comments
+                        && let Some(prefix_len) = executable_prefix_len
+                    {
+                        index += prefix_len;
 
                         while char_at(index).is_some_and(|character| character.is_ascii_digit()) {
                             index += 1;
@@ -446,7 +487,6 @@ fn tokenize(sql: &str, rules: &LexRules) -> Vec<Token> {
 
                     tokens.push(Token {
                         kind: TokenKind::Quoted,
-                        offset,
                     });
                     state = ScanState::Quoted {
                         close,
@@ -463,7 +503,6 @@ fn tokenize(sql: &str, rules: &LexRules) -> Vec<Token> {
                 {
                     tokens.push(Token {
                         kind: TokenKind::Quoted,
-                        offset,
                     });
                     state = ScanState::DollarQuoted {
                         tag_start: index,
@@ -487,14 +526,12 @@ fn tokenize(sql: &str, rules: &LexRules) -> Vec<Token> {
 
                     tokens.push(Token {
                         kind: TokenKind::Word(word),
-                        offset,
                     });
                     continue;
                 }
 
                 tokens.push(Token {
                     kind: TokenKind::Symbol(current),
-                    offset,
                 });
                 index += 1;
             }
@@ -726,6 +763,11 @@ mod tests {
                 "EXPLAIN ANALYZE FORMAT=TREE UPDATE t SET a = 1",
                 "DESCRIBE ANALYZE UPDATE t SET a = 1",
                 "EXPLAIN ANALYZE EXPLAIN ANALYZE SELECT 1",
+                // PostgreSQL accepts a quoted identifier as an option name.
+                "EXPLAIN (\"analyze\") DELETE FROM t",
+                "EXPLAIN (FORMAT JSON, \"analyze\" true) DELETE FROM t",
+                "EXPLAIN ANALYZE (EXPLAIN ANALYZE (SELECT 1))",
+                "EXPLAIN (ANALYZE) (EXPLAIN (ANALYZE) SELECT 1)",
             ],
             ExecutionClassification::Write,
         );
@@ -735,6 +777,16 @@ mod tests {
             ExecutionClassification::Read
         );
         assert!(is_safe_read_query("EXPLAIN ANALYZE SELECT * FROM t"));
+    }
+
+    #[test]
+    fn deeply_nested_explain_analyze_is_refused_without_deep_recursion() {
+        let query = "EXPLAIN ANALYZE (".repeat(50_000);
+
+        assert_eq!(
+            classify_sql_execution(&query),
+            ExecutionClassification::Write
+        );
     }
 
     #[test]
@@ -763,6 +815,8 @@ mod tests {
                 "SELECT * INTO #tmp FROM t",
                 "SELECT a, b INTO OUTFILE '/tmp/out.csv' FROM t",
                 "SELECT a FROM t INTO DUMPFILE '/tmp/out.bin'",
+                // `1.` is a numeric literal, not a qualifier.
+                "SELECT 1. INTO t2",
             ],
             ExecutionClassification::Write,
         );
@@ -778,6 +832,7 @@ mod tests {
                 "SELECT * FROM t FOR NO KEY UPDATE",
                 "SELECT * FROM t FOR KEY SHARE NOWAIT",
                 "SELECT * FROM t LOCK IN SHARE MODE",
+                "SELECT * FROM t WHERE id = 1. FOR SHARE",
             ],
             ExecutionClassification::Write,
         );
@@ -809,6 +864,9 @@ mod tests {
             &[
                 // MySQL executes the body of a `/*! ... */` comment.
                 "SELECT a FROM t /*!50000 INTO OUTFILE '/tmp/x' */",
+                // MariaDB also executes the body of `/*M! ... */`.
+                "SELECT a FROM t /*M!100000 INTO OUTFILE '/tmp/x' */",
+                "SELECT a FROM t /*M! INTO OUTFILE '/tmp/x' */",
                 // MySQL reads `\'` as an escaped quote, so the string closes early.
                 r"SELECT 'a\'' , b INTO OUTFILE '/tmp/x' FROM t",
                 // PostgreSQL block comments nest.
