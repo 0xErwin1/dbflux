@@ -4197,10 +4197,7 @@ fn native_error(table: &str, detail: String) -> DbError {
 #[cfg(test)]
 static REBUILD_TEST_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
-/// Locks a test hook mutex for the hook blocks inlined in production fns.
-/// These hooks keep the original fail-on-poison behavior (`expect` on the
-/// poisoned lock); the helper is not `Result`-returning, so `unwrap_in_result`
-/// does not apply to the `expect`.
+// Test hook poisoning must fail the test, not become a driver error.
 #[cfg(test)]
 fn lock_test_hook<'a, T>(mutex: &'a Mutex<T>, message: &str) -> std::sync::MutexGuard<'a, T> {
     mutex.lock().expect(message)

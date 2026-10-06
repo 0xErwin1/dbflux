@@ -81,7 +81,9 @@ pub(super) fn save_staging_objects_in(
 ///
 /// `target` names the file or object being saved and `directory` the place
 /// the staged file lives in, for the error a failed write of it reports.
-#[cfg(test)]
+/// The error path it exercises needs a device that fails writes, so the only
+/// caller is the `/dev/full` test on Linux.
+#[cfg(all(test, target_os = "linux"))]
 pub(super) fn write_staged<S: ByteSource>(
     source: &S,
     request: &SaveRequest<'_>,

@@ -1265,13 +1265,17 @@ fn input_bindings_run_the_input_actions() {
         &["Input"],
     );
 
-    let mut expected: Vec<(&'static str, Box<dyn Action>)> = vec![
+    let expected: Vec<(&'static str, Box<dyn Action>)> = vec![
         ("ctrl-j", Box::new(InputMoveDown)),
         ("ctrl-k", Box::new(InputMoveUp)),
         ("ctrl-space", Box::new(TriggerCompletion)),
     ];
     #[cfg(not(target_os = "macos"))]
-    expected.push(("ctrl-shift-z", Box::new(gpui_component::input::Redo)));
+    let expected: Vec<(&'static str, Box<dyn Action>)> = {
+        let mut expected = expected;
+        expected.push(("ctrl-shift-z", Box::new(gpui_component::input::Redo)));
+        expected
+    };
 
     assert_element_bindings(&stack, expected, "input");
 }
