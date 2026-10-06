@@ -2064,7 +2064,6 @@ document:
         inside_formula_range: "Cell %{cell} of sheet %{sheet} is inside the formula range %{range}, which only a spreadsheet application can edit as a whole."
       open_failed: "Could not open %{name}"
       sheet_failed: "Could not read sheet %{sheet} of %{name}"
-      objects_unsupported: "Spreadsheets stored in object storage cannot be opened yet. Download %{name} and open the local copy."
       not_a_spreadsheet: "The file is not an xlsx, xlsm, xls or ods workbook."
       encrypted: "The workbook is encrypted or protected with a password to open, which DBFlux cannot read."
       chart_sheet: "Sheet %{sheet} is a chart sheet and has no cells to show."

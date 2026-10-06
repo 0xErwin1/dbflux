@@ -1,67 +1,102 @@
 use super::*;
-use crate::ui::document::{DocumentKey, FileDocumentKey, SpreadsheetDocument};
-use crate::ui::labels::spreadsheet_objects_unsupported_message;
+use crate::ui::document::{DocumentKey, FileDocumentKey, ObjectSavedCallback, SpreadsheetDocument};
+use crate::ui::labels::{NoActiveConnectionKind, documents_no_active_connection_message};
 
 impl Workspace {
-    /// Opens a local spreadsheet one sheet at a time in its own tab, or
-    /// focuses the tab that already shows it: one tab per local path. Its
-    /// cells can be edited and saved in place, except in an xls file, which
-    /// opens read-only.
+    /// Opens a spreadsheet one sheet at a time in its own tab, or focuses the
+    /// tab that already shows it: one tab per local path and per
+    /// `(profile_id, bucket, key)`.
     ///
-    /// The path is resolved first, so two spellings of one file and a
+    /// A local path is resolved first, so two spellings of one file and a
     /// symlink to it share a tab. A path that resolves is kept in recent
     /// files. A path that cannot be resolved is opened as given, and the
     /// document reports why it cannot be read.
     ///
-    /// A spreadsheet object of an object store is refused with a message
-    /// that says to download it: objects do not open in this document yet.
+    /// An object is read through the live connection of its profile, so a
+    /// profile that is not connected is reported and opens nothing. An
+    /// object of a store that cannot read a byte range opens a tab that asks
+    /// whether to download it whole, and closes when the user declines.
+    /// `on_object_saved` is told the object's key after each save that
+    /// replaces it.
     ///
     /// The keyboard moves to the new tab on the next render, so callers
     /// without a window can open one.
     pub(in crate::ui::views::workspace) fn open_spreadsheet_file(
         &mut self,
         file: FileDocumentKey,
+        on_object_saved: Option<ObjectSavedCallback>,
         cx: &mut Context<Self>,
     ) {
-        let path = match file {
-            FileDocumentKey::Local { path } => path,
+        let file = match file {
+            FileDocumentKey::Local { path } => match std::fs::canonicalize(&path) {
+                Ok(resolved) => {
+                    self.app_state.update(cx, |state, cx| {
+                        state.record_recent_file(resolved.clone());
+                        cx.emit(AppStateChanged);
+                    });
 
-            FileDocumentKey::Object { key, .. } => {
-                let name = key.rsplit('/').next().unwrap_or(&key);
-
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::User,
-                        spreadsheet_objects_unsupported_message(name),
-                    ),
-                    cx,
-                );
-                return;
-            }
+                    FileDocumentKey::Local { path: resolved }
+                }
+                Err(_) => FileDocumentKey::Local { path },
+            },
+            object @ FileDocumentKey::Object { .. } => object,
         };
 
-        let path = match std::fs::canonicalize(&path) {
-            Ok(resolved) => {
-                self.app_state.update(cx, |state, cx| {
-                    state.record_recent_file(resolved.clone());
-                    cx.emit(AppStateChanged);
-                });
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .find_by_key(&DocumentKey::FileDocument(file.clone()), cx);
 
-                resolved
-            }
-            Err(_) => path,
-        };
-
-        let key = DocumentKey::FileDocument(FileDocumentKey::Local { path: path.clone() });
-
-        if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+        if let Some(id) = existing_id {
             self.tab_manager.update(cx, |manager, cx| {
                 manager.activate(id, cx);
             });
             return;
         }
 
-        let document = cx.new(|cx| SpreadsheetDocument::open_local(path, cx));
+        let document = match file {
+            FileDocumentKey::Local { path } => {
+                cx.new(|cx| SpreadsheetDocument::open_local(path, cx))
+            }
+
+            FileDocumentKey::Object {
+                profile_id,
+                bucket,
+                key,
+            } => {
+                let connection = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|connected| connected.connection.clone());
+
+                let Some(connection) = connection else {
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::User,
+                            documents_no_active_connection_message(NoActiveConnectionKind::Object),
+                        ),
+                        cx,
+                    );
+                    return;
+                };
+
+                let app_state = self.app_state.clone();
+
+                cx.new(|cx| {
+                    let mut document = SpreadsheetDocument::open_object(
+                        app_state, profile_id, connection, bucket, key, cx,
+                    );
+
+                    if let Some(on_saved) = on_object_saved {
+                        document.set_on_object_saved(on_saved);
+                    }
+
+                    document
+                })
+            }
+        };
         let pane = SpreadsheetDocument::into_pane(document, cx);
 
         self.tab_manager.update(cx, |manager, cx| {
@@ -158,15 +193,6 @@ mod tests {
         })
     }
 
-    fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
-        window.update(|_, cx| {
-            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
-                .host
-                .read(cx)
-                .last_toast_title()
-        })
-    }
-
     #[gpui::test]
     fn opening_the_same_file_twice_focuses_one_tab(cx: &mut TestAppContext) {
         let (workspace, window) = new_workspace(cx);
@@ -214,17 +240,37 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_spreadsheet_object_is_refused_until_objects_are_supported(cx: &mut TestAppContext) {
+    fn a_spreadsheet_object_opens_in_its_own_tab(cx: &mut TestAppContext) {
         let (workspace, window) = new_workspace(cx);
         let bytes = fixture("in.ods");
         let store = ObjectStoreFake::with_ranged_objects(&[("2026/budget.ods", &bytes)]);
         let profile_id = connect_object_store(window, &workspace, store);
+        let object = FileDocumentKey::Object {
+            profile_id,
+            bucket: BUCKET.to_string(),
+            key: "2026/budget.ods".to_string(),
+        };
+
+        open(window, &workspace, object.clone());
+        open(window, &workspace, object);
+
+        assert_eq!(tab_titles(window, &workspace), ["budget.ods"]);
+        assert_eq!(tab_kinds(window, &workspace), [DocumentKind::Spreadsheet]);
+        assert_eq!(tab_states(window, &workspace), [DocumentState::Clean]);
+        assert_eq!(toast_count(window), 0);
+    }
+
+    #[gpui::test]
+    fn a_spreadsheet_object_of_a_profile_that_is_not_connected_opens_no_tab(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, window) = new_workspace(cx);
 
         open(
             window,
             &workspace,
             FileDocumentKey::Object {
-                profile_id,
+                profile_id: uuid::Uuid::new_v4(),
                 bucket: BUCKET.to_string(),
                 key: "2026/budget.ods".to_string(),
             },
@@ -232,12 +278,5 @@ mod tests {
 
         assert!(tab_titles(window, &workspace).is_empty());
         assert_eq!(toast_count(window), 1);
-        assert_eq!(
-            last_toast_title(window),
-            Some(dbflux_i18n::t!(
-                "document.spreadsheet.error.objects_unsupported",
-                name = "budget.ods"
-            ))
-        );
     }
 }

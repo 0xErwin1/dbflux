@@ -8203,7 +8203,6 @@ mod tests {
             "document.spreadsheet.formula.unavailable",
             "document.spreadsheet.error.open_failed",
             "document.spreadsheet.error.sheet_failed",
-            "document.spreadsheet.error.objects_unsupported",
             "document.spreadsheet.error.not_a_spreadsheet",
             "document.spreadsheet.error.encrypted",
             "document.spreadsheet.error.chart_sheet",

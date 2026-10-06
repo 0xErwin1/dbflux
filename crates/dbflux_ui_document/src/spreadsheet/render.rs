@@ -11,12 +11,19 @@
 //!
 //! While the file is opened and when opening failed, a centered notice takes
 //! the place of all of it. While a sheet is read, when reading it failed and
-//! when it is empty, a notice takes the place of the readout and the table.
+//! when it is empty and cannot be edited, a notice takes the place of the
+//! readout and the table.
+//!
+//! An object that is only read whole is downloaded after a prompt over the
+//! document says how large it is. Enter downloads and Escape declines.
 
 use dbflux_components::composites::{EmptyState, result_tab, result_tab_bar};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{DocumentMetrics, FontSizes};
+use dbflux_core::LogErr;
 use dbflux_spreadsheet::SheetKind;
 use gpui::prelude::*;
 use gpui::*;
@@ -27,7 +34,72 @@ use super::document::{SheetPhase, SpreadsheetDocument, SpreadsheetPhase};
 use super::grid_model::FormulaReadout;
 use crate::chrome::document_bar;
 
+const DOWNLOAD_PROMPT_WIDTH: Pixels = px(440.0);
+
 impl SpreadsheetDocument {
+    /// The open prompt before a whole download: the object's size, and
+    /// Cancel and Download. It asks what the Parquet document asks, in the
+    /// same words.
+    fn render_download_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let message = self.download_prompt_message()?;
+
+        let prompt = self.download_prompt_mut()?;
+        prompt.focus_mut().apply_pending(window, cx);
+        let focus_handle = prompt.focus_mut().handle().clone();
+
+        let footer = div()
+            .flex()
+            .gap(DocumentMetrics::GAP)
+            .child(
+                Button::new(
+                    "spreadsheet-download-cancel",
+                    dbflux_i18n::t!("document.parquet.download.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dismiss_download_prompt(cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "spreadsheet-download-confirm",
+                    dbflux_i18n::t!("document.parquet.download.confirm"),
+                )
+                .primary()
+                .icon(AppIcon::Download)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_download(cx);
+                })),
+            );
+
+        let document = cx.weak_entity();
+        let confirm_target = document.clone();
+
+        Some(
+            Modal::new(dbflux_i18n::t!("document.parquet.download.title"))
+                .id("spreadsheet-download-prompt")
+                .icon(AppIcon::Download)
+                .width(DOWNLOAD_PROMPT_WIDTH)
+                .focus_handle(&focus_handle)
+                .on_close(move |_window, cx| {
+                    document
+                        .update(cx, |this, cx| this.dismiss_download_prompt(cx))
+                        .log_err();
+                })
+                .on_confirm(move |_window, cx| {
+                    confirm_target
+                        .update(cx, |this, cx| this.confirm_download(cx))
+                        .log_err();
+                })
+                .body(Text::body(message))
+                .footer(footer)
+                .into_any_element(),
+        )
+    }
+
     fn render_notice(
         &self,
         id: &'static str,
@@ -327,6 +399,7 @@ impl Render for SpreadsheetDocument {
         }
 
         let title = self.title();
+        let download_prompt = self.render_download_prompt(window, cx);
 
         let body = match self.phase() {
             SpreadsheetPhase::Loaded(_) => div()
@@ -348,6 +421,16 @@ impl Render for SpreadsheetDocument {
                 cx,
             ),
 
+            SpreadsheetPhase::AwaitingDownload => self.render_notice(
+                "spreadsheet-awaiting-download",
+                EmptyState::new(
+                    AppIcon::Download,
+                    dbflux_i18n::t!("document.parquet.download.title"),
+                )
+                .title(title.clone()),
+                cx,
+            ),
+
             SpreadsheetPhase::Loading => self.render_notice(
                 "spreadsheet-loading",
                 EmptyState::new(
@@ -362,10 +445,12 @@ impl Render for SpreadsheetDocument {
             .id("spreadsheet-document")
             .track_focus(self.focus_handle())
             .capture_action(cx.listener(Self::take_save_key))
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .bg(cx.theme().background)
             .child(body)
+            .children(download_prompt)
     }
 }

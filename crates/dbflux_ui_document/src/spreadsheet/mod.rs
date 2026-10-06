@@ -20,6 +20,8 @@ mod save;
 #[cfg(test)]
 mod editing_tests;
 #[cfg(test)]
+mod object_tests;
+#[cfg(test)]
 mod tests;
 
 pub use document::SpreadsheetDocument;

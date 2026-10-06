@@ -2064,7 +2064,6 @@ document:
         inside_formula_range: "工作表 %{sheet} 的单元格 %{cell} 位于公式区域 %{range} 内，该区域只能在电子表格应用中整体编辑。"
       open_failed: "无法打开 %{name}"
       sheet_failed: "无法读取 %{name} 的工作表 %{sheet}"
-      objects_unsupported: "暂时无法打开存放在对象存储中的电子表格。请下载 %{name} 后打开本地副本。"
       not_a_spreadsheet: "此文件不是 xlsx、xlsm、xls 或 ods 工作簿。"
       encrypted: "工作簿已加密或设置了打开密码，DBFlux 无法读取。"
       chart_sheet: "工作表 %{sheet} 是图表工作表，没有可显示的单元格。"

@@ -12,6 +12,14 @@
 //! Once the file holds the edits it is read again, showing the sheet that
 //! was shown, and the pending edits are dropped. The table is read-only and
 //! the sheet tabs take no switch while a save runs.
+//!
+//! An object is patched into a temporary file and uploaded through the live
+//! connection of its profile, after its version is checked twice (see
+//! [`crate::file_save::save_file`]). An object downloaded whole is patched
+//! from that copy, which is the version checked, and is downloaded again to
+//! be read after the save. Every save of an object that reaches the storage
+//! layer is recorded in the audit log, and the opener is told of each one
+//! that replaced the object.
 
 use std::io::BufWriter;
 
@@ -21,14 +29,15 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use super::document::{
-    OpenError, OpenedWorkbook, SpreadsheetDocument, open_error_to_user_facing, open_workbook,
+    OpenError, OpenedWorkbook, SpreadsheetDocument, open_error_to_user_facing, read_workbook,
 };
 use super::input::{CellRefusal, InputRefusal};
 use crate::dedup::FileDocumentKey;
 use crate::file_edit_lifecycle::{local_file_saves_now, quit_disposition};
 use crate::file_save::{SaveOutcome, StageWriteError, save_file};
-use crate::file_source::{LocationSource, StorageError, WriteFailure};
+use crate::file_source::{LocationSource, ObjectReads, StorageError, WriteFailure};
 use crate::handle::DocumentEvent;
+use crate::object_text::record_save_audit;
 use crate::pane::QuitDisposition;
 
 /// What a background save hands to the foreground.
@@ -42,6 +51,34 @@ enum SaveResult {
 
     /// Nothing replaced the file.
     Refused(StorageError),
+}
+
+/// Where an object's save is recorded in the audit log, as the object editor
+/// and the CSV document record their saves.
+struct SaveAudit {
+    service: dbflux_audit::AuditService,
+    profile_id: uuid::Uuid,
+    bucket: String,
+    key: String,
+}
+
+impl SaveAudit {
+    /// Records one save that reached the storage layer: a success when the
+    /// object holds the edits, a failure with the reason otherwise.
+    fn record(&self, result: &SaveResult) {
+        let error = match result {
+            SaveResult::Saved { .. } => None,
+            SaveResult::Refused(error) => Some(error.to_string()),
+        };
+
+        record_save_audit(
+            &self.service,
+            self.profile_id,
+            &self.bucket,
+            &self.key,
+            error.as_deref(),
+        );
+    }
 }
 
 /// A typed value the input rules refuse, and the sheet it is on.
@@ -67,8 +104,13 @@ impl SpreadsheetDocument {
     ///   and the document is clean. When it cannot be read again, the edits
     ///   are saved and the document shows the failure.
     /// - A sheet is being read, a typed value breaks the input rules, the
-    ///   patcher refuses a cell, or the file changed since it was opened:
-    ///   nothing is written and every pending edit stays.
+    ///   patcher refuses a cell, the file changed since it was opened, or
+    ///   the profile of an object is not connected: nothing is written and
+    ///   every pending edit stays.
+    ///
+    /// An object's save is recorded in the audit log once it reaches the
+    /// storage layer, a success or a failure, even when the tab is closed
+    /// while it runs.
     pub fn save(&mut self, cx: &mut Context<Self>) {
         self.start_save(true, cx);
     }
@@ -114,6 +156,13 @@ impl SpreadsheetDocument {
                 return;
             }
         };
+
+        let summary = crate::labels::spreadsheet_save_failed_message(&title);
+
+        if self.use_live_connection(summary, cx).is_err() {
+            self.report_save_outcome(false, cx);
+            return;
+        }
 
         self.spawn_save(edits, reopen, cx);
     }
@@ -163,7 +212,8 @@ impl SpreadsheetDocument {
     }
 
     /// Marks the document as saving and writes `edits` in the background,
-    /// reading the file again after it when `reopen` is set.
+    /// reading the file again after it when `reopen` is set. The result is
+    /// recorded in the audit log when the save is audited.
     fn spawn_save(&mut self, edits: SheetEdits, reopen: bool, cx: &mut Context<Self>) {
         let Some(loaded) = self.loaded() else {
             self.report_save_outcome(false, cx);
@@ -174,6 +224,10 @@ impl SpreadsheetDocument {
         let format = loaded.format;
         let shown_sheet = loaded.active_sheet;
         let location = self.location.clone();
+        let reads = self.reads;
+        let downloaded_copy =
+            (reads == Some(ObjectReads::Downloaded)).then(|| loaded.source.clone());
+        let audit = self.save_audit(cx);
 
         self.saving = true;
         self.sync_table_editing(cx);
@@ -181,13 +235,16 @@ impl SpreadsheetDocument {
 
         let task = cx.background_executor().spawn(async move {
             let saved = save_file(&location, &captured, |source, sink| {
+                let source = downloaded_copy.as_deref().unwrap_or(source);
+
                 write_patched(source, format, &edits, sink)
             });
 
             match saved {
                 Ok(outcome) => SaveResult::Saved {
                     outcome,
-                    reopened: reopen.then(|| Box::new(open_workbook(&location, shown_sheet))),
+                    reopened: reopen
+                        .then(|| Box::new(read_workbook(&location, reads, shown_sheet))),
                 },
 
                 Err(error) => SaveResult::Refused(error),
@@ -196,6 +253,10 @@ impl SpreadsheetDocument {
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
+
+            if let Some(audit) = &audit {
+                audit.record(&result);
+            }
 
             cx.update(|cx| {
                 this.update(cx, |document, cx| document.apply_save_result(result, cx))
@@ -246,6 +307,7 @@ impl SpreadsheetDocument {
                     None => self.discard_changes(cx),
                 }
 
+                self.notify_object_saved(cx);
                 true
             }
         };
@@ -294,9 +356,10 @@ impl SpreadsheetDocument {
 
     /// What quitting means for the pending edits: a clean document loses
     /// nothing, a local file whose save would go through now is saved by the
-    /// shutdown flush, and everything else asks first. A local save goes
-    /// through when neither a save nor a sheet read runs, every typed value
-    /// passes the input rules, and the file passes
+    /// shutdown flush, and everything else asks first: an object always,
+    /// because an upload while quitting can fail or be cut short. A local
+    /// save goes through when neither a save nor a sheet read runs, every
+    /// typed value passes the input rules, and the file passes
     /// [`crate::file_edit_lifecycle::local_file_saves_now`].
     pub fn quit_disposition(&self, cx: &App) -> QuitDisposition {
         quit_disposition(self.is_dirty(), || {
@@ -340,7 +403,9 @@ impl SpreadsheetDocument {
     /// The document's part of the shutdown flush: a local file with pending
     /// edits is saved once, without reading it again. Returns whether a save
     /// is still running. An object's edits are never uploaded while
-    /// quitting, and are dropped with a warning in the log.
+    /// quitting: a quit from the window asked about them first. They reach
+    /// here only from a quit that could not ask (a terminal signal), and are
+    /// dropped with one warning in the log naming the object.
     pub fn flush_for_shutdown(&mut self, cx: &mut Context<Self>) -> bool {
         if self
             .lifecycle
@@ -350,10 +415,14 @@ impl SpreadsheetDocument {
                 FileDocumentKey::Local { .. } => self.start_save(false, cx),
 
                 FileDocumentKey::Object { bucket, key, .. } => {
+                    let object = format!("{bucket}/{key}");
+
                     log::warn!(
-                        "Unsaved changes to {bucket}/{key} were dropped at shutdown: an object \
-                         is not uploaded while quitting"
+                        "Unsaved changes to {object} were dropped at shutdown: an object is \
+                         not uploaded while quitting"
                     );
+
+                    self.dropped_at_shutdown.push(object);
                 }
             }
         }
@@ -366,6 +435,39 @@ impl SpreadsheetDocument {
     pub fn change_summary(&self) -> Option<String> {
         self.is_dirty()
             .then(|| crate::labels::spreadsheet_unsaved_summary(&self.title()))
+    }
+
+    /// Where an object's save is audited. `None` for a local file.
+    fn save_audit(&self, cx: &App) -> Option<SaveAudit> {
+        let FileDocumentKey::Object {
+            profile_id,
+            bucket,
+            key,
+        } = self.file()
+        else {
+            return None;
+        };
+
+        let service = self.app_state.as_ref()?.read(cx).audit_service().clone();
+
+        Some(SaveAudit {
+            service,
+            profile_id: *profile_id,
+            bucket: bucket.clone(),
+            key: key.clone(),
+        })
+    }
+
+    /// Tells the opener of an object that a save replaced it. A local file
+    /// has no opener to tell.
+    fn notify_object_saved(&self, cx: &mut App) {
+        let FileDocumentKey::Object { key, .. } = self.file() else {
+            return;
+        };
+
+        if let Some(on_saved) = self.on_object_saved.clone() {
+            on_saved(key, cx);
+        }
     }
 
     /// Reports a finished save to the workspace. Only a successful save the
