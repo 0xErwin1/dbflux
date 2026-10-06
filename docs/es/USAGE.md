@@ -29,6 +29,10 @@ a tu primera query; si no, elige la página de lo que estás haciendo.
   delimitados como tabla o como texto.
 - [Archivos Parquet](PARQUET_FILES.md) — leer archivos Parquet como una tabla
   paginada de solo lectura e inspeccionar sus columnas.
+- [Archivos de hoja de cálculo](SPREADSHEET_FILES.md) — abrir libros xlsx,
+  xlsm, xls y ods hoja por hoja, editar celdas de archivos xlsx, xlsm y ods y
+  guardarlas en el mismo archivo, y guardar un archivo xls, que es de solo
+  lectura, como un archivo xlsx nuevo.
 - [Gráficos](CHARTS.md) y [Dashboards](DASHBOARDS.md) — graficar resultados y
   construir dashboards.
 - [Referencia de teclado](KEYBOARD.md) — todos los atajos por defecto, incluido
