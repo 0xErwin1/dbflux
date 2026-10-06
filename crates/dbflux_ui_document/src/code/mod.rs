@@ -1745,6 +1745,7 @@ impl CodeDocument {
 
         // Always land in the text: FocusUp from it would move into the context bar.
         if cmd == Command::FocusEditor {
+            self.reveal_editor(cx);
             self.exit_context_bar(window, cx);
             return true;
         }
@@ -1755,6 +1756,7 @@ impl CodeDocument {
         {
             // Special handling for FocusUp to exit results
             if cmd == Command::FocusUp {
+                self.reveal_editor(cx);
                 self.focus_mode = SqlQueryFocus::Editor;
                 self.editor
                     .input_state
