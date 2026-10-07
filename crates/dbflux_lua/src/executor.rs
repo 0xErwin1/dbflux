@@ -23,6 +23,11 @@ impl Default for LuaExecutor {
 }
 
 impl HookExecutor for LuaExecutor {
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_in_result,
+        reason = "both mutexes guard per-run state; a poisoned lock means the run's outcome/log are already inconsistent, so panicking with the existing message is the contract - no Result propagation, no silent poison recovery; unwrap_in_result fires only because the trait method returns Result; owning fn item covers both locks"
+    )]
     fn execute_hook(
         &self,
         hook: &ConnectionHook,

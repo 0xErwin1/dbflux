@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-pub fn register_logging_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> {
+pub(crate) fn register_logging_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> {
     let dbflux = ensure_dbflux_table(lua)?;
     let logging = lua.create_table()?;
 
@@ -43,7 +43,7 @@ const BLOCKED_ENV_VARS: &[&str] = &[
     "DBFLUX_AUTH_PROVIDER_IPC_TOKEN",
 ];
 
-pub fn register_env_api(lua: &Lua) -> LuaResult<()> {
+pub(crate) fn register_env_api(lua: &Lua) -> LuaResult<()> {
     let dbflux = ensure_dbflux_table(lua)?;
     let env = lua.create_table()?;
 
@@ -63,7 +63,7 @@ pub fn register_env_api(lua: &Lua) -> LuaResult<()> {
     dbflux.set("env", env)
 }
 
-pub fn register_process_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> {
+pub(crate) fn register_process_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> {
     let dbflux = ensure_dbflux_table(lua)?;
     let process = lua.create_table()?;
 
@@ -415,6 +415,10 @@ fn read_string_list(options: &Table, key: &str) -> LuaResult<Vec<String>> {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned log lock is a hard failure by design: silently dropping a log entry would corrupt the run's output; the existing panic message is the intended contract"
+)]
 fn append_log(state: &LuaRuntimeState, stream: OutputStreamKind, message: String) {
     state
         .log_buffer
@@ -653,6 +657,10 @@ mod tests {
         lua
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "pre-existing fixture mutates process-global env via set_var/remove_var (unsafe since edition 2024); scoped to this test, no safety claim; fixture hardening tracked separately and not fixed here"
+    )]
     #[test]
     fn env_get_blocks_driver_ipc_token_exact_case() {
         // Set the var so it would be readable if not blocked.
@@ -669,6 +677,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "pre-existing fixture mutates process-global env via set_var/remove_var (unsafe since edition 2024); scoped to this test, no safety claim; fixture hardening tracked separately and not fixed here"
+    )]
     #[test]
     fn env_get_blocks_ipc_token_case_insensitive() {
         unsafe { std::env::set_var("DBFLUX_IPC_TOKEN", "should-be-blocked") };
@@ -686,6 +698,10 @@ mod tests {
         assert!(upper.is_none(), "uppercase key must be blocked");
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "pre-existing fixture mutates process-global env via set_var/remove_var (unsafe since edition 2024); scoped to this test, no safety claim; fixture hardening tracked separately and not fixed here"
+    )]
     #[test]
     fn env_get_blocks_auth_provider_ipc_token() {
         unsafe { std::env::set_var("DBFLUX_AUTH_PROVIDER_IPC_TOKEN", "should-be-blocked") };
@@ -701,6 +717,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "pre-existing fixture mutates process-global env via set_var/remove_var (unsafe since edition 2024); scoped to this test, no safety claim; fixture hardening tracked separately and not fixed here"
+    )]
     #[test]
     fn env_get_allows_unrelated_vars() {
         unsafe { std::env::set_var("DBFLUX_TEST_SAFE_VAR_12345", "visible") };
@@ -716,6 +736,10 @@ mod tests {
     // --- SEC2-3: PATH resolution helper ---
     // All PATH-mutating sub-cases are in one test fn to avoid cross-test races.
 
+    #[expect(
+        unsafe_code,
+        reason = "pre-existing fixture mutates process-global PATH via set_var/remove_var (unsafe since edition 2024); covers all 5 unsafe blocks in this test fn, no safety claim; fixture hardening tracked separately and not fixed here"
+    )]
     #[test]
     fn resolve_program_in_path_cases() {
         use std::sync::atomic::{AtomicU32, Ordering};

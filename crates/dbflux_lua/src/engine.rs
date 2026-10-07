@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
-pub struct LuaRuntimeState {
+pub(crate) struct LuaRuntimeState {
     pub outcome: Arc<Mutex<LuaHookOutcome>>,
     pub log_buffer: Arc<Mutex<Vec<String>>>,
     pub output: Option<OutputSender>,
@@ -19,12 +19,12 @@ pub struct LuaRuntimeState {
     pub hook_timeout: Option<Duration>,
 }
 
-pub struct LuaVm {
+pub(crate) struct LuaVm {
     pub lua: Lua,
     pub state: LuaRuntimeState,
 }
 
-pub struct LuaVmConfig<'a> {
+pub(crate) struct LuaVmConfig<'a> {
     pub context: &'a HookContext,
     pub phase: HookPhase,
     pub capabilities: &'a LuaCapabilities,
@@ -36,10 +36,10 @@ pub struct LuaVmConfig<'a> {
     pub hook_timeout: Option<Duration>,
 }
 
-pub struct LuaEngine;
+pub(crate) struct LuaEngine;
 
 impl LuaEngine {
-    pub fn create_vm(config: LuaVmConfig<'_>) -> LuaResult<LuaVm> {
+    pub(crate) fn create_vm(config: LuaVmConfig<'_>) -> LuaResult<LuaVm> {
         let LuaVmConfig {
             context,
             phase,

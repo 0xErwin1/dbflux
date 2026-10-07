@@ -3,14 +3,18 @@ use mlua::{Lua, Result as LuaResult, Table};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default)]
-pub enum LuaHookOutcome {
+pub(crate) enum LuaHookOutcome {
     #[default]
     Ok,
     Warn(String),
     Fail(String),
 }
 
-pub fn register_hook_api(
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned outcome lock is a hard failure by design: the hook's verdict must never be silently defaulted; the existing panic message is the intended contract; owning fn covers all three hook closures"
+)]
+pub(crate) fn register_hook_api(
     lua: &Lua,
     phase: HookPhase,
     outcome: Arc<Mutex<LuaHookOutcome>>,
