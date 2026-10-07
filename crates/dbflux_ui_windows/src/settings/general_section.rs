@@ -1116,7 +1116,7 @@ mod tests {
             "settings.general.toast_timeout.option.15s",
             "settings.general.toast_timeout.option.never",
         ] {
-            for locale in ["en", "es", "ko", "zh_Hans"] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty for {locale}");

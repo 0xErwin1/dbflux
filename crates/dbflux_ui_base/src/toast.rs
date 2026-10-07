@@ -290,7 +290,7 @@ impl Toast {
         let settles_on_its_own = self.progress.is_none() && self.actions.is_empty();
 
         match self.kind {
-            ToastKind::Success => Some(base),
+            ToastKind::Success if settles_on_its_own => Some(base),
             ToastKind::Info if settles_on_its_own => Some(base),
             // A warning reports something worth reading but needs no reply,
             // so it outlives Success and Info.
@@ -1100,6 +1100,10 @@ mod auto_dismiss_tests {
                 cx,
             );
             host.push_rich(Toast::error("boom"), cx);
+            host.push_rich(
+                Toast::success("done").action(ToastAction::new("undo", "Undo")),
+                cx,
+            );
         });
 
         host.read_with(cx, |host, _| {
@@ -1114,6 +1118,10 @@ mod auto_dismiss_tests {
                 "a warning with an action stays until it is resolved"
             );
             assert_eq!(host.toasts[3].delay, None, "an error stays");
+            assert_eq!(
+                host.toasts[4].delay, None,
+                "a success with an action stays until it is resolved"
+            );
         });
 
         host.update(cx, |host, _| host.set_auto_dismiss(ToastAutoDismiss::Never));
