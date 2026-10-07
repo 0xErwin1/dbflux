@@ -731,9 +731,22 @@ mod windows_job {
     #[derive(Debug)]
     pub(super) struct JobObjectHandle(HANDLE);
 
+    #[expect(
+        unsafe_code,
+        reason = "Send on a raw kernel handle: a job object handle has no thread \
+                  affinity and every operation issued through it is thread-safe, \
+                  as documented in the SAFETY comment on `JobObjectHandle`"
+    )]
     unsafe impl Send for JobObjectHandle {}
 
     impl JobObjectHandle {
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `CreateJobObjectW` is called with the \
+                      documented-allowed null arguments and \
+                      `SetInformationJobObject` with an exact buffer/size pair; \
+                      both failure paths are checked and logged"
+        )]
         pub(super) fn create(kill_on_close: bool) -> Option<Self> {
             // SAFETY: both arguments are allowed to be null: an unnamed job object
             // with default security attributes.
@@ -779,6 +792,12 @@ mod windows_job {
             Some(job)
         }
 
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `AssignProcessToJobObject` takes a live job \
+                      handle owned by `self` and the child's live process handle, \
+                      per the SAFETY comment"
+        )]
         pub(super) fn assign(&self, child: &Child) -> bool {
             // The annotation states the type instead of casting it: `RawHandle` and a
             // windows-sys `HANDLE` are the same `*mut c_void` today, and a future
@@ -798,6 +817,11 @@ mod windows_job {
             true
         }
 
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `TerminateJobObject` takes the live job \
+                      handle owned by `self`, per the SAFETY comment"
+        )]
         pub(super) fn terminate(&self) {
             // SAFETY: `self.0` is a live job object handle.
             let ok = unsafe { TerminateJobObject(self.0, 0) };
@@ -810,9 +834,17 @@ mod windows_job {
         }
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "raw Win32 FFI: `CloseHandle` releases the kernel handle owned \
+                  exclusively by this value, per the SAFETY comment on `drop`"
+    )]
     impl Drop for JobObjectHandle {
         fn drop(&mut self) {
             // A failed close leaks one handle; there is nothing to recover from.
+            // SAFETY: `self.0` is exclusively owned by this value, `create` is the
+            // only constructor and never returns a null handle, `JobObjectHandle`
+            // is not `Clone`, and `drop` runs at most once — closed exactly here.
             unsafe { CloseHandle(self.0) };
         }
     }
