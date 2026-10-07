@@ -208,7 +208,7 @@ impl CachedAwsConfig {
 }
 
 /// Returns the platform path to `~/.aws/config`.
-pub fn config_file_path() -> PathBuf {
+pub(crate) fn config_file_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".aws")
@@ -220,7 +220,7 @@ pub fn config_file_path() -> PathBuf {
 /// Respects the `AWS_SHARED_CREDENTIALS_FILE` environment variable, which the
 /// AWS CLI and SDK honour as an override for the credentials file location.
 /// Mirrors the behaviour of `config_file_path`.
-pub fn credentials_file_path() -> PathBuf {
+pub(crate) fn credentials_file_path() -> PathBuf {
     if let Ok(override_path) = std::env::var("AWS_SHARED_CREDENTIALS_FILE")
         && !override_path.is_empty()
     {
@@ -247,7 +247,7 @@ pub fn credentials_file_path() -> PathBuf {
 /// Credentials files use bare `[NAME]` section headers (no `profile ` prefix
 /// and no `sso-session` headers). Headers using those prefixes are treated as
 /// literal profile names (mirroring the AWS CLI's credentials-file grammar).
-pub fn parse_aws_credentials_str(contents: &str) -> Vec<String> {
+pub(crate) fn parse_aws_credentials_str(contents: &str) -> Vec<String> {
     let mut names = Vec::new();
 
     for line in contents.lines() {
@@ -280,7 +280,7 @@ pub fn parse_aws_credentials_str(contents: &str) -> Vec<String> {
 /// Recognizes `[default]` and `[profile <name>]` sections. A profile is
 /// marked as SSO if it contains `sso_start_url` or `sso_session` keys.
 /// Malformed sections are skipped with a warning.
-pub fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
+pub(crate) fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
     let mut profiles = Vec::new();
     let mut current_section: Option<SectionKind> = None;
     let mut current_keys: HashMap<String, String> = HashMap::new();
@@ -1433,6 +1433,10 @@ output=json
     }
 
     #[test]
+    #[expect(
+        unsafe_code,
+        reason = "existing environment-override fixture mutates process environment; subprocess isolation is tracked separately"
+    )]
     fn credentials_file_path_override_via_env() {
         let dir = tempfile::tempdir().expect("tempdir");
         let custom = dir.path().join("my-credentials");
