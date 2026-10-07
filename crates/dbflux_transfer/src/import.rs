@@ -118,9 +118,15 @@ pub fn run_import(
 
         let Some(manifest_table) = manifest.tables.iter().find(|t| t.name == plan.source_table)
         else {
-            tables[index].status = TableTransferStatus::Failed {
-                error: format!("manifest has no table named '{}'", plan.source_table),
-            };
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "tables is built one-to-one from `plans`, which this loop enumerates; its length never changes"
+            )]
+            {
+                tables[index].status = TableTransferStatus::Failed {
+                    error: format!("manifest has no table named '{}'", plan.source_table),
+                };
+            }
             break;
         };
 
@@ -137,26 +143,38 @@ pub fn run_import(
         let report = match result {
             Ok(report) => report,
             Err(e) => {
-                tables[index].status = TableTransferStatus::Failed {
-                    error: e.to_string(),
-                };
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "tables is built one-to-one from `plans`, which this loop enumerates; its length never changes"
+                )]
+                {
+                    tables[index].status = TableTransferStatus::Failed {
+                        error: e.to_string(),
+                    };
+                }
                 break;
             }
         };
 
         let was_cancelled = report.outcome == TransferOutcome::Cancelled;
         warnings.extend(report.warnings);
-        tables[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
-            TableTransferStatus::Skipped
-        } else if was_cancelled {
-            TableTransferStatus::Cancelled {
-                rows: report.rows_transferred,
-            }
-        } else {
-            TableTransferStatus::Completed {
-                rows: report.rows_transferred,
-            }
-        };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "tables is built one-to-one from `plans`, which this loop enumerates; its length never changes"
+        )]
+        {
+            tables[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
+                TableTransferStatus::Skipped
+            } else if was_cancelled {
+                TableTransferStatus::Cancelled {
+                    rows: report.rows_transferred,
+                }
+            } else {
+                TableTransferStatus::Completed {
+                    rows: report.rows_transferred,
+                }
+            };
+        }
 
         if was_cancelled {
             break;
@@ -319,6 +337,10 @@ mod tests {
             None
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn generate_bulk_insert(
             &self,
             _schema: Option<&str>,
@@ -394,6 +416,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.executed_sql.lock().unwrap().push(req.sql.clone());
             Ok(QueryResult::empty())
@@ -423,6 +449,10 @@ mod tests {
             Some(&self.generator)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn table_details(
             &self,
             _database: &str,

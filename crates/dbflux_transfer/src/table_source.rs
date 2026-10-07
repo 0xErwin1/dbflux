@@ -231,6 +231,10 @@ mod tests {
     }
 
     impl Connection for FakeConnection {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test mock: TableSource tests never read connection metadata"
+        )]
         fn metadata(&self) -> &DriverMetadata {
             unimplemented!("FakeConnection::metadata not needed for TableSource tests")
         }
@@ -243,6 +247,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.captured_sql.lock().unwrap().push(req.sql.clone());
 

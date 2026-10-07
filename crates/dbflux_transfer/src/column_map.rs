@@ -65,10 +65,16 @@ impl AutoColumnMap {
                 continue;
             };
 
-            target_from_source[target_index] = override_entry
-                .source_column
-                .as_ref()
-                .and_then(|name| source_columns.iter().position(|c| &c.name == name));
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "target_index is a position within `target_columns` and auto_map returns exactly one entry per target column"
+            )]
+            {
+                target_from_source[target_index] = override_entry
+                    .source_column
+                    .as_ref()
+                    .and_then(|name| source_columns.iter().position(|c| &c.name == name));
+            }
         }
 
         let warnings = unmatched_source_warnings(source_columns, &target_from_source);
