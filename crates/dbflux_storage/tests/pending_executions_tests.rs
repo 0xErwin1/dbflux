@@ -12,6 +12,10 @@ fn sample_plan() -> ExecutionPlan {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "non-#[test] fixture helper: setup failures must abort the test run with context"
+)]
 fn runtime() -> StorageRuntime {
     StorageRuntime::in_memory().expect("in_memory runtime should succeed")
 }

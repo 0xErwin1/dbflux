@@ -7,6 +7,10 @@ use dbflux_storage::repositories::connection_profile_governance_bindings::Connec
 
 /// Builds a migrated runtime with one profile and one governance binding,
 /// returning the runtime and the binding id.
+#[expect(
+    clippy::expect_used,
+    reason = "non-#[test] fixture helper: setup failures must abort the test run with context"
+)]
 fn runtime_with_binding() -> (StorageRuntime, String) {
     let runtime = StorageRuntime::in_memory().expect("runtime should initialize");
 

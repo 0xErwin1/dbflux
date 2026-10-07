@@ -568,7 +568,13 @@ impl SavedChartsRepository {
 
             for s in series_rows {
                 if let Some(&idx) = index_map.get(&s.chart_id) {
-                    charts[idx].series.push(s);
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx is an enumerate position over `charts`, which is never resized or reordered in this method"
+                    )]
+                    {
+                        charts[idx].series.push(s);
+                    }
                 }
             }
 
@@ -602,7 +608,13 @@ impl SavedChartsRepository {
 
             for b in binding_y_rows {
                 if let Some(&idx) = index_map.get(&b.chart_id) {
-                    charts[idx].binding_y.push(b);
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx is an enumerate position over `charts`, which is never resized or reordered in this method"
+                    )]
+                    {
+                        charts[idx].binding_y.push(b);
+                    }
                 }
             }
 
@@ -643,7 +655,13 @@ impl SavedChartsRepository {
 
             for s in metric_series_rows {
                 if let Some(&idx) = index_map.get(&s.chart_id) {
-                    charts[idx].metric_series.push(s);
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx is an enumerate position over `charts`, which is never resized or reordered in this method"
+                    )]
+                    {
+                        charts[idx].metric_series.push(s);
+                    }
                 }
             }
 
@@ -680,7 +698,13 @@ impl SavedChartsRepository {
 
             for d in dim_rows {
                 if let Some(&idx) = index_map.get(&d.chart_id) {
-                    charts[idx].metric_dimensions.push(d);
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx is an enumerate position over `charts`, which is never resized or reordered in this method"
+                    )]
+                    {
+                        charts[idx].metric_dimensions.push(d);
+                    }
                 }
             }
 
@@ -710,7 +734,13 @@ impl SavedChartsRepository {
 
             for (chart_id, metric_id) in inst_rows {
                 if let Some(&idx) = index_map.get(&chart_id) {
-                    charts[idx].instance_metric_id = Some(metric_id);
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx is an enumerate position over `charts`, which is never resized or reordered in this method"
+                    )]
+                    {
+                        charts[idx].instance_metric_id = Some(metric_id);
+                    }
                 }
             }
         }
