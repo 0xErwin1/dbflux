@@ -9,6 +9,8 @@ mod data;
 pub mod document_id;
 mod driver;
 mod facade;
+#[cfg(test)]
+mod isolated_env;
 pub mod keymap_types;
 pub mod observability;
 pub mod pipeline;
