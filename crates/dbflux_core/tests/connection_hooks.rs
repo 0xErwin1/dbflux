@@ -8,6 +8,10 @@ use std::collections::HashMap;
 // Helpers
 // =========================================================================
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn echo_hook(message: &str) -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "echo",
@@ -16,6 +20,10 @@ fn echo_hook(message: &str) -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn failing_hook_warn() -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "false",
@@ -24,6 +32,10 @@ fn failing_hook_warn() -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn failing_hook_disconnect() -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "false",
@@ -32,6 +44,10 @@ fn failing_hook_disconnect() -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn disabled_echo() -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "echo",
@@ -41,6 +57,10 @@ fn disabled_echo() -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn inline_script_hook(message: &str) -> ConnectionHook {
     let interpreter = if cfg!(target_os = "windows") {
         "python"

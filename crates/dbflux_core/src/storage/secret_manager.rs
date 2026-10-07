@@ -362,6 +362,10 @@ mod tests {
             self.available
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: a poisoned values mutex means an earlier test step already panicked; failing loudly is the poison contract"
+        )]
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, crate::DbError> {
             Ok(self
                 .values
@@ -371,6 +375,10 @@ mod tests {
                 .cloned())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: a poisoned values mutex means an earlier test step already panicked; failing loudly is the poison contract"
+        )]
         fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), crate::DbError> {
             if self.fail_set {
                 return Err(crate::DbError::IoError(std::io::Error::other(

@@ -30,6 +30,15 @@ pub fn extract_referenced_tables(query: &str) -> Vec<QueryTableRef> {
 }
 
 /// Strip SQL line comments (`--`) and block comments (`/* */`).
+///
+/// Bounds proof: `bytes[i]` is read under `while i < len`; every lookahead
+/// `bytes[i + 1]` is guarded by `i + 1 < len`; the block-comment skip exits
+/// with `i` at or past the `*/` (verified via `i + 1 < len`) and the outer
+/// `while i < len` re-checks before any further read.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "bytes[i] under `while i < len`; every bytes[i + 1] lookahead behind `i + 1 < len`; the outer loop re-checks the bound before any read after comment skips"
+)]
 fn strip_comments(input: &str) -> String {
     let bytes = input.as_bytes();
     let len = bytes.len();
@@ -74,6 +83,15 @@ enum Token {
 
 /// Tokenize a comment-stripped SQL string into the minimal token stream needed
 /// for table-reference extraction.
+///
+/// Bounds proof: every `chars[i]` read is under `while i < len`; every lookahead
+/// `chars[i + 1]` is guarded by `i + 1 < len`; the `chars[start..i]` identifier
+/// slices satisfy `start <= i <= len` because `start` is captured at scan entry
+/// and `i` only advances under the bound.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "chars[i] reads under `while i < len`; chars[i + 1] lookaheads behind `i + 1 < len`; chars[start..i] slices have start captured at scan entry and i bounded by len"
+)]
 fn tokenize(sql: &str) -> Vec<Token> {
     let chars: Vec<char> = sql.chars().collect();
     let len = chars.len();
@@ -187,8 +205,8 @@ fn parse_table_refs(tokens: &[Token]) -> Vec<QueryTableRef> {
     let mut depth: u32 = 0;
     let mut i = 0;
 
-    while i < tokens.len() {
-        match &tokens[i] {
+    while let Some(token) = tokens.get(i) {
+        match token {
             Token::LParen => {
                 depth += 1;
                 i += 1;
@@ -212,7 +230,7 @@ fn parse_table_refs(tokens: &[Token]) -> Vec<QueryTableRef> {
                     "DELETE" => {
                         // DELETE FROM <table>: consume the FROM keyword next (skipping whitespace).
                         let mut j = i + 1;
-                        while j < tokens.len() && tokens[j] == Token::Other {
+                        while matches!(tokens.get(j), Some(Token::Other)) {
                             j += 1;
                         }
                         if let Some(Token::Ident(next)) = tokens.get(j)
@@ -231,7 +249,7 @@ fn parse_table_refs(tokens: &[Token]) -> Vec<QueryTableRef> {
                     "INSERT" => {
                         // INSERT INTO <table>: consume INTO next (skipping whitespace).
                         let mut j = i + 1;
-                        while j < tokens.len() && tokens[j] == Token::Other {
+                        while matches!(tokens.get(j), Some(Token::Other)) {
                             j += 1;
                         }
                         if let Some(Token::Ident(next)) = tokens.get(j)
@@ -274,7 +292,7 @@ fn parse_table_refs(tokens: &[Token]) -> Vec<QueryTableRef> {
 /// Returns `None` if the next token is not an identifier.
 fn read_qualified_name(tokens: &[Token], pos: &mut usize) -> Option<QueryTableRef> {
     // Skip any Other tokens (whitespace collapsed into Token::Other).
-    while *pos < tokens.len() && tokens[*pos] == Token::Other {
+    while tokens.get(*pos) == Some(&Token::Other) {
         *pos += 1;
     }
 
@@ -352,7 +370,7 @@ fn read_qualified_name(tokens: &[Token], pos: &mut usize) -> Option<QueryTableRe
 fn skip_alias(tokens: &[Token], pos: &mut usize) {
     // Skip whitespace tokens.
     let start = *pos;
-    while *pos < tokens.len() && tokens[*pos] == Token::Other {
+    while tokens.get(*pos) == Some(&Token::Other) {
         *pos += 1;
     }
 

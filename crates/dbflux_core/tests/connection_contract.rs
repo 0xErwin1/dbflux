@@ -289,6 +289,11 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
         Ok(())
     }
 
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_in_result,
+        reason = "Poisoned fixture state must fail the test rather than recover or become a driver error"
+    )]
     fn execute(
         &self,
         req: &dbflux_core::QueryRequest,

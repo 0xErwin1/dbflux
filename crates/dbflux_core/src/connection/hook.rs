@@ -731,9 +731,22 @@ mod windows_job {
     #[derive(Debug)]
     pub(super) struct JobObjectHandle(HANDLE);
 
+    #[expect(
+        unsafe_code,
+        reason = "Send on a raw kernel handle: a job object handle has no thread \
+                  affinity and every operation issued through it is thread-safe, \
+                  as documented in the SAFETY comment on `JobObjectHandle`"
+    )]
     unsafe impl Send for JobObjectHandle {}
 
     impl JobObjectHandle {
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `CreateJobObjectW` is called with the \
+                      documented-allowed null arguments and \
+                      `SetInformationJobObject` with an exact buffer/size pair; \
+                      both failure paths are checked and logged"
+        )]
         pub(super) fn create(kill_on_close: bool) -> Option<Self> {
             // SAFETY: both arguments are allowed to be null: an unnamed job object
             // with default security attributes.
@@ -779,6 +792,12 @@ mod windows_job {
             Some(job)
         }
 
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `AssignProcessToJobObject` takes a live job \
+                      handle owned by `self` and the child's live process handle, \
+                      per the SAFETY comment"
+        )]
         pub(super) fn assign(&self, child: &Child) -> bool {
             // The annotation states the type instead of casting it: `RawHandle` and a
             // windows-sys `HANDLE` are the same `*mut c_void` today, and a future
@@ -798,6 +817,11 @@ mod windows_job {
             true
         }
 
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `TerminateJobObject` takes the live job \
+                      handle owned by `self`, per the SAFETY comment"
+        )]
         pub(super) fn terminate(&self) {
             // SAFETY: `self.0` is a live job object handle.
             let ok = unsafe { TerminateJobObject(self.0, 0) };
@@ -810,9 +834,17 @@ mod windows_job {
         }
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "raw Win32 FFI: `CloseHandle` releases the kernel handle owned \
+                  exclusively by this value, per the SAFETY comment on `drop`"
+    )]
     impl Drop for JobObjectHandle {
         fn drop(&mut self) {
             // A failed close leaks one handle; there is nothing to recover from.
+            // SAFETY: `self.0` is exclusively owned by this value, `create` is the
+            // only constructor and never returns a null handle, `JobObjectHandle`
+            // is not `Clone`, and `drop` runs at most once — closed exactly here.
             unsafe { CloseHandle(self.0) };
         }
     }
@@ -1485,6 +1517,11 @@ where
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(bytes_read) => {
+                    // Read::read guarantees bytes_read <= buffer.len().
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "Read::read returns a count no greater than the buffer length"
+                    )]
                     let text = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
 
                     if sender.send(OutputEvent::new(stream, text)).is_err() {
@@ -1553,6 +1590,13 @@ fn terminate_child(
 /// (via `try_wait`), in which case the caller must NOT `wait` on it again.
 #[cfg(unix)]
 fn terminate_process_group(child: &mut Child) -> bool {
+    // SAFETY: `kill` is a standard POSIX syscall; the declaration matches the
+    // libc signature (`pid_t kill(pid_t, int)`) exactly, and only valid
+    // `SIGTERM`/`SIGKILL` signal constants are ever passed.
+    #[expect(
+        unsafe_code,
+        reason = "declaring the POSIX kill() symbol for negative-pid process-group termination; no libc crate dependency, signature matches the libc contract"
+    )]
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
@@ -1568,6 +1612,14 @@ fn terminate_process_group(child: &mut Child) -> bool {
         return false;
     }
 
+    // SAFETY: `pid > 0` and originates from a live `Child` we spawned with
+    // `process_group(0)`, so `-pid` addresses that process group; `kill` with
+    // a valid signal constant is memory-safe for any existing-or-not pid and
+    // never mutates our own process (pid is not ours).
+    #[expect(
+        unsafe_code,
+        reason = "kill(-pid, SIGTERM) targets the child's own process group set at spawn via process_group(0); pid > 0 checked above, so the call cannot signal the parent process"
+    )]
     unsafe {
         let _ = kill(-pid, SIGTERM);
     }
@@ -1577,6 +1629,13 @@ fn terminate_process_group(child: &mut Child) -> bool {
     match child.try_wait() {
         Ok(Some(_)) => true,
         _ => {
+            // SAFETY: same invariants as the SIGTERM call above: `pid > 0` and
+            // `-pid` is the child's spawn-time process group; SIGKILL is a
+            // valid signal constant.
+            #[expect(
+                unsafe_code,
+                reason = "kill(-pid, SIGKILL) targets the child's own process group set at spawn via process_group(0); pid > 0 checked above, so the call cannot signal the parent process"
+            )]
             unsafe {
                 let _ = kill(-pid, SIGKILL);
             }
@@ -2298,7 +2357,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_aws_secret_stripped_by_default() {
-        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2327,7 +2392,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_plain_env_inherited() {
-        unsafe { std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2356,7 +2427,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_explicit_env_reinjects_stripped_key() {
-        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2386,7 +2463,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_custom_denylist_entry_stripped() {
-        unsafe { std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {

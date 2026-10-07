@@ -1326,6 +1326,17 @@ fn split_sql_statements(text: &str) -> Vec<String> {
 /// Byte ranges of the `;`-delimited segments in `text` (separators excluded,
 /// segments untrimmed, empty segments kept). Shared scanner behind
 /// [`split_sql_statements`] and [`QueryLanguage::statement_bounds_at`].
+///
+/// Bounds proof for the indexed accesses below: `chars` is built once from
+/// `char_indices`, so `len == chars.len()` and every `byte` offset is a char
+/// boundary of `text`. Each `chars[index]` sits under `while index < len`, and
+/// every lookahead `chars[index + 1]` is separately guarded by
+/// `index + 1 < len`, in all four state machines (line comment, block
+/// comment, quoted string/identifier, dollar quote).
+#[expect(
+    clippy::indexing_slicing,
+    reason = "every chars[index] is under `while index < len` and every chars[index + 1] lookahead under a separate `index + 1 < len` guard; offsets come from char_indices so text[range] slices stay on char boundaries"
+)]
 fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let len = chars.len();
@@ -1449,6 +1460,12 @@ fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
 /// `$` of that opening tag. The tag identifier must be empty (`$$`) or a valid
 /// identifier (letters, digits, underscore, not starting with a digit), which
 /// also prevents misreading parameter placeholders such as `$1`.
+///
+/// `chars[index]` is only read under `while index < chars.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "chars[index] is read only under `while index < chars.len()`"
+)]
 fn dollar_tag_end(chars: &[(usize, char)], start: usize) -> Option<usize> {
     let mut index = start + 1;
 
@@ -1473,6 +1490,14 @@ fn dollar_tag_end(chars: &[(usize, char)], start: usize) -> Option<usize> {
 
 /// Whether the opening tag at `chars[tag_start..=tag_end]` repeats starting at
 /// `chars[index]`.
+///
+/// `tag_start + tag_len == tag_end + 1 <= chars.len()` (the tag end is returned
+/// only for `index < chars.len()`), and the early return below bounds
+/// `index + tag_len <= chars.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the `index + tag_len > chars.len()` early return bounds chars[index + offset]; tag_start + tag_len == tag_end + 1 <= chars.len() bounds chars[tag_start + offset]"
+)]
 fn matches_tag(chars: &[(usize, char)], index: usize, tag_start: usize, tag_end: usize) -> bool {
     let tag_len = tag_end + 1 - tag_start;
     if index + tag_len > chars.len() {

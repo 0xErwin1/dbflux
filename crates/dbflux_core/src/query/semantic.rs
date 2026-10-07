@@ -491,7 +491,7 @@ pub fn render_semantic_filter_sql(
 
 /// Maps a column reference to the `(table alias, column)` pair of a filter
 /// predicate, or says why the reference is not valid.
-pub type ColumnResolver<'a> = dyn Fn(&ColumnRef) -> Result<(String, String), String> + 'a;
+pub(crate) type ColumnResolver<'a> = dyn Fn(&ColumnRef) -> Result<(String, String), String> + 'a;
 
 /// Converts a semantic filter into the visual-query filter tree, which the
 /// structured SELECT generator renders with quoted identifiers and bound
@@ -1051,6 +1051,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test helper invariant: fixture JSON must parse; failure is a hard test error, not a recoverable case"
+    )]
     fn to_filter_node(json: serde_json::Value) -> Result<FilterNode, String> {
         let filter = parse_semantic_filter_json(&json)
             .expect("the filter parses")

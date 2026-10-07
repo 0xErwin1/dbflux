@@ -375,14 +375,26 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_env_var() {
-        unsafe { std::env::set_var("TEST_DBFLUX_VAR", "env_value") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("TEST_DBFLUX_VAR", "env_value")
+        };
         let resolver = test_resolver();
         let result = resolver
             .resolve(&ValueRef::env("TEST_DBFLUX_VAR"), &empty_ctx())
             .await
             .unwrap();
         assert_eq!(result.expose_secret(), "env_value");
-        unsafe { std::env::remove_var("TEST_DBFLUX_VAR") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::remove_var("TEST_DBFLUX_VAR")
+        };
     }
 
     #[tokio::test]
@@ -486,7 +498,13 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_all_concurrent() {
-        unsafe { std::env::set_var("TEST_RESOLVE_ALL_VAR", "env_val") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("TEST_RESOLVE_ALL_VAR", "env_val")
+        };
         let resolver = test_resolver();
 
         let mut refs = HashMap::new();
@@ -507,7 +525,13 @@ mod tests {
             "secret-value-for-db-pass"
         );
 
-        unsafe { std::env::remove_var("TEST_RESOLVE_ALL_VAR") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::remove_var("TEST_RESOLVE_ALL_VAR")
+        };
     }
 
     #[tokio::test]

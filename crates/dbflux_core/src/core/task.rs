@@ -465,7 +465,7 @@ impl TaskManager {
 
         match running.len() {
             0 => None,
-            1 => Some(running[0].description.clone()),
+            1 => running.first().map(|task| task.description.clone()),
             n => Some(format!("{} tasks running...", n)),
         }
     }

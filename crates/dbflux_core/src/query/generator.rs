@@ -112,19 +112,16 @@ pub fn inline_params(
             let mut result = String::with_capacity(sql.len());
             let mut param_iter = params.iter();
             let chars: Vec<char> = sql.chars().collect();
-            let mut i = 0;
 
-            while i < chars.len() {
-                if chars[i] == '?' {
-                    if let Some(val) = param_iter.next() {
-                        result.push_str(&dialect.value_to_literal(val));
+            for &character in &chars {
+                if character == '?' {
+                    if let Some(value) = param_iter.next() {
+                        result.push_str(&dialect.value_to_literal(value));
                     } else {
                         result.push('?');
                     }
-                    i += 1;
                 } else {
-                    result.push(chars[i]);
-                    i += 1;
+                    result.push(character);
                 }
             }
 
@@ -145,6 +142,17 @@ pub fn inline_params(
 ///
 /// E.g. `$1` with prefix=`'$'` prefix_str=`""`, or `@p1` with prefix=`'@'`
 /// prefix_str=`"p"`.
+///
+/// Bounds proof: `bytes[i]` is only read under `while i < bytes.len()`; the
+/// `prefix_bytes` slice is guarded by `end <= bytes.len()`; `params[n - 1]` is
+/// guarded by `n >= 1 && n <= params.len()`; the slices `sql[start..i]`,
+/// `sql[digit_start..i]` and `sql[i..run_end]` are between positions that only
+/// advance over ASCII bytes inside `[0, bytes.len()]`, so they stay on char
+/// boundaries.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "bytes[i] under `while i < bytes.len()`; prefix slice guarded by `end <= bytes.len()`; params[n - 1] guarded by `n >= 1 && n <= params.len()`; sql[..] slices sit between ASCII-aligned positions within [0, bytes.len()]"
+)]
 fn materialize_numbered_placeholders(
     sql: &str,
     params: &[crate::Value],
@@ -790,15 +798,10 @@ impl QueryGenerator for SqlMutationGenerator {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let sql = if where_parts.is_empty() {
-            format!("DELETE FROM {table}")
-        } else if where_parts.len() == 1 {
-            format!("DELETE FROM {table}\nWHERE {}", where_parts[0])
-        } else {
-            format!(
-                "DELETE FROM {table}\nWHERE ({}) AND ({})",
-                where_parts[0], where_parts[1]
-            )
+        let sql = match where_parts.as_slice() {
+            [] => format!("DELETE FROM {table}"),
+            [first] => format!("DELETE FROM {table}\nWHERE {first}"),
+            [first, second, ..] => format!("DELETE FROM {table}\nWHERE ({first}) AND ({second})"),
         };
 
         rewrite_placeholders_if_needed(self.dialect, sql, params, false)
@@ -881,15 +884,12 @@ impl QueryGenerator for SqlMutationGenerator {
             .collect();
 
         let set_str = set_clauses.join(", ");
-        let sql = if where_parts.is_empty() {
-            format!("UPDATE {table}\nSET {set_str}")
-        } else if where_parts.len() == 1 {
-            format!("UPDATE {table}\nSET {set_str}\nWHERE {}", where_parts[0])
-        } else {
-            format!(
-                "UPDATE {table}\nSET {set_str}\nWHERE ({}) AND ({})",
-                where_parts[0], where_parts[1]
-            )
+        let sql = match where_parts.as_slice() {
+            [] => format!("UPDATE {table}\nSET {set_str}"),
+            [first] => format!("UPDATE {table}\nSET {set_str}\nWHERE {first}"),
+            [first, second, ..] => {
+                format!("UPDATE {table}\nSET {set_str}\nWHERE ({first}) AND ({second})")
+            }
         };
 
         rewrite_placeholders_if_needed(self.dialect, sql, params, used_raw_expression)
@@ -969,8 +969,8 @@ fn build_pk_in_clause(
         _ => "?".to_string(),
     };
 
-    if pk_cols.len() == 1 {
-        let col = dialect.quote_identifier(pk_cols[0]);
+    if let [column] = pk_cols {
+        let col = dialect.quote_identifier(column);
         let placeholders: Vec<String> = pk_values
             .iter()
             .map(|row| {
@@ -1558,8 +1558,8 @@ impl<'a> SqlSelectBuilder<'a> {
                 if parts.is_empty() {
                     return String::new();
                 }
-                if parts.len() == 1 {
-                    return parts.into_iter().next().unwrap();
+                if let [single] = parts.as_slice() {
+                    return single.clone();
                 }
 
                 let sep = match op {

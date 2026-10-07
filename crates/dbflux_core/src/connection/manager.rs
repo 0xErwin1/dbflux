@@ -2448,10 +2448,13 @@ impl ConnectionManager {
         if let Some(reason) = self.refresh_views_stale_reason(&request) {
             return ApplyFetchOutcome::Rejected(reason);
         }
-        let connected = self
-            .connections
-            .get_mut(&request.session.profile_id)
-            .expect("checked connected profile");
+        // The `contains_key` guard above already proved the profile is still
+        // connected and nothing removes entries in between, so this lookup
+        // cannot fail; degrade to the same rejection instead of panicking if
+        // that invariant is ever broken.
+        let Some(connected) = self.connections.get_mut(&request.session.profile_id) else {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
+        };
         if let Some(db_schema) = connected.database_schemas.get_mut(&fetched.database) {
             db_schema.views = fetched.views;
         } else {
@@ -4752,6 +4755,10 @@ mod tests {
             self.inner.cancel(handle)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test gate fixture: a poisoned gate lock or failed wait means the suite already wedged; panicking surfaces it instead of hanging"
+        )]
         fn cancel_active(&self) -> Result<(), DbError> {
             let (lock, condvar) = &*self.gate;
 

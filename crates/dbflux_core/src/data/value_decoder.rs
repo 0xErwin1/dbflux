@@ -134,7 +134,7 @@ pub fn detect(bytes: &[u8]) -> Option<Encoding> {
         return Some(Encoding::Gif);
     }
 
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+    if bytes.get(..4) == Some(b"RIFF".as_slice()) && bytes.get(8..12) == Some(b"WEBP".as_slice()) {
         return Some(Encoding::WebP);
     }
 
@@ -242,6 +242,10 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> Result<Vec<u8>, BoundedD
             break;
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Read::read guarantees bytes_read <= chunk.len() (never exceeding the buffer passed in)"
+        )]
         buffer.extend_from_slice(&chunk[..read]);
 
         if buffer.len() > limit {

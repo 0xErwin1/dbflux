@@ -483,6 +483,10 @@ mod tests {
             Some(self.refs.clone())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the lookup-log mutex is poisoned only after an earlier panic in the same test; failing loudly is the poison contract"
+        )]
         fn table_details(
             &self,
             database: &str,
