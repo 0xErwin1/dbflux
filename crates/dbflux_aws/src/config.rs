@@ -1435,13 +1435,17 @@ output=json
     /// Test-only counterpart of dbflux_core's private isolated-env helper:
     /// this crate cannot see the other crate's cfg(test) module, so the same
     /// contract is repeated here (exact self marker, clean child environment).
-    fn run_isolated_fixture(test_name: &str, vars: &[(&str, &std::ffi::OsStr)]) -> bool {
+    fn run_isolated_fixture(
+        test_name: &str,
+        fixture_variables: &[(&str, &std::ffi::OsStr)],
+    ) -> bool {
         if is_isolated_child(test_name) {
             return false;
         }
 
-        let exe = std::env::current_exe().expect("current test binary must be locatable");
-        let mut command = std::process::Command::new(exe);
+        let test_executable =
+            std::env::current_exe().expect("current test binary must be locatable");
+        let mut command = std::process::Command::new(test_executable);
         command
             .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
             .env_clear();
@@ -1450,7 +1454,7 @@ output=json
                 command.env(key, value);
             }
         }
-        for (key, value) in vars {
+        for (key, value) in fixture_variables {
             command.env(key, value);
         }
         command.env(MARKER_VAR, test_name);
