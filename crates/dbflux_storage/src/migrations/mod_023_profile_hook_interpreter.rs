@@ -2,7 +2,7 @@ use rusqlite::Transaction;
 
 use super::{Migration, MigrationError};
 
-pub struct MigrationImpl;
+pub(crate) struct MigrationImpl;
 
 impl Migration for MigrationImpl {
     fn name(&self) -> &str {

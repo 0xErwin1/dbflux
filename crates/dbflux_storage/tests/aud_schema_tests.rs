@@ -8,6 +8,10 @@ use rusqlite::Connection;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::migrations::aud_schema;
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-#[test] fixture helper: SQLite setup failures must abort the test run with context"
+)]
 fn columns_for_table(conn: &Connection, table: &str) -> std::collections::BTreeSet<String> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({})", table))

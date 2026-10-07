@@ -947,6 +947,10 @@ pub fn temp_sqlite_path(file_name: &str) -> PathBuf {
     path
 }
 
+#[expect(
+    clippy::panic,
+    reason = "documented hard-failure contract of `temp_sqlite_path` (# Panics): a leftover temp path that cannot be removed must abort, not be silently ignored"
+)]
 fn remove_leftover_temp_path(path: &Path) {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,

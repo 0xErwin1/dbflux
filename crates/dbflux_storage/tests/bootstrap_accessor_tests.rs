@@ -6,6 +6,10 @@ use dbflux_storage::bootstrap::StorageRuntime;
 
 /// Produces a StorageRuntime whose dbflux_db_path points at a directory
 /// rather than a file, causing subsequent open_dbflux_db calls to fail.
+#[expect(
+    clippy::expect_used,
+    reason = "non-#[test] fixture helper: setup failures must abort the test run with context"
+)]
 fn runtime_with_inaccessible_db() -> StorageRuntime {
     let unique_dir = std::env::temp_dir().join(format!(
         "dbflux_bootstrap_test_{}_{}",

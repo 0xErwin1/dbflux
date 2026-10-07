@@ -175,26 +175,38 @@ pub fn run_migration(
             let report = match result {
                 Ok(report) => report,
                 Err(e) => {
-                    migrated[index].status = TableTransferStatus::Failed {
-                        error: e.to_string(),
-                    };
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "migrated is built one-to-one from `ordered_plans`, which this loop enumerates; its length never changes"
+                    )]
+                    {
+                        migrated[index].status = TableTransferStatus::Failed {
+                            error: e.to_string(),
+                        };
+                    }
                     break;
                 }
             };
 
             let was_cancelled = report.outcome == TransferOutcome::Cancelled;
             warnings.extend(report.warnings);
-            migrated[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
-                TableTransferStatus::Skipped
-            } else if was_cancelled {
-                TableTransferStatus::Cancelled {
-                    rows: report.rows_transferred,
-                }
-            } else {
-                TableTransferStatus::Completed {
-                    rows: report.rows_transferred,
-                }
-            };
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "migrated is built one-to-one from `ordered_plans`, which this loop enumerates; its length never changes"
+            )]
+            {
+                migrated[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
+                    TableTransferStatus::Skipped
+                } else if was_cancelled {
+                    TableTransferStatus::Cancelled {
+                        rows: report.rows_transferred,
+                    }
+                } else {
+                    TableTransferStatus::Completed {
+                        rows: report.rows_transferred,
+                    }
+                };
+            }
 
             if was_cancelled {
                 break;
@@ -502,6 +514,10 @@ mod tests {
             None
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn generate_bulk_insert(
             &self,
             _schema: Option<&str>,
@@ -579,6 +595,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned page mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             if req.sql.contains("COUNT(*)") {
                 return Ok(QueryResult::table(
@@ -701,6 +721,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.executed_sql.lock().unwrap().push(req.sql.clone());
             Ok(QueryResult::empty())
@@ -731,6 +755,10 @@ mod tests {
                 .then_some(&self.generator as &dyn QueryGenerator)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn table_details(
             &self,
             _database: &str,
@@ -756,6 +784,10 @@ mod tests {
             })
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
             self.ri_calls.lock().unwrap().push(enabled);
             if self.ri_toggle_fails && enabled {
