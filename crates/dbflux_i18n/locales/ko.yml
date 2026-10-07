@@ -3851,6 +3851,16 @@ settings:
       error: 키-값 미리 보기 크기 제한은 1 MiB 이상이어야 합니다
     key_value_size_limit_hint:
       label: "이보다 큰 값은 자동으로 내려받지 않으며, \"그래도 불러오기\"를 사용해 전체 값을 가져옵니다."
+    notifications:
+      group: "알림"
+    toast_timeout:
+      label: "알림 표시 시간"
+      hint: "성공, 정보, 경고 알림은 이 시간이 지나면 자동으로 닫힙니다. 오류 알림과 동작이나 진행률이 있는 알림은 닫을 때까지 남습니다. 알림 위에 포인터를 올리면 타이머가 멈춥니다."
+      option:
+        "4s": "4초"
+        "8s": "8초"
+        "15s": "15초"
+        never: "닫을 때까지 유지"
     share_stable_db:
       label: 안정 데이터베이스 사용
       error: 공유 데이터베이스 설정을 업데이트하지 못했습니다
@@ -5109,6 +5119,8 @@ toast:
     show_details: 세부 정보 표시
     hide_details: 세부 정보 숨기기
     dismiss: 닫기
+  stack:
+    hidden_more: "%{count}개 더 보기"
 workspace:
   rail:
     connections: "연결"

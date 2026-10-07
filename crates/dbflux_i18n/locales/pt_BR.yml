@@ -3851,6 +3851,16 @@ settings:
       error: O limite de tamanho da pré-visualização de chave-valor deve ser >= 1 MiB
     key_value_size_limit_hint:
       label: "Valores maiores que isso não são baixados automaticamente; use \"Carregar mesmo assim\" para buscar o valor completo."
+    notifications:
+      group: "Notificações"
+    toast_timeout:
+      label: "Tempo dos avisos"
+      hint: "Avisos de sucesso, informação e alerta fecham sozinhos depois deste tempo. Erros, e avisos com uma ação ou progresso, permanecem até serem dispensados. Passar o ponteiro sobre um aviso pausa o tempo."
+      option:
+        "4s": "4 segundos"
+        "8s": "8 segundos"
+        "15s": "15 segundos"
+        never: "Manter até dispensar"
     share_stable_db:
       label: Usar o banco de dados estável
       error: Falha ao atualizar a configuração de banco de dados compartilhado
@@ -5110,6 +5120,8 @@ toast:
     show_details: Mostrar detalhes
     hide_details: Ocultar detalhes
     dismiss: Dispensar
+  stack:
+    hidden_more: "%{count} mais"
 workspace:
   rail:
     connections: "Conexões"

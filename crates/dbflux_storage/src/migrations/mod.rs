@@ -183,6 +183,7 @@ impl MigrationRegistry {
         registry.register(mod_038_general_settings_vim_leader::MigrationImpl);
         registry.register(mod_039_cfg_script_roots::MigrationImpl);
         registry.register(mod_040_general_settings_fonts::MigrationImpl);
+        registry.register(mod_041_general_settings_toast_timeout::MigrationImpl);
         registry
     }
 
@@ -413,6 +414,7 @@ mod mod_037_qry_saved_document_queries;
 mod mod_038_general_settings_vim_leader;
 mod mod_039_cfg_script_roots;
 mod mod_040_general_settings_fonts;
+mod mod_041_general_settings_toast_timeout;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1123,6 +1125,7 @@ mod tests {
             "038_general_settings_vim_leader",
             "039_cfg_script_roots",
             "040_general_settings_fonts",
+            "041_general_settings_toast_timeout",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

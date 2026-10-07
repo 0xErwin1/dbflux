@@ -105,6 +105,24 @@ y permanece en English por ahora.
 | **Pause auto-refresh on error**         | On      | Detiene el auto-refresh de una view después de que falla. |
 | **Auto-refresh only if tab is visible** | Off     | Se salta el refresh de las tabs que no estás mirando.     |
 
+### Notificaciones
+
+| Ajuste | Opciones | Predeterminado |
+|---------|---------|---------|
+| **Duración de los avisos** | 4 segundos, 8 segundos, 15 segundos, Mantener hasta descartarlos | 8 segundos |
+
+**Duración de los avisos** define cuánto permanece un aviso antes de cerrarse
+solo. Los avisos de éxito y de información se cierran al cabo de ese tiempo, y
+los de advertencia al doble. Un error, y un aviso con un botón de acción o una
+barra de progreso, permanece hasta que lo descartes. **Mantener hasta
+descartarlos** desactiva el cierre automático para todos los avisos. Pasar el
+puntero por encima de un aviso detiene su temporizador, que se reanuda cuando el
+puntero se va.
+
+Los avisos se apilan en la esquina superior derecha del área de documentos. Se
+muestran como máximo cuatro a la vez; los más antiguos se pliegan en una entrada
+*N más* que los expande o los descarta todos juntos.
+
 ### Seguridad de ejecución (confirmación de queries peligrosas)
 
 Estos tres settings gobiernan cómo DBFlux trata las queries riesgosas en

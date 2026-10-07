@@ -148,6 +148,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         (
+            "general-toast-timeout.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "general-*-font-family",
             KeyboardPath::Command(Command::Execute),
         ),
