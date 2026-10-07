@@ -21,13 +21,16 @@ const OS_ESSENTIAL_VARS: &[&str] = &["PATH", "SystemRoot", "SystemDrive", "TEMP"
 /// original test body and return). Returns `true` when the caller is the
 /// parent and the child ran and passed the named test exactly once; panics
 /// otherwise, so a renamed or missing target can never pass vacuously.
-pub(crate) fn run_in_isolated_fixture(test_name: &str, vars: &[(&str, &OsStr)]) -> bool {
+pub(crate) fn run_in_isolated_fixture(
+    test_name: &str,
+    fixture_variables: &[(&str, &OsStr)],
+) -> bool {
     if std::env::var_os(MARKER_VAR).is_some_and(|marker| marker == test_name) {
         return false;
     }
 
-    let exe = std::env::current_exe().expect("current test binary must be locatable");
-    let mut command = Command::new(exe);
+    let test_executable = std::env::current_exe().expect("current test binary must be locatable");
+    let mut command = Command::new(test_executable);
     command
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env_clear();
@@ -36,7 +39,7 @@ pub(crate) fn run_in_isolated_fixture(test_name: &str, vars: &[(&str, &OsStr)]) 
             command.env(key, value);
         }
     }
-    for (key, value) in vars {
+    for (key, value) in fixture_variables {
         command.env(key, value);
     }
     command.env(MARKER_VAR, test_name);

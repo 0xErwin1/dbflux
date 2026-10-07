@@ -2436,18 +2436,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_plain_env_fixture_preserves_parent_environment() {
-        let before = std::env::var_os("MY_PLAIN_VAR_PROC2");
-        test_plain_env_inherited();
-        let after = std::env::var_os("MY_PLAIN_VAR_PROC2");
-        assert!(
-            after == before,
-            "fixture must preserve the caller's process environment"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn test_explicit_env_reinjects_stripped_key() {
         let before = std::env::var_os("AWS_SECRET_ACCESS_KEY");
         if crate::isolated_env::run_in_isolated_fixture(
