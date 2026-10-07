@@ -157,6 +157,10 @@ pub fn run(
     // `with` invokes its closure exactly once, synchronously, before
     // returning here. The erased `'static` reference is used only inside
     // that single synchronous call and never stored or leaked beyond it.
+    #[expect(
+        unsafe_code,
+        reason = "HRTB lifetime erasure for the captured host; justified by the SAFETY note above (original captured VM ownership): the erased reference is used only inside the single synchronous `context.with` call and never stored or leaked"
+    )]
     let host_static: &'static dyn ScriptOperationHost = unsafe {
         std::mem::transmute::<&dyn ScriptOperationHost, &'static dyn ScriptOperationHost>(host)
     };
@@ -442,6 +446,10 @@ mod tests {
     }
 
     impl ScriptOperationHost for FakeHost {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "fixture host: lock poisoning is a hard test failure by design, the panic is the intended contract; the lint fires only because the trait method returns Result"
+        )]
         fn dispatch(&self, op: &ScriptOperation) -> Result<ScriptOperationOutcome, DbError> {
             self.calls.lock().unwrap().push(op.clone());
             self.responses

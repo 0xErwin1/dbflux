@@ -197,6 +197,10 @@ impl<R: Read + Write> ForwardingConnection<R> {
                 return false;
             }
             Ok(n) => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "n is the byte count reported by read(&mut self.client_buf), which per the Read contract never exceeds the buffer length, so the slice is in bounds and the panic branch is unreachable"
+                )]
                 if write_to_remote(&mut self.remote, &self.client_buf[..n]).is_err() {
                     self.closed = true;
                     return false;
@@ -217,6 +221,10 @@ impl<R: Read + Write> ForwardingConnection<R> {
                 return false;
             }
             Ok(n) => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "n is the byte count reported by read(&mut self.remote_buf), which per the Read contract never exceeds the buffer length, so the slice is in bounds and the panic branch is unreachable"
+                )]
                 if write_to_client(&mut self.client, &self.remote_buf[..n]).is_err() {
                     self.closed = true;
                     return false;
