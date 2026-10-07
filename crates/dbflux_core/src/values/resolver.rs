@@ -375,26 +375,24 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_env_var() {
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::set_var("TEST_DBFLUX_VAR", "env_value")
-        };
+        let before = std::env::var_os("TEST_DBFLUX_VAR");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "values::resolver::tests::resolve_env_var",
+            &[("TEST_DBFLUX_VAR", std::ffi::OsStr::new("env_value"))],
+        ) {
+            let after = std::env::var_os("TEST_DBFLUX_VAR");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
         let resolver = test_resolver();
         let result = resolver
             .resolve(&ValueRef::env("TEST_DBFLUX_VAR"), &empty_ctx())
             .await
             .unwrap();
         assert_eq!(result.expose_secret(), "env_value");
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::remove_var("TEST_DBFLUX_VAR")
-        };
     }
 
     #[tokio::test]
@@ -498,13 +496,18 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_all_concurrent() {
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::set_var("TEST_RESOLVE_ALL_VAR", "env_val")
-        };
+        let before = std::env::var_os("TEST_RESOLVE_ALL_VAR");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "values::resolver::tests::resolve_all_concurrent",
+            &[("TEST_RESOLVE_ALL_VAR", std::ffi::OsStr::new("env_val"))],
+        ) {
+            let after = std::env::var_os("TEST_RESOLVE_ALL_VAR");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
         let resolver = test_resolver();
 
         let mut refs = HashMap::new();
@@ -524,14 +527,6 @@ mod tests {
             result["password"].expose_secret(),
             "secret-value-for-db-pass"
         );
-
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::remove_var("TEST_RESOLVE_ALL_VAR")
-        };
     }
 
     #[tokio::test]

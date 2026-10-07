@@ -2357,13 +2357,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_aws_secret_stripped_by_default() {
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET")
-        };
+        let before = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_aws_secret_stripped_by_default",
+            &[("AWS_SECRET_ACCESS_KEY", std::ffi::OsStr::new("REAL_SECRET"))],
+        ) {
+            let after = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2392,13 +2397,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_plain_env_inherited() {
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue")
-        };
+        let before = std::env::var_os("MY_PLAIN_VAR_PROC2");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_plain_env_inherited",
+            &[("MY_PLAIN_VAR_PROC2", std::ffi::OsStr::new("plainvalue"))],
+        ) {
+            let after = std::env::var_os("MY_PLAIN_VAR_PROC2");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2427,13 +2437,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_explicit_env_reinjects_stripped_key() {
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET")
-        };
+        let before = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_explicit_env_reinjects_stripped_key",
+            &[("AWS_SECRET_ACCESS_KEY", std::ffi::OsStr::new("REAL_SECRET"))],
+        ) {
+            let after = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2463,13 +2478,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_custom_denylist_entry_stripped() {
-        #[expect(
-            unsafe_code,
-            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
-        )]
-        unsafe {
-            std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue")
-        };
+        let before = std::env::var_os("MY_CUSTOM_PROC2_VAR");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_custom_denylist_entry_stripped",
+            &[("MY_CUSTOM_PROC2_VAR", std::ffi::OsStr::new("customvalue"))],
+        ) {
+            let after = std::env::var_os("MY_CUSTOM_PROC2_VAR");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
