@@ -30,6 +30,10 @@ fn read_fonts(connection: &Connection) -> SqlResult<FontRow> {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "fixture setup uses expect() so a failure names the setup step that broke, not just a propagated error"
+)]
 fn fonts_migration_adds_defaults_and_persists_settings() -> SqlResult<()> {
     let connection = Connection::open_in_memory()?;
     MigrationRegistry::new()
@@ -71,6 +75,10 @@ fn fonts_migration_adds_defaults_and_persists_settings() -> SqlResult<()> {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "fixture setup uses expect() so a failure names the setup step that broke, not just a propagated error"
+)]
 fn fonts_migration_upgrades_populated_pre_040_settings() -> SqlResult<()> {
     let connection = Connection::open_in_memory()?;
     let registry = MigrationRegistry::new();

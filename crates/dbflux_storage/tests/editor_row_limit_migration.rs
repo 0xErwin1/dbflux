@@ -2,6 +2,10 @@ use dbflux_storage::migrations::MigrationRegistry;
 use rusqlite::{Connection, Result as SqlResult};
 
 #[test]
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "fixture setup uses expect() so a failure names the setup step that broke, not just a propagated error"
+)]
 fn editor_row_limit_migration_preserves_snapshot_and_persists_setting() -> SqlResult<()> {
     let connection = Connection::open_in_memory()?;
     MigrationRegistry::new()
@@ -37,6 +41,10 @@ fn editor_row_limit_migration_preserves_snapshot_and_persists_setting() -> SqlRe
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "fixture setup uses expect() so a failure names the setup step that broke, not just a propagated error"
+)]
 fn editor_row_limit_migration_upgrades_populated_settings_and_rejects_zero() -> SqlResult<()> {
     let connection = Connection::open_in_memory()?;
     let registry = MigrationRegistry::new();

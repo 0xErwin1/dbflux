@@ -8,7 +8,7 @@ use rusqlite::Transaction;
 
 use crate::migrations::{Migration, MigrationError};
 
-pub struct MigrationImpl;
+pub(crate) struct MigrationImpl;
 
 const FONT_COLUMNS: [(&str, &str); 6] = [
     ("ui_font_family", "TEXT"),

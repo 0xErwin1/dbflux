@@ -14,7 +14,7 @@ use dbflux_core::chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 /// `NULL` — the same convention `FileSink`'s CSV writer uses for `Value::Null`
 /// (and, unavoidably, for an actual empty string; CSV cannot distinguish the
 /// two once written, matching `dbflux_export`'s existing encode-side limit).
-pub fn value_from_csv_field(field: &str, type_name: Option<&str>) -> Value {
+pub(crate) fn value_from_csv_field(field: &str, type_name: Option<&str>) -> Value {
     if field.is_empty() {
         return Value::Null;
     }
@@ -25,7 +25,7 @@ pub fn value_from_csv_field(field: &str, type_name: Option<&str>) -> Value {
 /// Decodes one JSON value (as produced by `Value::to_serde_json`) back into a
 /// `Value`, using `type_name` to disambiguate the JSON string cases that
 /// collapse several `Value` variants into plain strings (Decimal, Date, Time).
-pub fn value_from_json(value: &serde_json::Value, type_name: Option<&str>) -> Value {
+pub(crate) fn value_from_json(value: &serde_json::Value, type_name: Option<&str>) -> Value {
     match value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),
