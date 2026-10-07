@@ -260,7 +260,7 @@ impl Render for TabBar {
                 .flex()
                 .min_w_0()
                 .items_center()
-                .overflow_x_hidden()
+                .overflow_x_scroll()
                 .gap(TabMetrics::DOCUMENT_BAR_GAP)
                 .children(tabs)
                 .child(new_tab_btn),
