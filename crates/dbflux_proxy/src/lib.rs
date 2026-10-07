@@ -303,6 +303,16 @@ fn open_https_connect_stream(
     Ok(ProxiedStream::Tls(Box::new(tls_stream)))
 }
 
+// `write!` into a `String` is infallible, so the expect below cannot fire; keep
+// it outside the `Result` contract rather than fabricate an error branch.
+#[expect(
+    clippy::expect_used,
+    reason = "write! to a String is infallible: fmt::Write for String never returns Err"
+)]
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "the only expect targets an infallible write! to a String; mapping that unreachable branch into DbError would add a fictional error path"
+)]
 fn perform_connect_handshake<S: Read + Write>(
     mut stream: S,
     config: &ProxyTunnelConfig,
@@ -426,6 +436,14 @@ fn base64_encode(input: &[u8]) -> String {
 
     let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
 
+    // `chunks(3)` never yields an empty chunk, so `chunk[0]` is in bounds.
+    // Each `ALPHABET` index uses `& 0x3F`, keeping it within the 64-byte alphabet.
+    // Only `triple >> 18` is already below 64 before masking the packed 24 bits;
+    // the smaller shifts still require their masks.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "chunks(3) yields non-empty chunks so chunk[0] is in bounds, and every ALPHABET index is 6-bit masked (& 0x3F) against the 64-byte alphabet"
+    )]
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;

@@ -141,6 +141,10 @@ struct SshConnector {
 }
 
 // Safety: all `Session` access is serialized to the tunnel thread.
+#[expect(
+    unsafe_code,
+    reason = "redundant with the auto trait: ssh2 0.9.6 Session is documented Send (Session wraps Arc<Mutex<SessionInner>>); the explicit impl is kept as the recorded contract for tunnel-thread access"
+)]
 unsafe impl Send for SshConnector {}
 
 impl TunnelConnector for SshConnector {
@@ -517,6 +521,12 @@ fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
 
+    // `byte >> 4` and `byte & 0x0f` are always in 0..=15, so each index is
+    // within the 16-byte HEX alphabet.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "byte >> 4 and byte & 0x0f are always in 0..=15, within the 16-byte HEX alphabet"
+    )]
     for byte in bytes {
         output.push(HEX[(byte >> 4) as usize] as char);
         output.push(HEX[(byte & 0x0f) as usize] as char);
