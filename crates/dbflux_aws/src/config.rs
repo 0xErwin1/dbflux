@@ -1432,26 +1432,85 @@ output=json
         );
     }
 
+    /// Test-only counterpart of dbflux_core's private isolated-env helper:
+    /// this crate cannot see the other crate's cfg(test) module, so the same
+    /// contract is repeated here (exact self marker, clean child environment).
+    fn run_isolated_fixture(test_name: &str, vars: &[(&str, &std::ffi::OsStr)]) -> bool {
+        if is_isolated_child(test_name) {
+            return false;
+        }
+
+        let exe = std::env::current_exe().expect("current test binary must be locatable");
+        let mut command = std::process::Command::new(exe);
+        command
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env_clear();
+        for key in ["PATH", "SystemRoot", "SystemDrive", "TEMP", "TMP", "TMPDIR"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        for (key, value) in vars {
+            command.env(key, value);
+        }
+        command.env(MARKER_VAR, test_name);
+
+        let output = command
+            .output()
+            .expect("isolated fixture child process must be spawnable");
+
+        let summary = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && summary.contains("1 passed; 0 failed"),
+            "isolated fixture child must run and pass exactly the selected test (anti-vacuum); status: {:?}; child stderr (first 8k chars): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(8192)
+                .collect::<String>()
+        );
+        true
+    }
+
+    /// Marker shared by the isolated-fixture helper and each fixture's own
+    /// child branch. It is set by the parent process, so child selection is
+    /// conditional on the host environment, not a security boundary.
+    const MARKER_VAR: &str = "DBFLUX_ISOLATED_ENV_FIXTURE";
+
+    /// True when the current process is the isolated child selected by
+    /// `test_name`.
+    fn is_isolated_child(test_name: &str) -> bool {
+        std::env::var_os(MARKER_VAR).is_some_and(|marker| marker == test_name)
+    }
+
     #[test]
-    #[expect(
-        unsafe_code,
-        reason = "existing environment-override fixture mutates process environment; subprocess isolation is tracked separately"
-    )]
     fn credentials_file_path_override_via_env() {
+        let test_name = "config::tests::credentials_file_path_override_via_env";
+        if is_isolated_child(test_name) {
+            let from_startup_env = std::env::var_os("AWS_SHARED_CREDENTIALS_FILE")
+                .expect("override variable must be present in the isolated child");
+            let path = credentials_file_path();
+            assert_eq!(path, std::path::PathBuf::from(from_startup_env));
+            return;
+        }
+
         let dir = tempfile::tempdir().expect("tempdir");
         let custom = dir.path().join("my-credentials");
+        let before = std::env::var_os("AWS_SHARED_CREDENTIALS_FILE");
+        let ran = run_isolated_fixture(
+            test_name,
+            &[("AWS_SHARED_CREDENTIALS_FILE", custom.as_os_str())],
+        );
+        assert!(
+            ran,
+            "parent must observe exactly one passing isolated child run"
+        );
 
-        // Safety: test-only env mutation is acceptable here; tests run in a
-        // single-threaded test harness per process.
-        unsafe {
-            std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", custom.to_str().unwrap());
-        }
-        let path = credentials_file_path();
-        unsafe {
-            std::env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
-        }
-
-        assert_eq!(path, custom);
+        let after = std::env::var_os("AWS_SHARED_CREDENTIALS_FILE");
+        assert!(
+            after == before,
+            "fixture must preserve the caller's process environment"
+        );
     }
 
     // T-2.2 — parse_aws_credentials_str tests
