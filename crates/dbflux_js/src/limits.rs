@@ -11,15 +11,15 @@
 use std::time::Duration;
 
 /// Maximum heap memory a single script run may allocate.
-pub const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Maximum JS call-stack size for a single script run.
-pub const MAX_STACK_SIZE_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_STACK_SIZE_BYTES: usize = 512 * 1024;
 
 /// Wall-clock budget for JS execution time within one script run. This is
 /// JS-time only — it cannot preempt a blocking driver call already in
 /// flight; the dispatcher checks cancellation before each dispatch instead.
-pub const WALL_CLOCK_DEADLINE: Duration = Duration::from_secs(30);
+pub(crate) const WALL_CLOCK_DEADLINE: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {

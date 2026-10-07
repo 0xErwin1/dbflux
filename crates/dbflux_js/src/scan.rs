@@ -110,8 +110,16 @@ fn contains_word(source: &str, word: &str) -> bool {
     while let Some(relative_pos) = source.get(search_from..).and_then(|s| s.find(word)) {
         let absolute_pos = search_from + relative_pos;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the index evaluates only when the `absolute_pos == 0` short-circuit is false, i.e. 1 <= absolute_pos < bytes.len() because a non-empty word matched at absolute_pos, so absolute_pos - 1 is in bounds"
+        )]
         let before_is_boundary = absolute_pos == 0 || !is_identifier_char(bytes[absolute_pos - 1]);
         let after_index = absolute_pos + word_len;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the `after_index >= bytes.len()` short-circuit is evaluated first, so the index only runs when after_index < bytes.len()"
+        )]
         let after_is_boundary =
             after_index >= bytes.len() || !is_identifier_char(bytes[after_index]);
 
@@ -141,6 +149,10 @@ fn contains_computed_member_access(source: &str) -> bool {
         let mut lookback = index;
         while lookback > 0 {
             lookback -= 1;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "lookback starts at index < bytes.len() and the `while lookback > 0` guard decrements it, so at the index 0 <= lookback < bytes.len()"
+            )]
             let candidate = bytes[lookback];
             if (candidate as char).is_whitespace() {
                 continue;
