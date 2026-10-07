@@ -14,6 +14,13 @@ use testcontainers::{GenericImage, ImageExt};
 /// Docker bridge gateway IP — routes from inside containers back to the host.
 const DOCKER_GATEWAY: &str = "172.17.0.1";
 
+// Fixture setup for an `#[ignore]`d Docker test: the helper returns container
+// handles directly, so a failed start or port mapping is an environment failure
+// that must abort the test with its message rather than become a `Result`.
+#[expect(
+    clippy::expect_used,
+    reason = "Docker fixture helper returns infallible handles; container start and port mapping failures are test-environment aborts, not recoverable errors"
+)]
 fn start_postgres() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("postgres", "16")
         .with_exposed_port(ContainerPort::Tcp(5432))
@@ -31,6 +38,10 @@ fn start_postgres() -> (testcontainers::Container<GenericImage>, u16) {
     (container, port)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "Docker fixture helper returns infallible handles; container start and port mapping failures are test-environment aborts, not recoverable errors"
+)]
 fn start_socks5_proxy() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("serjs/go-socks5-proxy", "latest")
         .with_exposed_port(ContainerPort::Tcp(1080))
@@ -48,6 +59,10 @@ fn start_socks5_proxy() -> (testcontainers::Container<GenericImage>, u16) {
     (container, port)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "Docker fixture helper returns infallible handles; container start and port mapping failures are test-environment aborts, not recoverable errors"
+)]
 fn start_socks5_proxy_with_auth() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("serjs/go-socks5-proxy", "latest")
         .with_exposed_port(ContainerPort::Tcp(1080))
@@ -67,6 +82,10 @@ fn start_socks5_proxy_with_auth() -> (testcontainers::Container<GenericImage>, u
 }
 
 /// Wait for PostgreSQL to be reachable via a tunnel.
+#[expect(
+    clippy::panic,
+    reason = "timeout poll helper for an ignored Docker test: after the deadline expires, panicking with the last connection error is the intended test-failure signal"
+)]
 fn wait_for_postgres(tunnel_port: u16, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 
@@ -302,6 +321,10 @@ fn socks5_tunnel_drops_cleanly() {
 // HTTP CONNECT tests
 // ---------------------------------------------------------------------------
 
+#[expect(
+    clippy::expect_used,
+    reason = "Docker fixture helper returns infallible handles; container start and port mapping failures are test-environment aborts, not recoverable errors"
+)]
 fn start_tinyproxy() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("monokal/tinyproxy", "latest")
         .with_exposed_port(ContainerPort::Tcp(8888))
