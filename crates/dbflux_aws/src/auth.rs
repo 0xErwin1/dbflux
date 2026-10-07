@@ -110,7 +110,15 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
             ))
         })?;
 
+    #[expect(
+        clippy::expect_used,
+        reason = "stdout was set to Stdio::piped, so the capture handle is guaranteed to exist; capture-handle invariant, not error recovery"
+    )]
     let stdout = child.stdout.take().expect("stdout was piped");
+    #[expect(
+        clippy::expect_used,
+        reason = "stderr was set to Stdio::piped, so the capture handle is guaranteed to exist; capture-handle invariant, not error recovery"
+    )]
     let stderr = child.stderr.take().expect("stderr was piped");
 
     // Shared abort flag. The drain thread and the session-polling loop both
