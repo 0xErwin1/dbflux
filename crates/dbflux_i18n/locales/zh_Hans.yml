@@ -3851,6 +3851,16 @@ settings:
       error: 键值预览大小上限必须大于等于 1 MiB
     key_value_size_limit_hint:
       label: "超过此大小的值不会自动下载；请点击 仍要加载 获取完整值。"
+    notifications:
+      group: "通知"
+    toast_timeout:
+      label: "通知停留时间"
+      hint: "成功、信息和警告通知会在此时间后自动关闭。错误通知以及带操作或进度的通知会保留，直到关闭。将指针悬停在通知上会暂停计时。"
+      option:
+        "4s": "4 秒"
+        "8s": "8 秒"
+        "15s": "15 秒"
+        never: "保留直到关闭"
     share_stable_db:
       label: 使用稳定数据库
       error: 更新共享数据库设置失败
@@ -5108,6 +5118,8 @@ toast:
     show_details: 显示详情
     hide_details: 隐藏详情
     dismiss: 关闭
+  stack:
+    hidden_more: "还有 %{count} 条"
 workspace:
   rail:
     connections: "连接"

@@ -49,6 +49,7 @@ impl GeneralSection {
             current.dangerous_requires_preview != saved.dangerous_requires_preview,
             current.vim_mode != saved.vim_mode,
             current.vim_leader != saved.vim_leader,
+            current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
         let input_changes = [
@@ -135,6 +136,7 @@ impl GeneralSection {
             GeneralFormRow::EditorRowLimit,
             GeneralFormRow::ObjectPreviewLimit,
             GeneralFormRow::KeyValueSizeLimit,
+            GeneralFormRow::ToastTimeout,
         ];
 
         // The shared-database toggle only makes sense on nightly, which is the
@@ -277,6 +279,11 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::DefaultRefreshPolicy) => {
                 self.dropdown_refresh_policy
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::ToastTimeout) => {
+                self.dropdown_toast_timeout
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
@@ -432,6 +439,7 @@ impl GeneralSection {
             Some(GeneralFormRow::Language) => Some(&self.dropdown_language),
             Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
             Some(GeneralFormRow::VimLeader) => Some(&self.dropdown_vim_leader),
+            Some(GeneralFormRow::ToastTimeout) => Some(&self.dropdown_toast_timeout),
             _ => None,
         }
     }
@@ -1148,6 +1156,22 @@ impl GeneralSection {
                 cx,
             ));
 
+        let notifications = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.notifications.group"),
+                Some(AppIcon::Bell.into()),
+                cx,
+            ))
+            .child(self.render_gen_dropdown(
+                dbflux_i18n::t!("settings.general.toast_timeout.label"),
+                Some(dbflux_i18n::t!("settings.general.toast_timeout.hint")),
+                self.dropdown_toast_timeout.clone(),
+                GeneralFormRow::ToastTimeout,
+                cx,
+            ));
+
         let nightly_storage = Self::is_nightly().then(|| {
             div()
                 .flex()
@@ -1184,6 +1208,7 @@ impl GeneralSection {
                 .child(safety)
                 .child(object_storage)
                 .child(key_value)
+                .child(notifications)
                 .children(nightly_storage),
             &self.form_scroll,
             self.form_viewport.clone(),

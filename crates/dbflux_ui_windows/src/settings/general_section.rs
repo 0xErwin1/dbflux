@@ -21,6 +21,10 @@ use std::rc::Rc;
 /// default).
 const VIM_LEADER_CHOICES: [&str; 3] = ["space", ",", "\\"];
 
+/// The auto-dismiss delays Settings > General offers, in seconds. `0` keeps
+/// every toast until the user dismisses it.
+const TOAST_TIMEOUT_CHOICES: [u32; 4] = [4, 8, 15, 0];
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum GeneralFormRow {
     Theme,
@@ -50,6 +54,7 @@ pub(super) enum GeneralFormRow {
     EditorRowLimit,
     ObjectPreviewLimit,
     KeyValueSizeLimit,
+    ToastTimeout,
     ShareStableDb,
     SaveButton,
 }
@@ -97,6 +102,7 @@ pub(super) struct GeneralSection {
     pub(super) dropdown_language: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
     pub(super) dropdown_vim_leader: Entity<Dropdown>,
+    pub(super) dropdown_toast_timeout: Entity<Dropdown>,
     pub(super) select_ui_font_family: FontFamilySelect,
     pub(super) select_editor_font_family: FontFamilySelect,
     pub(super) select_grid_font_family: FontFamilySelect,
@@ -142,6 +148,7 @@ impl GeneralSection {
         let language_index = Self::language_index(&settings.language);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
         let vim_leader_index = Self::vim_leader_index(&settings.vim_leader);
+        let toast_timeout_index = Self::toast_timeout_index(settings.toast_auto_dismiss_secs);
         let max_history = settings.max_history_entries.to_string();
         let auto_save_interval = settings.auto_save_interval_ms.to_string();
         let refresh_interval = settings.default_refresh_interval_secs.to_string();
@@ -170,6 +177,12 @@ impl GeneralSection {
                 .placeholder(dbflux_i18n::t!("settings.general.vim_leader.label"))
                 .items(Self::vim_leader_items())
                 .selected_index(vim_leader_index)
+        });
+        let dropdown_toast_timeout = cx.new(move |_cx| {
+            Dropdown::new("general-toast-timeout")
+                .placeholder(dbflux_i18n::t!("settings.general.toast_timeout.label"))
+                .items(Self::toast_timeout_items())
+                .selected_index(toast_timeout_index)
         });
 
         let installed_fonts = dbflux_components::fonts::installed_font_names(cx);
@@ -303,6 +316,15 @@ impl GeneralSection {
             },
         );
 
+        let toast_timeout_subscription = cx.subscribe(
+            &dropdown_toast_timeout,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.gen_settings.toast_auto_dismiss_secs =
+                    Self::toast_timeout_for_index(event.index);
+                cx.notify();
+            },
+        );
+
         let blur_max_history =
             cx.subscribe(&input_max_history, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Blur) {
@@ -396,6 +418,7 @@ impl GeneralSection {
             dropdown_language,
             dropdown_refresh_policy,
             dropdown_vim_leader,
+            dropdown_toast_timeout,
             select_ui_font_family,
             select_editor_font_family,
             select_grid_font_family,
@@ -421,6 +444,7 @@ impl GeneralSection {
                 language_subscription,
                 refresh_policy_subscription,
                 vim_leader_subscription,
+                toast_timeout_subscription,
                 blur_max_history,
                 blur_auto_save,
                 blur_refresh_interval,
@@ -676,6 +700,35 @@ impl GeneralSection {
     /// The stored leader of the dropdown index `index`.
     pub(super) fn vim_leader_for_index(index: usize) -> &'static str {
         VIM_LEADER_CHOICES.get(index).copied().unwrap_or("space")
+    }
+
+    /// Toast timeout choices, in index order (see [`Self::toast_timeout_index`]).
+    fn toast_timeout_items() -> Vec<DropdownItem> {
+        vec![
+            DropdownItem::new(dbflux_i18n::t!("settings.general.toast_timeout.option.4s")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.toast_timeout.option.8s")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.toast_timeout.option.15s")),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.toast_timeout.option.never"
+            )),
+        ]
+    }
+
+    /// The dropdown index of the stored auto-dismiss delay, or `None` for a
+    /// value the dropdown does not offer.
+    pub(super) fn toast_timeout_index(secs: u32) -> Option<usize> {
+        TOAST_TIMEOUT_CHOICES
+            .iter()
+            .position(|choice| *choice == secs)
+    }
+
+    /// The stored auto-dismiss delay, in seconds, of the dropdown index
+    /// `index`.
+    pub(super) fn toast_timeout_for_index(index: usize) -> u32 {
+        TOAST_TIMEOUT_CHOICES
+            .get(index)
+            .copied()
+            .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS)
     }
 
     pub(super) fn theme_index(theme: ThemeSetting) -> usize {
@@ -1002,6 +1055,78 @@ mod tests {
 
         assert_eq!(GeneralSection::vim_leader_index("ctrl+k"), None);
         assert_eq!(GeneralSection::vim_leader_for_index(9), "space");
+    }
+
+    #[test]
+    fn toast_timeout_choices_round_trip_through_their_dropdown_index() {
+        for (index, stored) in [4u32, 8, 15, 0].into_iter().enumerate() {
+            assert_eq!(GeneralSection::toast_timeout_for_index(index), stored);
+            assert_eq!(GeneralSection::toast_timeout_index(stored), Some(index));
+        }
+
+        assert_eq!(GeneralSection::toast_timeout_index(30), None);
+        assert_eq!(
+            GeneralSection::toast_timeout_for_index(99),
+            dbflux_core::GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS
+        );
+    }
+
+    /// Picking a toast timeout is an unsaved change until Save, which stores
+    /// it. `0` means every toast waits for the user.
+    #[test]
+    fn choosing_a_toast_timeout_marks_dirty_and_saves() {
+        with_general_section(|section, _, window, cx| {
+            assert_eq!(section.gen_settings.toast_auto_dismiss_secs, 8);
+
+            section.gen_settings.toast_auto_dismiss_secs =
+                GeneralSection::toast_timeout_for_index(3);
+            assert_eq!(section.general_change_count(cx), 1);
+
+            section.save_general_settings(window, cx);
+
+            assert_eq!(
+                section
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .toast_auto_dismiss_secs,
+                0
+            );
+            let stored = section
+                .app_state
+                .read(cx)
+                .storage_runtime()
+                .general_settings()
+                .get()
+                .expect("stored general settings readable")
+                .map(|settings| settings.toast_auto_dismiss_secs);
+            assert_eq!(stored, Some(0));
+            assert!(!section.has_unsaved_general_changes(cx));
+        });
+    }
+
+    #[test]
+    fn toast_timeout_copy_resolves_in_every_locale() {
+        for key in [
+            "settings.general.notifications.group",
+            "settings.general.toast_timeout.label",
+            "settings.general.toast_timeout.hint",
+            "settings.general.toast_timeout.option.4s",
+            "settings.general.toast_timeout.option.8s",
+            "settings.general.toast_timeout.option.15s",
+            "settings.general.toast_timeout.option.never",
+        ] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty for {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
     }
 
     #[test]

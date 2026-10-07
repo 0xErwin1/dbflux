@@ -109,6 +109,7 @@ pub fn save_general_settings(
         editor_font_size: f64::from(settings.editor_font_size),
         grid_font_family: settings.grid_font_family.clone(),
         grid_font_size: f64::from(settings.grid_font_size),
+        toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1112,6 +1113,8 @@ fn load_general_settings(
             dto.grid_font_size,
             GeneralSettings::DEFAULT_GRID_FONT_SIZE,
         ),
+        toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
+            .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
     }
 }
 
@@ -2503,6 +2506,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
 
@@ -2597,6 +2601,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
         runtime
@@ -2834,6 +2839,26 @@ mod tests {
     }
 
     #[test]
+    fn toast_auto_dismiss_defaults_to_eight_and_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.toast_auto_dismiss_secs, 8);
+
+        let settings = GeneralSettings {
+            toast_auto_dismiss_secs: 0,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save toast timeout");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.toast_auto_dismiss_secs, 0,
+            "zero means the stack never closes a toast on its own"
+        );
+    }
+
+    #[test]
     fn out_of_range_font_sizes_and_blank_families_are_normalized_on_load() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
@@ -2902,6 +2927,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
         runtime

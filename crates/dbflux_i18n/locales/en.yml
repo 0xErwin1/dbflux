@@ -3851,6 +3851,16 @@ settings:
       error: Key-value preview size limit must be >= 1 MiB
     key_value_size_limit_hint:
       label: "Values larger than this are not downloaded automatically; use \"Load anyway\" to fetch the full value."
+    notifications:
+      group: "Notifications"
+    toast_timeout:
+      label: "Toast timeout"
+      hint: "Success, Info and Warning toasts close on their own after this. Errors, and toasts with an action or progress, stay until dismissed. Hovering a toast holds its timer."
+      option:
+        "4s": "4 seconds"
+        "8s": "8 seconds"
+        "15s": "15 seconds"
+        never: "Keep until dismissed"
     share_stable_db:
       label: Use the stable database
       error: Failed to update the shared-database setting
@@ -5110,6 +5120,8 @@ toast:
     show_details: Show details
     hide_details: Hide details
     dismiss: Dismiss
+  stack:
+    hidden_more: "%{count} more"
 workspace:
   rail:
     connections: "Connections"

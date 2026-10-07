@@ -98,6 +98,23 @@ converted crate by crate and stays in English for now.
 | **Pause auto-refresh on error** | On | Stop auto-refreshing a view after it errors. |
 | **Auto-refresh only if tab is visible** | Off | Skip refreshing tabs you're not looking at. |
 
+### Notifications
+
+| Setting | Options | Default |
+|---------|---------|---------|
+| **Toast timeout** | 4 seconds, 8 seconds, 15 seconds, Keep until dismissed | 8 seconds |
+
+**Toast timeout** sets how long a toast stays before it closes on its own.
+Success and Info toasts close after it, and Warning toasts after twice it. An
+Error toast, and a toast with an action button or a progress bar, stays until
+you dismiss it. **Keep until dismissed** turns automatic closing off for every
+toast. Pointing at a toast holds its timer, which resumes when the pointer
+leaves.
+
+Toasts stack in the top-right corner of the document area. At most four are
+shown at once; older ones fold into an *N more* entry that expands them or
+dismisses them together.
+
 ### Execution safety (dangerous-query confirmation)
 
 These three settings govern how DBFlux treats risky queries across **all**

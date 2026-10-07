@@ -383,6 +383,14 @@ pub struct GeneralSettings {
     #[serde(default = "default_key_value_size_limit_mib")]
     pub key_value_size_limit_mib: u64,
 
+    // -- Notifications --
+    /// Auto-dismiss delay for toasts, in seconds. Success and Info toasts
+    /// close after it and Warning toasts after twice it; an Error toast and
+    /// a toast with actions or progress stay until it is dismissed. `0`
+    /// keeps every toast until the user dismisses it.
+    #[serde(default = "default_toast_auto_dismiss_secs")]
+    pub toast_auto_dismiss_secs: u32,
+
     // -- Editor --
     /// Modal (Vim) editing in multi-line editors. Off by default.
     #[serde(default)]
@@ -425,6 +433,7 @@ impl GeneralSettings {
     pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
     pub const MIN_FONT_SIZE: f32 = 8.0;
     pub const MAX_FONT_SIZE: f32 = 32.0;
+    pub const DEFAULT_TOAST_AUTO_DISMISS_SECS: u32 = 8;
 
     /// Clamps a font size to `[MIN_FONT_SIZE, MAX_FONT_SIZE]`. A non-finite
     /// size (NaN or infinite) is replaced by `default`, since it carries no
@@ -449,6 +458,10 @@ impl GeneralSettings {
             Some(trimmed.to_string())
         }
     }
+}
+
+fn default_toast_auto_dismiss_secs() -> u32 {
+    GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS
 }
 
 fn default_ui_font_size() -> f32 {
@@ -511,6 +524,7 @@ impl Default for GeneralSettings {
             schema_snapshot_retention: default_schema_snapshot_retention(),
             object_preview_size_limit_mib: default_object_preview_size_limit_mib(),
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
+            toast_auto_dismiss_secs: Self::DEFAULT_TOAST_AUTO_DISMISS_SECS,
             vim_mode: false,
             vim_leader: default_vim_leader(),
             ui_font_family: None,

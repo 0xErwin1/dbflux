@@ -3851,6 +3851,16 @@ settings:
       error: El límite de tamaño para la vista previa de clave-valor debe ser >= 1 MiB
     key_value_size_limit_hint:
       label: "Los valores más grandes que este límite no se descargan automáticamente; usa \"Cargar de todos modos\" para obtener el valor completo."
+    notifications:
+      group: "Notificaciones"
+    toast_timeout:
+      label: "Duración de los avisos"
+      hint: "Los avisos de éxito, información y advertencia se cierran solos al cabo de este tiempo. Los errores, y los avisos con una acción o progreso, permanecen hasta que se descarten. Pasar el puntero por encima de un aviso detiene su temporizador."
+      option:
+        "4s": "4 segundos"
+        "8s": "8 segundos"
+        "15s": "15 segundos"
+        never: "Mantener hasta descartarlos"
     share_stable_db:
       label: Usar la base de datos estable
       error: No se pudo actualizar la configuración de base de datos compartida
@@ -5110,6 +5120,8 @@ toast:
     show_details: Mostrar detalles
     hide_details: Ocultar detalles
     dismiss: Descartar
+  stack:
+    hidden_more: "%{count} más"
 workspace:
   rail:
     connections: "Conexiones"

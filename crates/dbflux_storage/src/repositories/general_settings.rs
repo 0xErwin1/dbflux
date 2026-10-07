@@ -41,7 +41,7 @@ impl GeneralSettingsRepository {
                        object_preview_size_limit_mib, language,
                        key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
-                       grid_font_family, grid_font_size,
+                       grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -82,7 +82,8 @@ impl GeneralSettingsRepository {
                 editor_font_size: row.get(26)?,
                 grid_font_family: row.get(27)?,
                 grid_font_size: row.get(28)?,
-                updated_at: row.get(29)?,
+                toast_auto_dismiss_secs: row.get(29)?,
+                updated_at: row.get(30)?,
             })
         });
 
@@ -112,9 +113,9 @@ impl GeneralSettingsRepository {
                     object_preview_size_limit_mib, language,
                     key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
-                    grid_font_family, grid_font_size,
+                    grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -144,6 +145,7 @@ impl GeneralSettingsRepository {
                     editor_font_size = excluded.editor_font_size,
                     grid_font_family = excluded.grid_font_family,
                     grid_font_size = excluded.grid_font_size,
+                    toast_auto_dismiss_secs = excluded.toast_auto_dismiss_secs,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -175,6 +177,7 @@ impl GeneralSettingsRepository {
                     settings.editor_font_size,
                     settings.grid_font_family,
                     settings.grid_font_size,
+                    settings.toast_auto_dismiss_secs,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -239,6 +242,9 @@ pub struct GeneralSettingsDto {
     pub grid_font_family: Option<String>,
     /// Data grid font size in pixels.
     pub grid_font_size: f64,
+    /// Auto-dismiss delay for toasts, in seconds; `0` keeps them until the
+    /// user dismisses them.
+    pub toast_auto_dismiss_secs: i64,
     pub updated_at: String,
 }
 
@@ -302,6 +308,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
 
@@ -360,6 +367,7 @@ mod tests {
                 editor_font_size: 13.0,
                 grid_font_family: None,
                 grid_font_size: 12.5,
+                toast_auto_dismiss_secs: 8,
                 updated_at: String::new(),
             };
 
@@ -438,6 +446,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
 
@@ -530,6 +539,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
 
@@ -582,6 +592,7 @@ mod tests {
             editor_font_size: 13.0,
             grid_font_family: None,
             grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
 
@@ -666,6 +677,7 @@ mod tests {
             editor_font_size: 16.0,
             grid_font_family: Some("Fira Code".to_string()),
             grid_font_size: 14.0,
+            toast_auto_dismiss_secs: 8,
             updated_at: String::new(),
         };
 
