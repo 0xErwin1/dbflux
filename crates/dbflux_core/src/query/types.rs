@@ -4,14 +4,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use uuid::Uuid;
 
-pub const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
+pub(crate) const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
 
 /// `metadata_extra` key marking that a driver omitted result rows because an
 /// execution cap (e.g. a configured row limit) was reached. `true` must be
 /// written only when rows were actually dropped — it is not a guarantee that
 /// the driver enforced any cap, and its absence is not a promise of
 /// completeness.
-pub const ROWS_TRUNCATED_METADATA_KEY: &str = "rows_truncated";
+pub(crate) const ROWS_TRUNCATED_METADATA_KEY: &str = "rows_truncated";
 
 pub(crate) fn encode_unsupported_types(
     metadata: &mut Option<HashMap<String, serde_json::Value>>,
@@ -311,7 +311,7 @@ pub enum ColumnKind {
 
 /// Returns `ColumnKind::Unknown`. Used as a serde default so that JSON
 /// fixtures serialised before this field was introduced deserialise cleanly.
-pub fn default_column_kind_unknown() -> ColumnKind {
+pub(crate) fn default_column_kind_unknown() -> ColumnKind {
     ColumnKind::Unknown
 }
 

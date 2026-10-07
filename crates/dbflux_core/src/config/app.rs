@@ -464,7 +464,7 @@ fn default_grid_font_size() -> f32 {
 }
 
 /// The Vim leader key of a new installation.
-pub fn default_vim_leader() -> String {
+pub(crate) fn default_vim_leader() -> String {
     "space".to_string()
 }
 

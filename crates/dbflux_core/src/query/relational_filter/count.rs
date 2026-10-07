@@ -10,6 +10,17 @@ use crate::sql::dialect::SqlDialect;
 /// All dialects supported by DBFlux accept `SELECT COUNT(*) FROM (<select>) AS x`
 /// syntax, so no dialect-specific branching is needed here.
 pub fn count_query_from_spec(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -> SelectQuery {
+    // The public signature returns `SelectQuery` with no error channel, and
+    // `build_select_query` is deterministic per `(spec, dialect)`: supported
+    // callers pass a `RelationalLowering.spec` whose SELECT already built
+    // successfully (or rebuild the identical spec), so the `Err` arm is not
+    // reachable for them. A hand-built invalid spec (e.g. `IN` without a list
+    // value) would still panic here; narrowing the return type to `Result`
+    // would be a public-API break for `dbflux_core::count_query_from_spec`.
+    #[expect(
+        clippy::expect_used,
+        reason = "public API returns SelectQuery by value; Err unreachable for lowering specs"
+    )]
     let inner =
         build_select_query(spec, dialect).expect("spec must be valid when entering count path");
 

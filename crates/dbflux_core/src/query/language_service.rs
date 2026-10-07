@@ -550,12 +550,16 @@ fn word_range_at(statement: &str, offset: usize) -> Option<std::ops::Range<usize
     let is_ident_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
 
     let mut start = offset.min(bytes.len());
-    while start > 0 && is_ident_byte(bytes[start - 1]) {
+    while bytes
+        .get(start.wrapping_sub(1))
+        .copied()
+        .is_some_and(is_ident_byte)
+    {
         start -= 1;
     }
 
     let mut end = offset.min(bytes.len());
-    while end < bytes.len() && is_ident_byte(bytes[end]) {
+    while bytes.get(end).copied().is_some_and(is_ident_byte) {
         end += 1;
     }
 
@@ -868,6 +872,15 @@ fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
 /// PL/pgSQL bodies, so any query using them produces spurious ERROR nodes.
 /// Requiring a *closed* block avoids masking genuine syntax errors in plain
 /// SQL that merely contains a stray `$`.
+///
+/// Bounds proof: `bytes[index]` is read under `while index < bytes.len()`;
+/// `bytes[tag_end]` reads are guarded by `tag_end < bytes.len()`; the tag slice
+/// `query[index..=tag_end]` and the tail slice `query[tag_end + 1..]` stay
+/// within `query` because `tag_end < bytes.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "bytes[index] under `while index < bytes.len()`; bytes[tag_end] guarded by `tag_end < bytes.len()`; the tag and tail query slices derive from the same bound"
+)]
 fn contains_dollar_quoted_block(query: &str) -> bool {
     let bytes = query.as_bytes();
     let mut index = 0;
@@ -922,6 +935,15 @@ const ON_COMMIT_ACTIONS: [&[&str]; 3] = [&["DROP"], &["DELETE", "ROWS"], &["PRES
 /// kept), so every other error keeps its row and column and the rest of the
 /// script is still validated. Text inside quoted strings, quoted identifiers,
 /// and comments is never touched.
+///
+/// Bounds proof: `bytes[index]` is read under `while index < bytes.len()` and
+/// `bytes[index - 1]` behind `index == 0 ||` short-circuit; the `buffer`
+/// mask range `[index..end]` is bounded because `on_commit_clause_end` only
+/// returns positions verified via `bytes.get(..)` inside `match_words`/`skip_separator`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "bytes[index] under `while index < bytes.len()` with index - 1 behind the index == 0 short-circuit; buffer[index..end] bounded by on_commit_clause_end, whose returned positions are verified via bytes.get(..)"
+)]
 fn mask_on_commit_clauses(query: &str) -> Cow<'_, str> {
     let bytes = query.as_bytes();
     let mut masked: Option<Vec<u8>> = None;
@@ -1136,7 +1158,9 @@ pub fn detect_dangerous_sql(query: &str) -> Option<DangerousQueryKind> {
         return None;
     }
 
-    detect_dangerous_single(statements[0])
+    statements
+        .first()
+        .and_then(|&statement| detect_dangerous_single(statement))
 }
 
 /// Unified entry point for shared SQL dangerous-query checks.

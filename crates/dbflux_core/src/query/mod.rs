@@ -5,7 +5,7 @@ pub(crate) mod join_condition;
 pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub(crate) mod name_suggestion;
-pub mod relational_filter;
+pub(crate) mod relational_filter;
 pub(crate) mod relaxed_json;
 pub(crate) mod safety;
 pub(crate) mod script_operation;

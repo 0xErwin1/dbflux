@@ -21,6 +21,11 @@ mod correlation_id_round_trip {
     }
 
     impl EventSink for CapturingSink {
+        #[expect(
+            clippy::unwrap_used,
+            clippy::unwrap_in_result,
+            reason = "Poisoned audit fixture state must fail the test rather than recover"
+        )]
         fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
             self.events.lock().unwrap().push(event.clone());
             Ok(event)

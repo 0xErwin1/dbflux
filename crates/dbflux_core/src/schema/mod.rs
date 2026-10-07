@@ -1,12 +1,12 @@
 pub(crate) mod builder;
-pub mod dependency_order;
-pub mod dependents;
-pub mod drift_check;
-pub mod fingerprint;
+pub(crate) mod dependency_order;
+pub(crate) mod dependents;
+pub(crate) mod drift_check;
+pub(crate) mod fingerprint;
 pub mod node_id;
-pub mod query_parser;
-pub mod schema_drift;
-pub mod snapshot_record;
+pub(crate) mod query_parser;
+pub(crate) mod schema_drift;
+pub(crate) mod snapshot_record;
 pub(crate) mod types;
 
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};

@@ -66,6 +66,16 @@ fn comparable(name: &str) -> Vec<char> {
 
 /// Optimal string alignment distance: insertions, deletions, substitutions and
 /// swaps of two adjacent characters each cost one edit.
+///
+/// Bounds proof: `previous`/`before_previous` always have `right.len() + 1`
+/// entries, so `previous[right_index]`, the lookahead `previous[right_index + 1]`
+/// (with `right_index < right.len()`) and the final `previous[right.len()]` are
+/// in range; `current` has `1 + right_index` entries when `current[right_index]`
+/// is read; the `- 1` accesses are guarded by `left_index > 0` / `right_index > 0`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "previous/before_previous/current are sized right.len() + 1 (current grows one entry per iteration before its index is read); all `- 1` indexes are behind left_index > 0 / right_index > 0 guards and the +1 lookahead stays within right.len() + 1"
+)]
 fn edit_distance(left: &[char], right: &[char]) -> usize {
     let mut before_previous: Vec<usize> = vec![0; right.len() + 1];
     let mut previous: Vec<usize> = (0..=right.len()).collect();

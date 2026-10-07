@@ -176,6 +176,10 @@ fn tokenize(on: &str) -> Result<Vec<Token>, JoinConditionError> {
                 index += 1;
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "start == index at scan entry and index only advances past char-boundary ASCII runs verified via get(), so start <= index <= characters.len()"
+            )]
             tokens.push(Token::Identifier(characters[start..index].iter().collect()));
             continue;
         }

@@ -29,11 +29,9 @@ impl FromStr for SchemaNodeId {
         };
 
         let parts: Vec<&str> = s.splitn(6, '|').collect();
-        if parts.is_empty() {
+        let Some((&prefix, rest)) = parts.split_first() else {
             return Err(err());
-        }
-
-        let prefix = parts[0];
+        };
 
         // Handle single-token variants first
         if prefix == P_SCRIPTS_FOLDER && parts.len() == 1 {
@@ -42,7 +40,7 @@ impl FromStr for SchemaNodeId {
 
         // ScriptsFolder with path — path may contain pipes, rejoin everything after prefix
         if prefix == P_SCRIPTS_FOLDER && parts.len() >= 2 {
-            let path = parts[1..].join("|");
+            let path = rest.join("|");
             return Ok(Self::ScriptsFolder { path: Some(path) });
         }
 
@@ -668,7 +666,7 @@ fn parse_script_file(
     err: impl Fn() -> ParseSchemaNodeIdError,
 ) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
     // Path may contain pipe characters, so rejoin everything after the prefix
-    let path = parts[1..].join("|");
+    let path = parts.get(1..).unwrap_or_default().join("|");
     if path.is_empty() {
         return Err(err());
     }
@@ -680,7 +678,7 @@ fn parse_scripts_root(
     err: impl Fn() -> ParseSchemaNodeIdError,
 ) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
     // Path may contain pipe characters, so rejoin everything after the prefix
-    let path = parts[1..].join("|");
+    let path = parts.get(1..).unwrap_or_default().join("|");
     if path.is_empty() {
         return Err(err());
     }

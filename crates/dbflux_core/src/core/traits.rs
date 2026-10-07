@@ -1935,6 +1935,10 @@ pub trait Connection: Send + Sync {
     ///
     /// # Returns
     /// A SQL string for the SELECT query
+    #[expect(
+        clippy::unimplemented,
+        reason = "Drivers must override this method; preserve the existing default panic contract."
+    )]
     fn build_select_sql(
         &self,
         table: &str,
@@ -1959,6 +1963,10 @@ pub trait Connection: Send + Sync {
     ///
     /// # Returns
     /// A tuple of (SQL string, parameter values)
+    #[expect(
+        clippy::unimplemented,
+        reason = "Drivers must override this method; preserve the existing default panic contract."
+    )]
     fn build_upsert_sql(
         &self,
         table: &str,
@@ -1978,6 +1986,10 @@ pub trait Connection: Send + Sync {
     ///
     /// # Returns
     /// A SQL string for TRUNCATE TABLE
+    #[expect(
+        clippy::unimplemented,
+        reason = "Drivers must override this method; preserve the existing default panic contract."
+    )]
     fn build_truncate_sql(&self, table: &str) -> String {
         let _ = table;
         unimplemented!("build_truncate_sql not implemented for this driver")
@@ -1992,6 +2004,10 @@ pub trait Connection: Send + Sync {
     ///
     /// # Returns
     /// A SQL string for DROP INDEX
+    #[expect(
+        clippy::unimplemented,
+        reason = "Drivers must override this method; preserve the existing default panic contract."
+    )]
     fn build_drop_index_sql(
         &self,
         index_name: &str,
@@ -2003,6 +2019,10 @@ pub trait Connection: Send + Sync {
     }
 
     /// Returns the SQL query to get the server version.
+    #[expect(
+        clippy::unimplemented,
+        reason = "Drivers must override this method; preserve the existing default panic contract."
+    )]
     fn version_query(&self) -> &'static str {
         unimplemented!("version_query not implemented for this driver")
     }
@@ -2178,6 +2198,10 @@ mod tests {
     struct StubConnection;
 
     impl Connection for StubConnection {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
         fn metadata(&self) -> &DriverMetadata {
             unimplemented!("StubConnection::metadata not needed for this test")
         }
@@ -2210,6 +2234,10 @@ mod tests {
             SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
         fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
             unimplemented!("StubConnection::dialect not needed for this test")
         }
@@ -2916,6 +2944,10 @@ mod tests {
     }
 
     impl Connection for RecordingConnection {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
         fn metadata(&self) -> &DriverMetadata {
             unimplemented!("RecordingConnection::metadata not needed for this test")
         }

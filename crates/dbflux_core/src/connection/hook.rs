@@ -1485,6 +1485,11 @@ where
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(bytes_read) => {
+                    // Read::read guarantees bytes_read <= buffer.len().
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "Read::read returns a count no greater than the buffer length"
+                    )]
                     let text = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
 
                     if sender.send(OutputEvent::new(stream, text)).is_err() {
@@ -1553,6 +1558,13 @@ fn terminate_child(
 /// (via `try_wait`), in which case the caller must NOT `wait` on it again.
 #[cfg(unix)]
 fn terminate_process_group(child: &mut Child) -> bool {
+    // SAFETY: `kill` is a standard POSIX syscall; the declaration matches the
+    // libc signature (`pid_t kill(pid_t, int)`) exactly, and only valid
+    // `SIGTERM`/`SIGKILL` signal constants are ever passed.
+    #[expect(
+        unsafe_code,
+        reason = "declaring the POSIX kill() symbol for negative-pid process-group termination; no libc crate dependency, signature matches the libc contract"
+    )]
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
@@ -1568,6 +1580,14 @@ fn terminate_process_group(child: &mut Child) -> bool {
         return false;
     }
 
+    // SAFETY: `pid > 0` and originates from a live `Child` we spawned with
+    // `process_group(0)`, so `-pid` addresses that process group; `kill` with
+    // a valid signal constant is memory-safe for any existing-or-not pid and
+    // never mutates our own process (pid is not ours).
+    #[expect(
+        unsafe_code,
+        reason = "kill(-pid, SIGTERM) targets the child's own process group set at spawn via process_group(0); pid > 0 checked above, so the call cannot signal the parent process"
+    )]
     unsafe {
         let _ = kill(-pid, SIGTERM);
     }
@@ -1577,6 +1597,13 @@ fn terminate_process_group(child: &mut Child) -> bool {
     match child.try_wait() {
         Ok(Some(_)) => true,
         _ => {
+            // SAFETY: same invariants as the SIGTERM call above: `pid > 0` and
+            // `-pid` is the child's spawn-time process group; SIGKILL is a
+            // valid signal constant.
+            #[expect(
+                unsafe_code,
+                reason = "kill(-pid, SIGKILL) targets the child's own process group set at spawn via process_group(0); pid > 0 checked above, so the call cannot signal the parent process"
+            )]
             unsafe {
                 let _ = kill(-pid, SIGKILL);
             }
@@ -2298,7 +2325,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_aws_secret_stripped_by_default() {
-        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2327,7 +2360,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_plain_env_inherited() {
-        unsafe { std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2356,7 +2395,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_explicit_env_reinjects_stripped_key() {
-        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2386,7 +2431,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_custom_denylist_entry_stripped() {
-        unsafe { std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue") };
+        #[expect(
+            unsafe_code,
+            reason = "Existing environment fixture requires per-process isolation; preserve its setup contract"
+        )]
+        unsafe {
+            std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue")
+        };
 
         let hook = ConnectionHook {
             kind: HookKind::Command {

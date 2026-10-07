@@ -1333,7 +1333,7 @@ fn strip_uri_userinfo(uri: &str) -> String {
 ///
 /// Returns `(sanitized_uri, extracted_password)` where `extracted_password` is
 /// URL-decoded when possible.
-pub fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
+pub(crate) fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
     let Some(scheme_end) = uri.find("://") else {
         return (uri.to_string(), None);
     };
