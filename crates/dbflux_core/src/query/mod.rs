@@ -48,7 +48,10 @@ pub use language_service::{
 };
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
-pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
+pub use safety::{
+    classify_query_for_governance, classify_sql_execution, contains_compound_block,
+    is_safe_read_query,
+};
 pub use script_operation::{
     ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
     ScriptOperationOutcome, ScriptTarget, ceiling_permits,
