@@ -707,11 +707,11 @@ fn build_sql_completion_metadata<'a>(
                 metadata.schema_names.insert(schema.name.clone());
 
                 for table in &schema.tables {
-                    metadata.add_table(table);
+                    metadata.add_table_in(table, Some(&schema.name));
                 }
 
                 for view in &schema.views {
-                    metadata.add_view(view);
+                    metadata.add_view_in(view, Some(&schema.name));
                 }
             }
         }
@@ -1465,15 +1465,25 @@ struct SchemaFirst {
 
 impl SqlCompletionMetadata {
     fn add_table(&mut self, table: &dbflux_core::TableInfo) {
+        self.add_table_in(table, None);
+    }
+
+    /// Adds `table`, listed under the snapshot schema `enclosing_schema`. A
+    /// table without its own schema belongs to the enclosing one, so
+    /// `schema.` lists it; the flat list keeps only its bare name.
+    fn add_table_in(&mut self, table: &dbflux_core::TableInfo, enclosing_schema: Option<&str>) {
         self.table_names.insert(table.name.clone());
 
-        match &table.schema {
-            Some(schema) => {
+        match (&table.schema, enclosing_schema) {
+            (Some(schema), _) => {
                 self.table_names
                     .insert(format!("{}.{}", schema, table.name));
                 self.add_schema_relation(schema, &table.name);
             }
-            None => {
+            (None, Some(enclosing_schema)) => {
+                self.add_schema_relation(enclosing_schema, &table.name);
+            }
+            (None, None) => {
                 self.unqualified_relations.insert(table.name.clone());
             }
         }
@@ -1506,14 +1516,22 @@ impl SqlCompletionMetadata {
     }
 
     fn add_view(&mut self, view: &dbflux_core::ViewInfo) {
+        self.add_view_in(view, None);
+    }
+
+    /// Adds `view` the way [`Self::add_table_in`] adds a table.
+    fn add_view_in(&mut self, view: &dbflux_core::ViewInfo, enclosing_schema: Option<&str>) {
         self.view_names.insert(view.name.clone());
 
-        match &view.schema {
-            Some(schema) => {
+        match (&view.schema, enclosing_schema) {
+            (Some(schema), _) => {
                 self.view_names.insert(format!("{}.{}", schema, view.name));
                 self.add_schema_relation(schema, &view.name);
             }
-            None => {
+            (None, Some(enclosing_schema)) => {
+                self.add_schema_relation(enclosing_schema, &view.name);
+            }
+            (None, None) => {
                 self.unqualified_relations.insert(view.name.clone());
             }
         }
@@ -2455,7 +2473,6 @@ mod tests {
         assert!(!labels.contains(&"users".to_string()));
     }
 
-    /// The example from #980: `raw`, `reporting`, and `public` schemas.
     fn schema_first_metadata(selected_schema: Option<&str>) -> SqlCompletionMetadata {
         let mut metadata = SqlCompletionMetadata::default();
         for (schema, table) in [
@@ -2480,9 +2497,11 @@ mod tests {
 
     /// Completion labels without SQL keywords.
     fn non_keyword_labels(items: &[CompletionItem]) -> Vec<String> {
-        let mut found = labels(items);
-        found.retain(|label| !label.chars().all(|c| c.is_ascii_uppercase() || c == '_'));
-        found
+        items
+            .iter()
+            .filter(|item| item.kind != Some(lsp_types::CompletionItemKind::KEYWORD))
+            .map(|item| item.label.clone())
+            .collect()
     }
 
     fn table_position_labels(metadata: &SqlCompletionMetadata, source: &str) -> Vec<String> {
@@ -2514,6 +2533,40 @@ mod tests {
         let found = table_position_labels(&metadata, "SELECT * FROM ra");
         assert_eq!(found, vec!["rates", "raw"]);
         assert!(!found.iter().any(|label| label.contains('.')));
+    }
+
+    #[test]
+    fn snapshot_tables_without_their_own_schema_belong_to_the_enclosing_one() {
+        let snapshot = SchemaSnapshot::relational(RelationalSchema {
+            schemas: vec![DbSchemaInfo {
+                name: "raw".to_string(),
+                tables: vec![t1_table()],
+                views: vec![dbflux_core::ViewInfo {
+                    name: "v1".to_string(),
+                    schema: None,
+                }],
+                custom_types: None,
+            }],
+            ..Default::default()
+        });
+        let mut metadata = build_sql_completion_metadata(
+            Some(&snapshot),
+            std::iter::empty(),
+            std::iter::empty(),
+            false,
+        );
+        metadata.schema_first = Some(super::SchemaFirst {
+            selected_schema: Some(normalize_identifier("public")),
+        });
+
+        assert_eq!(
+            labels(&analyzed_items(&metadata, "SELECT * FROM raw.")),
+            vec!["t1", "v1"]
+        );
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM "),
+            vec!["raw"]
+        );
     }
 
     #[test]
