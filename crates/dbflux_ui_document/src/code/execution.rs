@@ -186,12 +186,28 @@ impl CodeDocument {
             return;
         }
 
-        let query = self.editor.input_state.read(cx).value().to_string();
+        let state = self.editor.input_state.read(cx);
+        let query = state.value().to_string();
+        let cursor = state.cursor();
+
+        // Without a selection, a buffer of several statements runs only the
+        // one under the cursor; selecting everything runs the whole script.
+        let cursor_statement =
+            statements::cursor_statement(self.effective_language(), &query, cursor)
+                .and_then(|range| Some((range.start, query.get(range)?.to_string())));
+
+        if let Some((origin, statement)) = cursor_statement {
+            self.execution.query_origin = Some(origin);
+            self.run_query_text(statement, in_new_tab, window, cx);
+            return;
+        }
+
         self.execution.query_origin = Some(0);
 
-        // No selection means the whole buffer runs. When it holds more than one
-        // statement and the driver can execute batches, confirm before running
-        // the entire script.
+        // A language without a statement splitter, or a buffer with a
+        // compound block, runs the whole buffer. When
+        // it holds more than one statement and the driver can execute batches,
+        // confirm before running the entire script.
         if let Some(statement_count) = self.script_statement_count(&query, cx) {
             self.ask_script_confirm(
                 PendingScriptConfirm {

@@ -130,10 +130,20 @@ impl DbFluxServer {
             "message": format!("Connected to {}", connection_id)
         });
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "response is an object literal from serde_json::json!; indexing a Value \
+                object with a str key cannot panic (missing keys yield Null)"
+        )]
         if let Some(current_database) = context.current_database {
             response["current_database"] = serde_json::Value::String(current_database);
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "response is an object literal from serde_json::json!; indexing a Value \
+                object with a str key cannot panic (missing keys yield Null)"
+        )]
         if !context.databases.is_empty() {
             response["databases"] = serde_json::json!(context.databases);
         }
@@ -243,6 +253,12 @@ impl DbFluxServer {
                             });
 
                             result.ok().and_then(|r| {
+                                #[expect(
+                                    clippy::indexing_slicing,
+                                    reason = "the condition guards rows with !is_empty() and \
+                                        rows[0] with !is_empty(), so both row[0] accesses are \
+                                        within bounds"
+                                )]
                                 if !r.rows.is_empty() && !r.rows[0].is_empty() {
                                     Some(format!("{:?}", r.rows[0][0]))
                                 } else {
@@ -264,10 +280,22 @@ impl DbFluxServer {
                         "status": "connected",
                     });
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "info is an object literal from serde_json::json!; indexing \
+                            a Value object with a str key cannot panic (missing keys yield \
+                            Null)"
+                    )]
                     if let Some(version) = version_info {
                         info["version"] = serde_json::Value::String(version);
                     }
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "info is an object literal from serde_json::json!; indexing \
+                            a Value object with a str key cannot panic (missing keys yield \
+                            Null)"
+                    )]
                     if let Some(db) = current_database {
                         info["current_database"] = serde_json::Value::String(db);
                     }

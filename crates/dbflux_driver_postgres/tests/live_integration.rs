@@ -1434,6 +1434,82 @@ fn postgres_query_safety_limit_below_exact_and_over_retains_and_flags() -> Resul
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_stops_reading_at_the_limit() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        // Row 1000 divides by zero, so the query only succeeds when the
+        // server stops producing rows before it.
+        let sql = "SELECT 1 / (g - 1000) AS v FROM generate_series(1, 2000) g";
+        let limited = connection.execute(&QueryRequest::new(sql).with_limit(10))?;
+        assert_eq!(limited.rows.len(), 10);
+        assert!(limited.rows_truncated());
+
+        connection
+            .execute(&QueryRequest::new(sql).with_limit(5000))
+            .expect_err("reading past row 1000 must fail");
+        connection.execute(&QueryRequest::new("SELECT 1").with_limit(10))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_call_of_a_committing_procedure_runs() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_call_log (id INTEGER)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE PROCEDURE safety_commit(OUT inserted INTEGER) LANGUAGE plpgsql AS $$ \
+             BEGIN INSERT INTO safety_call_log VALUES (1); COMMIT; inserted := 1; END $$",
+        ))?;
+
+        let called =
+            connection.execute(&QueryRequest::new("CALL safety_commit(NULL)").with_limit(10))?;
+        assert_eq!(called.rows.len(), 1);
+        assert!(!called.rows_truncated());
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_call_log"))?
+                .rows[0][0],
+            Value::Int(1)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_leaves_an_open_transaction_open() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_open_block (id INTEGER PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO safety_open_block SELECT g FROM generate_series(1, 5) g",
+        ))?;
+
+        let inside = connection
+            .execute(&QueryRequest::new("SELECT id FROM safety_open_block").with_limit(2))?;
+        assert_eq!(inside.rows.len(), 2);
+        assert!(inside.rows_truncated());
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_open_block"))?
+                .rows[0][0],
+            Value::Int(0)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn postgres_query_safety_zero_limit_retains_nothing_only_when_rows_exist() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
@@ -1477,29 +1553,6 @@ fn postgres_query_safety_returning_above_cap_completes_effects_and_truncates() -
                 ))?
                 .rows[0][0],
             Value::Int(5)
-        );
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires Docker daemon"]
-fn postgres_query_safety_late_stream_error_propagates_after_cap_reached() -> Result<(), DbError> {
-    containers::with_postgres_url(|uri| {
-        let (connection, _) = connect_postgres(uri)?;
-        let result = connection.execute(
-            &QueryRequest::new("SELECT g, 1 / (g - 3) FROM generate_series(1, 10) g").with_limit(2),
-        );
-        assert!(
-            matches!(result, Err(DbError::QueryFailed(_))),
-            "late division error must propagate: {result:?}"
-        );
-        assert_eq!(
-            connection
-                .execute(&QueryRequest::new("SELECT 1"))?
-                .rows
-                .len(),
-            1
         );
         Ok(())
     })
