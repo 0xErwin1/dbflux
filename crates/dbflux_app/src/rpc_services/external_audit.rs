@@ -397,6 +397,12 @@ mod tests {
     }
 
     impl EventSink for RecordingEventSink {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "the test sink intentionally returns `Ok` after recording; \
+                      retain its existing panic-on-poison behavior; event \
+                      cloning and `Vec::push` occur under the guard"
+        )]
         fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
             self.records.lock().unwrap().push(event.clone());
             Ok(event)
