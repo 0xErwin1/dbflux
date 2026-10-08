@@ -3286,7 +3286,6 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "duckdb",
- "hex",
  "log",
  "serde_json",
  "tempfile",
