@@ -293,6 +293,10 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::FocusRight),
         ),
         (
+            "segmented-navigator-view-*",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
             "segmented-enter-as-*",
             KeyboardPath::Command(Command::FocusRight),
         ),

@@ -363,6 +363,7 @@ pub fn save_profiles(
             environment: profile
                 .environment
                 .map(|environment| environment.as_str().to_string()),
+            navigator_view: profile.navigator_view.as_str().to_string(),
         };
 
         repo.upsert(&dto)?;
@@ -1742,6 +1743,7 @@ fn load_profiles(
                     .environment
                     .as_deref()
                     .and_then(dbflux_core::ConnectionEnvironment::from_id),
+                navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
             })
         })
         .collect()
@@ -2363,6 +2365,35 @@ mod tests {
             Some(dbflux_core::ConnectionEnvironment::Production)
         );
         assert_eq!(find(unset.id).environment(), None);
+    }
+
+    #[test]
+    fn profile_navigator_view_round_trips_and_defaults_to_advanced() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut simple = ConnectionProfile::new("simple", DbConfig::default_postgres());
+        simple.navigator_view = dbflux_core::NavigatorView::Simple;
+        let unset = ConnectionProfile::new("unset", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[simple.clone(), unset.clone()])
+            .expect("save profiles with navigator view");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert_eq!(
+            find(simple.id).navigator_view,
+            dbflux_core::NavigatorView::Simple
+        );
+        assert_eq!(
+            find(unset.id).navigator_view,
+            dbflux_core::NavigatorView::Advanced
+        );
     }
 
     #[test]

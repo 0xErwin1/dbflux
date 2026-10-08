@@ -2640,7 +2640,7 @@ impl ConnectionManagerWindow {
                     }
                 }
             }
-            MainExtraStop::SslMode => {
+            MainExtraStop::SslMode | MainExtraStop::NavigatorView => {
                 self.step_main_extra_choice(index, true);
             }
             MainExtraStop::SslCert(slot) => {
@@ -2701,6 +2701,13 @@ impl ConnectionManagerWindow {
                 true
             }
             MainExtraStop::SslCert(_) => false,
+            MainExtraStop::NavigatorView => {
+                self.form.navigator_view = match self.form.navigator_view {
+                    dbflux_core::NavigatorView::Advanced => dbflux_core::NavigatorView::Simple,
+                    dbflux_core::NavigatorView::Simple => dbflux_core::NavigatorView::Advanced,
+                };
+                true
+            }
         }
     }
 
@@ -2723,6 +2730,11 @@ impl ConnectionManagerWindow {
                 .filter(|section| !section.fields.is_empty())
                 .position(|section| section.fields.iter().any(|f| f.id == field.id))
                 .map_or(0, |section| section + 1),
+            // The navigator section follows the transport section, when
+            // the driver has one.
+            Some(MainExtraStop::NavigatorView) => {
+                main_tab.sections.len() + 2 + usize::from(driver.metadata().ssl_modes.is_some())
+            }
             Some(_) => main_tab.sections.len() + 2,
             None => 0,
         }

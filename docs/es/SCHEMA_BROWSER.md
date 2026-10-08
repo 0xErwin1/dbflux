@@ -35,6 +35,21 @@ pantalla contrae el sidebar.
   <img src="../images/schema-browser/tree-light.webp" alt="El árbol del schema en el sidebar para una conexión PostgreSQL, con una tabla expandida hasta sus columnas, índices y restricciones">
 </picture>
 
+## Disposición simple y avanzada
+
+Cada conexión a una base de datos con esquemas tiene una **Vista del
+navegador** en la pestaña Main del administrador de conexiones:
+
+- **Avanzada** (la predeterminada): cada esquema agrupa sus tablas y vistas en
+  las carpetas **Tables** y **Views**, junto a sus tipos, índices, claves
+  foráneas y, cuando el driver los admite, rutinas.
+- **Simple**: cada esquema muestra directamente sus tablas y vistas, como la
+  vista simple de DBeaver. Una base de datos se abre en sus esquemas, y un
+  esquema en sus tablas y vistas. Las tablas siguen desplegando sus columnas,
+  índices y restricciones.
+
+La disposición cambia en cuanto guardas la conexión, también mientras está abierta.
+
 ## Carpetas externas de scripts
 
 La vista Scripts puede listar scripts que están fuera de la carpeta de scripts

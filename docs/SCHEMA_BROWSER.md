@@ -31,6 +31,21 @@ from the rail collapses the sidebar.
   <img src="images/schema-browser/tree-light.webp" alt="The sidebar schema tree of a PostgreSQL connection, with a table expanded to its columns, indexes and constraints">
 </picture>
 
+## Simple and advanced layout
+
+Each connection to a database with schemas has a **Navigator view** in the
+Main tab of the connection manager:
+
+- **Advanced** (the default) — each schema groups its tables and views in
+  **Tables** and **Views** folders, next to its types, indexes, foreign keys
+  and, where the driver supports them, routines.
+- **Simple** — each schema lists its tables and views directly, as DBeaver's
+  simple view does. A database opens to its schemas, and a schema to its
+  tables and views. Tables still expand to their columns, indexes and
+  constraints.
+
+The layout changes as soon as you save the connection, also while it is open.
+
 ## External scripts folders
 
 The Scripts view can list scripts that live outside DBFlux's own scripts

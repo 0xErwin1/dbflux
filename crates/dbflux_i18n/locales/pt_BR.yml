@@ -252,6 +252,12 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  navigator_view:
+    label: "Visão do navegador"
+    help: "Simples lista diretamente as tabelas e views de cada esquema. Avançada as agrupa em pastas, ao lado dos tipos, índices, chaves estrangeiras e rotinas do esquema."
+    option:
+      advanced: "Avançada"
+      simple: "Simples"
   environment:
     none: "Nenhum"
     help: "Indica a qual ambiente esta conexão aponta."
@@ -370,6 +376,7 @@ connection_manager:
     client_key: Chave do cliente
   section:
     transport: TRANSPORTE
+    navigator: "NAVEGADOR"
   banner:
     correct_following: Corrija os itens a seguir
     testing_connection: "Testando conexão…"

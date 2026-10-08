@@ -2120,6 +2120,13 @@ fn build_projected_relational_children(
                 _ => None,
             })
             .collect();
+        // The simple layout lists a schema's tables and views directly,
+        // without their folders or the schema's other objects.
+        if connected.profile.navigator_view == dbflux_core::NavigatorView::Simple {
+            let mut items = tables;
+            items.extend(views);
+            return items;
+        }
         let mut items = Vec::new();
         if !tables.is_empty() {
             items.push(
@@ -4651,6 +4658,55 @@ mod tests {
             .remove(&profile_id)
             .expect("connected");
         children
+    }
+
+    #[test]
+    fn simple_navigator_view_lists_tables_and_views_directly_under_each_schema() {
+        use dbflux_core::{DbSchemaInfo, NavigatorView, SchemaSnapshot, ViewInfo};
+
+        fn schema_child_labels(children: &[TreeItem]) -> Vec<String> {
+            let [schema] = children else {
+                panic!("one schema row expected, got {}", children.len());
+            };
+            schema
+                .children
+                .iter()
+                .map(|child| child.label.to_string())
+                .collect()
+        }
+
+        let profile_id = Uuid::new_v4();
+        let mut connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+        connected.database_schemas.insert(
+            "analytics".to_string(),
+            DbSchemaInfo {
+                name: "analytics".to_string(),
+                tables: vec![relational_table("records", Some("dbo"))],
+                views: vec![ViewInfo {
+                    name: "active_records".to_string(),
+                    schema: Some("dbo".to_string()),
+                }],
+                custom_types: None,
+            },
+        );
+        let snapshot = SchemaSnapshot::default();
+
+        let advanced =
+            resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
+        let advanced_labels = schema_child_labels(&advanced);
+        assert!(
+            !advanced_labels.contains(&"records".to_string()),
+            "the advanced view groups tables in a folder: {advanced_labels:?}"
+        );
+
+        connected.profile.navigator_view = NavigatorView::Simple;
+        let simple =
+            resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
+        assert_eq!(
+            schema_child_labels(&simple),
+            vec!["records", "active_records"]
+        );
     }
 
     #[test]

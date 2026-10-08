@@ -252,6 +252,12 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  navigator_view:
+    label: "Navigator view"
+    help: "Simple lists the tables and views of each schema directly. Advanced groups them in folders, next to the schema's types, indexes, foreign keys and routines."
+    option:
+      advanced: "Advanced"
+      simple: "Simple"
   environment:
     none: "None"
     help: "Marks which environment this connection points at."
@@ -370,6 +376,7 @@ connection_manager:
     client_key: Client key
   section:
     transport: TRANSPORT
+    navigator: "NAVIGATOR"
   banner:
     correct_following: Please correct the following
     testing_connection: "Testing connection…"

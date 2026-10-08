@@ -1380,6 +1380,36 @@ pub(crate) fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
     )
 }
 
+/// How the sidebar lays out a relational connection's objects.
+///
+/// - `Advanced` — each schema groups its tables and views in folders, next
+///   to its types, indexes, foreign keys and routines.
+/// - `Simple` — each schema lists its tables and views directly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigatorView {
+    #[default]
+    Advanced,
+    Simple,
+}
+
+impl NavigatorView {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Advanced => "advanced",
+            Self::Simple => "simple",
+        }
+    }
+
+    /// Parses a stored value; anything unknown is `Advanced`.
+    pub fn from_storage_str(value: &str) -> Self {
+        match value {
+            "simple" => Self::Simple,
+            _ => Self::Advanced,
+        }
+    }
+}
+
 /// Deployment environment a connection points at.
 ///
 /// Purely descriptive: it drives the environment tag shown next to the
@@ -1505,6 +1535,10 @@ pub struct ConnectionProfile {
     /// Deployment environment this connection belongs to, if the user set one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<ConnectionEnvironment>,
+
+    /// How the sidebar lays out this connection's objects.
+    #[serde(default)]
+    pub navigator_view: NavigatorView,
 }
 
 impl ConnectionProfile {
@@ -1528,6 +1562,7 @@ impl ConnectionProfile {
             mcp_governance: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
         }
     }
 
@@ -1553,6 +1588,7 @@ impl ConnectionProfile {
             access_kind: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
             mcp_governance: None,
         }
     }
@@ -1582,6 +1618,7 @@ impl ConnectionProfile {
             mcp_governance: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
         }
     }
 
@@ -1616,6 +1653,7 @@ impl ConnectionProfile {
             mcp_governance: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
         }
     }
 

@@ -69,9 +69,9 @@ pub use manager::{
 #[allow(deprecated)]
 pub use profile::{
     ConnectionEnvironment, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile,
-    DbConfig, DbKind, InfluxVersion, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslInfo,
-    SslMode, TestConnectionResult, ssl_mode_from_id, ssl_mode_id_is_cert_active,
-    ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    DbConfig, DbKind, InfluxVersion, NavigatorView, SshAuthMethod, SshTunnelConfig,
+    SshTunnelProfile, SslInfo, SslMode, TestConnectionResult, ssl_mode_from_id,
+    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 pub use profile_manager::ProfileManager;
 pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile, host_matches_no_proxy};

@@ -37,8 +37,8 @@ use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AuthProfile, AuthSessionState, ConnectionHookBindings, ConnectionMcpPolicyBinding, DbConfig,
-    DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod,
-    SshTunnelProfile, ValueRef,
+    DbDriver, DbKind, DriverCapabilities, DriverFormDef, FormFieldDef, FormFieldKind,
+    GlobalOverrides, SshAuthMethod, SshTunnelProfile, ValueRef,
 };
 use dbflux_ui_base::platform;
 use dbflux_ui_base::sso_wizard::SsoWizard;
@@ -256,6 +256,7 @@ pub(super) enum MainExtraStop {
     DriverField(Box<FormFieldDef>),
     SslMode,
     SslCert(SslCertSlot),
+    NavigatorView,
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -299,6 +300,8 @@ struct FormState {
     /// Chip the arrow keys moved the environment row's cursor to, when it
     /// differs from the selected one; cleared by any other command.
     environment_cursor: Option<usize>,
+    /// Sidebar layout chosen in the Main tab; saved on the profile.
+    navigator_view: dbflux_core::NavigatorView,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -923,6 +926,7 @@ impl ConnectionManagerWindow {
                 selected_driver: None,
                 environment: None,
                 environment_cursor: None,
+                navigator_view: dbflux_core::NavigatorView::Advanced,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,
@@ -1072,6 +1076,7 @@ impl ConnectionManagerWindow {
         instance.form.selected_driver_id = Some(profile.driver_id());
         instance.form.form_save_password = profile.save_password;
         instance.form.environment = profile.environment();
+        instance.form.navigator_view = profile.navigator_view;
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -1871,7 +1876,8 @@ impl ConnectionManagerWindow {
 
     /// The Main-tab controls after the named fields, in the order they are
     /// drawn: the driver's own fields, then the SSL mode and the certificate
-    /// pickers the selected mode shows.
+    /// pickers the selected mode shows, then the navigator view of a driver
+    /// with schemas.
     pub(super) fn main_extra_stops(&self) -> Vec<MainExtraStop> {
         let Some(driver) = self.form.selected_driver.as_ref() else {
             return Vec::new();
@@ -1912,7 +1918,25 @@ impl ConnectionManagerWindow {
             }
         }
 
+        if Self::shows_navigator_view(driver.as_ref()) {
+            stops.push(MainExtraStop::NavigatorView);
+        }
+
         stops
+    }
+
+    /// The navigator view only changes the layout of schemas, so it shows
+    /// for drivers that have them.
+    pub(super) fn shows_navigator_view(driver: &dyn DbDriver) -> bool {
+        driver
+            .metadata()
+            .capabilities
+            .contains(DriverCapabilities::SCHEMAS)
+    }
+
+    /// The ring stop of the navigator view control.
+    fn main_extra_focus_for_navigator_view(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::NavigatorView))
     }
 
     /// The ring stop of the Main-tab driver field `field_id` when it has no

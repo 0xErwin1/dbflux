@@ -252,6 +252,12 @@ connection_manager:
     ssm: "SSM"
     proxy: "代理"
     ssh: "SSH"
+  navigator_view:
+    label: "导航器视图"
+    help: "简单视图直接列出每个模式的表和视图。高级视图将它们分组到文件夹中，并与模式的类型、索引、外键和例程并列显示。"
+    option:
+      advanced: "高级"
+      simple: "简单"
   environment:
     none: "无"
     help: "标明此连接指向的环境。"
@@ -370,6 +376,7 @@ connection_manager:
     client_key: 客户端密钥
   section:
     transport: 传输
+    navigator: "导航器"
   banner:
     correct_following: 请更正以下内容
     testing_connection: 正在测试连接…

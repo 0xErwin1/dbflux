@@ -252,6 +252,12 @@ connection_manager:
     ssm: "SSM"
     proxy: "프록시"
     ssh: "SSH"
+  navigator_view:
+    label: "탐색기 보기"
+    help: "단순은 각 스키마의 테이블과 뷰를 바로 나열합니다. 고급은 이를 폴더로 묶고 스키마의 타입, 인덱스, 외래 키, 루틴과 함께 표시합니다."
+    option:
+      advanced: "고급"
+      simple: "단순"
   environment:
     none: "없음"
     help: "이 연결이 가리키는 환경을 표시합니다."
@@ -370,6 +376,7 @@ connection_manager:
     client_key: 클라이언트 키
   section:
     transport: 전송
+    navigator: "탐색기"
   banner:
     correct_following: 다음 항목을 수정하세요
     testing_connection: "연결 테스트 중…"

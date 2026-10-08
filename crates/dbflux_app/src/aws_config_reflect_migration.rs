@@ -423,6 +423,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             environment: None,
+            navigator_view: "advanced".to_string(),
         })
         .expect("insert connection");
     }
