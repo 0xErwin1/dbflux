@@ -28,3 +28,6 @@ path = "src/lib.rs"
 # uuid::Uuid is used directly in src/transport.rs (line 15: `use uuid::Uuid`);
 # machete misses it because the import comes from the workspace re-export path.
 ignored = ["uuid"]
+
+[lints]
+workspace = true
