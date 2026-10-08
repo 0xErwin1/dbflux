@@ -273,11 +273,20 @@ fn non_blank(value: &Option<String>) -> Option<String> {
 
 /// The path that identifies a database file, so `./a.duckdb` and its absolute
 /// form share one instance. The file may not exist yet, which `canonicalize`
-/// refuses.
+/// refuses; its parent is canonicalized instead, so the key matches the one the
+/// file gets once it exists (symlinked parents, Windows verbatim prefixes).
 fn instance_path(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf())
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(name)) => parent
+            .canonicalize()
+            .map(|parent| parent.join(name))
+            .unwrap_or(absolute),
+        _ => absolute,
+    }
 }
 
 fn instance_slot(key: &str) -> Result<Arc<InstanceSlot>, DbError> {
@@ -564,6 +573,21 @@ mod tests {
         let driver = DuckDbDriver::new();
         let _first = driver.connect(&profile(config(absolute))).unwrap();
         assert!(driver.connect(&profile(config(relative))).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_keeps_its_instance_path_once_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let path = link.join("a.duckdb");
+
+        let before = instance_path(&path);
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(before, instance_path(&path));
     }
 
     #[test]

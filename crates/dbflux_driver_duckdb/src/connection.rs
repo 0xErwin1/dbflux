@@ -328,6 +328,164 @@ impl DuckDbConnection {
         format!("'{}'", DUCKDB_DIALECT.escape_string(text))
     }
 
+    /// The primary key columns, foreign keys, and CHECK and UNIQUE constraints
+    /// of the table `filter` selects.
+    fn load_constraints(&self, filter: &str, schema: &str) -> Result<TableConstraints, DbError> {
+        let rows = self
+            .run(
+                &format!(
+                    "SELECT constraint_type, constraint_name, constraint_column_names, \
+                     referenced_table, referenced_column_names, expression \
+                     FROM duckdb_constraints() WHERE {filter} ORDER BY constraint_index"
+                ),
+                &[],
+                None,
+            )?
+            .rows;
+
+        let mut primary_key = Vec::new();
+        let mut foreign_keys = Vec::new();
+        let mut checks_and_uniques = Vec::new();
+        for row in rows {
+            let Ok(
+                [
+                    kind,
+                    name,
+                    columns,
+                    referenced_table,
+                    referenced_columns,
+                    expression,
+                ],
+            ) = <[Value; 6]>::try_from(row)
+            else {
+                continue;
+            };
+            let (Value::Text(kind), Value::Text(name)) = (kind, name) else {
+                continue;
+            };
+            let columns = text_list(columns);
+            match kind.as_str() {
+                "PRIMARY KEY" => primary_key = columns,
+                "FOREIGN KEY" => {
+                    if let Value::Text(referenced_table) = referenced_table {
+                        foreign_keys.push(ForeignKeyInfo {
+                            name,
+                            columns,
+                            referenced_table,
+                            // DuckDB only allows foreign keys within one schema.
+                            referenced_schema: Some(schema.to_string()),
+                            referenced_columns: text_list(referenced_columns),
+                            on_delete: None,
+                            on_update: None,
+                        });
+                    }
+                }
+                "UNIQUE" => checks_and_uniques.push(ConstraintInfo {
+                    name,
+                    kind: ConstraintKind::Unique,
+                    columns,
+                    check_clause: None,
+                }),
+                "CHECK" => checks_and_uniques.push(ConstraintInfo {
+                    name,
+                    kind: ConstraintKind::Check,
+                    columns,
+                    check_clause: match expression {
+                        Value::Text(expression) => Some(expression),
+                        _ => None,
+                    },
+                }),
+                _ => {}
+            }
+        }
+        Ok(TableConstraints {
+            primary_key,
+            foreign_keys,
+            checks_and_uniques,
+        })
+    }
+
+    fn load_columns(
+        &self,
+        filter: &str,
+        primary_key: &[String],
+    ) -> Result<Vec<ColumnInfo>, DbError> {
+        Ok(self
+            .run(
+                &format!(
+                    "SELECT column_name, data_type, is_nullable, column_default \
+                     FROM duckdb_columns() WHERE {filter} ORDER BY column_index"
+                ),
+                &[],
+                None,
+            )?
+            .rows
+            .into_iter()
+            .filter_map(|row| match <[Value; 4]>::try_from(row) {
+                Ok([Value::Text(name), Value::Text(type_name), nullable, default]) => {
+                    Some(ColumnInfo {
+                        is_primary_key: primary_key.contains(&name),
+                        name,
+                        type_name,
+                        nullable: nullable != Value::Bool(false),
+                        default_value: match default {
+                            Value::Text(default) => Some(default),
+                            _ => None,
+                        },
+                        enum_values: None,
+                    })
+                }
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn load_indexes(
+        &self,
+        filter: &str,
+        table: &str,
+        primary_key: Vec<String>,
+    ) -> Result<Vec<IndexInfo>, DbError> {
+        let mut indexes: Vec<IndexInfo> = (!primary_key.is_empty())
+            .then(|| IndexInfo {
+                name: format!("{table}_pkey"),
+                columns: primary_key,
+                is_unique: true,
+                is_primary: true,
+            })
+            .into_iter()
+            .collect();
+        // `expressions` is the indexed expression list as text, such as `[a, b]`.
+        indexes.extend(
+            self.run(
+                &format!(
+                    "SELECT index_name, is_unique, expressions FROM duckdb_indexes() \
+                     WHERE {filter} ORDER BY index_name"
+                ),
+                &[],
+                None,
+            )?
+            .rows
+            .into_iter()
+            .filter_map(|row| match <[Value; 3]>::try_from(row) {
+                Ok([Value::Text(name), is_unique, Value::Text(expressions)]) => Some(IndexInfo {
+                    name,
+                    columns: expressions
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .split(", ")
+                        .filter(|column| !column.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                    is_unique: is_unique == Value::Bool(true),
+                    is_primary: false,
+                }),
+                _ => None,
+            }),
+        );
+        Ok(indexes)
+    }
+
     /// Runs a mutation with `RETURNING *` and reports the first returned row.
     fn run_returning(&self, sql: Option<String>) -> Result<CrudResult, DbError> {
         let sql = sql.ok_or_else(|| DbError::query_failed("Failed to build the statement"))?;
@@ -488,138 +646,13 @@ impl Connection for DuckDbConnection {
             Self::literal(table)
         );
 
-        let constraints = self.run(
-            &format!(
-                "SELECT constraint_type, constraint_name, constraint_column_names, \
-                 referenced_table, referenced_column_names, expression \
-                 FROM duckdb_constraints() WHERE {filter} ORDER BY constraint_index"
-            ),
-            &[],
-            None,
-        )?;
-
-        let mut primary_key = Vec::new();
-        let mut foreign_keys = Vec::new();
-        let mut checks_and_uniques = Vec::new();
-        for row in constraints.rows {
-            let Ok(
-                [
-                    kind,
-                    name,
-                    columns,
-                    referenced_table,
-                    referenced_columns,
-                    expression,
-                ],
-            ) = <[Value; 6]>::try_from(row)
-            else {
-                continue;
-            };
-            let (Value::Text(kind), Value::Text(name)) = (kind, name) else {
-                continue;
-            };
-            let columns = text_list(columns);
-            match kind.as_str() {
-                "PRIMARY KEY" => primary_key = columns,
-                "FOREIGN KEY" => {
-                    if let Value::Text(referenced_table) = referenced_table {
-                        foreign_keys.push(ForeignKeyInfo {
-                            name,
-                            columns,
-                            referenced_table,
-                            // DuckDB only allows foreign keys within one schema.
-                            referenced_schema: Some(schema.to_string()),
-                            referenced_columns: text_list(referenced_columns),
-                            on_delete: None,
-                            on_update: None,
-                        });
-                    }
-                }
-                "UNIQUE" => checks_and_uniques.push(ConstraintInfo {
-                    name,
-                    kind: ConstraintKind::Unique,
-                    columns,
-                    check_clause: None,
-                }),
-                "CHECK" => checks_and_uniques.push(ConstraintInfo {
-                    name,
-                    kind: ConstraintKind::Check,
-                    columns,
-                    check_clause: match expression {
-                        Value::Text(expression) => Some(expression),
-                        _ => None,
-                    },
-                }),
-                _ => {}
-            }
-        }
-
-        let columns = self
-            .run(
-                &format!(
-                    "SELECT column_name, data_type, is_nullable, column_default \
-                     FROM duckdb_columns() WHERE {filter} ORDER BY column_index"
-                ),
-                &[],
-                None,
-            )?
-            .rows
-            .into_iter()
-            .filter_map(|row| match <[Value; 4]>::try_from(row) {
-                Ok([Value::Text(name), Value::Text(type_name), nullable, default]) => {
-                    Some(ColumnInfo {
-                        is_primary_key: primary_key.contains(&name),
-                        name,
-                        type_name,
-                        nullable: nullable != Value::Bool(false),
-                        default_value: match default {
-                            Value::Text(default) => Some(default),
-                            _ => None,
-                        },
-                        enum_values: None,
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-
-        let mut indexes: Vec<IndexInfo> = (!primary_key.is_empty())
-            .then(|| IndexInfo {
-                name: format!("{table}_pkey"),
-                columns: primary_key,
-                is_unique: true,
-                is_primary: true,
-            })
-            .into_iter()
-            .collect();
-        // `expressions` is the indexed expression list as text, such as `[a, b]`.
-        indexes.extend(
-            self.run(
-                &format!(
-                    "SELECT index_name, is_unique, expressions FROM duckdb_indexes() \
-                     WHERE {filter} ORDER BY index_name"
-                ),
-                &[],
-                None,
-            )?
-            .rows
-            .into_iter()
-            .filter_map(|row| match <[Value; 3]>::try_from(row) {
-                Ok([Value::Text(name), is_unique, Value::Text(expressions)]) => Some(IndexInfo {
-                    name,
-                    columns: expressions
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
-                        .split(", ")
-                        .filter(|column| !column.is_empty())
-                        .map(str::to_string)
-                        .collect(),
-                    is_unique: is_unique == Value::Bool(true),
-                    is_primary: false,
-                }),
-                _ => None,
-            }),
-        );
+        let TableConstraints {
+            primary_key,
+            foreign_keys,
+            checks_and_uniques,
+        } = self.load_constraints(&filter, schema)?;
+        let columns = self.load_columns(&filter, &primary_key)?;
+        let indexes = self.load_indexes(&filter, table, primary_key)?;
 
         Ok(TableInfo {
             name: table.to_string(),
@@ -872,6 +905,12 @@ fn to_duckdb_value(value: &Value) -> DuckValue {
         Value::Array(values) => DuckValue::List(values.iter().map(to_duckdb_value).collect()),
         Value::Document(_) => DuckValue::Text(DUCKDB_DIALECT.value_to_literal(value)),
     }
+}
+
+struct TableConstraints {
+    primary_key: Vec<String>,
+    foreign_keys: Vec<ForeignKeyInfo>,
+    checks_and_uniques: Vec<ConstraintInfo>,
 }
 
 fn text_list(value: Value) -> Vec<String> {
