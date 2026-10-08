@@ -1420,11 +1420,10 @@ fn postgres_query_safety_limit_below_exact_and_over_retains_and_flags() -> Resul
             &connection.execute(&QueryRequest::new(sql).with_limit(8))?,
             5,
         );
-        // The read stops at the limit, so a result that exactly fills it
-        // cannot tell whether rows remain and is flagged.
-        let exact = connection.execute(&QueryRequest::new(sql).with_limit(5))?;
-        assert_eq!(exact.rows.len(), 5);
-        assert!(exact.rows_truncated());
+        assert_no_rows_truncated(
+            &connection.execute(&QueryRequest::new(sql).with_limit(5))?,
+            5,
+        );
         let over = connection.execute(&QueryRequest::new(sql).with_limit(3))?;
         assert_eq!(over.rows.len(), 3);
         assert_eq!(over.rows[0][0], Value::Int(1));
@@ -1449,6 +1448,33 @@ fn postgres_query_safety_limit_stops_reading_at_the_limit() -> Result<(), DbErro
             .execute(&QueryRequest::new(sql).with_limit(5000))
             .expect_err("reading past row 1000 must fail");
         connection.execute(&QueryRequest::new("SELECT 1").with_limit(10))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_call_of_a_committing_procedure_runs() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_call_log (id INTEGER)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE PROCEDURE safety_commit(OUT inserted INTEGER) LANGUAGE plpgsql AS $$ \
+             BEGIN INSERT INTO safety_call_log VALUES (1); COMMIT; inserted := 1; END $$",
+        ))?;
+
+        let called =
+            connection.execute(&QueryRequest::new("CALL safety_commit(NULL)").with_limit(10))?;
+        assert_eq!(called.rows.len(), 1);
+        assert!(!called.rows_truncated());
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_call_log"))?
+                .rows[0][0],
+            Value::Int(1)
+        );
         Ok(())
     })
 }
@@ -2386,7 +2412,7 @@ fn postgres_query_safety_capped_single_statement_with_trailing_comments_executes
             "SELECT 1; /* trailing block comment */",
         ] {
             assert_no_rows_truncated(
-                &connection.execute(&QueryRequest::new(sql).with_limit(2))?,
+                &connection.execute(&QueryRequest::new(sql).with_limit(1))?,
                 1,
             );
         }
@@ -2401,7 +2427,7 @@ fn postgres_query_safety_capped_quoted_semicolons_and_dollar_quotes_execute() ->
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
         for (sql, expected) in [("SELECT ';'::text", ";"), ("SELECT $$a;b$$::text", "a;b")] {
-            let result = connection.execute(&QueryRequest::new(sql).with_limit(2))?;
+            let result = connection.execute(&QueryRequest::new(sql).with_limit(1))?;
             assert_no_rows_truncated(&result, 1);
             assert_eq!(result.rows[0][0], Value::Text(expected.to_string()));
         }
@@ -2416,7 +2442,7 @@ fn postgres_query_safety_capped_single_statement_with_trailing_nested_comment_ex
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
         let result = connection.execute(
-            &QueryRequest::new("SELECT 1; /* outer /* inner */ still outer */").with_limit(2),
+            &QueryRequest::new("SELECT 1; /* outer /* inner */ still outer */").with_limit(1),
         )?;
         assert_no_rows_truncated(&result, 1);
         assert_eq!(result.rows[0][0], Value::Int(1));

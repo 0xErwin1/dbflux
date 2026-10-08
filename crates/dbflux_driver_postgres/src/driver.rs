@@ -5338,8 +5338,11 @@ fn execute_bounded_request(
         Err(error) => return Err(bounded_statement_error(&error, query_id)),
     };
 
+    // A procedure that commits or rolls back fails inside the transaction
+    // the portal needs, so `CALL` keeps the streaming path.
     if limit > 0
         && !statement.columns().is_empty()
+        && !split_leading_keyword(sql).0.eq_ignore_ascii_case("CALL")
         && let Some(result) = fetch_first_page(client, &statement, limit, start)
             .map_err(|error| bounded_statement_error(&error, query_id))?
     {
@@ -5355,10 +5358,10 @@ fn execute_bounded_request(
 /// portal, so the server stops producing rows at the limit instead of
 /// streaming the whole result only for the rows past it to be dropped.
 ///
-/// Whether rows remain past a full page is unknown without reading them, so a
-/// full page is flagged as truncated. PostgreSQL runs a data-modifying
-/// statement to completion before it returns its first row, so `RETURNING`
-/// keeps its full effect.
+/// One row past the limit is fetched and dropped, so the result is flagged as
+/// truncated only when rows remain. PostgreSQL runs a data-modifying statement
+/// to completion before it returns its first row, so `RETURNING` keeps its
+/// full effect.
 ///
 /// A portal needs a transaction block, so the statement runs in one the
 /// driver opens and commits. Returns `None` without running the statement
@@ -5369,18 +5372,15 @@ fn fetch_first_page(
     limit: u32,
     start: Instant,
 ) -> Result<Option<QueryResult>, postgres::Error> {
-    match client.batch_execute("SAVEPOINT dbflux_page_probe") {
-        Ok(()) => {
-            client.batch_execute("RELEASE SAVEPOINT dbflux_page_probe")?;
-            return Ok(None);
-        }
-        Err(error)
-            if error.code() == Some(&postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) => {}
+    match in_transaction_block(client) {
+        Ok(false) => {}
+        Ok(true) => return Ok(None),
         Err(error) if is_in_failed_transaction(&error) => return Ok(None),
         Err(error) => return Err(error),
     }
 
-    let max_rows = i32::try_from(limit).unwrap_or(i32::MAX);
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let max_rows = i32::try_from(limit.saturating_add(1)).unwrap_or(i32::MAX);
     let mut transaction = client.transaction()?;
     let portal = transaction.bind(statement, &[])?;
     let fetched = transaction.query_portal(&portal, max_rows)?;
@@ -5388,9 +5388,10 @@ fn fetch_first_page(
     transaction.commit()?;
 
     let columns = statement_columns(statement);
-    let truncated = fetched.len() >= max_rows as usize;
+    let truncated = fetched.len() > limit;
     let rows: Vec<Row> = fetched
         .iter()
+        .take(limit)
         .map(|row| {
             (0..columns.len())
                 .map(|index| postgres_value_to_value(row, index))
@@ -5402,6 +5403,18 @@ fn fetch_first_page(
     result.set_rows_truncated(truncated);
     result.set_unsupported_types(unsupported_type_names(&result.rows));
     Ok(Some(result))
+}
+
+/// Whether the session is inside a transaction block. Outside one, each
+/// statement runs in its own implicit transaction, so the transaction and the
+/// statement start at the same time; inside an open block they differ. Unlike
+/// a `SAVEPOINT` probe, this leaves no `ERROR` in the server log.
+fn in_transaction_block(client: &mut Client) -> Result<bool, postgres::Error> {
+    let messages = client.simple_query("SELECT transaction_timestamp() = statement_timestamp()")?;
+    let outside_block = messages.iter().any(|message| {
+        matches!(message, postgres::SimpleQueryMessage::Row(row) if row.get(0) == Some("t"))
+    });
+    Ok(!outside_block)
 }
 
 fn statement_columns(statement: &postgres::Statement) -> Vec<ColumnMeta> {

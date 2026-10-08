@@ -32,7 +32,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
-* **PostgreSQL editor queries stop at the row limit** — A query run from the editor now stops reading rows from the server once the editor row limit is reached, instead of downloading the whole result and keeping only the first rows. `SELECT * FROM` a large table returns as soon as its first page arrives. A result that fills the limit is now flagged as possibly incomplete even when no rows remain, and an error the query would raise in a later row is no longer reported. Inside a transaction you opened with `BEGIN`, queries still read the whole result. See the PostgreSQL driver page.
+* **PostgreSQL editor queries stop at the row limit** — A query run from the editor now stops reading rows from the server once the editor row limit is reached, instead of downloading the whole result and keeping only the first rows. `SELECT * FROM` a large table returns as soon as its first page arrives. An error the query would raise in a later row is no longer reported. `CALL` and queries inside a transaction you opened with `BEGIN` still read the whole result. See the PostgreSQL driver page.
 
 ## [0.8.8] - 2026-10-06
 

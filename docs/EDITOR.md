@@ -40,7 +40,7 @@ instead, and **Save file as…** is offered when you close them.
 If a non-empty text selection exists, only the selected text runs. With no
 selection, the full editor buffer is used.
 
-When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning, except on PostgreSQL, which stops reading at the limit and so flags any result that fills it. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
+When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ## Multi-statement scripts
 
