@@ -83,7 +83,7 @@ crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor
 crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
 crates/dbflux_ui_windows/src/settings/general.rs:render_gen_checkbox: cursor sync
 crates/dbflux_ui_windows/src/settings/general.rs:render_gen_dropdown: cursor sync
-crates/dbflux_ui_windows/src/settings/general.rs:render_gen_input_field: cursor sync
+crates/dbflux_ui_windows/src/settings/general.rs:render_gen_input_field_with: cursor sync
 crates/dbflux_ui_windows/src/settings/hooks.rs:hook_field_frame: cursor sync
 crates/dbflux_ui_windows/src/settings/hooks.rs:hook_input_row: cursor sync
 crates/dbflux_ui_windows/src/settings/hooks.rs:render_hook_form: cursor sync

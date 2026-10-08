@@ -184,6 +184,7 @@ impl MigrationRegistry {
         registry.register(mod_039_cfg_script_roots::MigrationImpl);
         registry.register(mod_040_general_settings_fonts::MigrationImpl);
         registry.register(mod_041_general_settings_toast_timeout::MigrationImpl);
+        registry.register(mod_044_general_settings_syntax_colors::MigrationImpl);
         registry
     }
 
@@ -415,6 +416,7 @@ mod mod_038_general_settings_vim_leader;
 mod mod_039_cfg_script_roots;
 mod mod_040_general_settings_fonts;
 mod mod_041_general_settings_toast_timeout;
+mod mod_044_general_settings_syntax_colors;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1126,6 +1128,7 @@ mod tests {
             "039_cfg_script_roots",
             "040_general_settings_fonts",
             "041_general_settings_toast_timeout",
+            "044_general_settings_syntax_colors",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

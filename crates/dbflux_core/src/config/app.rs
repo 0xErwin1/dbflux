@@ -1,7 +1,7 @@
 use crate::ConnectionHook;
 use crate::driver::form::FormValues;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Stable identifier for a registered driver.
 ///
@@ -401,6 +401,12 @@ pub struct GeneralSettings {
     #[serde(default = "default_vim_leader")]
     pub vim_leader: String,
 
+    // -- Syntax colors --
+    /// Colors the user picked for the editor's syntax roles, per palette
+    /// variant. A role without an entry uses the palette's color.
+    #[serde(default, skip_serializing_if = "SyntaxColorOverrides::is_empty")]
+    pub syntax_colors: SyntaxColorOverrides,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -533,8 +539,80 @@ impl Default for GeneralSettings {
             editor_font_size: Self::DEFAULT_EDITOR_FONT_SIZE,
             grid_font_family: None,
             grid_font_size: Self::DEFAULT_GRID_FONT_SIZE,
+            syntax_colors: SyntaxColorOverrides::default(),
         }
     }
+}
+
+/// A syntax role of the code editor's highlighting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyntaxRole {
+    Keyword,
+    String,
+    /// Numbers, booleans and NULL.
+    Number,
+    Comment,
+    /// Types and built-in identifiers.
+    Type,
+    Function,
+    /// Operators and punctuation.
+    Operator,
+    /// Plain identifiers.
+    Identifier,
+}
+
+impl SyntaxRole {
+    pub const ALL: [SyntaxRole; 8] = [
+        SyntaxRole::Keyword,
+        SyntaxRole::String,
+        SyntaxRole::Number,
+        SyntaxRole::Comment,
+        SyntaxRole::Type,
+        SyntaxRole::Function,
+        SyntaxRole::Operator,
+        SyntaxRole::Identifier,
+    ];
+}
+
+/// Syntax colors that replace the palette's, per palette variant, as
+/// `#RRGGBB` text keyed by role.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyntaxColorOverrides {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dark: BTreeMap<SyntaxRole, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub light: BTreeMap<SyntaxRole, String>,
+}
+
+impl SyntaxColorOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.dark.is_empty() && self.light.is_empty()
+    }
+
+    /// The overrides of `variant`; `System` has none of its own.
+    pub fn for_variant(&self, variant: ThemeSetting) -> &BTreeMap<SyntaxRole, String> {
+        match variant {
+            ThemeSetting::Light => &self.light,
+            ThemeSetting::Dark | ThemeSetting::System => &self.dark,
+        }
+    }
+
+    pub fn for_variant_mut(&mut self, variant: ThemeSetting) -> &mut BTreeMap<SyntaxRole, String> {
+        match variant {
+            ThemeSetting::Light => &mut self.light,
+            ThemeSetting::Dark | ThemeSetting::System => &mut self.dark,
+        }
+    }
+}
+
+/// Parses `#RRGGBB` (the `#` is optional) into its 24-bit value.
+pub fn parse_hex_color(text: &str) -> Option<u32> {
+    let digits = text.trim().strip_prefix('#').unwrap_or(text.trim());
+    if digits.len() != 6 {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok()
 }
 
 #[cfg(test)]

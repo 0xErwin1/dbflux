@@ -6,8 +6,9 @@ pub use app::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
     GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicySetting, RpcServiceKind,
-    ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting, ToolPolicyConfig,
-    TrustedClientConfig, driver_maps_differ, migrate_app_config,
+    ServiceConfig, ServiceRpcApiContract, StartupFocus, SyntaxColorOverrides, SyntaxRole,
+    ThemeSetting, ToolPolicyConfig, TrustedClientConfig, driver_maps_differ, migrate_app_config,
+    parse_hex_color,
 };
 pub use refresh_policy::RefreshPolicy;
 pub use scripts_directory::{

@@ -95,11 +95,11 @@ fn ctrl_h_and_ctrl_l_move_between_navigation_and_section(cx: &mut TestAppContext
     );
 }
 
-/// The theme row is a segmented field: Left and Right pick the choice next
-/// to the current one and stop at either end.
+/// The theme row of Appearance is a segmented field: Left and Right pick the
+/// choice next to the current one and stop at either end.
 #[gpui::test]
 fn arrows_move_the_choice_of_a_segmented_general_row(cx: &mut TestAppContext) {
-    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
     focus_content(&settings, window);
     assert_eq!(
         general_cursor(&settings, window),
@@ -526,4 +526,51 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
             "{section:?}: {checked:?}"
         );
     }
+}
+
+/// On Appearance, R restores the syntax color of the row under the cursor and
+/// Shift+R every syntax color of the variant shown.
+#[gpui::test]
+fn r_and_shift_r_restore_appearance_syntax_colors(cx: &mut TestAppContext) {
+    use super::general_section::GeneralFormRow;
+    use dbflux_core::SyntaxRole;
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
+    focus_content(&settings, window);
+
+    let section = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::General(section) => section.clone(),
+        _ => unreachable!("the appearance section is open"),
+    });
+
+    window.update(|_, cx| {
+        section.update(cx, |section, _| {
+            section.set_syntax_variant(ThemeSetting::Dark);
+            section.set_syntax_override(SyntaxRole::Keyword, "#111111".to_string());
+            section.set_syntax_override(SyntaxRole::String, "#222222".to_string());
+            section.gen_form_cursor = section
+                .gen_form_rows()
+                .iter()
+                .position(|row| *row == GeneralFormRow::SyntaxColor(SyntaxRole::Keyword))
+                .expect("keyword row");
+        });
+    });
+
+    let dark_overrides = |window: &mut VisualTestContext| {
+        window.update(|_, cx| section.read(cx).gen_settings.syntax_colors.dark.clone())
+    };
+
+    window.simulate_keystrokes("r");
+    let after_r = dark_overrides(window);
+    assert!(
+        !after_r.contains_key(&SyntaxRole::Keyword),
+        "R resets the row"
+    );
+    assert!(
+        after_r.contains_key(&SyntaxRole::String),
+        "other rows keep theirs"
+    );
+
+    window.simulate_keystrokes("shift-r");
+    assert!(dark_overrides(window).is_empty(), "Shift+R resets them all");
 }

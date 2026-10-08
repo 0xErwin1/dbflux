@@ -40,6 +40,16 @@ pub fn save_general_settings(
             )
         })?;
 
+    let syntax_colors_json = if settings.syntax_colors.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&settings.syntax_colors).map_err(|error| {
+            dbflux_storage::error::StorageError::Data(format!(
+                "syntax colors could not be serialized: {error}"
+            ))
+        })?
+    };
+
     // Save to normalized general_settings table
     let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
@@ -110,6 +120,7 @@ pub fn save_general_settings(
         grid_font_family: settings.grid_font_family.clone(),
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
+        syntax_colors_json,
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1115,7 +1126,21 @@ fn load_general_settings(
         ),
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
+        syntax_colors: syntax_colors_from_storage(&dto.syntax_colors_json),
     }
+}
+
+/// Reads the stored syntax color overrides. Text that does not parse keeps
+/// every palette color, so a damaged row cannot stop the settings loading.
+fn syntax_colors_from_storage(json: &str) -> dbflux_core::SyntaxColorOverrides {
+    if json.trim().is_empty() {
+        return dbflux_core::SyntaxColorOverrides::default();
+    }
+
+    serde_json::from_str(json).unwrap_or_else(|error| {
+        log::warn!("Ignoring stored syntax colors that do not parse: {error}");
+        dbflux_core::SyntaxColorOverrides::default()
+    })
 }
 
 /// Converts a stored font size to the clamped `f32` the settings carry.
@@ -2507,6 +2532,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            syntax_colors_json: String::new(),
             updated_at: String::new(),
         };
 
@@ -2602,6 +2628,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            syntax_colors_json: String::new(),
             updated_at: String::new(),
         };
         runtime
@@ -2859,6 +2886,45 @@ mod tests {
     }
 
     #[test]
+    fn syntax_colors_round_trip_and_unreadable_text_keeps_the_palette() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(loaded.general_settings.syntax_colors.is_empty());
+
+        let mut settings = GeneralSettings::default();
+        settings
+            .syntax_colors
+            .dark
+            .insert(dbflux_core::SyntaxRole::Keyword, "#FF0000".to_string());
+        settings
+            .syntax_colors
+            .light
+            .insert(dbflux_core::SyntaxRole::Comment, "#00AA00".to_string());
+        super::save_general_settings(&runtime, &settings).expect("save syntax colors");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.syntax_colors,
+            settings.syntax_colors
+        );
+
+        let mut dto = runtime
+            .general_settings()
+            .get()
+            .expect("load dto")
+            .expect("general settings row");
+        dto.syntax_colors_json = "{not json".to_string();
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("store damaged row");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(loaded.general_settings.syntax_colors.is_empty());
+    }
+
+    #[test]
     fn out_of_range_font_sizes_and_blank_families_are_normalized_on_load() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
@@ -2928,6 +2994,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            syntax_colors_json: String::new(),
             updated_at: String::new(),
         };
         runtime

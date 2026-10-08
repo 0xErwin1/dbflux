@@ -3716,6 +3716,30 @@ settings:
       new: "新建 %{noun}"
   mcp_governance:
     persist_error: "持久化 MCP 治理失败：%{error}"
+  appearance:
+    header:
+      title: "外观"
+      subtitle: "主题、密度、语言、字体以及编辑器的语法颜色。"
+    syntax:
+      group: "语法颜色"
+      variant:
+        label: "适用主题"
+        help: "每个主题保存各自的颜色。更改在保存后生效。"
+      role:
+        keyword: "关键字"
+        string: "字符串"
+        number: "数字和 NULL"
+        comment: "注释"
+        type: "类型"
+        function: "函数"
+        operator: "运算符和标点"
+        identifier: "标识符"
+      reset: "重置"
+      reset_all:
+        button: "恢复默认值"
+        label: "全部语法颜色"
+        help: "将此主题的所有语法颜色恢复为默认值。"
+      error: "请以 #RRGGBB 格式输入颜色，或留空以使用默认值。"
   general:
     unit:
       pixels: "px"
@@ -3724,7 +3748,7 @@ settings:
       milliseconds: "毫秒"
     header:
       title: 常规
-      subtitle: "外观、启动、刷新以及危险语句的安全保护。"
+      subtitle: "编辑器、启动、刷新以及危险语句的安全保护。"
     appearance:
       group: 外观
     startup:
@@ -4720,6 +4744,7 @@ settings:
     search_placeholder: "搜索设置"
     general_group: 常规
     general: 常规
+    appearance: "外观"
     keybindings: 键盘快捷键
     updates: 更新
     audit: 审计

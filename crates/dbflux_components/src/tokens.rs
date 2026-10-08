@@ -656,14 +656,79 @@ impl SyntaxColors {
         }
     }
 
-    /// Return the `SyntaxColors` for the currently active theme.
-    ///
-    /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
-    pub fn for_current(cx: &gpui::App) -> Self {
-        match crate::semantic::ThemeSettingGlobal::get(cx) {
+    /// The palette's own colors for `variant`, before the user's overrides.
+    pub fn defaults(variant: dbflux_core::ThemeSetting) -> Self {
+        match variant {
             dbflux_core::ThemeSetting::Light => Self::light(),
             dbflux_core::ThemeSetting::Dark | dbflux_core::ThemeSetting::System => Self::dark(),
         }
+    }
+
+    /// Return the `SyntaxColors` for the currently active theme, with the
+    /// user's overrides applied.
+    ///
+    /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
+    pub fn for_current(cx: &gpui::App) -> Self {
+        let variant = crate::semantic::ThemeSettingGlobal::get(cx);
+        let colors = Self::defaults(variant);
+
+        match crate::theme::syntax_overrides(cx) {
+            Some(overrides) => colors.with_overrides(overrides.for_variant(variant)),
+            None => colors,
+        }
+    }
+
+    /// The color of `role`.
+    pub fn role(&self, role: dbflux_core::SyntaxRole) -> Hsla {
+        match role {
+            dbflux_core::SyntaxRole::Keyword => self.keyword,
+            dbflux_core::SyntaxRole::String => self.string,
+            dbflux_core::SyntaxRole::Number => self.number,
+            dbflux_core::SyntaxRole::Comment => self.comment,
+            dbflux_core::SyntaxRole::Type => self.type_name,
+            dbflux_core::SyntaxRole::Function => self.function,
+            dbflux_core::SyntaxRole::Operator => self.operator,
+            dbflux_core::SyntaxRole::Identifier => self.plain,
+        }
+    }
+
+    fn role_mut(&mut self, role: dbflux_core::SyntaxRole) -> &mut Hsla {
+        match role {
+            dbflux_core::SyntaxRole::Keyword => &mut self.keyword,
+            dbflux_core::SyntaxRole::String => &mut self.string,
+            dbflux_core::SyntaxRole::Number => &mut self.number,
+            dbflux_core::SyntaxRole::Comment => &mut self.comment,
+            dbflux_core::SyntaxRole::Type => &mut self.type_name,
+            dbflux_core::SyntaxRole::Function => &mut self.function,
+            dbflux_core::SyntaxRole::Operator => &mut self.operator,
+            dbflux_core::SyntaxRole::Identifier => &mut self.plain,
+        }
+    }
+
+    /// These colors with every parseable `#RRGGBB` entry of `overrides`
+    /// in place of its role's color. Entries that do not parse are skipped.
+    pub fn with_overrides(
+        mut self,
+        overrides: &std::collections::BTreeMap<dbflux_core::SyntaxRole, String>,
+    ) -> Self {
+        for (role, text) in overrides {
+            if let Some(value) = dbflux_core::parse_hex_color(text) {
+                *self.role_mut(*role) = rgb(value).into();
+            }
+        }
+        self
+    }
+
+    /// `color` as `#RRGGBB`.
+    pub fn hex(color: Hsla) -> String {
+        let rgba = gpui::Rgba::from(color);
+        let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!(
+            "#{:02X}{:02X}{:02X}",
+            channel(rgba.r),
+            channel(rgba.g),
+            channel(rgba.b)
+        )
     }
 
     /// Schema-tree table icon.

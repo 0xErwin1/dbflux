@@ -3,8 +3,8 @@ use crate::semantic::ThemeSettingGlobal;
 use crate::tokens::{BASE_REM, SyntaxColors};
 pub use crate::typography::AppFonts;
 use crate::typography::load_bundled_fonts;
-use dbflux_core::{AppStyle, ThemeSetting};
-use gpui::{App, Hsla, Window, WindowAppearance, hsla, px};
+use dbflux_core::{AppStyle, SyntaxColorOverrides, ThemeSetting};
+use gpui::{App, Global, Hsla, Window, WindowAppearance, hsla, px};
 use gpui_component::{
     highlighter::{HighlightTheme, ThemeStyle},
     theme::{Theme, ThemeConfig, ThemeMode, ThemeTokens},
@@ -37,6 +37,24 @@ pub fn init_with_settings(
     crate::density::init(cx, style);
     crate::fonts::init(cx, fonts);
     apply_theme(setting, style, None, cx);
+}
+
+/// The syntax colors the user picked in place of the palette's.
+#[derive(Default)]
+struct SyntaxOverridesGlobal(SyntaxColorOverrides);
+
+impl Global for SyntaxOverridesGlobal {}
+
+/// Store the user's syntax colors. They take effect with the next
+/// [`apply_theme`] and in [`SyntaxColors::for_current`].
+pub fn set_syntax_overrides(overrides: SyntaxColorOverrides, cx: &mut App) {
+    cx.set_global(SyntaxOverridesGlobal(overrides));
+}
+
+/// The user's syntax colors, empty until [`set_syntax_overrides`] runs.
+pub fn syntax_overrides(cx: &App) -> Option<&SyntaxColorOverrides> {
+    cx.try_global::<SyntaxOverridesGlobal>()
+        .map(|global| &global.0)
 }
 
 /// Write the active font settings into the global theme without changing
@@ -76,10 +94,15 @@ pub fn apply_theme(
         ThemeSetting::Dark | ThemeSetting::Light => setting,
     };
 
-    let palette = match resolved {
+    let mut palette = match resolved {
         ThemeSetting::Light => Palette::light(),
         ThemeSetting::Dark | ThemeSetting::System => Palette::dark(),
     };
+    if let Some(overrides) = syntax_overrides(cx) {
+        palette.syntax = palette
+            .syntax
+            .with_overrides(overrides.for_variant(resolved));
+    }
 
     Theme::change(palette.mode, window, cx);
     apply_palette(&palette, style, cx);
@@ -930,5 +953,69 @@ mod tests {
 
             cx.update(|cx| assert_eq!(SyntaxColors::for_current(cx), expected));
         }
+    }
+
+    /// The user's colors replace the palette's in the editor and in
+    /// `for_current`, only for their own variant, and clearing them restores
+    /// the palette.
+    #[gpui::test]
+    fn syntax_overrides_recolor_only_their_variant(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let mut overrides = SyntaxColorOverrides::default();
+        overrides
+            .dark
+            .insert(dbflux_core::SyntaxRole::Keyword, "#112233".to_string());
+        overrides
+            .dark
+            .insert(dbflux_core::SyntaxRole::Comment, "not a color".to_string());
+
+        cx.update(|cx| {
+            set_syntax_overrides(overrides, cx);
+            apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
+        });
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(syntax_hex(theme, "keyword"), Some(0x112233));
+            assert_eq!(
+                syntax_hex(theme, "comment"),
+                Some(hex_of(SyntaxColors::dark().comment)),
+                "an unparseable entry keeps the palette color"
+            );
+            assert_eq!(hex_of(SyntaxColors::for_current(cx).keyword), 0x112233);
+        });
+
+        cx.update(|cx| apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx));
+        cx.update(|cx| {
+            assert_eq!(
+                syntax_hex(Theme::global(cx), "keyword"),
+                Some(hex_of(SyntaxColors::light().keyword))
+            );
+        });
+
+        cx.update(|cx| {
+            set_syntax_overrides(SyntaxColorOverrides::default(), cx);
+            apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                syntax_hex(Theme::global(cx), "keyword"),
+                Some(hex_of(SyntaxColors::dark().keyword))
+            );
+        });
+    }
+
+    #[test]
+    fn hex_round_trips_the_palette_colors() {
+        for colors in [SyntaxColors::dark(), SyntaxColors::light()] {
+            for role in dbflux_core::SyntaxRole::ALL {
+                let hex = SyntaxColors::hex(colors.role(role));
+                assert_eq!(
+                    dbflux_core::parse_hex_color(&hex),
+                    Some(hex_of(colors.role(role)))
+                );
+            }
+        }
+        assert_eq!(SyntaxColors::hex(SyntaxColors::dark().keyword), "#D48CC8");
     }
 }

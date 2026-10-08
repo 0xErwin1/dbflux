@@ -3716,6 +3716,30 @@ settings:
       new: "새 %{noun}"
   mcp_governance:
     persist_error: "MCP 거버넌스를 저장하지 못했습니다: %{error}"
+  appearance:
+    header:
+      title: "모양"
+      subtitle: "테마, 밀도, 언어, 글꼴 및 편집기의 구문 색상."
+    syntax:
+      group: "구문 색상"
+      variant:
+        label: "적용 테마"
+        help: "테마마다 자체 색상을 유지합니다. 변경 사항은 저장할 때 적용됩니다."
+      role:
+        keyword: "키워드"
+        string: "문자열"
+        number: "숫자 및 NULL"
+        comment: "주석"
+        type: "타입"
+        function: "함수"
+        operator: "연산자 및 구두점"
+        identifier: "식별자"
+      reset: "초기화"
+      reset_all:
+        button: "기본값 복원"
+        label: "모든 구문 색상"
+        help: "이 테마의 모든 구문 색상을 기본값으로 복원합니다."
+      error: "색상을 #RRGGBB 형식으로 입력하거나, 기본값을 쓰려면 비워 두세요."
   general:
     unit:
       pixels: "px"
@@ -3724,7 +3748,7 @@ settings:
       milliseconds: "ms"
     header:
       title: 일반
-      subtitle: "모양, 시작, 새로 고침, 그리고 위험한 문에 대한 안전장치."
+      subtitle: "편집기, 시작, 새로 고침, 그리고 위험한 문에 대한 안전장치."
     appearance:
       group: 모양
     startup:
@@ -4719,6 +4743,7 @@ settings:
     search_placeholder: "설정 검색"
     general_group: 일반
     general: 일반
+    appearance: "모양"
     keybindings: 키 바인딩
     updates: 업데이트
     audit: 감사

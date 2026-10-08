@@ -2181,6 +2181,9 @@ fn settings_layer() -> KeymapLayer {
     let section = "Settings && focus == section && !Input";
     let list_section = "Settings && focus == section && section != keybindings && !Input";
     let keybindings = "Settings && focus == section && section == keybindings && !Input";
+    // R and Shift+R reset key bindings, and on Appearance the syntax color of
+    // the row under the cursor and every syntax color of the variant shown.
+    let reset = "Settings && focus == section && (section == keybindings || section == appearance) && !Input";
 
     layer.bind_with_predicate(
         KeyChord::new("n", Modifiers::none()),
@@ -2210,12 +2213,12 @@ fn settings_layer() -> KeymapLayer {
     layer.bind_with_predicate(
         KeyChord::new("r", Modifiers::none()),
         Command::ResetBinding,
-        keybindings,
+        reset,
     );
     layer.bind_with_predicate(
         KeyChord::new("r", Modifiers::shift()),
         Command::ResetAllBindings,
-        keybindings,
+        reset,
     );
     layer.bind_with_predicate(
         KeyChord::new("p", Modifiers::none()),

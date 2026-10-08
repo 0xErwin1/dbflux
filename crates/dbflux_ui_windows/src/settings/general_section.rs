@@ -6,7 +6,9 @@ use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::SegmentedItem;
 use dbflux_components::typography::AppFonts;
-use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
+use dbflux_core::{
+    AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, SyntaxRole, ThemeSetting,
+};
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
@@ -56,7 +58,19 @@ pub(super) enum GeneralFormRow {
     KeyValueSizeLimit,
     ToastTimeout,
     ShareStableDb,
+    SyntaxVariant,
+    SyntaxColor(SyntaxRole),
+    SyntaxReset,
     SaveButton,
+}
+
+/// The page of the settings this form shows: General, or Appearance (theme,
+/// density, language, fonts and syntax colors). Both pages edit and save the
+/// same general settings.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum GeneralPage {
+    General,
+    Appearance,
 }
 
 /// Each numeric field's last drawn bounds and the scroll offset of that frame.
@@ -93,6 +107,7 @@ pub(super) type FontFamilySelect = Entity<SelectState<SearchableVec<FontFamilyOp
 
 pub(super) struct GeneralSection {
     pub(super) app_state: Entity<AppStateEntity>,
+    pub(super) page: GeneralPage,
     pub(super) gen_settings: GeneralSettings,
     pub(super) gen_form_cursor: usize,
     pub(super) gen_editing_field: bool,
@@ -116,6 +131,14 @@ pub(super) struct GeneralSection {
     pub(super) input_editor_row_limit: Entity<InputState>,
     pub(super) input_object_preview_limit: Entity<InputState>,
     pub(super) input_key_value_size_limit: Entity<InputState>,
+    /// The palette variant whose syntax colors the syntax rows edit.
+    pub(super) syntax_variant: ThemeSetting,
+    /// One `#RRGGBB` field per syntax role, in `SyntaxRole::ALL` order. An
+    /// empty field keeps the palette's color.
+    pub(super) syntax_inputs: Vec<(SyntaxRole, Entity<InputState>)>,
+    /// Set when the syntax fields must show `syntax_variant`'s colors again,
+    /// done on the next render, which has the window the fields need.
+    pub(super) pending_syntax_reload: bool,
     /// The last rejected field and its message, shown under that field
     /// until the next save attempt.
     pub(super) gen_field_error: Option<(GeneralFormRow, String)>,
@@ -141,10 +164,13 @@ impl EventEmitter<SectionFocusEvent> for GeneralSection {}
 impl GeneralSection {
     pub(super) fn new(
         app_state: Entity<AppStateEntity>,
+        page: GeneralPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let settings = app_state.read(cx).general_settings().clone();
+        let syntax_variant =
+            Self::syntax_variant_for(dbflux_components::semantic::ThemeSettingGlobal::get(cx));
         let language_index = Self::language_index(&settings.language);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
         let vim_leader_index = Self::vim_leader_index(&settings.vim_leader);
@@ -291,6 +317,41 @@ impl GeneralSection {
                 .default_value(key_value_size_limit.clone())
         });
 
+        let syntax_inputs: Vec<(SyntaxRole, Entity<InputState>)> = SyntaxRole::ALL
+            .into_iter()
+            .map(|role| {
+                let saved = settings
+                    .syntax_colors
+                    .for_variant(syntax_variant)
+                    .get(&role)
+                    .cloned()
+                    .unwrap_or_default();
+                let default = Self::default_syntax_hex(syntax_variant, role);
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(default)
+                        .default_value(saved)
+                });
+                (role, input)
+            })
+            .collect();
+
+        let syntax_subscriptions: Vec<Subscription> = syntax_inputs
+            .iter()
+            .map(|(role, input)| {
+                let role = *role;
+                cx.subscribe(input, move |this, input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = input.read(cx).value().trim().to_string();
+                        this.set_syntax_override(role, text);
+                        cx.notify();
+                    } else {
+                        this.return_focus_on_blur(input, event, cx);
+                    }
+                })
+            })
+            .collect();
+
         let language_subscription = cx.subscribe(
             &dropdown_language,
             |this, _, event: &DropdownSelectionChanged, cx| {
@@ -411,6 +472,7 @@ impl GeneralSection {
 
         Self {
             app_state,
+            page,
             gen_settings: settings,
             gen_form_cursor: 0,
             gen_editing_field: false,
@@ -432,6 +494,9 @@ impl GeneralSection {
             input_editor_row_limit,
             input_object_preview_limit,
             input_key_value_size_limit,
+            syntax_variant,
+            syntax_inputs,
+            pending_syntax_reload: false,
             gen_field_error: None,
             pending_reveal: None,
             reveal_attempts: 0,
@@ -455,7 +520,132 @@ impl GeneralSection {
             ]
             .into_iter()
             .chain(font_subscriptions)
+            .chain(syntax_subscriptions)
             .collect(),
+        }
+    }
+
+    /// The variant the syntax rows open on: the one on screen, Dark for
+    /// `System` before it resolves.
+    fn syntax_variant_for(theme: ThemeSetting) -> ThemeSetting {
+        match theme {
+            ThemeSetting::Light => ThemeSetting::Light,
+            ThemeSetting::Dark | ThemeSetting::System => ThemeSetting::Dark,
+        }
+    }
+
+    /// The palette's own color for `role` in `variant`, as `#RRGGBB`.
+    pub(super) fn default_syntax_hex(variant: ThemeSetting, role: SyntaxRole) -> String {
+        dbflux_components::tokens::SyntaxColors::hex(
+            dbflux_components::tokens::SyntaxColors::defaults(variant).role(role),
+        )
+    }
+
+    /// Stores the text of `role`'s field for the edited variant; empty text
+    /// restores the palette's color.
+    pub(super) fn set_syntax_override(&mut self, role: SyntaxRole, text: String) {
+        let overrides = self
+            .gen_settings
+            .syntax_colors
+            .for_variant_mut(self.syntax_variant);
+
+        if text.is_empty() {
+            overrides.remove(&role);
+        } else {
+            overrides.insert(role, text);
+        }
+    }
+
+    /// Restores the palette's color for `role` in the edited variant.
+    pub(super) fn reset_syntax_color(&mut self, role: SyntaxRole) {
+        self.set_syntax_override(role, String::new());
+        self.pending_syntax_reload = true;
+    }
+
+    /// Restores every palette color of the edited variant.
+    pub(super) fn reset_syntax_colors(&mut self) {
+        self.gen_settings
+            .syntax_colors
+            .for_variant_mut(self.syntax_variant)
+            .clear();
+        self.pending_syntax_reload = true;
+    }
+
+    pub(super) fn set_syntax_variant(&mut self, variant: ThemeSetting) {
+        self.syntax_variant = Self::syntax_variant_for(variant);
+        self.pending_syntax_reload = true;
+    }
+
+    pub(super) fn syntax_input(&self, role: SyntaxRole) -> Option<&Entity<InputState>> {
+        self.syntax_inputs
+            .iter()
+            .find(|(input_role, _)| *input_role == role)
+            .map(|(_, input)| input)
+    }
+
+    /// Shows the edited variant's colors, and its defaults as placeholders,
+    /// in the syntax fields.
+    pub(super) fn reload_syntax_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.pending_syntax_reload) {
+            return;
+        }
+
+        let variant = self.syntax_variant;
+        for (role, input) in &self.syntax_inputs {
+            let value = self
+                .gen_settings
+                .syntax_colors
+                .for_variant(variant)
+                .get(role)
+                .cloned()
+                .unwrap_or_default();
+            let placeholder = Self::default_syntax_hex(variant, *role);
+
+            input.update(cx, |state, cx| {
+                state.set_value(value, window, cx);
+                state.set_placeholder(placeholder, window, cx);
+            });
+        }
+    }
+
+    /// Syntax variant segments: Dark, then Light.
+    pub(super) fn syntax_variant_items() -> Vec<SegmentedItem> {
+        vec![
+            SegmentedItem::new(
+                "dark",
+                dbflux_i18n::t!("settings.general.theme.option.dark"),
+            ),
+            SegmentedItem::new(
+                "light",
+                dbflux_i18n::t!("settings.general.theme.option.light"),
+            ),
+        ]
+    }
+
+    pub(super) fn syntax_variant_index(variant: ThemeSetting) -> usize {
+        usize::from(variant == ThemeSetting::Light)
+    }
+
+    pub(super) fn syntax_variant_for_index(index: usize) -> ThemeSetting {
+        if index == 1 {
+            ThemeSetting::Light
+        } else {
+            ThemeSetting::Dark
+        }
+    }
+
+    pub(super) fn syntax_role_label(role: SyntaxRole) -> String {
+        match role {
+            SyntaxRole::Keyword => dbflux_i18n::t!("settings.appearance.syntax.role.keyword"),
+            SyntaxRole::String => dbflux_i18n::t!("settings.appearance.syntax.role.string"),
+            SyntaxRole::Number => dbflux_i18n::t!("settings.appearance.syntax.role.number"),
+            SyntaxRole::Comment => dbflux_i18n::t!("settings.appearance.syntax.role.comment"),
+            SyntaxRole::Type => dbflux_i18n::t!("settings.appearance.syntax.role.type"),
+            SyntaxRole::Function => dbflux_i18n::t!("settings.appearance.syntax.role.function"),
+            SyntaxRole::Operator => dbflux_i18n::t!("settings.appearance.syntax.role.operator"),
+            SyntaxRole::Identifier => {
+                dbflux_i18n::t!("settings.appearance.syntax.role.identifier")
+            }
         }
     }
 
@@ -816,7 +1006,10 @@ impl GeneralSection {
 
 impl SettingsSection for GeneralSection {
     fn section_id(&self) -> SettingsSectionId {
-        SettingsSectionId::General
+        match self.page {
+            GeneralPage::General => SettingsSectionId::General,
+            GeneralPage::Appearance => SettingsSectionId::Appearance,
+        }
     }
 
     fn handle_key_event(
@@ -863,6 +1056,7 @@ impl SettingsSection for GeneralSection {
 
 impl Render for GeneralSection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.reload_syntax_inputs(window, cx);
         self.reveal_pending_field(window, cx);
         self.render_general_section(cx)
     }
@@ -870,7 +1064,7 @@ impl Render for GeneralSection {
 
 #[cfg(test)]
 mod tests {
-    use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralSection};
+    use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralPage, GeneralSection};
     use dbflux_core::{AppStyle, ThemeSetting};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
@@ -880,6 +1074,18 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn with_general_section(
+        test: impl FnOnce(
+            &mut GeneralSection,
+            &Entity<ToastHost>,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+    ) {
+        with_section(GeneralPage::General, test);
+    }
+
+    fn with_section(
+        page: GeneralPage,
         test: impl FnOnce(
             &mut GeneralSection,
             &Entity<ToastHost>,
@@ -906,7 +1112,7 @@ mod tests {
         let window = cx
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
-                    cx.new(|cx| GeneralSection::new(app_state, window, cx))
+                    cx.new(|cx| GeneralSection::new(app_state, page, window, cx))
                 })
             })
             .expect("general settings window opens");
@@ -1103,6 +1309,193 @@ mod tests {
             assert_eq!(stored, Some(0));
             assert!(!section.has_unsaved_general_changes(cx));
         });
+    }
+
+    #[test]
+    fn appearance_holds_theme_fonts_and_syntax_rows_and_general_does_not() {
+        with_section(GeneralPage::Appearance, |section, _, _, _| {
+            let rows = section.gen_form_rows();
+            assert_eq!(rows.first(), Some(&GeneralFormRow::Theme));
+            assert!(rows.contains(&GeneralFormRow::GridFontSize));
+            for role in dbflux_core::SyntaxRole::ALL {
+                assert!(rows.contains(&GeneralFormRow::SyntaxColor(role)));
+            }
+            assert_eq!(rows.last(), Some(&GeneralFormRow::SaveButton));
+            assert!(!rows.contains(&GeneralFormRow::VimMode));
+        });
+
+        with_general_section(|section, _, _, _| {
+            let rows = section.gen_form_rows();
+            assert_eq!(rows.first(), Some(&GeneralFormRow::VimMode));
+            assert!(!rows.contains(&GeneralFormRow::Theme));
+            assert!(!rows.contains(&GeneralFormRow::UiFontSize));
+            assert!(!rows.contains(&GeneralFormRow::SyntaxVariant));
+        });
+    }
+
+    #[test]
+    fn a_typed_syntax_color_marks_dirty_and_saves_normalized() {
+        use dbflux_core::{SyntaxRole, ThemeSetting};
+
+        with_section(GeneralPage::Appearance, |section, _, window, cx| {
+            section.set_syntax_variant(ThemeSetting::Dark);
+            assert_eq!(
+                GeneralSection::default_syntax_hex(ThemeSetting::Dark, SyntaxRole::Keyword),
+                "#D48CC8",
+                "the placeholder names the palette's color"
+            );
+
+            section.set_syntax_override(SyntaxRole::Keyword, "ff8800".to_string());
+            assert_eq!(section.general_change_count(cx), 1);
+
+            section.save_general_settings(window, cx);
+
+            let saved = section
+                .app_state
+                .read(cx)
+                .general_settings()
+                .syntax_colors
+                .clone();
+            assert_eq!(
+                saved.dark.get(&SyntaxRole::Keyword).map(String::as_str),
+                Some("#FF8800")
+            );
+            let stored = section
+                .app_state
+                .read(cx)
+                .storage_runtime()
+                .general_settings()
+                .get()
+                .expect("stored general settings readable")
+                .map(|settings| settings.syntax_colors_json)
+                .unwrap_or_default();
+            assert!(stored.contains("#FF8800"), "stored: {stored}");
+            assert_eq!(
+                dbflux_components::theme::syntax_overrides(cx),
+                Some(&saved),
+                "the editor theme picks the saved colors up"
+            );
+            assert!(!section.has_unsaved_general_changes(cx));
+        });
+    }
+
+    #[test]
+    fn an_invalid_syntax_color_is_rejected_on_its_row_and_its_variant() {
+        use dbflux_core::{SyntaxRole, ThemeSetting};
+
+        with_section(GeneralPage::Appearance, |section, _, window, cx| {
+            section.set_syntax_variant(ThemeSetting::Light);
+            section.set_syntax_override(SyntaxRole::Comment, "#12".to_string());
+            section.set_syntax_variant(ThemeSetting::Dark);
+
+            section.save_general_settings(window, cx);
+
+            assert_eq!(section.syntax_variant, ThemeSetting::Light);
+            let row = GeneralFormRow::SyntaxColor(SyntaxRole::Comment);
+            assert_eq!(
+                section.gen_field_error.as_ref().map(|(row, _)| *row),
+                Some(row)
+            );
+            assert_eq!(
+                section.gen_form_rows().get(section.gen_form_cursor),
+                Some(&row)
+            );
+            assert!(
+                section
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .syntax_colors
+                    .is_empty(),
+                "nothing is saved"
+            );
+        });
+    }
+
+    #[test]
+    fn reset_restores_one_color_and_reset_all_the_whole_variant() {
+        use dbflux_core::{SyntaxRole, ThemeSetting};
+
+        with_section(GeneralPage::Appearance, |section, _, window, cx| {
+            section.set_syntax_variant(ThemeSetting::Dark);
+            section.set_syntax_override(SyntaxRole::Keyword, "#111111".to_string());
+            section.set_syntax_override(SyntaxRole::String, "#222222".to_string());
+            section.set_syntax_variant(ThemeSetting::Light);
+            section.set_syntax_override(SyntaxRole::Keyword, "#333333".to_string());
+            section.set_syntax_variant(ThemeSetting::Dark);
+            section.reload_syntax_inputs(window, cx);
+            assert_eq!(
+                section
+                    .syntax_input(SyntaxRole::String)
+                    .expect("string field")
+                    .read(cx)
+                    .value()
+                    .to_string(),
+                "#222222",
+                "switching variant shows that variant's colors"
+            );
+
+            section.reset_syntax_color(SyntaxRole::Keyword);
+            section.reload_syntax_inputs(window, cx);
+            let dark = &section.gen_settings.syntax_colors.dark;
+            assert!(!dark.contains_key(&SyntaxRole::Keyword));
+            assert!(dark.contains_key(&SyntaxRole::String));
+            assert!(
+                section
+                    .syntax_input(SyntaxRole::Keyword)
+                    .expect("keyword field")
+                    .read(cx)
+                    .value()
+                    .is_empty(),
+                "the reset field is empty and shows the default as placeholder"
+            );
+
+            section.reset_syntax_colors();
+            assert!(section.gen_settings.syntax_colors.dark.is_empty());
+            assert_eq!(
+                section.gen_settings.syntax_colors.light.len(),
+                1,
+                "the other variant keeps its colors"
+            );
+        });
+    }
+
+    #[test]
+    fn appearance_copy_resolves_in_every_locale() {
+        let keys = [
+            "settings.nav.appearance",
+            "settings.appearance.header.title",
+            "settings.appearance.header.subtitle",
+            "settings.appearance.syntax.group",
+            "settings.appearance.syntax.variant.label",
+            "settings.appearance.syntax.variant.help",
+            "settings.appearance.syntax.role.keyword",
+            "settings.appearance.syntax.role.string",
+            "settings.appearance.syntax.role.number",
+            "settings.appearance.syntax.role.comment",
+            "settings.appearance.syntax.role.type",
+            "settings.appearance.syntax.role.function",
+            "settings.appearance.syntax.role.operator",
+            "settings.appearance.syntax.role.identifier",
+            "settings.appearance.syntax.reset",
+            "settings.appearance.syntax.reset_all.button",
+            "settings.appearance.syntax.reset_all.label",
+            "settings.appearance.syntax.reset_all.help",
+            "settings.appearance.syntax.error",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty for {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1323,7 +1716,7 @@ mod tests {
 
     #[test]
     fn font_rows_follow_the_language_row_and_focus_their_controls() {
-        with_general_section(|section, _, window, cx| {
+        with_section(GeneralPage::Appearance, |section, _, window, cx| {
             let rows = section.gen_form_rows();
             let language = rows
                 .iter()
@@ -1517,7 +1910,8 @@ mod tests {
         let (_, window) = cx.add_window_view({
             let slot = slot.clone();
             move |window, cx| {
-                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                let section = cx
+                    .new(|cx| GeneralSection::new(app_state, GeneralPage::Appearance, window, cx));
                 slot.replace(Some(section.clone()));
                 gpui_component::Root::new(section, window, cx)
             }
@@ -1681,7 +2075,7 @@ mod tests {
 
     #[test]
     fn a_rejected_font_size_moves_the_cursor_to_its_field() {
-        with_general_section(|section, _, window, cx| {
+        with_section(GeneralPage::Appearance, |section, _, window, cx| {
             section
                 .input_editor_font_size
                 .update(cx, |input, cx| input.set_value("40", window, cx));
@@ -1913,7 +2307,7 @@ mod tests {
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
                     window.observe_frames(&capture);
-                    cx.new(|cx| GeneralSection::new(app_state, window, cx))
+                    cx.new(|cx| GeneralSection::new(app_state, GeneralPage::General, window, cx))
                 })
             })
             .expect("general settings window opens");
@@ -2058,7 +2452,8 @@ mod tests {
         let (_, window) = cx.add_window_view({
             let slot = slot.clone();
             move |window, cx| {
-                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                let section =
+                    cx.new(|cx| GeneralSection::new(app_state, GeneralPage::General, window, cx));
                 slot.replace(Some(section.clone()));
                 gpui_component::Root::new(section, window, cx)
             }

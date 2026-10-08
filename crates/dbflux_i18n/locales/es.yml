@@ -3716,6 +3716,30 @@ settings:
       new: "Nuevo %{noun}"
   mcp_governance:
     persist_error: "No se pudo persistir la gobernanza de MCP: %{error}"
+  appearance:
+    header:
+      title: "Apariencia"
+      subtitle: "Tema, densidad, idioma, fuentes y los colores de sintaxis del editor."
+    syntax:
+      group: "Colores de sintaxis"
+      variant:
+        label: "Colores para"
+        help: "Cada tema guarda sus propios colores. Los cambios se aplican al guardar."
+      role:
+        keyword: "Palabras clave"
+        string: "Cadenas"
+        number: "Números y NULL"
+        comment: "Comentarios"
+        type: "Tipos"
+        function: "Funciones"
+        operator: "Operadores y puntuación"
+        identifier: "Identificadores"
+      reset: "Restablecer"
+      reset_all:
+        button: "Restaurar valores predeterminados"
+        label: "Todos los colores de sintaxis"
+        help: "Restaura cada color de sintaxis de este tema a su valor predeterminado."
+      error: "Escribe un color como #RRGGBB, o deja el campo vacío para usar el predeterminado."
   general:
     unit:
       pixels: "px"
@@ -3724,7 +3748,7 @@ settings:
       milliseconds: "ms"
     header:
       title: General
-      subtitle: "Apariencia, inicio, actualización y la red de seguridad para sentencias peligrosas."
+      subtitle: "Editor, inicio, actualización y la red de seguridad para sentencias peligrosas."
     appearance:
       group: Apariencia
     startup:
@@ -4720,6 +4744,7 @@ settings:
     search_placeholder: "Buscar en ajustes"
     general_group: General
     general: General
+    appearance: "Apariencia"
     keybindings: Atajos de teclado
     updates: Actualizaciones
     audit: Auditoría

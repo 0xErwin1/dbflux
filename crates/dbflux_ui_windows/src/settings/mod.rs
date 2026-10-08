@@ -40,7 +40,7 @@ use auth_profiles_section::AuthProfilesSection;
 use dbflux_components::components::tree_nav::TreeNav;
 use dbflux_ui_base::AppStateEntity;
 use drivers_section::DriversSection;
-use general_section::GeneralSection;
+use general_section::{GeneralPage, GeneralSection};
 use gpui::prelude::*;
 use gpui::*;
 use hooks_section::HooksSection;

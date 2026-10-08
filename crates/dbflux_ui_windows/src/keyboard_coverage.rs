@@ -48,6 +48,20 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "segmented-syntax-variant-*",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        // Appearance: R restores the syntax color of the row under the
+        // cursor, Shift+R every syntax color of the variant shown.
+        (
+            "syntax-reset-all",
+            KeyboardPath::Command(Command::ResetAllBindings),
+        ),
+        (
+            "syntax-reset-*",
+            KeyboardPath::Command(Command::ResetBinding),
+        ),
+        (
             "segmented-policy-class-*",
             KeyboardPath::Command(Command::ColumnRight),
         ),

@@ -117,8 +117,13 @@ impl SettingsCoordinator {
         cx: &mut Context<Self>,
     ) -> (ActiveSettingsSection, Vec<Subscription>) {
         match section_id {
-            SettingsSectionId::General => {
-                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+            SettingsSectionId::General | SettingsSectionId::Appearance => {
+                let page = if section_id == SettingsSectionId::Appearance {
+                    GeneralPage::Appearance
+                } else {
+                    GeneralPage::General
+                };
+                let section = cx.new(|cx| GeneralSection::new(app_state, page, window, cx));
                 let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
                     if matches!(event, SectionFocusEvent::RequestFocusReturn) {
                         this.pending_focus_return = true;

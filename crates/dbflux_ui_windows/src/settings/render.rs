@@ -20,6 +20,7 @@ impl SettingsCoordinator {
     fn section_display_name(section: super::SettingsSectionId) -> String {
         match section {
             super::SettingsSectionId::General => dbflux_i18n::t!("settings.nav.general"),
+            super::SettingsSectionId::Appearance => dbflux_i18n::t!("settings.nav.appearance"),
             super::SettingsSectionId::Audit => dbflux_i18n::t!("settings.nav.audit"),
             #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpClients => dbflux_i18n::t!("settings.nav.mcp_clients"),

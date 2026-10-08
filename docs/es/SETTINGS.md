@@ -9,7 +9,8 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
+| [General](#general)                                 | Comportamiento a nivel de app: editor, inicio, refresh, seguridad de queries. |
+| [Apariencia](#apariencia) | Theme, densidad, idioma, fuentes y los colores de sintaxis del editor. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
@@ -33,50 +34,6 @@ Integration](MCP_AI_INTEGRATION.md).
   <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
   <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
 </picture>
-
-### Apariencia
-
-| Setting      | Opciones                 | Default |
-| ------------ | ------------------------ | ------- |
-| **Theme**    | Follow system, Dark, Light | Dark  |
-| **Density**  | Default, Compact         | Default |
-| **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
-| **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
-| **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
-| **Fuente del editor** | Predeterminada (JetBrains Mono) o cualquier fuente instalada | Predeterminada |
-| **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
-| **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
-| **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
-
-Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
-guardas; no hace falta reiniciar. La fuente del editor también define el texto
-monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
-fuente de interfaz personalizada también reemplaza la fuente expandida de las
-etiquetas de sección. Qué controla cada tamaño:
-
-- **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
-  controles y los íconos de la interfaz.
-- **Tamaño de fuente del editor** define el texto y la altura de línea del
-  editor de código, y el texto de la consola.
-- **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
-  altura de filas y encabezados, y el ancho automático de las columnas. Las
-  columnas que redimensionaste a mano conservan su ancho.
-
-Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
-cientos de fuentes. Una fuente guardada que ya no está instalada sigue
-seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente
-predeterminada hasta que se vuelva a instalar; la tabla de datos recurre a la
-fuente del editor.
-
-La lista de idiomas se deriva de los catálogos de traducción incluidos con
-DBFlux: English aparece primero, seguido de los demás idiomas en un orden
-determinista y con sus nombres nativos. System sigue el locale del sistema
-operativo y recurre a English cuando ningún locale incluido coincide de forma no
-ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
-el control muestra una nota permanente al respecto. Los catálogos parciales
-recurren a English para el texto general aún no traducido. Este release solo
-traduce la sección General; el resto de la UI se está convirtiendo crate por crate
-y permanece en English por ahora.
 
 ### Editor
 
@@ -165,6 +122,68 @@ ejecuta sus comandos sin él en los demás.
 
 Ver [Data & Privacy](PRIVACY.md#ubicaciones-de-datos) para cómo se separan
 las bases de datos Nightly y stable.
+
+---
+
+## Apariencia
+
+| Setting      | Opciones                 | Default |
+| ------------ | ------------------------ | ------- |
+| **Theme**    | Follow system, Dark, Light | Dark  |
+| **Density**  | Default, Compact         | Default |
+| **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
+| **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente del editor** | Predeterminada (JetBrains Mono) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
+| **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
+
+Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
+guardas; no hace falta reiniciar. La fuente del editor también define el texto
+monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
+fuente de interfaz personalizada también reemplaza la fuente expandida de las
+etiquetas de sección. Qué controla cada tamaño:
+
+- **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
+  controles y los íconos de la interfaz.
+- **Tamaño de fuente del editor** define el texto y la altura de línea del
+  editor de código, y el texto de la consola.
+- **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
+  altura de filas y encabezados, y el ancho automático de las columnas. Las
+  columnas que redimensionaste a mano conservan su ancho.
+
+Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
+cientos de fuentes. Una fuente guardada que ya no está instalada sigue
+seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente
+predeterminada hasta que se vuelva a instalar; la tabla de datos recurre a la
+fuente del editor.
+
+La lista de idiomas se deriva de los catálogos de traducción incluidos con
+DBFlux: English aparece primero, seguido de los demás idiomas en un orden
+determinista y con sus nombres nativos. System sigue el locale del sistema
+operativo y recurre a English cuando ningún locale incluido coincide de forma no
+ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
+el control muestra una nota permanente al respecto. Los catálogos parciales
+recurren a English para el texto general aún no traducido. Este release solo
+traduce la sección General; el resto de la UI se está convirtiendo crate por crate
+y permanece en English por ahora.
+
+### Colores de sintaxis
+
+Los colores del resaltado de sintaxis del editor de código se pueden cambiar por
+rol: palabras clave, cadenas, números y NULL, comentarios, tipos, funciones,
+operadores y puntuación, e identificadores. **Colores para** elige qué theme
+estás editando, Oscuro o Claro; cada theme guarda sus propios colores, y
+**Seguir al sistema** usa los colores del theme que resulte.
+
+Cada rol tiene una muestra de color, un campo y un botón **Restablecer**. Escribe
+un color como `#RRGGBB` (el `#` es opcional); un campo vacío usa el color
+predeterminado, que el campo muestra como placeholder. **Restablecer** (o `R` en
+la fila) restaura el color predeterminado de ese rol, y **Restaurar valores
+predeterminados** (o `Shift+R`) restaura todos los colores del theme mostrado.
+Los cambios se aplican a los editores abiertos al guardar. Los mismos colores
+tiñen los iconos del árbol de schema y los valores NULL del data grid.
 
 ---
 

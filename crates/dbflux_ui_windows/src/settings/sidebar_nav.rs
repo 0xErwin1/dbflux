@@ -28,6 +28,11 @@ impl SettingsCoordinator {
                         AppIcon::Settings,
                     ),
                     (
+                        "appearance",
+                        dbflux_i18n::t!("settings.nav.appearance"),
+                        AppIcon::Eye,
+                    ),
+                    (
                         "keybindings",
                         dbflux_i18n::t!("settings.nav.keybindings"),
                         AppIcon::Keyboard,
@@ -144,6 +149,7 @@ impl SettingsCoordinator {
     pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
             "general" => Some(SettingsSectionId::General),
+            "appearance" => Some(SettingsSectionId::Appearance),
             "audit" => Some(SettingsSectionId::Audit),
             #[cfg(feature = "mcp")]
             "mcp-clients" => Some(SettingsSectionId::McpClients),
@@ -167,6 +173,7 @@ impl SettingsCoordinator {
     pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
             SettingsSectionId::General => "general",
+            SettingsSectionId::Appearance => "appearance",
             SettingsSectionId::Audit => "audit",
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpClients => "mcp-clients",
@@ -238,6 +245,7 @@ mod tests {
     fn tree_id_roundtrip_all_sections() {
         let mut sections = vec![
             SettingsSectionId::General,
+            SettingsSectionId::Appearance,
             SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
             SettingsSectionId::Updates,

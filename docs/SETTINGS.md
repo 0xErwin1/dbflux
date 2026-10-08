@@ -8,7 +8,8 @@ window is organized into sections down the left side.
 
 | Section | Covers |
 |---------|--------|
-| [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
+| [General](#general) | App-wide behavior: editor, startup, refresh, query safety. |
+| [Appearance](#appearance) | Theme, density, language, fonts and the editor's syntax colors. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
@@ -31,45 +32,6 @@ Integration](MCP_AI_INTEGRATION.md).
   <source media="(prefers-color-scheme: dark)" srcset="images/settings/general-dark.webp">
   <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the appearance, editor and startup settings">
 </picture>
-
-### Appearance
-
-| Setting | Options | Default |
-|---------|---------|---------|
-| **Theme** | Follow system, Dark, Light | Dark |
-| **Density** | Default, Compact | Default |
-| **Language** | System, then every language with a shipped translation catalog | System |
-| **Interface font** | Default (Archivo), or any installed font | Default |
-| **Interface font size** | 8 to 32 px, decimals allowed | 13 |
-| **Editor font** | Default (JetBrains Mono), or any installed font | Default |
-| **Editor font size** | 8 to 32 px, decimals allowed | 13 |
-| **Data grid font** | Same as editor, or any installed font | Same as editor |
-| **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
-
-Font changes apply to every open window as soon as you save; no restart is
-needed. The editor font also sets the monospace text in the interface
-(metadata, key hints, console), and a custom interface font also replaces the
-expanded display face of section labels. What each size controls:
-
-- **Interface font size** scales all interface text, rows, controls and icons.
-- **Editor font size** sets the code editor text and line height, and the
-  console text.
-- **Data grid font size** sets cell text, row and header height, and the
-  automatic column widths. Columns you resized by hand keep their width.
-
-The font lists have a search field, since a system can have hundreds of fonts.
-A saved font that is no longer installed stays selected, marked
-"(not installed)", and DBFlux draws with the default until it is installed
-again; the data grid falls back to the editor font.
-
-The language list is derived from DBFlux's shipped translation catalogs: English
-appears first, followed by the remaining languages in deterministic order and
-shown by their native names. System follows your OS locale and falls back to
-English when no shipped locale matches unambiguously. A language change takes
-effect after you restart DBFlux, so the control shows a permanent note to that
-effect. Partial catalogs fall back to English for untranslated general UI text.
-This release only translates the General section; the rest of the UI is being
-converted crate by crate and stays in English for now.
 
 ### Editor
 
@@ -155,6 +117,62 @@ runs its commands without one on the others.
 
 See [Data & Privacy](../PRIVACY.md#data-locations) for how the Nightly and
 stable databases are separated.
+
+---
+
+## Appearance
+
+| Setting | Options | Default |
+|---------|---------|---------|
+| **Theme** | Follow system, Dark, Light | Dark |
+| **Density** | Default, Compact | Default |
+| **Language** | System, then every language with a shipped translation catalog | System |
+| **Interface font** | Default (Archivo), or any installed font | Default |
+| **Interface font size** | 8 to 32 px, decimals allowed | 13 |
+| **Editor font** | Default (JetBrains Mono), or any installed font | Default |
+| **Editor font size** | 8 to 32 px, decimals allowed | 13 |
+| **Data grid font** | Same as editor, or any installed font | Same as editor |
+| **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
+
+Font changes apply to every open window as soon as you save; no restart is
+needed. The editor font also sets the monospace text in the interface
+(metadata, key hints, console), and a custom interface font also replaces the
+expanded display face of section labels. What each size controls:
+
+- **Interface font size** scales all interface text, rows, controls and icons.
+- **Editor font size** sets the code editor text and line height, and the
+  console text.
+- **Data grid font size** sets cell text, row and header height, and the
+  automatic column widths. Columns you resized by hand keep their width.
+
+The font lists have a search field, since a system can have hundreds of fonts.
+A saved font that is no longer installed stays selected, marked
+"(not installed)", and DBFlux draws with the default until it is installed
+again; the data grid falls back to the editor font.
+
+The language list is derived from DBFlux's shipped translation catalogs: English
+appears first, followed by the remaining languages in deterministic order and
+shown by their native names. System follows your OS locale and falls back to
+English when no shipped locale matches unambiguously. A language change takes
+effect after you restart DBFlux, so the control shows a permanent note to that
+effect. Partial catalogs fall back to English for untranslated general UI text.
+This release only translates the General section; the rest of the UI is being
+converted crate by crate and stays in English for now.
+
+### Syntax colors
+
+The colors of the code editor's syntax highlighting can be changed per role:
+keywords, strings, numbers and NULL, comments, types, functions, operators and
+punctuation, and identifiers. **Colors for** picks which theme you are editing,
+Dark or Light; each theme keeps its own colors, and **Follow system** uses the
+colors of the theme it resolves to.
+
+Each role has a color swatch, a field and a **Reset** button. Type a color as
+`#RRGGBB` (the `#` is optional); an empty field uses the default color, which
+the field shows as its placeholder. **Reset** (or `R` on the row) restores the
+default color of that role, and **Restore defaults** (or `Shift+R`) restores
+every color of the theme shown. Changes apply to open editors when you save. The
+same colors tint the schema tree icons and NULL values in the data grid.
 
 ---
 

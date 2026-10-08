@@ -3716,6 +3716,30 @@ settings:
       new: "New %{noun}"
   mcp_governance:
     persist_error: "Failed to persist MCP governance: %{error}"
+  appearance:
+    header:
+      title: "Appearance"
+      subtitle: "Theme, density, language, fonts and the editor's syntax colors."
+    syntax:
+      group: "Syntax colors"
+      variant:
+        label: "Colors for"
+        help: "Each theme keeps its own colors. Changes apply when you save."
+      role:
+        keyword: "Keywords"
+        string: "Strings"
+        number: "Numbers and NULL"
+        comment: "Comments"
+        type: "Types"
+        function: "Functions"
+        operator: "Operators and punctuation"
+        identifier: "Identifiers"
+      reset: "Reset"
+      reset_all:
+        button: "Restore defaults"
+        label: "All syntax colors"
+        help: "Restores every syntax color of this theme to its default."
+      error: "Enter a color as #RRGGBB, or leave the field empty for the default."
   general:
     unit:
       pixels: "px"
@@ -3724,7 +3748,7 @@ settings:
       milliseconds: "ms"
     header:
       title: General
-      subtitle: "Appearance, startup, refresh and the safety net for dangerous statements."
+      subtitle: "Editor, startup, refresh and the safety net for dangerous statements."
     appearance:
       group: Appearance
     startup:
@@ -4720,6 +4744,7 @@ settings:
     search_placeholder: "Search settings"
     general_group: General
     general: General
+    appearance: "Appearance"
     keybindings: Keybindings
     updates: Updates
     audit: Audit
