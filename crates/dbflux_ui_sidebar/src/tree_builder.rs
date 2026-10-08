@@ -742,22 +742,23 @@ impl Sidebar {
             let is_time_series_db = schema.is_time_series();
             let conn_metadata = connected.connection.metadata();
             let conn_capabilities = conn_metadata.capabilities;
-            let simple_view =
-                connected.profile.navigator_view == dbflux_core::NavigatorView::Simple;
+            let navigator_view = connected.profile.navigator_view;
+            let simple_view = navigator_view == dbflux_core::NavigatorView::Simple;
+            let flat_view = navigator_view != dbflux_core::NavigatorView::Advanced;
 
             // Surface the per-profile Dashboards / Saved Charts folders only
             // for drivers that opt in via `CHART_AUTHORING`. Drivers without
             // a natural chart-authoring UX (e.g. plain relational stores) keep
             // their sidebar focused on the native browsing model. Gating is
             // purely capability-driven — no driver_id or category branching.
-            if conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
+            if !simple_view && conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
                 profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
                 profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
             }
 
             // Drivers that can browse upstream dashboards get a read-only
             // listing container. Capability-gated — no driver_id branching.
-            if conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
+            if !simple_view && conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
                 profile_children.push(Self::build_remote_dashboards_folder_item(
                     profile_id,
                     state,
@@ -830,11 +831,11 @@ impl Sidebar {
                     let collapse_single_db = schema.databases().len() == projected.children.len()
                         && should_collapse_database_wrapper(schema.databases(), strategy);
 
-                    if collapse_single_db && !simple_view {
+                    if collapse_single_db && !flat_view {
                         for db_item in named_items {
                             profile_children.extend(db_item.children);
                         }
-                    } else if simple_view {
+                    } else if flat_view {
                         profile_children.extend(named_items);
                     } else if !named_items.is_empty() {
                         profile_children
@@ -869,7 +870,9 @@ impl Sidebar {
                 instance_metrics_cache,
                 instance_inspectors_cache,
             );
-            if simple_view && !instance_section.is_empty() {
+            if simple_view {
+                // Simple shows only databases, schemas, tables and views.
+            } else if flat_view && !instance_section.is_empty() {
                 profile_children.push(
                     TreeItem::new(
                         SchemaNodeId::InstanceFolder { profile_id }.to_string(),
@@ -2155,14 +2158,15 @@ fn build_projected_relational_children(
                 .map(|types| types.iter().collect::<Vec<_>>())
                 .or(projection.schema_types(schema_name))
         };
-        // Simple lists objects without folders, as DBeaver's simple view does,
-        // but keeps routines and data types reachable. Indexes and foreign keys
-        // stay reachable under their tables. Until a list loads, its loading row
-        // sits in the schema and the sidebar fetches it (`fetch_visible_inline_lists`).
-        if connected.profile.navigator_view == dbflux_core::NavigatorView::Simple {
+        // Simple and Compact list objects without folders. Compact keeps routines
+        // and data types reachable; indexes and foreign keys stay reachable under
+        // their tables. Until a list loads, its loading row sits in the schema
+        // and the sidebar fetches it (`fetch_visible_inline_lists`).
+        let navigator_view = connected.profile.navigator_view;
+        if navigator_view != dbflux_core::NavigatorView::Advanced {
             let mut items = tables;
             items.extend(views);
-            if include_schema_chrome {
+            if include_schema_chrome && navigator_view == dbflux_core::NavigatorView::Compact {
                 if supports_routines
                     && let Some(folder) = build_schema_routines_folder(
                         profile_id,
@@ -4851,9 +4855,9 @@ mod tests {
             "advanced keeps the dashboards: {advanced:?}"
         );
 
-        let simple = top_level_kinds(&build(NavigatorView::Simple));
+        let compact = top_level_kinds(&build(NavigatorView::Compact));
         assert_eq!(
-            simple,
+            compact,
             vec![
                 "DashboardsFolder",
                 "SavedChartsFolder",
@@ -4862,6 +4866,9 @@ mod tests {
                 "InstanceFolder",
             ]
         );
+
+        let simple = top_level_kinds(&build(NavigatorView::Simple));
+        assert_eq!(simple, vec!["database move", "database postgres"]);
     }
 
     #[test]
@@ -5006,7 +5013,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_navigator_view_lists_schema_objects_directly_under_each_schema() {
+    fn flat_navigator_views_list_schema_objects_directly_under_each_schema() {
         use dbflux_core::{
             CustomTypeInfo, CustomTypeKind, DbSchemaInfo, NavigatorView, RoutineInfo, RoutineKind,
             SchemaCacheKey, SchemaNodeId, SchemaSnapshot, ViewInfo,
@@ -5051,7 +5058,16 @@ mod tests {
         connected.profile.navigator_view = NavigatorView::Simple;
         let simple =
             resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
-        let [schema] = simple.as_slice() else {
+        assert_eq!(
+            schema_child_labels(&simple),
+            vec!["records", "active_records"],
+            "simple shows only tables and views"
+        );
+
+        connected.profile.navigator_view = NavigatorView::Compact;
+        let compact =
+            resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
+        let [schema] = compact.as_slice() else {
             panic!("one schema row expected");
         };
         let loading_kinds: Vec<_> = schema.children[2..]
@@ -5094,10 +5110,10 @@ mod tests {
                 base_type: None,
             }],
         );
-        let simple =
+        let compact =
             resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
         assert_eq!(
-            schema_child_labels(&simple),
+            schema_child_labels(&compact),
             vec!["records", "active_records", "refresh (fn)", "status (enum)"]
         );
     }

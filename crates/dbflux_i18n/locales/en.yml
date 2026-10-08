@@ -254,9 +254,10 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "Navigator view"
-    help: "Simple lists databases, schemas and their tables, views, routines and data types without folders, and groups the instance views under one Instance folder. Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines."
+    help: "Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines. Compact drops the folders: each schema lists its tables, views, routines and data types directly, and the instance views share one Instance folder. Simple shows only databases, schemas, and their tables and views."
     option:
       advanced: "Advanced"
+      compact: "Compact"
       simple: "Simple"
   environment:
     none: "None"

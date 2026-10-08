@@ -1384,12 +1384,15 @@ pub(crate) fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
 ///
 /// - `Advanced` — each schema groups its tables and views in folders, next
 ///   to its types, indexes, foreign keys and routines.
-/// - `Simple` — each schema lists its tables and views directly.
+/// - `Compact` — no folders: each schema lists its tables, views, routines
+///   and data types directly, and the instance views share one folder.
+/// - `Simple` — only databases, schemas, and their tables and views.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigatorView {
     #[default]
     Advanced,
+    Compact,
     Simple,
 }
 
@@ -1397,6 +1400,7 @@ impl NavigatorView {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Advanced => "advanced",
+            Self::Compact => "compact",
             Self::Simple => "simple",
         }
     }
@@ -1404,6 +1408,7 @@ impl NavigatorView {
     /// Parses a stored value; anything unknown is `Advanced`.
     pub fn from_storage_str(value: &str) -> Self {
         match value {
+            "compact" => Self::Compact,
             "simple" => Self::Simple,
             _ => Self::Advanced,
         }

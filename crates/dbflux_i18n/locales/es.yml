@@ -254,9 +254,10 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "Vista del navegador"
-    help: "Simple muestra bases de datos, esquemas y sus tablas, vistas, rutinas y tipos de datos sin carpetas, y agrupa las vistas de la instancia en una carpeta Instance. Avanzada agrupa tablas y vistas en carpetas, junto a los tipos, índices, claves foráneas y rutinas del esquema."
+    help: "Avanzada agrupa tablas y vistas en carpetas, junto a los tipos, índices, claves foráneas y rutinas del esquema. Compacta quita las carpetas: cada esquema muestra directamente sus tablas, vistas, rutinas y tipos de datos, y las vistas de la instancia comparten una carpeta Instance. Simple muestra solo bases de datos, esquemas y sus tablas y vistas."
     option:
       advanced: "Avanzada"
+      compact: "Compacta"
       simple: "Simple"
   environment:
     none: "Ninguno"

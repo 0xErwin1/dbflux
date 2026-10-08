@@ -2705,9 +2705,11 @@ impl ConnectionManagerWindow {
             }
             MainExtraStop::SslCert(_) | MainExtraStop::ShowAllDatabases => false,
             MainExtraStop::NavigatorView => {
-                self.form.navigator_view = match self.form.navigator_view {
-                    dbflux_core::NavigatorView::Advanced => dbflux_core::NavigatorView::Simple,
-                    dbflux_core::NavigatorView::Simple => dbflux_core::NavigatorView::Advanced,
+                use dbflux_core::NavigatorView::{Advanced, Compact, Simple};
+                self.form.navigator_view = match (self.form.navigator_view, forward) {
+                    (Advanced, true) | (Simple, false) => Compact,
+                    (Compact, true) | (Advanced, false) => Simple,
+                    (Simple, true) | (Compact, false) => Advanced,
                 };
                 true
             }

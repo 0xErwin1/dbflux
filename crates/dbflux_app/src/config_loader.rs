@@ -2376,9 +2376,11 @@ mod tests {
         let mut simple = ConnectionProfile::new("simple", DbConfig::default_postgres());
         simple.navigator_view = dbflux_core::NavigatorView::Simple;
         simple.show_all_databases = false;
+        let mut compact = ConnectionProfile::new("compact", DbConfig::default_postgres());
+        compact.navigator_view = dbflux_core::NavigatorView::Compact;
         let unset = ConnectionProfile::new("unset", DbConfig::default_postgres());
 
-        save_profiles(&runtime, &[simple.clone(), unset.clone()])
+        save_profiles(&runtime, &[simple.clone(), compact.clone(), unset.clone()])
             .expect("save profiles with navigator view");
 
         let loaded = load_config(&runtime).expect("load configuration").profiles;
@@ -2392,6 +2394,10 @@ mod tests {
         assert_eq!(
             find(simple.id).navigator_view,
             dbflux_core::NavigatorView::Simple
+        );
+        assert_eq!(
+            find(compact.id).navigator_view,
+            dbflux_core::NavigatorView::Compact
         );
         assert_eq!(
             find(unset.id).navigator_view,

@@ -219,6 +219,10 @@ impl ConnectionManagerWindow {
                 dbflux_i18n::t!("connection_manager.navigator_view.option.advanced"),
             ),
             SegmentedItem::new(
+                NavigatorView::Compact.as_str(),
+                dbflux_i18n::t!("connection_manager.navigator_view.option.compact"),
+            ),
+            SegmentedItem::new(
                 NavigatorView::Simple.as_str(),
                 dbflux_i18n::t!("connection_manager.navigator_view.option.simple"),
             ),

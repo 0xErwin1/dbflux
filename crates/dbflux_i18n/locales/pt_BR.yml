@@ -254,9 +254,10 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "Visão do navegador"
-    help: "Simples lista bancos de dados, esquemas e suas tabelas, views, rotinas e tipos de dados sem pastas, e agrupa as visões da instância em uma pasta Instance. Avançada agrupa tabelas e views em pastas, ao lado dos tipos, índices, chaves estrangeiras e rotinas do esquema."
+    help: "Avançada agrupa tabelas e views em pastas, ao lado dos tipos, índices, chaves estrangeiras e rotinas do esquema. Compacta remove as pastas: cada esquema lista diretamente suas tabelas, views, rotinas e tipos de dados, e as visões da instância ficam em uma pasta Instance. Simples mostra apenas bancos de dados, esquemas e suas tabelas e views."
     option:
       advanced: "Avançada"
+      compact: "Compacta"
       simple: "Simples"
   environment:
     none: "Nenhum"

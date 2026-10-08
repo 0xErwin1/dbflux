@@ -43,14 +43,19 @@ navegador** en la pestaña Main del administrador de conexiones:
 - **Avanzada** (la predeterminada): cada esquema agrupa sus tablas y vistas en
   las carpetas **Tables** y **Views**, junto a sus tipos, índices, claves
   foráneas y, cuando el driver los admite, rutinas.
-- **Simple**: el árbol oculta las carpetas intermedias, como la vista simple
-  de DBeaver: la conexión muestra sus bases de datos, cada base de datos sus
-  esquemas y cada esquema sus tablas, vistas, rutinas y tipos de datos
-  directamente. Las tablas siguen desplegando sus columnas, índices, claves
-  foráneas y restricciones, por lo que se omiten las carpetas Indexes y
-  Foreign Keys del esquema. Instance Overview, Instance Metrics e Instance
-  Inspectors se agrupan en una sola carpeta **Instance**. Nada de lo que
-  muestra la vista Avanzada queda inaccesible.
+- **Compacta**: el árbol oculta las carpetas intermedias: la conexión muestra
+  sus bases de datos, cada base de datos sus esquemas y cada esquema sus
+  tablas, vistas, rutinas y tipos de datos directamente. Las tablas siguen
+  desplegando sus columnas, índices, claves foráneas y restricciones, por lo
+  que se omiten las carpetas Indexes y Foreign Keys del esquema. Instance
+  Overview, Instance Metrics e Instance Inspectors se agrupan en una sola
+  carpeta **Instance**. Nada de lo que muestra la vista Avanzada queda
+  inaccesible.
+- **Simple**: solo las bases de datos, sus esquemas y las tablas y vistas de
+  cada esquema, como la vista simple de DBeaver. Se ocultan las rutinas, los
+  tipos de datos, los dashboards y las vistas de la instancia; cambia a
+  Compacta o Avanzada para acceder a ellos. Las tablas siguen desplegando sus
+  columnas, índices y restricciones.
 
 La disposición cambia en cuanto guardas la conexión, también mientras está abierta.
 
