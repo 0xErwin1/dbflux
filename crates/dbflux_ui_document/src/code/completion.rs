@@ -951,6 +951,11 @@ fn sql_completion_items_with_context(
 
         let qualifier_columns = metadata.columns_for_table_or_bare(&resolved_qualifier, bare);
         sink.push_all(qualifier_columns, CompletionItemKind::FIELD, None);
+        sink.push_all(
+            metadata.relations_in_schema(&normalize_identifier(qualifier)),
+            CompletionItemKind::STRUCT,
+            None,
+        );
         return sink.items;
     }
 
@@ -1321,6 +1326,9 @@ struct SqlCompletionMetadata {
     view_names: BTreeSet<String>,
     all_columns: BTreeSet<String>,
     columns_by_table: HashMap<String, BTreeSet<String>>,
+    /// Bare table and view names keyed by normalized schema name, so a
+    /// `schema.` qualifier can list the relations of that schema.
+    relations_by_schema: HashMap<String, BTreeSet<String>>,
 }
 
 impl SqlCompletionMetadata {
@@ -1330,6 +1338,7 @@ impl SqlCompletionMetadata {
         if let Some(schema) = &table.schema {
             self.table_names
                 .insert(format!("{}.{}", schema, table.name));
+            self.add_schema_relation(schema, &table.name);
         }
 
         let mut keys = vec![normalize_identifier(&table.name)];
@@ -1364,7 +1373,23 @@ impl SqlCompletionMetadata {
 
         if let Some(schema) = &view.schema {
             self.view_names.insert(format!("{}.{}", schema, view.name));
+            self.add_schema_relation(schema, &view.name);
         }
+    }
+
+    fn add_schema_relation(&mut self, schema: &str, name: &str) {
+        self.relations_by_schema
+            .entry(normalize_identifier(schema))
+            .or_default()
+            .insert(name.to_string());
+    }
+
+    fn relations_in_schema(&self, schema: &str) -> impl Iterator<Item = &str> {
+        self.relations_by_schema
+            .get(schema)
+            .into_iter()
+            .flatten()
+            .map(|name| name.as_str())
     }
 
     /// Folds a document-store collection into the SQL completion metadata so an
@@ -2255,6 +2280,36 @@ mod tests {
             items.is_empty(),
             "alias from a neighboring statement must not resolve"
         );
+    }
+
+    #[test]
+    fn schema_qualifier_lists_the_relations_of_that_schema() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&TableInfo {
+            name: "events".to_string(),
+            schema: Some("raw".to_string()),
+            ..t1_table()
+        });
+        metadata.add_table(&TableInfo {
+            name: "users".to_string(),
+            schema: Some("public".to_string()),
+            ..t1_table()
+        });
+        metadata.add_view(&dbflux_core::ViewInfo {
+            name: "event_counts".to_string(),
+            schema: Some("raw".to_string()),
+        });
+
+        let source = "SELECT * FROM raw.";
+        let items = sql_completion_items(&metadata, source, source.len());
+        assert_eq!(labels(&items), vec!["event_counts", "events"]);
+
+        let source = "SELECT * FROM RAW.ev";
+        let items = sql_completion_items(&metadata, source, source.len());
+        let labels = labels(&items);
+        assert!(labels.contains(&"events".to_string()));
+        assert!(labels.contains(&"event_counts".to_string()));
+        assert!(!labels.contains(&"users".to_string()));
     }
 
     #[test]
