@@ -10,8 +10,9 @@ use tokio::io::DuplexStream;
 #[allow(dead_code)]
 #[expect(
     clippy::todo,
-    reason = "deliberately unfinished stub: the ignored tests it serves still require \
-        refactoring run_mcp_server to be constructible"
+    reason = "deliberately unfinished legacy fixture: this helper still calls todo!, and its \
+        tests remain ignored; the server itself can already be constructed and served without \
+        refactoring run_mcp_server"
 )]
 async fn create_test_server() -> (Box<dyn std::any::Any>, DuplexStream) {
     // Create bidirectional in-memory stream
