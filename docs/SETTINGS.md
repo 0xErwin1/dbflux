@@ -167,9 +167,10 @@ punctuation, identifiers, schemas, and columns. **Colors for** picks which theme
 Dark or Light; each theme keeps its own colors, and **Follow system** uses the
 colors of the theme it resolves to.
 
-Each role has a color swatch, a field and a **Reset** button. Type a color as
-`#RRGGBB` (the `#` is optional); an empty field uses the default color, which
-the field shows as its placeholder. **Reset** (or `R` on the row) restores the
+Each role has a color swatch, a field and a **Reset** button. The field shows
+the color in use, the default until you change it, so it can be copied. Type a
+color as `#RRGGBB` (the `#` is optional); an empty field, or the default color,
+keeps the default. **Reset** (or `R` on the row) restores the
 default color of that role, and **Restore defaults** (or `Shift+R`) restores
 every color of the theme shown. Changes apply to open editors when you save. The
 same colors tint the schema tree icons and NULL values in the data grid.

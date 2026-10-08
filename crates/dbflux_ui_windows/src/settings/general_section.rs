@@ -320,17 +320,17 @@ impl GeneralSection {
         let syntax_inputs: Vec<(SyntaxRole, Entity<InputState>)> = SyntaxRole::ALL
             .into_iter()
             .map(|role| {
-                let saved = settings
+                let default = Self::default_syntax_hex(syntax_variant, role);
+                let shown = settings
                     .syntax_colors
                     .for_variant(syntax_variant)
                     .get(&role)
                     .cloned()
-                    .unwrap_or_default();
-                let default = Self::default_syntax_hex(syntax_variant, role);
+                    .unwrap_or_else(|| default.clone());
                 let input = cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder(default)
-                        .default_value(saved)
+                        .default_value(shown)
                 });
                 (role, input)
             })
@@ -541,15 +541,19 @@ impl GeneralSection {
         )
     }
 
-    /// Stores the text of `role`'s field for the edited variant; empty text
-    /// restores the palette's color.
+    /// Stores the text of `role`'s field for the edited variant. Empty text,
+    /// or the palette's own color, keeps the palette's color, so only real
+    /// changes become overrides.
     pub(super) fn set_syntax_override(&mut self, role: SyntaxRole, text: String) {
+        let default = Self::default_syntax_hex(self.syntax_variant, role);
+        let is_default = dbflux_core::parse_hex_color(&text).is_some()
+            && dbflux_core::parse_hex_color(&text) == dbflux_core::parse_hex_color(&default);
         let overrides = self
             .gen_settings
             .syntax_colors
             .for_variant_mut(self.syntax_variant);
 
-        if text.is_empty() {
+        if text.is_empty() || is_default {
             overrides.remove(&role);
         } else {
             overrides.insert(role, text);
@@ -583,8 +587,8 @@ impl GeneralSection {
             .map(|(_, input)| input)
     }
 
-    /// Shows the edited variant's colors, and its defaults as placeholders,
-    /// in the syntax fields.
+    /// Shows the edited variant's colors in the syntax fields: each override,
+    /// or the palette's color for a role without one.
     pub(super) fn reload_syntax_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.pending_syntax_reload) {
             return;
@@ -592,14 +596,14 @@ impl GeneralSection {
 
         let variant = self.syntax_variant;
         for (role, input) in &self.syntax_inputs {
+            let placeholder = Self::default_syntax_hex(variant, *role);
             let value = self
                 .gen_settings
                 .syntax_colors
                 .for_variant(variant)
                 .get(role)
                 .cloned()
-                .unwrap_or_default();
-            let placeholder = Self::default_syntax_hex(variant, *role);
+                .unwrap_or_else(|| placeholder.clone());
 
             input.update(cx, |state, cx| {
                 state.set_value(value, window, cx);
@@ -1341,10 +1345,22 @@ mod tests {
 
         with_section(GeneralPage::Appearance, |section, _, window, cx| {
             section.set_syntax_variant(ThemeSetting::Dark);
+            section.reload_syntax_inputs(window, cx);
+            let shown = |section: &GeneralSection, cx: &gpui::App| {
+                section
+                    .syntax_input(SyntaxRole::Keyword)
+                    .expect("keyword field")
+                    .read(cx)
+                    .value()
+                    .to_string()
+            };
+            assert_eq!(shown(section, cx), "#D48CC8", "the field shows the default");
+
+            section.set_syntax_override(SyntaxRole::Keyword, "#d48cc8".to_string());
             assert_eq!(
-                GeneralSection::default_syntax_hex(ThemeSetting::Dark, SyntaxRole::Keyword),
-                "#D48CC8",
-                "the placeholder names the palette's color"
+                section.general_change_count(cx),
+                0,
+                "typing the default color is not a change"
             );
 
             section.set_syntax_override(SyntaxRole::Keyword, "ff8800".to_string());
@@ -1442,14 +1458,15 @@ mod tests {
             let dark = &section.gen_settings.syntax_colors.dark;
             assert!(!dark.contains_key(&SyntaxRole::Keyword));
             assert!(dark.contains_key(&SyntaxRole::String));
-            assert!(
+            assert_eq!(
                 section
                     .syntax_input(SyntaxRole::Keyword)
                     .expect("keyword field")
                     .read(cx)
                     .value()
-                    .is_empty(),
-                "the reset field is empty and shows the default as placeholder"
+                    .to_string(),
+                GeneralSection::default_syntax_hex(ThemeSetting::Dark, SyntaxRole::Keyword),
+                "the reset field shows the default color"
             );
 
             section.reset_syntax_colors();

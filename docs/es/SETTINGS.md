@@ -177,9 +177,10 @@ operadores y puntuación, identificadores, schemas y columnas. **Colores para** 
 estás editando, Oscuro o Claro; cada theme guarda sus propios colores, y
 **Seguir al sistema** usa los colores del theme que resulte.
 
-Cada rol tiene una muestra de color, un campo y un botón **Restablecer**. Escribe
-un color como `#RRGGBB` (el `#` es opcional); un campo vacío usa el color
-predeterminado, que el campo muestra como placeholder. **Restablecer** (o `R` en
+Cada rol tiene una muestra de color, un campo y un botón **Restablecer**. El campo
+muestra el color en uso, el predeterminado hasta que lo cambies, así que se puede
+copiar. Escribe un color como `#RRGGBB` (el `#` es opcional); un campo vacío, o el
+color predeterminado, mantiene el predeterminado. **Restablecer** (o `R` en
 la fila) restaura el color predeterminado de ese rol, y **Restaurar valores
 predeterminados** (o `Shift+R`) restaura todos los colores del theme mostrado.
 Los cambios se aplican a los editores abiertos al guardar. Los mismos colores
