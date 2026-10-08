@@ -87,6 +87,11 @@ impl IntegrationHarness {
     }
 
     fn handshake(&self) -> Vec<&'static str> {
+        #[expect(
+            clippy::expect_used,
+            reason = "test handshake: a transport profile that fails validation must abort \
+                the test loudly"
+        )]
         validate_v1_transport_profile(&BootstrapConfig {
             enabled_transports: vec![self.transport],
         })

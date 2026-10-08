@@ -5,6 +5,10 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 async fn start_rowid_agent() -> (Agent, String, tempfile::TempDir) {
+    #[expect(
+        clippy::expect_used,
+        reason = "test setup: failing to create the data directory must abort the test"
+    )]
     let directory = tempfile::tempdir().expect("create the test data directory");
     create_rowid_tables(&directory);
 

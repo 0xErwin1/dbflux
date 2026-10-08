@@ -31,6 +31,11 @@ fn audit_service_for_test(file_name: &str) -> AuditService {
             "stale audit database could not be removed: {error}"
         );
     }
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: failing to initialize the audit service must abort the test \
+            loudly"
+    )]
     AuditService::new_sqlite(&path).expect("audit service should initialize")
 }
 
@@ -95,6 +100,11 @@ fn authorize(
     classification: ExecutionClassification,
     payload: serde_json::Value,
 ) -> AuthorizationOutcome {
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: an unexpected authorization error from policy evaluation, audit \
+            recording, or approval flow must abort this test"
+    )]
     runtime
         .authorize_with_approval_mut(
             &trusted_registry(),
@@ -109,6 +119,10 @@ fn authorize(
 fn authorize_events(
     runtime: &McpRuntime,
 ) -> Vec<dbflux_storage::repositories::audit::AuditEventDto> {
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: failing to query the audit log must abort the test loudly"
+    )]
     let mut entries = runtime
         .audit_service()
         .query_extended(&dbflux_audit::query::AuditQueryFilter {

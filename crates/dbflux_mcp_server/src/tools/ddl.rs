@@ -304,6 +304,11 @@ fn validate_postgres_type_expression(expression: &str, field_name: &str) -> Resu
     let mut index = 0usize;
 
     while index < chars.len() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the loop condition `index < chars.len()` bounds this index; index only \
+                advances by fixed steps below"
+        )]
         let ch = chars[index];
         match ch {
             'A'..='Z' | 'a'..='z' | '_' => saw_identifier = true,
@@ -1474,6 +1479,12 @@ impl DbFluxServer {
 
             for (operation_index, statement) in transactional_statements {
                 if let Err(execution_error) = connection.execute(&QueryRequest::new(statement)) {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "operation_index comes from enumerating all_stmts, which has \
+                            one entry per element of ops; operation_names has exactly one \
+                            entry per element of ops, so operation_index is in bounds"
+                    )]
                     let message = format!(
                         "ALTER TABLE aborted at operation {} ({}): {}",
                         operation_index, operation_names[operation_index], execution_error
