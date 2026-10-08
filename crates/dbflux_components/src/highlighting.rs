@@ -163,9 +163,22 @@ const SQL_HIGHLIGHT_FIXES: &str = r#"
 ] @keyword.modifier
 "#;
 
+/// SQL captures finer than the grammar's own query: schemas, columns, table
+/// aliases and column aliases get roles of their own. Each falls back to the
+/// role it had before in a theme without that slot (`variable.alias` to
+/// `variable`).
+const SQL_HIGHLIGHT_ROLES: &str = r#"
+(object_reference schema: (identifier) @namespace)
+(object_reference database: (identifier) @namespace)
+(field (object_reference name: (identifier) @type.alias))
+(relation alias: (identifier) @variable.alias)
+(term alias: (identifier) @variable.column_alias)
+(field name: (identifier) @field)
+"#;
+
 fn sql_highlights_query() -> String {
     format!(
-        "{SQL_HIGHLIGHT_FIXES}\n{}",
+        "{SQL_HIGHLIGHT_ROLES}\n{SQL_HIGHLIGHT_FIXES}\n{}",
         tree_sitter_sequel::HIGHLIGHTS_QUERY
     )
 }
@@ -228,7 +241,12 @@ mod tests {
             "keyword",
             "function",
             "type",
+            "type.alias",
+            "namespace",
+            "field",
             "variable",
+            "variable.alias",
+            "variable.column_alias",
             "string",
             "number",
             "operator",
@@ -290,5 +308,29 @@ mod tests {
         for keyword in ["CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
             assert_eq!(role_of(keyword), Some("keyword"), "{keyword}");
         }
+    }
+
+    #[test]
+    fn sql_captures_give_each_identifier_its_role() {
+        let roles = sql_roles("SELECT d.id, count(*) AS total FROM raw.driver d WHERE d.n = 1;");
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+
+        assert_eq!(role_of("raw"), Some("namespace"));
+        assert_eq!(role_of("driver"), Some("type"));
+        assert_eq!(role_of("d"), Some("type.alias"));
+        assert_eq!(role_of("id"), Some("field"));
+        assert_eq!(role_of("total"), Some("variable.column_alias"));
+        assert_eq!(role_of("count"), Some("function"));
+        assert!(
+            roles
+                .iter()
+                .any(|(token, role)| token == "d" && role == "variable.alias"),
+            "the alias declared after the table is a table alias: {roles:?}"
+        );
     }
 }
