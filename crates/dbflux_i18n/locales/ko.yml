@@ -3734,6 +3734,8 @@ settings:
         function: "함수"
         operator: "연산자 및 구두점"
         identifier: "식별자"
+        namespace: "스키마"
+        field: "열 및 열 별칭"
       reset: "초기화"
       reset_all:
         button: "기본값 복원"

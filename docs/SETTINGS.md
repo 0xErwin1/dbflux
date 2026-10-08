@@ -163,7 +163,7 @@ converted crate by crate and stays in English for now.
 
 The colors of the code editor's syntax highlighting can be changed per role:
 keywords, strings, numbers and NULL, comments, types, functions, operators and
-punctuation, and identifiers. **Colors for** picks which theme you are editing,
+punctuation, identifiers, schemas, and columns. **Colors for** picks which theme you are editing,
 Dark or Light; each theme keeps its own colors, and **Follow system** uses the
 colors of the theme it resolves to.
 

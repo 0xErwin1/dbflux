@@ -3734,6 +3734,8 @@ settings:
         function: "函数"
         operator: "运算符和标点"
         identifier: "标识符"
+        namespace: "模式"
+        field: "列和列别名"
       reset: "重置"
       reset_all:
         button: "恢复默认值"

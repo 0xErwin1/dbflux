@@ -3734,6 +3734,8 @@ settings:
         function: "Functions"
         operator: "Operators and punctuation"
         identifier: "Identifiers"
+        namespace: "Schemas"
+        field: "Columns and column aliases"
       reset: "Reset"
       reset_all:
         button: "Restore defaults"

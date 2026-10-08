@@ -1685,6 +1685,8 @@ impl GeneralSection {
                 SyntaxRole::Function => "syntax-color-function",
                 SyntaxRole::Operator => "syntax-color-operator",
                 SyntaxRole::Identifier => "syntax-color-identifier",
+                SyntaxRole::Namespace => "syntax-color-namespace",
+                SyntaxRole::Field => "syntax-color-field",
             },
             _ => "editor-row-limit",
         }

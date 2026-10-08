@@ -560,10 +560,14 @@ pub enum SyntaxRole {
     Operator,
     /// Plain identifiers.
     Identifier,
+    /// Schema and database qualifiers.
+    Namespace,
+    /// Column names and column aliases.
+    Field,
 }
 
 impl SyntaxRole {
-    pub const ALL: [SyntaxRole; 8] = [
+    pub const ALL: [SyntaxRole; 10] = [
         SyntaxRole::Keyword,
         SyntaxRole::String,
         SyntaxRole::Number,
@@ -572,6 +576,8 @@ impl SyntaxRole {
         SyntaxRole::Function,
         SyntaxRole::Operator,
         SyntaxRole::Identifier,
+        SyntaxRole::Namespace,
+        SyntaxRole::Field,
     ];
 }
 

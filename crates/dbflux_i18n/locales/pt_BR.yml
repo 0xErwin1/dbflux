@@ -3734,6 +3734,8 @@ settings:
         function: "Funções"
         operator: "Operadores e pontuação"
         identifier: "Identificadores"
+        namespace: "Schemas"
+        field: "Colunas e aliases de coluna"
       reset: "Redefinir"
       reset_all:
         button: "Restaurar padrões"

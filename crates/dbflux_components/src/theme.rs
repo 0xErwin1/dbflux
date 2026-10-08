@@ -969,6 +969,9 @@ mod tests {
         overrides
             .dark
             .insert(dbflux_core::SyntaxRole::Comment, "not a color".to_string());
+        overrides
+            .dark
+            .insert(dbflux_core::SyntaxRole::Field, "#445566".to_string());
 
         cx.update(|cx| {
             set_syntax_overrides(overrides, cx);
@@ -977,6 +980,11 @@ mod tests {
         cx.update(|cx| {
             let theme = Theme::global(cx);
             assert_eq!(syntax_hex(theme, "keyword"), Some(0x112233));
+            assert_eq!(
+                syntax_hex(theme, "field"),
+                Some(0x445566),
+                "the column role takes its override too"
+            );
             assert_eq!(
                 syntax_hex(theme, "comment"),
                 Some(hex_of(SyntaxColors::dark().comment)),

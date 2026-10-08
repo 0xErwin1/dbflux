@@ -646,6 +646,8 @@ impl GeneralSection {
             SyntaxRole::Identifier => {
                 dbflux_i18n::t!("settings.appearance.syntax.role.identifier")
             }
+            SyntaxRole::Namespace => dbflux_i18n::t!("settings.appearance.syntax.role.namespace"),
+            SyntaxRole::Field => dbflux_i18n::t!("settings.appearance.syntax.role.field"),
         }
     }
 
@@ -1477,6 +1479,8 @@ mod tests {
             "settings.appearance.syntax.role.function",
             "settings.appearance.syntax.role.operator",
             "settings.appearance.syntax.role.identifier",
+            "settings.appearance.syntax.role.namespace",
+            "settings.appearance.syntax.role.field",
             "settings.appearance.syntax.reset",
             "settings.appearance.syntax.reset_all.button",
             "settings.appearance.syntax.reset_all.label",

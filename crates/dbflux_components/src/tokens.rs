@@ -689,6 +689,8 @@ impl SyntaxColors {
             dbflux_core::SyntaxRole::Function => self.function,
             dbflux_core::SyntaxRole::Operator => self.operator,
             dbflux_core::SyntaxRole::Identifier => self.plain,
+            dbflux_core::SyntaxRole::Namespace => self.namespace,
+            dbflux_core::SyntaxRole::Field => self.field,
         }
     }
 
@@ -702,6 +704,8 @@ impl SyntaxColors {
             dbflux_core::SyntaxRole::Function => &mut self.function,
             dbflux_core::SyntaxRole::Operator => &mut self.operator,
             dbflux_core::SyntaxRole::Identifier => &mut self.plain,
+            dbflux_core::SyntaxRole::Namespace => &mut self.namespace,
+            dbflux_core::SyntaxRole::Field => &mut self.field,
         }
     }
 
