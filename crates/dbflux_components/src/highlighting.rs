@@ -124,9 +124,10 @@ pub fn register_languages() {
 /// existing role (`keyword.conditional` to `keyword`).
 const SQL_HIGHLIGHT_FIXES: &str = r#"
 ; The grammar's number patterns use Lua `%d`, which a regex never matches,
-; so numbers fell through to the string capture.
+; so numbers fell through to the string capture. This covers every numeric
+; form the grammar's `_integer` and `_decimal_number` accept.
 ((literal) @number
-  (#match? @number "^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$"))
+  (#match? @number "^[-+]?(0[xX][0-9A-Fa-f_]+|0[oO][0-7_]+|0[bB][01_]+|([0-9][0-9_]*[.]?[0-9_]*|[.][0-9][0-9_]*)([eE][-+]?[0-9][0-9_]*)?)$"))
 ; `conditional` has no style, so these had no color.
 [
   (keyword_case)
@@ -296,7 +297,7 @@ mod tests {
     #[test]
     fn sql_numbers_and_keywords_take_their_roles() {
         let roles = sql_roles(
-            "SELECT 1, 1.5, 1e3, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
+            "SELECT 1, 1.5, 1e3, 1_000, 0xFF, 0o77, 0b1010, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
              CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);",
         );
         let role_of = |text: &str| {
@@ -306,7 +307,7 @@ mod tests {
                 .map(|(_, role)| role.as_str())
         };
 
-        for number in ["1", "1.5", "1e3"] {
+        for number in ["1", "1.5", "1e3", "1_000", "0xFF", "0o77", "0b1010"] {
             assert_eq!(role_of(number), Some("number"), "{number}");
         }
         assert_eq!(role_of("'7'"), Some("string"));

@@ -733,8 +733,6 @@ mod tests {
         }
     }
 
-    /// Both variants style the SQL roles: bold keywords and functions, italic
-    /// aliases, and their own colors for schemas and columns.
     #[gpui::test]
     fn syntax_roles_are_styled_in_both_variants(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
