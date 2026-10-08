@@ -45,6 +45,12 @@ struct StdioAgent {
 
 impl StdioAgent {
     /// Spawns the binary against a freshly seeded settings database.
+    #[expect(
+        clippy::expect_used,
+        reason = "tempdir creation, spawning the just-built binary and taking \
+                  the piped stdio handles are setup steps whose failure means \
+                  a broken test environment; aborting the test is intended"
+    )]
     fn start() -> (Self, tempfile::TempDir) {
         let home = tempfile::tempdir().expect("create the isolated home");
         seed_settings_database(home.path());
@@ -93,6 +99,12 @@ impl StdioAgent {
         )
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "serializing a `serde_json::Value` and writing to the child's \
+                  piped stdin only fail on a broken harness; aborting the test \
+                  is intended"
+    )]
     fn send(&mut self, message: &Value) {
         let line = serde_json::to_string(message).expect("serialize a JSON-RPC message");
         self.stdin
@@ -153,6 +165,12 @@ impl StdioAgent {
     }
 
     /// Reads the text block of a tool result and parses it as JSON.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "serde_json's immutable `Index` returns `Null` for missing \
+                  keys instead of panicking, and a missing text block is \
+                  handled right after by `.as_str().unwrap_or_else(fail)`"
+    )]
     fn tool_json(&mut self, response: &Value) -> Value {
         let text = response["result"]["content"][0]["text"]
             .as_str()
@@ -164,6 +182,13 @@ impl StdioAgent {
     }
 
     /// Closes stdin and waits for the process to shut down cleanly.
+    #[expect(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "the child must exit cleanly on stdin EOF: poll failures and \
+                  the shutdown timeout are harness failures that must abort \
+                  the test with the collected stderr diagnostics"
+    )]
     fn shutdown(self) {
         let StdioAgent {
             child,
@@ -216,6 +241,12 @@ impl StdioAgent {
         join_stderr(self.stderr.take())
     }
 
+    #[expect(
+        clippy::panic,
+        reason = "`fail` is the harness's abort path: it kills the child and \
+                  panics with the collected stderr so the test failure is \
+                  actionable"
+    )]
     fn fail(&mut self, message: String) -> ! {
         let _ = self.child.kill();
         let stderr = self.take_stderr();
@@ -235,6 +266,11 @@ fn join_stderr(handle: Option<JoinHandle<String>>) -> String {
 
 /// Creates the settings database the child reads, with the agent registered as a
 /// trusted client and MCP enabled by default — the same state the GUI writes.
+#[expect(
+    clippy::expect_used,
+    reason = "seeding the isolated settings database must succeed for the test \
+              to be meaningful; a failure aborts the test"
+)]
 fn seed_settings_database(home: &std::path::Path) {
     let data_dir = data_dir_for(home);
     std::fs::create_dir_all(&data_dir).expect("create the isolated data directory");

@@ -1,6 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
 
+/// Reads a source file whose path the calling tests hardcode and whose
+/// presence is part of the checked-in workspace.
+#[expect(
+    clippy::expect_used,
+    reason = "callers pass paths of checked-in workspace sources; a missing \
+              file is a broken checkout, not an expected runtime condition"
+)]
 fn read_workspace_file(relative_path: &str) -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     fs::read_to_string(root.join(relative_path)).expect("file should be readable")
@@ -11,6 +18,12 @@ fn read_workspace_file(relative_path: &str) -> String {
 /// Used for source-wiring assertions against modules that are split into a
 /// directory of sibling files, so the checks stay agnostic to which file a
 /// given symbol lives in.
+#[expect(
+    clippy::expect_used,
+    reason = "the module directory and every `.rs` file under it are \
+              checked-in workspace sources; a read failure is a broken \
+              checkout, not an expected runtime condition"
+)]
 fn read_workspace_module(relative_dir: &str) -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dir = root.join(relative_dir);
