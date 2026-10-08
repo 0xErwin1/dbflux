@@ -7,6 +7,11 @@ use super::*;
 /// Creates tables whose names SQLite resolves beyond `PRAGMA table_info`: a
 /// generated column, a view, a column with a non-ASCII-foldable twin, a column
 /// with a space and an FTS5 virtual table.
+#[expect(
+    clippy::expect_used,
+    reason = "test setup: failing to create or populate the fixture database must \
+        abort the test"
+)]
 async fn start_engine_names_agent() -> (Agent, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().expect("create the test data directory");
 

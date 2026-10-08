@@ -8,6 +8,11 @@ use tokio::io::DuplexStream;
 
 /// Helper to create a test server with in-memory transport
 #[allow(dead_code)]
+#[expect(
+    clippy::todo,
+    reason = "deliberately unfinished stub: the ignored tests it serves still require \
+        refactoring run_mcp_server to be constructible"
+)]
 async fn create_test_server() -> (Box<dyn std::any::Any>, DuplexStream) {
     // Create bidirectional in-memory stream
     let (_client_stream, _server_stream) = tokio::io::duplex(8192);
@@ -82,6 +87,11 @@ async fn test_governance_authorization() {
 
 /// Helper to create a minimal ServerState for testing
 #[allow(dead_code)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test fixture: failing to create the temp dir or open the audit database \
+        must abort the test"
+)]
 fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
     use dbflux_mcp::{McpRuntime, TrustedClientDto, builtin_policies, builtin_roles};
     use std::sync::Arc;

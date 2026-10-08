@@ -49,6 +49,12 @@ fn current_tool_call_arguments() -> serde_json::Value {
 }
 
 /// Helper to get current epoch time in milliseconds
+#[expect(
+    clippy::unwrap_used,
+    reason = "a sane process clock is assumed to have passed UNIX_EPOCH; the standard \
+        library guarantees no such thing, so a pre-epoch reading aborts here instead of \
+        yielding a negative timestamp"
+)]
 fn now_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

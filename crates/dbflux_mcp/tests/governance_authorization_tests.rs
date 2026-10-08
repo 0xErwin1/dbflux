@@ -11,6 +11,11 @@ use dbflux_policy::{
 fn audit_service_for_test(file_name: &str) -> AuditService {
     let path = dbflux_audit::temp_sqlite_path(file_name);
     let _ = std::fs::remove_file(&path);
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: failing to initialize the audit service must abort the test \
+            loudly"
+    )]
     AuditService::new_sqlite(&path).expect("audit service should initialize")
 }
 

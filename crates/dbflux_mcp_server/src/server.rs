@@ -843,6 +843,11 @@ mod tests {
                 .connect_with_secrets(profile, password, ssh_secret)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test recording driver: mutex poisoning makes the fixture's recorded \
+                state untrustworthy, so aborting the test is intentional"
+        )]
         fn connect_with_overrides(
             &self,
             profile: &ConnectionProfile,
@@ -879,6 +884,11 @@ mod tests {
             true
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test in-memory secret store: mutex poisoning makes the fixture's \
+                secret map untrustworthy, so aborting the test is intentional"
+        )]
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
             Ok(self
                 .secrets
@@ -888,6 +898,11 @@ mod tests {
                 .map(|value| SecretString::from(value.clone())))
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test in-memory secret store: mutex poisoning makes the fixture's \
+                secret map untrustworthy, so aborting the test is intentional"
+        )]
         fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), dbflux_core::DbError> {
             self.secrets
                 .lock()
@@ -896,6 +911,11 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test in-memory secret store: mutex poisoning makes the fixture's \
+                secret map untrustworthy, so aborting the test is intentional"
+        )]
         fn delete(&self, secret_ref: &str) -> Result<(), dbflux_core::DbError> {
             self.secrets
                 .lock()
