@@ -260,6 +260,7 @@ impl Sidebar {
         item_id: &str,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.inline_list_fetches.clear();
         let parsed = parse_node_id(item_id);
 
         if let Some(SchemaNodeId::Database { profile_id, name }) = &parsed
@@ -932,6 +933,80 @@ impl Sidebar {
             .is_some_and(|item| item.presentation == CollectionPresentation::EventStream)
     }
 
+    /// Starts the fetch behind each visible routines or data-types loading row.
+    ///
+    /// The Simple navigator view lists these objects directly in the schema, so
+    /// no folder expansion triggers their fetch. Each row is fetched once until
+    /// the next node expansion, so a failed fetch does not retry on every rebuild.
+    fn fetch_visible_inline_lists(&mut self, items: &[TreeItem], cx: &mut Context<Self>) {
+        fn collect<'a>(items: &'a [TreeItem], found: &mut Vec<&'a str>) {
+            for item in items {
+                if item.is_expanded() {
+                    collect(&item.children, found);
+                } else if item.children.is_empty() {
+                    found.push(&item.id);
+                }
+            }
+        }
+
+        let mut visible_leaves = Vec::new();
+        collect(items, &mut visible_leaves);
+        for leaf_id in visible_leaves {
+            let parsed = parse_node_id(leaf_id);
+            if !matches!(
+                parsed,
+                Some(
+                    SchemaNodeId::RoutinesLoadingFolder { .. }
+                        | SchemaNodeId::TypesLoadingFolder { .. }
+                )
+            ) || !self.inline_list_fetches.insert(leaf_id.to_string())
+            {
+                continue;
+            }
+            match parsed {
+                Some(SchemaNodeId::RoutinesLoadingFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => {
+                    let item_id = SchemaNodeId::RoutinesFolder {
+                        profile_id,
+                        database: database.clone(),
+                        schema: schema.clone(),
+                    }
+                    .to_string();
+                    self.spawn_fetch_schema_routines(
+                        profile_id,
+                        &database,
+                        Some(&schema),
+                        PendingAction::ExpandSchemaRoutinesFolder { item_id },
+                        cx,
+                    );
+                }
+                Some(SchemaNodeId::TypesLoadingFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => {
+                    let item_id = SchemaNodeId::TypesFolder {
+                        profile_id,
+                        database: database.clone(),
+                        schema: schema.clone(),
+                    }
+                    .to_string();
+                    self.spawn_fetch_schema_types(
+                        profile_id,
+                        &database,
+                        Some(&schema),
+                        PendingAction::ExpandTypesFolder { item_id },
+                        cx,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
         let selected_id = self
             .tree_state
@@ -941,6 +1016,7 @@ impl Sidebar {
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
         let items = self.build_tree_items_with_overrides(cx);
+        self.fetch_visible_inline_lists(&items, cx);
         self.prune_connection_selection(&items);
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);
@@ -1018,6 +1094,7 @@ impl Sidebar {
         self.cleanup_stale_overrides(cx);
 
         let items = self.build_tree_items_with_overrides(cx);
+        self.fetch_visible_inline_lists(&items, cx);
         self.prune_connection_selection(&items);
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);

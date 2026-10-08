@@ -254,7 +254,7 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "Navigator view"
-    help: "Simple lists databases, schemas and their tables and views, without folders or dashboard and instance sections. Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines."
+    help: "Simple lists databases, schemas and their tables, views, routines and data types without folders, and groups the instance views under one Instance folder. Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines."
     option:
       advanced: "Advanced"
       simple: "Simple"
@@ -4980,6 +4980,7 @@ sidebar:
       saved_charts: Saved Charts
       instance_metrics: Instance Metrics
       instance_inspectors: Instance Inspectors
+      instance: Instance
       metrics: Metrics
     node:
       instance_overview: Instance Overview

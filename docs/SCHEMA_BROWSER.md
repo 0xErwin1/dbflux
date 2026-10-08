@@ -39,12 +39,13 @@ Main tab of the connection manager:
 - **Advanced** (the default) — each schema groups its tables and views in
   **Tables** and **Views** folders, next to its types, indexes, foreign keys
   and, where the driver supports them, routines.
-- **Simple** — the connection lists its databases, each database its
-  schemas, and each schema its tables and views, as DBeaver's simple view
-  does. The Databases folder, the schema's other folders, and the
-  connection's Dashboards, Saved Charts and Instance sections are hidden;
-  saved dashboards stay available in the Dashboards view. Tables still
-  expand to their columns, indexes and constraints.
+- **Simple** — the tree hides intermediate folders, as DBeaver's simple view
+  does: the connection lists its databases, each database its schemas, and
+  each schema its tables, views, routines and data types directly. Tables
+  still expand to their columns, indexes, foreign keys and constraints, so
+  the schema-level Indexes and Foreign Keys folders are left out. Instance
+  Overview, Instance Metrics and Instance Inspectors are grouped under one
+  **Instance** folder. Nothing that Advanced shows becomes unreachable.
 
 The layout changes as soon as you save the connection, also while it is open.
 

@@ -254,7 +254,7 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "导航器视图"
-    help: "简单视图列出数据库、模式及其表和视图，不显示文件夹以及仪表板和实例部分。高级视图将表和视图分组到文件夹中，并与模式的类型、索引、外键和例程并列显示。"
+    help: "简单视图不使用文件夹，列出数据库、模式及其表、视图、例程和数据类型，并将实例视图归入一个 Instance 文件夹。高级视图将表和视图分组到文件夹中，并与模式的类型、索引、外键和例程并列显示。"
     option:
       advanced: "高级"
       simple: "简单"
@@ -4978,6 +4978,7 @@ sidebar:
       saved_charts: 已保存图表
       instance_metrics: 实例指标
       instance_inspectors: 实例检查器
+      instance: 实例
       metrics: 指标
     node:
       instance_overview: 实例概览

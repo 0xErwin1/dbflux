@@ -254,7 +254,7 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "탐색기 보기"
-    help: "단순은 폴더나 대시보드·인스턴스 섹션 없이 데이터베이스, 스키마, 그리고 테이블과 뷰를 나열합니다. 고급은 테이블과 뷰를 폴더로 묶고 스키마의 타입, 인덱스, 외래 키, 루틴과 함께 표시합니다."
+    help: "단순은 폴더 없이 데이터베이스, 스키마, 그리고 테이블, 뷰, 루틴, 데이터 타입을 나열하고, 인스턴스 보기를 하나의 Instance 폴더로 묶습니다. 고급은 테이블과 뷰를 폴더로 묶고 스키마의 타입, 인덱스, 외래 키, 루틴과 함께 표시합니다."
     option:
       advanced: "고급"
       simple: "단순"
@@ -4979,6 +4979,7 @@ sidebar:
       saved_charts: 저장된 차트
       instance_metrics: 인스턴스 지표
       instance_inspectors: 인스턴스 검사기
+      instance: 인스턴스
       metrics: 지표
     node:
       instance_overview: 인스턴스 개요

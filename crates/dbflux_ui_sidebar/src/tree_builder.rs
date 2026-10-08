@@ -750,14 +750,14 @@ impl Sidebar {
             // a natural chart-authoring UX (e.g. plain relational stores) keep
             // their sidebar focused on the native browsing model. Gating is
             // purely capability-driven — no driver_id or category branching.
-            if !simple_view && conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
+            if conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
                 profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
                 profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
             }
 
             // Drivers that can browse upstream dashboards get a read-only
             // listing container. Capability-gated — no driver_id branching.
-            if !simple_view && conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
+            if conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
                 profile_children.push(Self::build_remote_dashboards_folder_item(
                     profile_id,
                     state,
@@ -863,13 +863,23 @@ impl Sidebar {
             // Instance overview, metrics, and inspectors — appended after databases.
             // Sidebar order: Instance Overview, Instance Metrics, Instance Inspectors.
             // Capability-gated; no driver_id branching.
-            if !simple_view {
-                profile_children.extend(build_instance_section(
-                    profile_id,
-                    conn_capabilities,
-                    instance_metrics_cache,
-                    instance_inspectors_cache,
-                ));
+            let instance_section = build_instance_section(
+                profile_id,
+                conn_capabilities,
+                instance_metrics_cache,
+                instance_inspectors_cache,
+            );
+            if simple_view && !instance_section.is_empty() {
+                profile_children.push(
+                    TreeItem::new(
+                        SchemaNodeId::InstanceFolder { profile_id }.to_string(),
+                        crate::labels::instance_folder_label(),
+                    )
+                    .expanded(false)
+                    .children(instance_section),
+                );
+            } else {
+                profile_children.extend(instance_section);
             }
 
             profile_item = profile_item.expanded(is_active).children(profile_children);
@@ -2137,9 +2147,42 @@ fn build_projected_relational_children(
                 _ => None,
             })
             .collect();
+        let types_key = SchemaCacheKey::new(database, Some(schema_name));
+        let type_refs = || {
+            connected
+                .schema_types
+                .get(&types_key)
+                .map(|types| types.iter().collect::<Vec<_>>())
+                .or(projection.schema_types(schema_name))
+        };
+        // Simple lists objects without folders, as DBeaver's simple view does,
+        // but keeps routines and data types reachable. Indexes and foreign keys
+        // stay reachable under their tables. Until a list loads, its loading row
+        // sits in the schema and the sidebar fetches it (`fetch_visible_inline_lists`).
         if connected.profile.navigator_view == dbflux_core::NavigatorView::Simple {
             let mut items = tables;
             items.extend(views);
+            if include_schema_chrome {
+                if supports_routines
+                    && let Some(folder) = build_schema_routines_folder(
+                        profile_id,
+                        database,
+                        schema_name,
+                        connected.schema_routines.get(&types_key),
+                    )
+                {
+                    items.extend(folder.children);
+                }
+                items.extend(
+                    build_schema_types_folder(
+                        profile_id,
+                        database,
+                        schema_name,
+                        type_refs().as_deref(),
+                    )
+                    .children,
+                );
+            }
             return items;
         }
         let mut items = Vec::new();
@@ -2177,17 +2220,11 @@ fn build_projected_relational_children(
             );
         }
         if include_schema_chrome {
-            let types_key = SchemaCacheKey::new(database, Some(schema_name));
-            let cached_types = connected.schema_types.get(&types_key);
-            let selected_types = projection.schema_types(schema_name);
-            let type_refs = cached_types
-                .map(|types| types.iter().collect::<Vec<_>>())
-                .or(selected_types);
             items.push(build_schema_types_folder(
                 profile_id,
                 database,
                 schema_name,
-                type_refs.as_deref(),
+                type_refs().as_deref(),
             ));
             items.push(build_schema_indexes_folder(
                 profile_id,
@@ -4716,10 +4753,15 @@ mod tests {
                 database_name,
             )
             .expect("projected database");
+            let connected = state.connections().get(&profile_id).expect("connected");
             super::build_projected_relational_children(
                 &projection,
-                state.connections().get(&profile_id).expect("connected"),
-                false,
+                connected,
+                connected
+                    .connection
+                    .metadata()
+                    .capabilities
+                    .contains(dbflux_core::DriverCapabilities::ROUTINES),
                 true,
                 Some(database_name),
             )
@@ -4810,7 +4852,16 @@ mod tests {
         );
 
         let simple = top_level_kinds(&build(NavigatorView::Simple));
-        assert_eq!(simple, vec!["database move", "database postgres"]);
+        assert_eq!(
+            simple,
+            vec![
+                "DashboardsFolder",
+                "SavedChartsFolder",
+                "database move",
+                "database postgres",
+                "InstanceFolder",
+            ]
+        );
     }
 
     #[test]
@@ -4955,8 +5006,11 @@ mod tests {
     }
 
     #[test]
-    fn simple_navigator_view_lists_tables_and_views_directly_under_each_schema() {
-        use dbflux_core::{DbSchemaInfo, NavigatorView, SchemaSnapshot, ViewInfo};
+    fn simple_navigator_view_lists_schema_objects_directly_under_each_schema() {
+        use dbflux_core::{
+            CustomTypeInfo, CustomTypeKind, DbSchemaInfo, NavigatorView, RoutineInfo, RoutineKind,
+            SchemaCacheKey, SchemaNodeId, SchemaSnapshot, ViewInfo,
+        };
 
         fn schema_child_labels(children: &[TreeItem]) -> Vec<String> {
             let [schema] = children else {
@@ -4971,7 +5025,7 @@ mod tests {
 
         let profile_id = Uuid::new_v4();
         let mut connected =
-            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::ROUTINES);
         connected.database_schemas.insert(
             "analytics".to_string(),
             DbSchemaInfo {
@@ -4997,9 +5051,54 @@ mod tests {
         connected.profile.navigator_view = NavigatorView::Simple;
         let simple =
             resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
+        let [schema] = simple.as_slice() else {
+            panic!("one schema row expected");
+        };
+        let loading_kinds: Vec<_> = schema.children[2..]
+            .iter()
+            .map(|child| {
+                child
+                    .id
+                    .as_ref()
+                    .parse::<SchemaNodeId>()
+                    .map(|id| id.kind())
+            })
+            .collect();
+        assert_eq!(
+            loading_kinds,
+            vec![
+                Ok(dbflux_core::SchemaNodeKind::RoutinesLoadingFolder),
+                Ok(dbflux_core::SchemaNodeKind::TypesLoadingFolder),
+            ],
+            "unloaded routines and types show a loading row the sidebar fetches"
+        );
+
+        let cache_key = SchemaCacheKey::new("analytics", Some("dbo"));
+        connected.schema_routines.insert(
+            cache_key.clone(),
+            vec![RoutineInfo {
+                name: "refresh".to_string(),
+                kind: RoutineKind::Function,
+                specific_name: "refresh()".to_string(),
+                parameter_types: vec![],
+                return_type_hint: None,
+            }],
+        );
+        connected.schema_types.insert(
+            cache_key,
+            vec![CustomTypeInfo {
+                name: "status".to_string(),
+                schema: Some("dbo".to_string()),
+                kind: CustomTypeKind::Enum,
+                enum_values: Some(vec!["open".to_string()]),
+                base_type: None,
+            }],
+        );
+        let simple =
+            resolve_lazy_relational_children(profile_id, &mut connected, &snapshot, "analytics");
         assert_eq!(
             schema_child_labels(&simple),
-            vec!["records", "active_records"]
+            vec!["records", "active_records", "refresh (fn)", "status (enum)"]
         );
     }
 
