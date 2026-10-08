@@ -723,17 +723,26 @@ fn build_sql_completion_metadata<'a>(
 /// Candidates that start with the prefix keep their push order. Candidates
 /// that only fuzzy-match it (fzf-style subsequence, e.g. `messa` for
 /// `alarm_message`) are held back and appended by [`Self::finish`] after every
-/// prefix match, best score first, so fuzzy hits never push an exact
-/// continuation down the menu.
+/// prefix match, so fuzzy hits never push an exact continuation down the
+/// menu.
+///
+/// Fuzzy matching starts at [`FUZZY_MIN_PREFIX_CHARS`] typed characters, since
+/// a shorter prefix is a subsequence of nearly every name, and only the
+/// [`FUZZY_MAX_MATCHES`] best fuzzy hits are kept. Prefix matches stay
+/// unlimited.
 struct SqlItemSink<'a> {
     items: Vec<CompletionItem>,
     seen: HashSet<String>,
     prefix: &'a str,
     prefix_upper: String,
     replace_range: lsp_types::Range,
-    matcher: SkimMatcherV2,
+    /// `None` while the prefix is too short for fuzzy matching.
+    matcher: Option<SkimMatcherV2>,
     fuzzy_matches: Vec<FuzzyCandidate>,
 }
+
+const FUZZY_MIN_PREFIX_CHARS: usize = 3;
+const FUZZY_MAX_MATCHES: usize = 50;
 
 struct FuzzyCandidate {
     score: i64,
@@ -750,7 +759,8 @@ impl SqlItemSink<'_> {
             prefix,
             prefix_upper: prefix.to_uppercase(),
             replace_range,
-            matcher: SkimMatcherV2::default().ignore_case(),
+            matcher: (prefix.chars().count() >= FUZZY_MIN_PREFIX_CHARS)
+                .then(|| SkimMatcherV2::default().ignore_case()),
             fuzzy_matches: Vec::new(),
         }
     }
@@ -766,7 +776,11 @@ impl SqlItemSink<'_> {
                 || candidate.to_uppercase().starts_with(&self.prefix_upper)
             {
                 self.push_item(candidate, kind, rank);
-            } else if let Some(score) = self.matcher.fuzzy_match(candidate, self.prefix) {
+            } else if let Some(score) = self
+                .matcher
+                .as_ref()
+                .and_then(|matcher| matcher.fuzzy_match(candidate, self.prefix))
+            {
                 self.fuzzy_matches.push(FuzzyCandidate {
                     score,
                     label: candidate.to_string(),
@@ -801,11 +815,14 @@ impl SqlItemSink<'_> {
 
     fn finish(mut self) -> Vec<CompletionItem> {
         let mut fuzzy_matches = std::mem::take(&mut self.fuzzy_matches);
-        fuzzy_matches.sort_by(|left, right| {
-            left.rank
-                .cmp(&right.rank)
-                .then(right.score.cmp(&left.score))
-        });
+
+        // Keep the best-scoring hits, then order them by rank group; the
+        // stable sort keeps the score order inside each group.
+        fuzzy_matches.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
+        let mut kept_labels = HashSet::new();
+        fuzzy_matches.retain(|candidate| kept_labels.insert(candidate.label.clone()));
+        fuzzy_matches.truncate(FUZZY_MAX_MATCHES);
+        fuzzy_matches.sort_by_key(|candidate| candidate.rank);
 
         for candidate in fuzzy_matches {
             self.push_item(&candidate.label, candidate.kind, candidate.rank);
@@ -2681,6 +2698,29 @@ mod tests {
         let source = "SELECT * FROM db1.t1 WHERE ";
         let items = analyzed_items(&metadata, source);
         assert!(labels(&items).contains(&"c2".to_string()));
+    }
+
+    #[test]
+    fn fuzzy_matching_waits_for_three_characters_and_keeps_the_best_fifty() {
+        let mut metadata = SqlCompletionMetadata::default();
+        for index in 0..80 {
+            metadata.add_table(&TableInfo {
+                name: format!("alarm_message_{index:02}"),
+                schema: None,
+                columns: None,
+                ..t1_table()
+            });
+        }
+
+        let source = "SELECT * FROM ms";
+        assert!(
+            sql_completion_items(&metadata, source, source.len()).is_empty(),
+            "two characters do not fuzzy-match"
+        );
+
+        let source = "SELECT * FROM msg";
+        let items = sql_completion_items(&metadata, source, source.len());
+        assert_eq!(items.len(), super::FUZZY_MAX_MATCHES);
     }
 
     #[test]
