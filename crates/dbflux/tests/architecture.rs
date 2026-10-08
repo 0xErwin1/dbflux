@@ -20,7 +20,7 @@ fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The `dbflux` crate sits exactly one level below the workspace root.
+/// Locates the workspace root from `crates/dbflux`.
 #[expect(
     clippy::expect_used,
     reason = "`CARGO_MANIFEST_DIR` for this test target is always \
@@ -35,7 +35,7 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Reads a file that the test itself just verified exists in the workspace.
+/// Reads a checked-in workspace file; read failures intentionally fail the test.
 #[expect(
     clippy::expect_used,
     reason = "callers pass paths of workspace files whose presence the tests \

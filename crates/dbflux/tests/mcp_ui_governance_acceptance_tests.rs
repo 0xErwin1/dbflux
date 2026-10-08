@@ -1,8 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// Reads a source file whose path the calling tests hardcode and whose
-/// presence is part of the checked-in workspace.
+/// Reads a checked-in workspace source; read failures intentionally fail the test.
 #[expect(
     clippy::expect_used,
     reason = "callers pass paths of checked-in workspace sources; a missing \

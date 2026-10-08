@@ -63,6 +63,11 @@ fn env_var(name: &str) -> String {
 /// or compilation fails. An executable that silently shipped without its icon
 /// and version block would be the worse outcome.
 #[cfg(windows)]
+#[expect(
+    clippy::panic,
+    reason = "missing application icon or failed resource compilation are fatal \
+              Windows build errors; preserve their existing diagnostics"
+)]
 fn embed(script: &Path, icon: &Path) {
     if !icon.is_file() {
         panic!("application icon not found at {}", icon.display());

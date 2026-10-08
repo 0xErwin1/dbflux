@@ -101,9 +101,9 @@ impl StdioAgent {
 
     #[expect(
         clippy::expect_used,
-        reason = "serializing a `serde_json::Value` and writing to the child's \
-                  piped stdin only fail on a broken harness; aborting the test \
-                  is intended"
+        reason = "serialization and child-stdin write failures abort the test; \
+                  they can indicate a harness problem or a failure in the \
+                  server under test"
     )]
     fn send(&mut self, message: &Value) {
         let line = serde_json::to_string(message).expect("serialize a JSON-RPC message");
@@ -185,9 +185,9 @@ impl StdioAgent {
     #[expect(
         clippy::expect_used,
         clippy::panic,
-        reason = "the child must exit cleanly on stdin EOF: poll failures and \
-                  the shutdown timeout are harness failures that must abort \
-                  the test with the collected stderr diagnostics"
+        reason = "preserve the test's fail-fast child-poll and shutdown checks; \
+                  timeout and exit-status failures include collected stderr, \
+                  while poll failure retains its existing expect diagnostic"
     )]
     fn shutdown(self) {
         let StdioAgent {
@@ -243,9 +243,9 @@ impl StdioAgent {
 
     #[expect(
         clippy::panic,
-        reason = "`fail` is the harness's abort path: it kills the child and \
-                  panics with the collected stderr so the test failure is \
-                  actionable"
+        reason = "`fail` attempts to terminate the child, then panics with \
+                  collected stderr; preserve the existing best-effort cleanup \
+                  and failure diagnostics"
     )]
     fn fail(&mut self, message: String) -> ! {
         let _ = self.child.kill();

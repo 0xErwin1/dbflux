@@ -113,10 +113,10 @@ extern "C" fn handle_shutdown_signal(_signum: std::ffi::c_int) {
 #[cfg(unix)]
 #[expect(
     unsafe_code,
-    reason = "libc signal FFI: `mem::zeroed` zero-initializes the plain \
-              C `sigaction` struct before its fields are set, and \
-              `sigemptyset`/`sigaction` receive valid pointers into it; \
-              failures are checked through the returned value"
+    reason = "libc signal FFI uses an all-zero-valid C `sigaction` value, \
+              initializes its mask through a valid pointer, and passes a valid \
+              action plus the permitted null old-action pointer; only \
+              `sigaction` failures are checked by the existing code"
 )]
 fn install_shutdown_signal_handlers() {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -350,10 +350,10 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    reason = "the process-global `Mutex<Option<_>>` holders are only assigned, \
-              read or taken inside panic-free critical sections, so they are \
-              never poisoned; the main-window open aborts because without a \
-              window there is nothing to run"
+    reason = "startup preserves the existing fail-fast behavior for poisoned \
+              process-global locks and failure to open the main window; bridge \
+              initialization runs under its guard, so panic-freedom is an \
+              assumption, not a mutex guarantee"
 )]
 fn run_gui() {
     let fmt_writer = if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
@@ -893,9 +893,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
 
     #[expect(
         clippy::unwrap_used,
-        reason = "`BRIDGE_HANDLE`'s critical sections only assign, read or take \
-                  an `Option` handle, which cannot panic, so the mutex is never \
-                  poisoned"
+        reason = "preserve the existing panic-on-poison shutdown policy; the \
+                  if-let guard remains held through bridge shutdown and \
+                  diagnostics, so this is not a guarantee that the critical \
+                  section cannot unwind"
     )]
     if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().take() {
         match handle.shutdown() {
