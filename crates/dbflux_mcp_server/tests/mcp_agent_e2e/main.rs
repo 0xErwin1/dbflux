@@ -67,6 +67,12 @@ struct Agent {
     runtime: Arc<RwLock<McpRuntime>>,
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "agent harness: a failed protocol call or a failed approval must abort the \
+        calling test with the server's own error message"
+)]
 impl Agent {
     /// `tools/list`, paging through the whole catalog.
     async fn tools(&self) -> Vec<Tool> {
@@ -126,6 +132,14 @@ impl Agent {
 }
 
 /// Asserts that a call was queued for approval and returns its pending id.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "asserts the exact shape of the server's approval_required error: the data \
+        object and its fields are emitted by the approval queue path, so any drift \
+        must abort the test"
+)]
 fn expect_queued(result: Result<CallToolResult, rmcp::ServiceError>) -> String {
     let error = result.expect_err("the call should wait for approval instead of running");
     let rmcp::ServiceError::McpError(error) = error else {
@@ -160,6 +174,11 @@ fn expect_queued(result: Result<CallToolResult, rmcp::ServiceError>) -> String {
 
 /// Serves the server over an in-memory transport and completes the MCP
 /// handshake with a real client.
+#[expect(
+    clippy::expect_used,
+    reason = "handshake failure means the harness cannot run any test, so aborting is \
+        the intended signal"
+)]
 async fn start_agent(
     role: &str,
     connection: Option<(Arc<dyn DbDriver>, ConnectionProfile)>,
@@ -262,6 +281,11 @@ fn build_state(
 /// Mirrors the runtime `ServerState::new` builds from `dbflux.db`: built-in
 /// roles and policies, one trusted client, and the global read-only assignment
 /// plus a connection-scoped assignment for the same actor.
+#[expect(
+    clippy::expect_used,
+    reason = "fixture construction over a fresh in-memory runtime: built-in roles and \
+        policies cannot conflict, and a rejected insert must abort the test"
+)]
 fn build_runtime(connection_id: Option<&str>, role: &str) -> McpRuntime {
     let audit_path = dbflux_audit::temp_sqlite_path("agent_e2e_audit.sqlite");
     let audit_service =
@@ -412,6 +436,12 @@ async fn prepare_items_table(agent: &Agent, connection_id: &str, approve: bool) 
 const NOT_LISTED_REASON: &str = "It may not exist, or this connection may not have access to it.";
 
 /// Returns the message of a call that must fail as a tool error.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "asserts the call fails as an MCP protocol error; a success or a non-MCP \
+        error must abort the test"
+)]
 async fn tool_error(agent: &Agent, tool: &str, arguments: Value) -> String {
     let error = agent
         .try_call(tool, arguments)
@@ -474,6 +504,11 @@ impl HintDriver {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "metadata is built from a literal JSON document matching TableInfo, so a \
+        deserialization drift must abort the test"
+)]
 fn hint_table(name: &str, columns: Option<&[&str]>) -> dbflux_core::TableInfo {
     let columns = columns.map(|names| {
         names
@@ -639,6 +674,10 @@ async fn start_hint_agent(role: &str, databases: &[&str]) -> (Agent, String) {
 /// Starts an allow-all agent on a SQLite file holding three tables:
 /// `customers` (Ada, Bo and Cy, who has no order), `orders` (two for Ada, one
 /// for Bo) and `payments` (one, for Ada's first order).
+#[expect(
+    clippy::expect_used,
+    reason = "test setup: failing to create the data directory must abort the test"
+)]
 async fn start_join_agent() -> (Agent, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().expect("create the test data directory");
     let profile = sqlite_profile(&directory);
@@ -720,6 +759,11 @@ fn customers_join_orders(connection_id: &str, join_type: &str) -> Value {
 }
 
 /// The `details_json` of the latest audited execution of `select_data`.
+#[expect(
+    clippy::expect_used,
+    reason = "the test asserts select_data audited an execution with details, so a \
+        missing record must abort the test"
+)]
 async fn latest_select_data_audit_details(agent: &Agent) -> Value {
     let runtime = agent.runtime.read().await;
 
@@ -748,6 +792,10 @@ const NOT_RUN: &str = "The query was not run.";
 /// Creates `notes`, a rowid table with no `INTEGER PRIMARY KEY` (so `rowid` is
 /// not an alias of a listed column), and `codes`, a `WITHOUT ROWID` table, in
 /// the profile's file before the agent connects.
+#[expect(
+    clippy::expect_used,
+    reason = "test setup: failing to create the fixture tables must abort the test"
+)]
 fn create_rowid_tables(directory: &tempfile::TempDir) {
     let connection = rusqlite::Connection::open(directory.path().join("agent.sqlite"))
         .expect("open the test database");

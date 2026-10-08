@@ -301,6 +301,9 @@ features = ["wasm-bindgen"]
 [dependencies.itertools]
 version = "0.13.0"
 
+[dependencies.fuzzy-matcher]
+version = "0.3"
+
 [dependencies.log]
 version = "0.4"
 

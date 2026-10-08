@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use fuzzy_matcher::FuzzyMatcher as _;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
     Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
@@ -7,6 +9,7 @@ use gpui::{
     deferred, div, prelude::FluentBuilder, px, relative,
 };
 use lsp_types::CompletionItem;
+use std::ops::Range;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
@@ -85,20 +88,18 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
-        let matched_len = item
+        let query = item
             .filter_text
-            .as_ref()
-            .map(|s| s.len())
-            .unwrap_or(self.highlight_prefix.len())
-            .min(item.label.len());
-
-        let highlights = vec![(
-            0..matched_len,
-            HighlightStyle {
-                color: Some(cx.theme().blue),
-                ..Default::default()
-            },
-        )];
+            .as_deref()
+            .unwrap_or(self.highlight_prefix.as_ref());
+        let highlight_style = HighlightStyle {
+            color: Some(cx.theme().blue),
+            ..Default::default()
+        };
+        let highlights: Vec<_> = fuzzy_match_ranges(&item.label, query)
+            .into_iter()
+            .map(|range| (range, highlight_style))
+            .collect();
 
         h_flex()
             .id(self.ix)
@@ -124,6 +125,34 @@ impl RenderOnce for CompletionMenuItem {
             })
             .children(self.children)
     }
+}
+
+/// Byte ranges of `label` that fuzzy-match `query` (fzf-style), merged into
+/// contiguous runs for the match highlight.
+fn fuzzy_match_ranges(label: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let matcher = SkimMatcherV2::default().ignore_case();
+    let Some((_, char_indices)) = matcher.fuzzy_indices(label, query) else {
+        return Vec::new();
+    };
+
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    for (char_index, (byte_index, character)) in label.char_indices().enumerate() {
+        if !char_indices.contains(&char_index) {
+            continue;
+        }
+
+        let byte_end = byte_index + character.len_utf8();
+        match ranges.last_mut() {
+            Some(last) if last.end == byte_index => last.end = byte_end,
+            _ => ranges.push(byte_index..byte_end),
+        }
+    }
+
+    ranges
 }
 
 impl EventEmitter<DismissEvent> for ContextMenuDelegate {}

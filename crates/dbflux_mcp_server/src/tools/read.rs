@@ -717,6 +717,14 @@ impl DbFluxServer {
     /// Handle select_data for drivers that expose table browse semantics.
     #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
+    #[cfg_attr(
+        not(feature = "sqlite"),
+        expect(
+            dead_code,
+            reason = "only the sqlite-gated browse test calls this helper, so without that \
+                feature the test build legitimately leaves it unused"
+        )
+    )]
     async fn select_data_table(
         connection: &Arc<dyn Connection>,
         table: &str,
@@ -946,6 +954,13 @@ impl DbFluxServer {
                 let mut object = serde_json::Map::new();
 
                 for (column, index) in columns.iter().zip(indices.iter()) {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "index is a valid position in result.columns (from \
+                            .position() above) and the driver contract is one cell per \
+                            column per row; QueryResult does not enforce that arity, so a \
+                            ragged result set would panic here"
+                    )]
                     object.insert(column.clone(), crate::helper::value_to_json(&row[*index]));
                 }
 
