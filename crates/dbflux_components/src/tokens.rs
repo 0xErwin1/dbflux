@@ -619,6 +619,10 @@ pub struct SyntaxColors {
     pub operator: Hsla,
     /// Plain identifiers.
     pub plain: Hsla,
+    /// Schema and database qualifiers.
+    pub namespace: Hsla,
+    /// Column names and column aliases.
+    pub field: Hsla,
 }
 
 impl SyntaxColors {
@@ -632,6 +636,8 @@ impl SyntaxColors {
             function: rgb(0xFFC23D).into(),
             operator: rgb(0xC6C3CC).into(),
             plain: rgb(0xF7F4F7).into(),
+            namespace: rgb(0xE5A86E).into(),
+            field: rgb(0x5CCFC9).into(),
         }
     }
 
@@ -645,6 +651,8 @@ impl SyntaxColors {
             function: rgb(0xB7791F).into(),
             operator: rgb(0x3B3740).into(),
             plain: rgb(0x141118).into(),
+            namespace: rgb(0x9A5418).into(),
+            field: rgb(0x0B7A80).into(),
         }
     }
 

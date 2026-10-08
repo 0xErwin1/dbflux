@@ -310,7 +310,49 @@ fn apply_syntax_colors(theme: &mut Theme, colors: &SyntaxColors) {
         }
     }
 
+    // Keywords and functions are bold and aliases italic, so the roles of a
+    // query differ in more than color.
+    let roles = [
+        ("keyword", colors.keyword, true, false),
+        ("function", colors.function, true, false),
+        ("namespace", colors.namespace, false, false),
+        ("field", colors.field, false, false),
+        ("type.alias", colors.type_name, false, true),
+        ("variable.alias", colors.type_name, false, true),
+        ("variable.column_alias", colors.field, false, true),
+    ];
+    match styled_syntax(syntax, &roles) {
+        Ok(styled) => *syntax = styled,
+        Err(error) => log::warn!("Failed to style editor syntax roles: {error}"),
+    }
+
     theme.highlight_theme = Arc::new(highlight_theme);
+}
+
+/// `syntax` with each `(name, color, bold, italic)` role replaced. The fields
+/// of the style types are private, so the change goes through JSON, as in
+/// `recolored_style`.
+fn styled_syntax(
+    syntax: &gpui_component::highlighter::SyntaxColors,
+    roles: &[(&str, Hsla, bool, bool)],
+) -> serde_json::Result<gpui_component::highlighter::SyntaxColors> {
+    let mut value = serde_json::to_value(syntax)?;
+
+    if let Some(object) = value.as_object_mut() {
+        for &(name, color, bold, italic) in roles {
+            let mut style = serde_json::Map::new();
+            style.insert("color".to_string(), serde_json::to_value(color)?);
+            if bold {
+                style.insert("font_weight".to_string(), 700.into());
+            }
+            if italic {
+                style.insert("font_style".to_string(), "italic".into());
+            }
+            object.insert(name.to_string(), serde_json::Value::Object(style));
+        }
+    }
+
+    serde_json::from_value(value)
 }
 
 /// Return `existing` (or an empty style) with its color replaced.
@@ -687,6 +729,37 @@ mod tests {
                     theme.colors.button_primary, expected,
                     "{setting:?}: legacy button field"
                 );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn syntax_roles_are_styled_in_both_variants(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        for (setting, colors) in [
+            (ThemeSetting::Dark, SyntaxColors::dark()),
+            (ThemeSetting::Light, SyntaxColors::light()),
+        ] {
+            cx.update(|cx| {
+                apply_theme(setting, AppStyle::Default, None, cx);
+                let syntax = &Theme::global(cx).highlight_theme.style.syntax;
+                let style = |name: &str| syntax.style(name).expect(name);
+
+                assert_eq!(style("keyword").color, Some(colors.keyword), "{setting:?}");
+                assert_eq!(style("keyword").font_weight, Some(gpui::FontWeight::BOLD));
+                assert_eq!(style("function").font_weight, Some(gpui::FontWeight::BOLD));
+                assert_eq!(style("namespace").color, Some(colors.namespace));
+                assert_eq!(style("field").color, Some(colors.field));
+                for alias in ["type.alias", "variable.alias", "variable.column_alias"] {
+                    assert_eq!(
+                        style(alias).font_style,
+                        Some(gpui::FontStyle::Italic),
+                        "{setting:?} {alias}"
+                    );
+                }
+                assert_eq!(style("variable.alias").color, Some(colors.type_name));
+                assert_eq!(style("variable.column_alias").color, Some(colors.field));
             });
         }
     }

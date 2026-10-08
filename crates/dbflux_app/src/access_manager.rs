@@ -209,6 +209,17 @@ mod tests {
         AppAccessManager::new(HashMap::new(), HashMap::new())
     }
 
+    /// Polls `future` to completion on the current thread.
+    ///
+    /// The current test paths complete synchronously; the no-op waker carries
+    /// no owned data.
+    #[expect(
+        unsafe_code,
+        reason = "the stateless `RawWaker` clone/wake/drop callbacks never \
+                  dereference or own the null data pointer and are thread-safe, \
+                  so `Waker::from_raw` receives a valid vtable; the current \
+                  test paths also complete synchronously"
+    )]
     fn run_ready_future<F>(future: F) -> F::Output
     where
         F: Future,
