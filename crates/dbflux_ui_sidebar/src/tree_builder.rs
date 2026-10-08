@@ -732,20 +732,25 @@ impl Sidebar {
             let is_time_series_db = schema.is_time_series();
             let conn_metadata = connected.connection.metadata();
             let conn_capabilities = conn_metadata.capabilities;
+            // The simple layout shows only databases, schemas and their
+            // objects: no dashboard, chart or instance sections, and the
+            // databases sit directly under the connection.
+            let simple_view =
+                connected.profile.navigator_view == dbflux_core::NavigatorView::Simple;
 
             // Surface the per-profile Dashboards / Saved Charts folders only
             // for drivers that opt in via `CHART_AUTHORING`. Drivers without
             // a natural chart-authoring UX (e.g. plain relational stores) keep
             // their sidebar focused on the native browsing model. Gating is
             // purely capability-driven — no driver_id or category branching.
-            if conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
+            if !simple_view && conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
                 profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
                 profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
             }
 
             // Drivers that can browse upstream dashboards get a read-only
             // listing container. Capability-gated — no driver_id branching.
-            if conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
+            if !simple_view && conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
                 profile_children.push(Self::build_remote_dashboards_folder_item(
                     profile_id,
                     state,
@@ -821,6 +826,8 @@ impl Sidebar {
                         for db_item in named_items {
                             profile_children.extend(db_item.children);
                         }
+                    } else if simple_view {
+                        profile_children.extend(named_items);
                     } else if !named_items.is_empty() {
                         profile_children
                             .push(Self::build_databases_folder_item(profile_id, named_items));
@@ -848,12 +855,14 @@ impl Sidebar {
             // Instance overview, metrics, and inspectors — appended after databases.
             // Sidebar order: Instance Overview, Instance Metrics, Instance Inspectors.
             // Capability-gated; no driver_id branching.
-            profile_children.extend(build_instance_section(
-                profile_id,
-                conn_capabilities,
-                instance_metrics_cache,
-                instance_inspectors_cache,
-            ));
+            if !simple_view {
+                profile_children.extend(build_instance_section(
+                    profile_id,
+                    conn_capabilities,
+                    instance_metrics_cache,
+                    instance_inspectors_cache,
+                ));
+            }
 
             profile_item = profile_item.expanded(is_active).children(profile_children);
         }
@@ -4658,6 +4667,88 @@ mod tests {
             .remove(&profile_id)
             .expect("connected");
         children
+    }
+
+    #[test]
+    fn simple_navigator_view_lists_databases_directly_under_the_connection() {
+        use dbflux_core::{
+            DatabaseInfo, DbSchemaInfo, DriverCapabilities, NavigatorView, RelationalSchema,
+            SchemaNodeId, SchemaSnapshot,
+        };
+
+        fn top_level_kinds(item: &TreeItem) -> Vec<String> {
+            item.children
+                .iter()
+                .map(|child| match child.id.as_ref().parse::<SchemaNodeId>() {
+                    Ok(SchemaNodeId::Database { name, .. }) => format!("database {name}"),
+                    Ok(other) => format!("{other:?}")
+                        .split([' ', '{', '('])
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                    Err(_) => child.id.to_string(),
+                })
+                .collect()
+        }
+
+        let profile_id = Uuid::new_v4();
+        let build = |navigator_view: NavigatorView| {
+            let mut connected = make_connected_profile(
+                profile_id,
+                DriverCapabilities::SCHEMAS
+                    | DriverCapabilities::CHART_AUTHORING
+                    | DriverCapabilities::INSTANCE_METRICS,
+            );
+            connected.profile.id = profile_id;
+            connected.profile.navigator_view = navigator_view;
+            connected.schema = Some(SchemaSnapshot::relational(RelationalSchema {
+                databases: ["move", "postgres"]
+                    .into_iter()
+                    .map(|name| DatabaseInfo {
+                        name: name.to_string(),
+                        is_current: name == "move",
+                    })
+                    .collect(),
+                current_database: Some("move".to_string()),
+                schemas: vec![DbSchemaInfo {
+                    name: "raw".to_string(),
+                    tables: vec![relational_table("driver", Some("raw"))],
+                    views: vec![],
+                    custom_types: None,
+                }],
+                tables: vec![],
+                views: vec![],
+            }));
+            let profile = connected.profile.clone();
+
+            let mut state =
+                dbflux_ui_base::app_state_entity::AppStateEntity::new_with_storage_runtime(
+                    dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("test storage"),
+                )
+                .expect("test app state");
+            state.connections_mut().insert(profile_id, connected);
+            Sidebar::build_profile_item_with_errors(
+                &profile,
+                &state,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+            )
+        };
+
+        let advanced = top_level_kinds(&build(NavigatorView::Advanced));
+        assert!(
+            advanced.iter().any(|kind| kind == "DatabasesFolder"),
+            "advanced keeps the Databases folder: {advanced:?}"
+        );
+        assert!(
+            advanced.iter().any(|kind| kind == "DashboardsFolder"),
+            "advanced keeps the dashboards: {advanced:?}"
+        );
+
+        let simple = top_level_kinds(&build(NavigatorView::Simple));
+        assert_eq!(simple, vec!["database move", "database postgres"]);
     }
 
     #[test]

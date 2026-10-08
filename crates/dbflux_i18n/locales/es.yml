@@ -254,7 +254,7 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "Vista del navegador"
-    help: "Simple muestra directamente las tablas y vistas de cada esquema. Avanzada las agrupa en carpetas, junto a los tipos, índices, claves foráneas y rutinas del esquema."
+    help: "Simple muestra bases de datos, esquemas y sus tablas y vistas, sin carpetas ni secciones de dashboards e instancia. Avanzada agrupa tablas y vistas en carpetas, junto a los tipos, índices, claves foráneas y rutinas del esquema."
     option:
       advanced: "Avanzada"
       simple: "Simple"

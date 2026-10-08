@@ -254,7 +254,7 @@ connection_manager:
     ssh: "SSH"
   navigator_view:
     label: "Navigator view"
-    help: "Simple lists the tables and views of each schema directly. Advanced groups them in folders, next to the schema's types, indexes, foreign keys and routines."
+    help: "Simple lists databases, schemas and their tables and views, without folders or dashboard and instance sections. Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines."
     option:
       advanced: "Advanced"
       simple: "Simple"
