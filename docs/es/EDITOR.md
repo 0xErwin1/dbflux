@@ -42,17 +42,21 @@ cerrarlas.
 - `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run query in new tab**.
 
 Si existe una selección de texto no vacía, solo se ejecuta el texto
-seleccionado. Sin selección, se usa el buffer completo del editor.
+seleccionado. Sin selección y con varias sentencias separadas por `;` en el
+buffer, solo se ejecuta la sentencia bajo el cursor: un cursor después del `;`
+de una sentencia o en las líneas en blanco debajo de ella ejecuta esa sentencia,
+y un cursor por encima de todas las sentencias ejecuta la primera. Para ejecutar
+el buffer completo, selecciona todo (`Ctrl+A`) primero. Un buffer con una sola
+sentencia, o en un lenguaje sin división en sentencias, se ejecuta completo.
 
 Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
 
 ## Scripts multi-statement
 
-Cuando ejecutas sin selección y el buffer contiene varias sentencias separadas
-por `;`, y el driver activo declara soporte de batch, DBFlux muestra un diálogo
-de confirmación (`Run entire script (N statements)?`) antes de ejecutar. Al
-confirmar, el conjunto de resultados de cada sentencia se renderiza en su propia
-pestaña de resultado.
+Para ejecutar varias sentencias como script, selecciónalas (`Ctrl+A`
+selecciona todo el buffer) y pulsa `Ctrl+Enter`. Cuando el driver activo declara
+soporte de batch, el conjunto de resultados de cada sentencia se renderiza en su
+propia pestaña de resultado.
 
 La división en sentencias es consciente del lenguaje para los lenguajes de la
 familia SQL: los separadores dentro de strings, identificadores, comentarios de
@@ -60,7 +64,7 @@ línea/bloque y los cuerpos dollar-quoted de PostgreSQL no se tratan como límit
 de sentencia. Los lenguajes no SQL siguen siendo de sentencia única. El soporte
 de batch es por driver — entre los drivers SQL integrados, PostgreSQL,
 MySQL/MariaDB, SQLite y Microsoft SQL Server lo soportan. Una selección siempre
-se ejecuta tal cual y nunca dispara la confirmación de script.
+se ejecuta tal cual.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/editor/multi-statement-dark.webp">

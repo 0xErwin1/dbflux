@@ -222,9 +222,10 @@ is a single uppercase key. A pending `g` clears if interrupted or focus leaves
 the editor. In Normal mode, `d` / `y` / `c` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
 
 `Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
-otherwise it uses the full buffer. For a Visual Block selection, it joins
-ordered nonempty row fragments with newlines, as with mouse Alt-drag. A
-whitespace-only block selection uses the full buffer. Block columns count
+otherwise it runs the statement under the cursor, as without Vim. For a Visual
+Block selection, it joins ordered nonempty row fragments with newlines, as with
+mouse Alt-drag. A whitespace-only block selection runs the statement under the
+cursor. Block columns count
 Unicode scalars, not visual cells: tabs, wide characters, and combining
 sequences may not align with on-screen columns.
 
