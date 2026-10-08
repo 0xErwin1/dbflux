@@ -244,6 +244,11 @@ impl Sidebar {
             }
             for ((known_profile, database), (original_connection, generation)) in known {
                 if *known_profile != profile_id
+                    || hides_database(
+                        &connected.profile,
+                        state.get_database_list(profile_id).map(Vec::as_slice),
+                        database,
+                    )
                     || state.profile_session_generation(profile_id) != Some(*generation)
                     || !original_connection.upgrade().is_some_and(|original| {
                         std::sync::Arc::ptr_eq(&connected.connection, &original)
@@ -338,6 +343,11 @@ impl Sidebar {
             }
             for ((recovered_profile, database), (table_id, generation)) in recovered {
                 if *recovered_profile != profile_id
+                    || hides_database(
+                        &connected.profile,
+                        state.get_database_list(profile_id).map(Vec::as_slice),
+                        database,
+                    )
                     || state.profile_session_generation(profile_id) != Some(*generation)
                     || state
                         .get_database_list(profile_id)
@@ -732,9 +742,6 @@ impl Sidebar {
             let is_time_series_db = schema.is_time_series();
             let conn_metadata = connected.connection.metadata();
             let conn_capabilities = conn_metadata.capabilities;
-            // The simple layout shows only databases, schemas and their
-            // objects: no dashboard, chart or instance sections, and the
-            // databases sit directly under the connection.
             let simple_view =
                 connected.profile.navigator_view == dbflux_core::NavigatorView::Simple;
 
@@ -823,7 +830,7 @@ impl Sidebar {
                     let collapse_single_db = schema.databases().len() == projected.children.len()
                         && should_collapse_database_wrapper(schema.databases(), strategy);
 
-                    if collapse_single_db {
+                    if collapse_single_db && !simple_view {
                         for db_item in named_items {
                             profile_children.extend(db_item.children);
                         }
@@ -2130,8 +2137,6 @@ fn build_projected_relational_children(
                 _ => None,
             })
             .collect();
-        // The simple layout lists a schema's tables and views directly,
-        // without their folders or the schema's other objects.
         if connected.profile.navigator_view == dbflux_core::NavigatorView::Simple {
             let mut items = tables;
             items.extend(views);
@@ -2369,6 +2374,28 @@ fn listed_databases(
     }
 
     items.into_iter().filter(is_configured).collect()
+}
+
+/// Whether the profile's database filter hides `database`: Show all databases
+/// is off, and the server lists the configured database, which is another
+/// one. Recovered and invalidated database rows follow the same rule as the
+/// listed ones.
+fn hides_database(
+    profile: &dbflux_core::ConnectionProfile,
+    listed: Option<&[dbflux_core::DatabaseInfo]>,
+    database: &str,
+) -> bool {
+    if profile.show_all_databases {
+        return false;
+    }
+
+    profile
+        .config
+        .database()
+        .filter(|configured| !configured.trim().is_empty() && configured != database)
+        .is_some_and(|configured| {
+            listed.is_some_and(|list| list.iter().any(|entry| entry.name == configured))
+        })
 }
 
 /// Build the per-database `TreeItem` nodes for a named-database connection.
@@ -4784,6 +4811,83 @@ mod tests {
 
         let simple = top_level_kinds(&build(NavigatorView::Simple));
         assert_eq!(simple, vec!["database move", "database postgres"]);
+    }
+
+    #[test]
+    fn simple_navigator_view_keeps_the_row_of_a_single_database() {
+        use dbflux_core::{
+            DatabaseInfo, NavigatorView, RelationalSchema, SchemaNodeId, SchemaSnapshot,
+        };
+
+        let profile_id = Uuid::new_v4();
+        let mut connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::SCHEMAS);
+        connected.profile.id = profile_id;
+        connected.profile.navigator_view = NavigatorView::Simple;
+        connected.schema = Some(SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![DatabaseInfo {
+                name: "move".to_string(),
+                is_current: true,
+            }],
+            current_database: Some("move".to_string()),
+            schemas: vec![],
+            tables: vec![],
+            views: vec![],
+        }));
+        let profile = connected.profile.clone();
+        let mut state = dbflux_ui_base::app_state_entity::AppStateEntity::new_with_storage_runtime(
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("test storage"),
+        )
+        .expect("test app state");
+        state.connections_mut().insert(profile_id, connected);
+
+        let item = Sidebar::build_profile_item_with_errors(
+            &profile,
+            &state,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let ids: Vec<_> = item
+            .children
+            .iter()
+            .map(|child| child.id.as_ref().parse::<SchemaNodeId>())
+            .collect();
+        assert!(
+            matches!(ids.as_slice(), [Ok(SchemaNodeId::Database { name, .. })] if name == "move"),
+            "{ids:?}"
+        );
+    }
+
+    #[test]
+    fn recovered_database_rows_follow_the_database_filter() {
+        use dbflux_core::{DatabaseInfo, DbConfig};
+
+        let mut profile = dbflux_core::ConnectionProfile::new("test", {
+            let mut config = DbConfig::default_postgres();
+            if let DbConfig::Postgres { database, .. } = &mut config {
+                *database = "move".to_string();
+            }
+            config
+        });
+        let listed: Vec<DatabaseInfo> = ["move", "postgres"]
+            .into_iter()
+            .map(|name| DatabaseInfo {
+                name: name.to_string(),
+                is_current: false,
+            })
+            .collect();
+
+        assert!(!super::hides_database(&profile, Some(&listed), "postgres"));
+
+        profile.show_all_databases = false;
+        assert!(super::hides_database(&profile, Some(&listed), "postgres"));
+        assert!(!super::hides_database(&profile, Some(&listed), "move"));
+        assert!(
+            !super::hides_database(&profile, Some(&listed[1..]), "postgres"),
+            "a configured database the server does not list hides nothing"
+        );
     }
 
     #[test]

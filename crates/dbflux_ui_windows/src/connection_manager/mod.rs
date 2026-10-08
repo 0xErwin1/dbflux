@@ -1957,7 +1957,7 @@ impl ConnectionManagerWindow {
                 tab.sections
                     .iter()
                     .flat_map(|section| section.fields.iter())
-                    .any(|field| field.id == "database")
+                    .any(|field| field.id == "database" && field.kind == FormFieldKind::Text)
             })
     }
 
