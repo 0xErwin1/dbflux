@@ -5,6 +5,8 @@ use crate::completion_support::{
     scan_identifier_start,
 };
 use dbflux_core::{SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis};
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
@@ -715,17 +717,44 @@ fn build_sql_completion_metadata<'a>(
     metadata
 }
 
-/// Push-helper for the SQL item builders: applies the typed-prefix filter and
-/// an optional rank group to whole candidate sets.
+/// Push-helper for the SQL item builders: filters whole candidate sets
+/// against the typed prefix, with an optional rank group.
+///
+/// Candidates that start with the prefix keep their push order. Candidates
+/// that only fuzzy-match it (fzf-style subsequence, e.g. `messa` for
+/// `alarm_message`) are held back and appended by [`Self::finish`] after every
+/// prefix match, best score first, so fuzzy hits never push an exact
+/// continuation down the menu.
 struct SqlItemSink<'a> {
     items: Vec<CompletionItem>,
     seen: HashSet<String>,
     prefix: &'a str,
     prefix_upper: String,
     replace_range: lsp_types::Range,
+    matcher: SkimMatcherV2,
+    fuzzy_matches: Vec<FuzzyCandidate>,
+}
+
+struct FuzzyCandidate {
+    score: i64,
+    label: String,
+    kind: CompletionItemKind,
+    rank: Option<u8>,
 }
 
 impl SqlItemSink<'_> {
+    fn new<'a>(prefix: &'a str, replace_range: lsp_types::Range) -> SqlItemSink<'a> {
+        SqlItemSink {
+            items: Vec::new(),
+            seen: HashSet::new(),
+            prefix,
+            prefix_upper: prefix.to_uppercase(),
+            replace_range,
+            matcher: SkimMatcherV2::default().ignore_case(),
+            fuzzy_matches: Vec::new(),
+        }
+    }
+
     fn push_all<'c>(
         &mut self,
         candidates: impl IntoIterator<Item = &'c str>,
@@ -733,32 +762,56 @@ impl SqlItemSink<'_> {
         rank: Option<u8>,
     ) {
         for candidate in candidates {
-            if !self.prefix_upper.is_empty()
-                && !candidate.to_uppercase().starts_with(&self.prefix_upper)
+            if self.prefix_upper.is_empty()
+                || candidate.to_uppercase().starts_with(&self.prefix_upper)
             {
-                continue;
-            }
-
-            match rank {
-                Some(rank_group) => push_completion_item_ranked(
-                    &mut self.items,
-                    &mut self.seen,
-                    candidate,
+                self.push_item(candidate, kind, rank);
+            } else if let Some(score) = self.matcher.fuzzy_match(candidate, self.prefix) {
+                self.fuzzy_matches.push(FuzzyCandidate {
+                    score,
+                    label: candidate.to_string(),
                     kind,
-                    self.prefix,
-                    self.replace_range,
-                    rank_group,
-                ),
-                None => push_completion_item(
-                    &mut self.items,
-                    &mut self.seen,
-                    candidate,
-                    kind,
-                    self.prefix,
-                    self.replace_range,
-                ),
+                    rank,
+                });
             }
         }
+    }
+
+    fn push_item(&mut self, label: &str, kind: CompletionItemKind, rank: Option<u8>) {
+        match rank {
+            Some(rank_group) => push_completion_item_ranked(
+                &mut self.items,
+                &mut self.seen,
+                label,
+                kind,
+                self.prefix,
+                self.replace_range,
+                rank_group,
+            ),
+            None => push_completion_item(
+                &mut self.items,
+                &mut self.seen,
+                label,
+                kind,
+                self.prefix,
+                self.replace_range,
+            ),
+        }
+    }
+
+    fn finish(mut self) -> Vec<CompletionItem> {
+        let mut fuzzy_matches = std::mem::take(&mut self.fuzzy_matches);
+        fuzzy_matches.sort_by(|left, right| {
+            left.rank
+                .cmp(&right.rank)
+                .then(right.score.cmp(&left.score))
+        });
+
+        for candidate in fuzzy_matches {
+            self.push_item(&candidate.label, candidate.kind, candidate.rank);
+        }
+
+        self.items
     }
 
     fn has_prefix(&self) -> bool {
@@ -799,7 +852,7 @@ impl SqlItemSink<'_> {
         );
 
         if self.stop_before_keywords() {
-            return self.items;
+            return self.finish();
         }
 
         self.push_all(
@@ -807,7 +860,7 @@ impl SqlItemSink<'_> {
             CompletionItemKind::KEYWORD,
             Some(RANK_KEYWORD),
         );
-        self.items
+        self.finish()
     }
 
     /// Items for a column position: scoped columns (with the referenced-table
@@ -875,7 +928,7 @@ impl SqlItemSink<'_> {
         }
 
         if self.stop_before_keywords() {
-            return self.items;
+            return self.finish();
         }
 
         self.push_all(
@@ -883,7 +936,7 @@ impl SqlItemSink<'_> {
             CompletionItemKind::KEYWORD,
             Some(RANK_KEYWORD),
         );
-        self.items
+        self.finish()
     }
 
     /// Heuristic fallback when the cursor position could not be classified:
@@ -916,7 +969,7 @@ impl SqlItemSink<'_> {
             self.push_all(metadata.all_columns_iter(), CompletionItemKind::FIELD, None);
         }
 
-        self.items
+        self.finish()
     }
 }
 
@@ -929,13 +982,10 @@ fn sql_completion_items_with_context(
     let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
     let before_cursor = &source[..cursor];
 
-    let mut sink = SqlItemSink {
-        items: Vec::new(),
-        seen: HashSet::new(),
-        prefix: &prefix,
-        prefix_upper: prefix.to_uppercase(),
-        replace_range: completion_replace_range(source, prefix_start, cursor),
-    };
+    let mut sink = SqlItemSink::new(
+        &prefix,
+        completion_replace_range(source, prefix_start, cursor),
+    );
 
     let has_dot_before_prefix =
         prefix_start > 0 && source.as_bytes().get(prefix_start - 1) == Some(&b'.');
@@ -956,7 +1006,7 @@ fn sql_completion_items_with_context(
             CompletionItemKind::STRUCT,
             None,
         );
-        return sink.items;
+        return sink.finish();
     }
 
     let scope = analysis.map(|analysis| &analysis.scope);
@@ -2631,6 +2681,32 @@ mod tests {
         let source = "SELECT * FROM db1.t1 WHERE ";
         let items = analyzed_items(&metadata, source);
         assert!(labels(&items).contains(&"c2".to_string()));
+    }
+
+    #[test]
+    fn table_names_match_fuzzily_after_prefix_matches() {
+        let mut metadata = context_metadata();
+        metadata.add_table(&TableInfo {
+            name: "alarm_message".to_string(),
+            schema: Some("raw".to_string()),
+            columns: None,
+            ..t1_table()
+        });
+        metadata.add_table(&TableInfo {
+            name: "message_log".to_string(),
+            schema: Some("raw".to_string()),
+            columns: None,
+            ..t1_table()
+        });
+
+        let items = analyzed_items(&metadata, "SELECT * FROM raw.messa");
+        assert_eq!(labels(&items), vec!["message_log", "alarm_message"]);
+
+        let items = analyzed_items(&metadata, "SELECT * FROM rawmsg");
+        assert!(labels(&items).contains(&"raw.alarm_message".to_string()));
+
+        let items = analyzed_items(&metadata, "SELECT * FROM t1 WHERE c");
+        assert_eq!(labels(&items).first().map(String::as_str), Some("c1"));
     }
 
     #[test]
