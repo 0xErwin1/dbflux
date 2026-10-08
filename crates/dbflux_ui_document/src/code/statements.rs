@@ -32,6 +32,25 @@ fn gutter_style(theme: &gpui_component::theme::Theme) -> GutterStatementStyle {
     }
 }
 
+/// The range of `buffer` a run without a selection executes, or `None` to
+/// run the whole buffer: for a language without a statement splitter, for a
+/// single statement, and for a buffer with a compound block such as a
+/// procedure body, whose inner statements the splitter cannot tell from
+/// standalone ones.
+pub(super) fn cursor_statement(
+    language: &QueryLanguage,
+    buffer: &str,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    let ranges = language.statement_ranges(buffer)?;
+
+    if dbflux_core::contains_compound_block(buffer) {
+        return None;
+    }
+
+    statement_at_cursor(&ranges, cursor)
+}
+
 /// The statement a run without a selection executes: the last one starting
 /// at or before the cursor, so a cursor after its `;` or in the blank lines
 /// below it still runs it, and the first one when the cursor is above every
@@ -257,7 +276,9 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{result_statement_captions, run_summary_label, statement_at_cursor};
+    use super::{
+        cursor_statement, result_statement_captions, run_summary_label, statement_at_cursor,
+    };
     use dbflux_core::QueryLanguage;
 
     const BUFFER: &str = "SELECT count(*) FROM orders;\n\nSELECT c.country,\n       o.total\nFROM orders o\nJOIN customers c ON c.id = o.customer_id;\n";
@@ -297,6 +318,23 @@ mod tests {
             statement_under(BUFFER, BUFFER.len())
                 .is_some_and(|statement| statement.starts_with("SELECT c.country"))
         );
+    }
+
+    #[test]
+    fn a_buffer_with_a_procedure_body_runs_whole() {
+        let buffer = "CREATE PROCEDURE purge_logs()\nBEGIN\n  DELETE FROM logs WHERE created_at < NOW() - INTERVAL 30 DAY;\n  INSERT INTO audit (action) VALUES ('purge');\nEND;\nSELECT 1;";
+        let on_delete = buffer.find("DELETE").expect("delete line");
+
+        assert_eq!(
+            cursor_statement(&QueryLanguage::Sql, buffer, on_delete),
+            None
+        );
+
+        let transaction = "BEGIN;\nDELETE FROM logs;\nCOMMIT;";
+        let on_delete = transaction.find("DELETE").expect("delete line");
+        let range = cursor_statement(&QueryLanguage::Sql, transaction, on_delete)
+            .expect("a transaction is not a compound block");
+        assert_eq!(&transaction[range], "DELETE FROM logs");
     }
 
     #[test]

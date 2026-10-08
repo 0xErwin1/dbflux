@@ -186,11 +186,11 @@ pub use query::{
     VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec, VisualSortDirection,
     aggregate_writes_output, ceiling_permits, classify_query_for_governance,
     classify_query_for_language, classify_query_for_language_with_service, classify_sql_execution,
-    classify_visual_mutation, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
-    infer_column_kind, inline_params, is_safe_read_query, lower_keyset_predicate,
-    parse_semantic_filter_json, project_aggregate_kinds, render_filter_node_sql,
-    render_semantic_filter_sql, sql_statement_keywords, strip_leading_comments,
-    substitute_time_macros,
+    classify_visual_mutation, contains_compound_block, contains_time_macros,
+    detect_dangerous_query, detect_dangerous_sql, infer_column_kind, inline_params,
+    is_safe_read_query, lower_keyset_predicate, parse_semantic_filter_json,
+    project_aggregate_kinds, render_filter_node_sql, render_semantic_filter_sql,
+    sql_statement_keywords, strip_leading_comments, substitute_time_macros,
 };
 pub use query::{
     DocumentAccumulator, DocumentAccumulatorKind, DocumentCombinator, DocumentCondition,

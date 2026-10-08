@@ -192,11 +192,9 @@ impl CodeDocument {
 
         // Without a selection, a buffer of several statements runs only the
         // one under the cursor; selecting everything runs the whole script.
-        let cursor_statement = self
-            .effective_language()
-            .statement_ranges(&query)
-            .and_then(|ranges| statements::statement_at_cursor(&ranges, cursor))
-            .and_then(|range| Some((range.start, query.get(range)?.to_string())));
+        let cursor_statement =
+            statements::cursor_statement(&self.effective_language(), &query, cursor)
+                .and_then(|range| Some((range.start, query.get(range)?.to_string())));
 
         if let Some((origin, statement)) = cursor_statement {
             self.execution.query_origin = Some(origin);
@@ -206,7 +204,8 @@ impl CodeDocument {
 
         self.execution.query_origin = Some(0);
 
-        // A language without a statement splitter runs the whole buffer. When
+        // A language without a statement splitter, or a buffer with a
+        // compound block, runs the whole buffer. When
         // it holds more than one statement and the driver can execute batches,
         // confirm before running the entire script.
         if let Some(statement_count) = self.script_statement_count(&query, cx) {

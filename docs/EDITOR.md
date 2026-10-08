@@ -43,7 +43,9 @@ statement under the cursor runs: a cursor after a statement's `;` or in the
 blank lines below it runs that statement, and a cursor above every statement
 runs the first. To run the whole buffer, select all (`Ctrl+A`) first. A buffer
 with a single statement, or in a language without statement splitting, runs
-whole.
+whole. So does a buffer with a compound block, such as the `BEGIN ... END` body
+of a procedure or trigger, since the `;` inside it does not end a statement;
+`BEGIN` that opens a transaction is not a block.
 
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
