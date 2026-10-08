@@ -554,6 +554,10 @@ impl QueryCompletionProvider {
 struct KnownTableListing {
     database: String,
     schema: Option<String>,
+    /// The snapshot schema the table is listed under. A schema qualifier
+    /// matches it when the table carries no schema of its own; the fetch key
+    /// still uses `schema`.
+    enclosing_schema: Option<String>,
     name: String,
     has_columns: bool,
 }
@@ -576,11 +580,18 @@ fn known_relational_tables<'a>(
         && let Some(snapshot) = snapshot
         && let Some(relational) = snapshot.as_relational()
     {
-        let per_schema = relational.schemas.iter().flat_map(|schema| &schema.tables);
-        for table in relational.tables.iter().chain(per_schema) {
+        let top_level = relational.tables.iter().map(|table| (None, table));
+        let per_schema = relational.schemas.iter().flat_map(|schema| {
+            schema
+                .tables
+                .iter()
+                .map(|table| (Some(schema.name.as_str()), table))
+        });
+        for (enclosing_schema, table) in top_level.chain(per_schema) {
             tables.push(KnownTableListing {
                 database: database.to_string(),
                 schema: table.schema.clone(),
+                enclosing_schema: enclosing_schema.map(String::from),
                 name: table.name.clone(),
                 has_columns: table.columns.is_some(),
             });
@@ -592,6 +603,7 @@ fn known_relational_tables<'a>(
             tables.push(KnownTableListing {
                 database: database.clone(),
                 schema: table.schema.clone(),
+                enclosing_schema: None,
                 name: table.name.clone(),
                 has_columns: table.columns.is_some(),
             });
@@ -628,6 +640,7 @@ fn tables_needing_details(
                 let schema_matches = table
                     .schema
                     .as_deref()
+                    .or(table.enclosing_schema.as_deref())
                     .is_some_and(|schema| normalize_identifier(schema) == qualifier);
                 let database_matches = normalize_identifier(&table.database) == qualifier;
 
@@ -1489,7 +1502,7 @@ impl SqlCompletionMetadata {
         }
 
         let mut keys = vec![normalize_identifier(&table.name)];
-        if let Some(schema) = &table.schema {
+        if let Some(schema) = table.schema.as_deref().or(enclosing_schema) {
             keys.push(normalize_identifier(&format!("{}.{}", schema, table.name)));
         }
 
@@ -2567,6 +2580,25 @@ mod tests {
             table_position_labels(&metadata, "SELECT * FROM "),
             vec!["raw"]
         );
+        assert_eq!(
+            metadata.columns_for_table("raw.t1"),
+            vec!["c1", "c2", "c3"],
+            "columns are keyed under the enclosing schema"
+        );
+
+        let known = known_relational_tables(Some(&snapshot), std::iter::empty(), Some("db"));
+        let keys = tables_needing_details(
+            &[KnownTableListing {
+                has_columns: false,
+                ..known.into_iter().next().expect("listed table")
+            }],
+            &[QueryTableRef {
+                database: None,
+                schema: Some("raw".to_string()),
+                table: "t1".to_string(),
+            }],
+        );
+        assert_eq!(keys, vec![("db".to_string(), None, "t1".to_string())]);
     }
 
     #[test]
@@ -2600,6 +2632,7 @@ mod tests {
         KnownTableListing {
             database: database.to_string(),
             schema: schema.map(String::from),
+            enclosing_schema: None,
             name: name.to_string(),
             has_columns,
         }
