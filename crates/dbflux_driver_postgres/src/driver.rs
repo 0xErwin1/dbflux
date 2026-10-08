@@ -5338,9 +5338,97 @@ fn execute_bounded_request(
         Err(error) => return Err(bounded_statement_error(&error, query_id)),
     };
 
+    // A procedure that commits or rolls back fails inside the transaction
+    // the portal needs, so `CALL` keeps the streaming path.
+    if limit > 0
+        && !statement.columns().is_empty()
+        && !split_leading_keyword(sql).0.eq_ignore_ascii_case("CALL")
+        && let Some(result) = fetch_first_page(client, &statement, limit, start)
+            .map_err(|error| bounded_statement_error(&error, query_id))?
+    {
+        return Ok(result);
+    }
+
     let mut remaining_rows = limit as usize;
     stream_bounded_statement(client, &statement, &mut remaining_rows, start)
         .map_err(|error| bounded_statement_error(&error, query_id))
+}
+
+/// Fetches at most `limit` rows of a row-returning statement through a
+/// portal, so the server stops producing rows at the limit instead of
+/// streaming the whole result only for the rows past it to be dropped.
+///
+/// One row past the limit is fetched and dropped, so the result is flagged as
+/// truncated only when rows remain. PostgreSQL runs a data-modifying statement
+/// to completion before it returns its first row, so `RETURNING` keeps its
+/// full effect.
+///
+/// A portal needs a transaction block, so the statement runs in one the
+/// driver opens and commits. Returns `None` without running the statement
+/// when the session is already in a block, which the driver must not end.
+fn fetch_first_page(
+    client: &mut Client,
+    statement: &postgres::Statement,
+    limit: u32,
+    start: Instant,
+) -> Result<Option<QueryResult>, postgres::Error> {
+    match in_transaction_block(client) {
+        Ok(false) => {}
+        Ok(true) => return Ok(None),
+        Err(error) if is_in_failed_transaction(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    }
+
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let max_rows = i32::try_from(limit.saturating_add(1)).unwrap_or(i32::MAX);
+    let mut transaction = client.transaction()?;
+    let portal = transaction.bind(statement, &[])?;
+    let fetched = transaction.query_portal(&portal, max_rows)?;
+    drop(portal);
+    transaction.commit()?;
+
+    let columns = statement_columns(statement);
+    let truncated = fetched.len() > limit;
+    let rows: Vec<Row> = fetched
+        .iter()
+        .take(limit)
+        .map(|row| {
+            (0..columns.len())
+                .map(|index| postgres_value_to_value(row, index))
+                .collect()
+        })
+        .collect();
+
+    let mut result = QueryResult::table(columns, rows, None, start.elapsed());
+    result.set_rows_truncated(truncated);
+    result.set_unsupported_types(unsupported_type_names(&result.rows));
+    Ok(Some(result))
+}
+
+/// Whether the session is inside a transaction block. Outside one, each
+/// statement runs in its own implicit transaction, so the transaction and the
+/// statement start at the same time; inside an open block they differ. Unlike
+/// a `SAVEPOINT` probe, this leaves no `ERROR` in the server log.
+fn in_transaction_block(client: &mut Client) -> Result<bool, postgres::Error> {
+    let messages = client.simple_query("SELECT transaction_timestamp() = statement_timestamp()")?;
+    let outside_block = messages.iter().any(|message| {
+        matches!(message, postgres::SimpleQueryMessage::Row(row) if row.get(0) == Some("t"))
+    });
+    Ok(!outside_block)
+}
+
+fn statement_columns(statement: &postgres::Statement) -> Vec<ColumnMeta> {
+    statement
+        .columns()
+        .iter()
+        .map(|column| ColumnMeta {
+            name: column.name().to_string(),
+            type_name: column.type_().name().to_string(),
+            kind: pg_oid_to_kind(column.type_().oid()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect()
 }
 
 /// Prepares a request that splits into several statements without letting a
@@ -5398,17 +5486,7 @@ fn stream_bounded_statement(
     remaining_rows: &mut usize,
     start: Instant,
 ) -> Result<QueryResult, postgres::Error> {
-    let columns: Vec<ColumnMeta> = statement
-        .columns()
-        .iter()
-        .map(|column| ColumnMeta {
-            name: column.name().to_string(),
-            type_name: column.type_().name().to_string(),
-            kind: pg_oid_to_kind(column.type_().oid()),
-            nullable: true,
-            is_primary_key: false,
-        })
-        .collect();
+    let columns = statement_columns(statement);
 
     let mut stream = client.query_raw(statement, std::iter::empty::<i32>())?;
     let mut rows: Vec<Row> = Vec::new();

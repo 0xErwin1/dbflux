@@ -9,7 +9,7 @@
 use std::path::Path;
 
 /// Format a connection error with context and troubleshooting steps.
-pub fn connection_error(
+pub(crate) fn connection_error(
     connection_id: &str,
     driver: &str,
     error: impl std::fmt::Display,
@@ -39,7 +39,7 @@ pub fn connection_error(
 }
 
 /// Format an invalid connection ID error.
-pub fn invalid_connection_id(connection_id: &str) -> String {
+pub(crate) fn invalid_connection_id(connection_id: &str) -> String {
     format!(
         "Invalid connection ID format: '{}'\n\
          \n\
@@ -54,7 +54,7 @@ pub fn invalid_connection_id(connection_id: &str) -> String {
 }
 
 /// Format a connection not found error.
-pub fn connection_not_found(connection_id: &str) -> String {
+pub(crate) fn connection_not_found(connection_id: &str) -> String {
     format!(
         "Connection not found: {}\n\
          \n\
@@ -70,7 +70,7 @@ pub fn connection_not_found(connection_id: &str) -> String {
 }
 
 /// Format a driver not available error.
-pub fn driver_not_available(driver_id: &str, available_drivers: &[String]) -> String {
+pub(crate) fn driver_not_available(driver_id: &str, available_drivers: &[String]) -> String {
     let drivers_list = if available_drivers.is_empty() {
         "None (server built without driver features)".to_string()
     } else {
@@ -93,7 +93,7 @@ pub fn driver_not_available(driver_id: &str, available_drivers: &[String]) -> St
 }
 
 /// Format a query execution error.
-pub fn query_execution_error(
+pub(crate) fn query_execution_error(
     tool: &str,
     connection_id: &str,
     database: Option<&str>,
@@ -129,7 +129,7 @@ pub fn query_execution_error(
 }
 
 /// Format a schema operation error.
-pub fn schema_operation_error(
+pub(crate) fn schema_operation_error(
     operation: &str,
     connection_id: &str,
     database: Option<&str>,
@@ -170,7 +170,7 @@ pub fn schema_operation_error(
 }
 
 /// Format an authorization denied error.
-pub fn authorization_denied(
+pub(crate) fn authorization_denied(
     client_id: &str,
     connection_id: &str,
     tool_id: &str,
@@ -198,7 +198,7 @@ pub fn authorization_denied(
 }
 
 /// Format a connection not MCP-enabled error.
-pub fn connection_not_mcp_enabled(connection_id: &str) -> String {
+pub(crate) fn connection_not_mcp_enabled(connection_id: &str) -> String {
     format!(
         "Connection '{}' does not allow MCP access\n\
          \n\
@@ -221,7 +221,11 @@ pub fn connection_not_mcp_enabled(connection_id: &str) -> String {
 }
 
 /// Format a script operation error.
-pub fn script_error(operation: &str, script_id: &str, error: impl std::fmt::Display) -> String {
+pub(crate) fn script_error(
+    operation: &str,
+    script_id: &str,
+    error: impl std::fmt::Display,
+) -> String {
     format!(
         "Failed to {} script: {}\n\
          \n\
@@ -243,7 +247,7 @@ pub fn script_error(operation: &str, script_id: &str, error: impl std::fmt::Disp
 }
 
 /// Format a configuration error.
-pub fn config_error(
+pub(crate) fn config_error(
     operation: &str,
     config_path: Option<&Path>,
     error: impl std::fmt::Display,
@@ -273,7 +277,7 @@ pub fn config_error(
 }
 
 /// Format an audit operation error.
-pub fn audit_error(operation: &str, error: impl std::fmt::Display) -> String {
+pub(crate) fn audit_error(operation: &str, error: impl std::fmt::Display) -> String {
     format!(
         "Audit operation failed: {}\n\
          \n\
@@ -298,7 +302,7 @@ pub fn audit_error(operation: &str, error: impl std::fmt::Display) -> String {
 }
 
 /// Format a missing required field error.
-pub fn missing_required_field(tool_id: &str, field_name: &str) -> String {
+pub(crate) fn missing_required_field(tool_id: &str, field_name: &str) -> String {
     format!(
         "Missing required parameter: '{}'\n\
          \n\
@@ -314,7 +318,7 @@ pub fn missing_required_field(tool_id: &str, field_name: &str) -> String {
 }
 
 /// Format an unknown tool error with suggestions.
-pub fn unknown_tool(tool_id: &str, category: &str) -> String {
+pub(crate) fn unknown_tool(tool_id: &str, category: &str) -> String {
     format!(
         "Unknown tool: '{}'\n\
          \n\

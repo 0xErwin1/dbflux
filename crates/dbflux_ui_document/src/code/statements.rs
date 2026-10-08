@@ -32,6 +32,43 @@ fn gutter_style(theme: &gpui_component::theme::Theme) -> GutterStatementStyle {
     }
 }
 
+/// The range of `buffer` a run without a selection executes, or `None` to
+/// run the whole buffer: for a language without a statement splitter, for a
+/// single statement, and for a buffer with a compound block such as a
+/// procedure body, whose inner statements the splitter cannot tell from
+/// standalone ones.
+pub(super) fn cursor_statement(
+    language: &QueryLanguage,
+    buffer: &str,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    let ranges = language.statement_ranges(buffer)?;
+
+    if dbflux_core::contains_compound_block(buffer) {
+        return None;
+    }
+
+    statement_at_cursor(&ranges, cursor)
+}
+
+/// The statement a run without a selection executes: the last one starting
+/// at or before the cursor, so a cursor after its `;` or in the blank lines
+/// below it still runs it, and the first one when the cursor is above every
+/// statement. `None` for fewer than two statements, where the whole buffer
+/// runs.
+pub(super) fn statement_at_cursor(ranges: &[Range<usize>], cursor: usize) -> Option<Range<usize>> {
+    if ranges.len() < 2 {
+        return None;
+    }
+
+    ranges
+        .iter()
+        .rev()
+        .find(|range| range.start <= cursor)
+        .or(ranges.first())
+        .cloned()
+}
+
 /// The toolbar's run summary (AppByzEditor): "3 statements · last run
 /// 0.32 s", either part alone when the other is unknown, `None` when both
 /// are.
@@ -239,10 +276,78 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{result_statement_captions, run_summary_label};
+    use super::{
+        cursor_statement, result_statement_captions, run_summary_label, statement_at_cursor,
+    };
     use dbflux_core::QueryLanguage;
 
     const BUFFER: &str = "SELECT count(*) FROM orders;\n\nSELECT c.country,\n       o.total\nFROM orders o\nJOIN customers c ON c.id = o.customer_id;\n";
+
+    fn statement_under(buffer: &str, cursor: usize) -> Option<&str> {
+        let ranges = QueryLanguage::Sql.statement_ranges(buffer)?;
+        statement_at_cursor(&ranges, cursor).map(|range| &buffer[range])
+    }
+
+    #[test]
+    fn statement_at_cursor_picks_the_statement_the_cursor_is_in() {
+        let second = BUFFER.find("FROM orders o").expect("second statement");
+        assert_eq!(
+            statement_under(BUFFER, second),
+            Some(
+                "SELECT c.country,\n       o.total\nFROM orders o\nJOIN customers c ON c.id = o.customer_id"
+            )
+        );
+        assert_eq!(
+            statement_under(BUFFER, 3),
+            Some("SELECT count(*) FROM orders")
+        );
+    }
+
+    #[test]
+    fn statement_at_cursor_after_a_statement_runs_that_statement() {
+        let after_semicolon = BUFFER.find(';').expect("first terminator") + 1;
+        assert_eq!(
+            statement_under(BUFFER, after_semicolon),
+            Some("SELECT count(*) FROM orders")
+        );
+        assert_eq!(
+            statement_under(BUFFER, after_semicolon + 1),
+            Some("SELECT count(*) FROM orders")
+        );
+        assert!(
+            statement_under(BUFFER, BUFFER.len())
+                .is_some_and(|statement| statement.starts_with("SELECT c.country"))
+        );
+    }
+
+    #[test]
+    fn a_buffer_with_a_procedure_body_runs_whole() {
+        let buffer = "CREATE PROCEDURE purge_logs()\nBEGIN\n  DELETE FROM logs WHERE created_at < NOW() - INTERVAL 30 DAY;\n  INSERT INTO audit (action) VALUES ('purge');\nEND;\nSELECT 1;";
+        let on_delete = buffer.find("DELETE").expect("delete line");
+
+        assert_eq!(
+            cursor_statement(&QueryLanguage::Sql, buffer, on_delete),
+            None
+        );
+
+        let transaction = "BEGIN;\nDELETE FROM logs;\nCOMMIT;";
+        let on_delete = transaction.find("DELETE").expect("delete line");
+        let range = cursor_statement(&QueryLanguage::Sql, transaction, on_delete)
+            .expect("a transaction is not a compound block");
+        assert_eq!(&transaction[range], "DELETE FROM logs");
+    }
+
+    #[test]
+    fn statement_at_cursor_above_every_statement_runs_the_first() {
+        let buffer = "\n\nSELECT 1;\nSELECT 2;";
+        assert_eq!(statement_under(buffer, 0), Some("SELECT 1"));
+    }
+
+    #[test]
+    fn statement_at_cursor_leaves_a_single_statement_to_the_whole_buffer_run() {
+        assert_eq!(statement_under("SELECT 1;", 2), None);
+        assert_eq!(statement_under("", 0), None);
+    }
 
     #[test]
     fn run_summary_joins_the_statement_count_and_the_last_run() {

@@ -38,23 +38,29 @@ instead, and **Save file as…** is offered when you close them.
 - `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run query in new tab**.
 
 If a non-empty text selection exists, only the selected text runs. With no
-selection, the full editor buffer is used.
+selection and several `;`-separated statements in the buffer, only the
+statement under the cursor runs: a cursor after a statement's `;` or in the
+blank lines below it runs that statement, and a cursor above every statement
+runs the first. To run the whole buffer, select all (`Ctrl+A`) first. A buffer
+with a single statement, or in a language without statement splitting, runs
+whole. So does a buffer with a compound block, such as the `BEGIN ... END` body
+of a procedure or trigger, since the `;` inside it does not end a statement;
+`BEGIN` that opens a transaction is not a block.
 
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ## Multi-statement scripts
 
-When you run with no selection and the buffer contains multiple `;`-separated
-statements, and the active driver advertises batch support, DBFlux shows a
-confirmation dialog (`Run entire script (N statements)?`) before executing. On
-confirmation each statement's result set is rendered in its own result tab.
+To run several statements as a script, select them (`Ctrl+A` selects the
+whole buffer) and press `Ctrl+Enter`. When the active driver advertises batch
+support, each statement's result set is rendered in its own result tab.
 
 Statement splitting is language-aware for SQL-family languages: separators inside
 strings, identifiers, line/block comments, and PostgreSQL dollar-quoted bodies are
 not treated as statement boundaries. Non-SQL languages remain single-statement.
 Batch support is per-driver — among the built-in SQL drivers, PostgreSQL,
 MySQL/MariaDB, SQLite, and Microsoft SQL Server support it. A selection always
-runs as-is and never triggers the script confirmation.
+runs as-is.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/editor/multi-statement-dark.webp">

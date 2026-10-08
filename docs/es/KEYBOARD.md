@@ -232,10 +232,10 @@ de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendi
 se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
 
 `Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
-texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de
-línea los fragmentos no vacíos en orden, como al seleccionar con Alt y
-arrastrar el mouse. Si el bloque solo contiene espacios en blanco, usa todo el
-editor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
+texto no blanco; si no, ejecuta la sentencia bajo el cursor, como sin Vim. En
+Visual Bloque, une con saltos de línea los fragmentos no vacíos en orden, como
+al seleccionar con Alt y arrastrar el mouse. Si el bloque solo contiene espacios
+en blanco, ejecuta la sentencia bajo el cursor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
 las tabulaciones, los caracteres anchos y las secuencias combinadas pueden no
 alinearse con las columnas en pantalla.
 

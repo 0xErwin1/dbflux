@@ -31,6 +31,11 @@ use tokio::sync::RwLock;
 /// about something other than the approval flow.
 const ALLOW_ALL_ROLE: &str = "test/allow-all";
 
+#[expect(
+    clippy::expect_used,
+    reason = "fixture construction over a fresh in-memory runtime: built-in roles and \
+        policies cannot conflict, and a rejected insert must abort the test"
+)]
 fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     let audit_path = dbflux_audit::temp_sqlite_path(&format!(
         "integration_test_{}.sqlite",
@@ -111,6 +116,11 @@ fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     runtime
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "test fixture: an unparsable connection id means the fixture itself was \
+        built wrong and must abort the test"
+)]
 fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
     let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();
     let mut profile = dbflux_core::ConnectionProfile::new(
@@ -138,6 +148,12 @@ fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
 }
 
 fn property_schema<'a>(schema: &'a Value, field: &str) -> &'a Value {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "schema comes from schema_for! of the tool params, which always renders \
+            a 'properties' object, and indexing asserts the requested field exists; \
+            a missing field must fail the test"
+    )]
     &schema["properties"][field]
 }
 
@@ -148,6 +164,11 @@ fn property_schema<'a>(schema: &'a Value, field: &str) -> &'a Value {
 /// - Initialize config with trusted client
 /// - Grant admin role to test client
 #[allow(dead_code)]
+#[expect(
+    clippy::unimplemented,
+    reason = "deliberately unfinished stub documented above as requiring full config \
+        initialization"
+)]
 async fn setup_test_server() -> ServerState {
     // TODO: Implement full setup
     // For now, this serves as a placeholder showing the intended structure
@@ -755,6 +776,10 @@ async fn mcp_execution_writes_correlated_audit_events() {
 // Audit query fingerprint tests
 // ---------------------------------------------------------------------------
 
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a failed audit query must abort the test"
+)]
 async fn query_latest_execute_event_details(
     state: &ServerState,
     tool_id: &str,
