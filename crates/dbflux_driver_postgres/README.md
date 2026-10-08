@@ -54,7 +54,7 @@ Exposes tabular snapshots of running server state:
 
 ## Limitations
 
-- Row limits cap retained rows, not server work, network traffic, or execution time; mutations still complete all effects.
+- A row-limited single statement that returns rows stops reading at the limit: it runs in a transaction the driver opens and commits, and fetches at most the limit through a portal, so the server stops producing rows there. A result that fills the limit is flagged as truncated even when no rows remain, and an error the statement would raise in a later row is not reported. Mutations with `RETURNING` still complete all effects. Inside an open transaction, and in row-limited batches, row limits cap retained rows only, not server work, network traffic, or execution time. To detect an open transaction the driver runs a `SAVEPOINT` probe first, so the server logs one `ERROR` (SQLSTATE `25P01`) for each such statement run outside a transaction.
 - Row limits on instance metrics and inspectors are rejected before dispatch. Unbounded batches retain their buffered behavior.
 - A row-limited batch refuses, before any statement runs, `PREPARE TRANSACTION`, and a `SAVEPOINT`, `RELEASE`, `ROLLBACK TO`, or chained `COMMIT`/`ROLLBACK` that follows statements outside an explicit transaction. PostgreSQL rejects those inside its implicit transaction block, while the transaction the driver opens would accept them.
 - Statements that cannot run inside a transaction block, such as `VACUUM` or `CREATE INDEX CONCURRENTLY`, fail inside a row-limited batch with PostgreSQL's own error, as they do in an unbounded batch.

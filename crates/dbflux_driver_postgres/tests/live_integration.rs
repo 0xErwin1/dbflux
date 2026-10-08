@@ -1420,14 +1420,64 @@ fn postgres_query_safety_limit_below_exact_and_over_retains_and_flags() -> Resul
             &connection.execute(&QueryRequest::new(sql).with_limit(8))?,
             5,
         );
-        assert_no_rows_truncated(
-            &connection.execute(&QueryRequest::new(sql).with_limit(5))?,
-            5,
-        );
+        // The read stops at the limit, so a result that exactly fills it
+        // cannot tell whether rows remain and is flagged.
+        let exact = connection.execute(&QueryRequest::new(sql).with_limit(5))?;
+        assert_eq!(exact.rows.len(), 5);
+        assert!(exact.rows_truncated());
         let over = connection.execute(&QueryRequest::new(sql).with_limit(3))?;
         assert_eq!(over.rows.len(), 3);
         assert_eq!(over.rows[0][0], Value::Int(1));
         assert!(over.rows_truncated());
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_stops_reading_at_the_limit() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        // Row 1000 divides by zero, so the query only succeeds when the
+        // server stops producing rows before it.
+        let sql = "SELECT 1 / (g - 1000) AS v FROM generate_series(1, 2000) g";
+        let limited = connection.execute(&QueryRequest::new(sql).with_limit(10))?;
+        assert_eq!(limited.rows.len(), 10);
+        assert!(limited.rows_truncated());
+
+        connection
+            .execute(&QueryRequest::new(sql).with_limit(5000))
+            .expect_err("reading past row 1000 must fail");
+        connection.execute(&QueryRequest::new("SELECT 1").with_limit(10))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_leaves_an_open_transaction_open() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_open_block (id INTEGER PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO safety_open_block SELECT g FROM generate_series(1, 5) g",
+        ))?;
+
+        let inside = connection
+            .execute(&QueryRequest::new("SELECT id FROM safety_open_block").with_limit(2))?;
+        assert_eq!(inside.rows.len(), 2);
+        assert!(inside.rows_truncated());
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_open_block"))?
+                .rows[0][0],
+            Value::Int(0)
+        );
         Ok(())
     })
 }
@@ -1477,29 +1527,6 @@ fn postgres_query_safety_returning_above_cap_completes_effects_and_truncates() -
                 ))?
                 .rows[0][0],
             Value::Int(5)
-        );
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires Docker daemon"]
-fn postgres_query_safety_late_stream_error_propagates_after_cap_reached() -> Result<(), DbError> {
-    containers::with_postgres_url(|uri| {
-        let (connection, _) = connect_postgres(uri)?;
-        let result = connection.execute(
-            &QueryRequest::new("SELECT g, 1 / (g - 3) FROM generate_series(1, 10) g").with_limit(2),
-        );
-        assert!(
-            matches!(result, Err(DbError::QueryFailed(_))),
-            "late division error must propagate: {result:?}"
-        );
-        assert_eq!(
-            connection
-                .execute(&QueryRequest::new("SELECT 1"))?
-                .rows
-                .len(),
-            1
         );
         Ok(())
     })
@@ -2359,7 +2386,7 @@ fn postgres_query_safety_capped_single_statement_with_trailing_comments_executes
             "SELECT 1; /* trailing block comment */",
         ] {
             assert_no_rows_truncated(
-                &connection.execute(&QueryRequest::new(sql).with_limit(1))?,
+                &connection.execute(&QueryRequest::new(sql).with_limit(2))?,
                 1,
             );
         }
@@ -2374,7 +2401,7 @@ fn postgres_query_safety_capped_quoted_semicolons_and_dollar_quotes_execute() ->
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
         for (sql, expected) in [("SELECT ';'::text", ";"), ("SELECT $$a;b$$::text", "a;b")] {
-            let result = connection.execute(&QueryRequest::new(sql).with_limit(1))?;
+            let result = connection.execute(&QueryRequest::new(sql).with_limit(2))?;
             assert_no_rows_truncated(&result, 1);
             assert_eq!(result.rows[0][0], Value::Text(expected.to_string()));
         }
@@ -2389,7 +2416,7 @@ fn postgres_query_safety_capped_single_statement_with_trailing_nested_comment_ex
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
         let result = connection.execute(
-            &QueryRequest::new("SELECT 1; /* outer /* inner */ still outer */").with_limit(1),
+            &QueryRequest::new("SELECT 1; /* outer /* inner */ still outer */").with_limit(2),
         )?;
         assert_no_rows_truncated(&result, 1);
         assert_eq!(result.rows[0][0], Value::Int(1));

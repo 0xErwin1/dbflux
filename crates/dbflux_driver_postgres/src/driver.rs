@@ -5338,9 +5338,84 @@ fn execute_bounded_request(
         Err(error) => return Err(bounded_statement_error(&error, query_id)),
     };
 
+    if limit > 0
+        && !statement.columns().is_empty()
+        && let Some(result) = fetch_first_page(client, &statement, limit, start)
+            .map_err(|error| bounded_statement_error(&error, query_id))?
+    {
+        return Ok(result);
+    }
+
     let mut remaining_rows = limit as usize;
     stream_bounded_statement(client, &statement, &mut remaining_rows, start)
         .map_err(|error| bounded_statement_error(&error, query_id))
+}
+
+/// Fetches at most `limit` rows of a row-returning statement through a
+/// portal, so the server stops producing rows at the limit instead of
+/// streaming the whole result only for the rows past it to be dropped.
+///
+/// Whether rows remain past a full page is unknown without reading them, so a
+/// full page is flagged as truncated. PostgreSQL runs a data-modifying
+/// statement to completion before it returns its first row, so `RETURNING`
+/// keeps its full effect.
+///
+/// A portal needs a transaction block, so the statement runs in one the
+/// driver opens and commits. Returns `None` without running the statement
+/// when the session is already in a block, which the driver must not end.
+fn fetch_first_page(
+    client: &mut Client,
+    statement: &postgres::Statement,
+    limit: u32,
+    start: Instant,
+) -> Result<Option<QueryResult>, postgres::Error> {
+    match client.batch_execute("SAVEPOINT dbflux_page_probe") {
+        Ok(()) => {
+            client.batch_execute("RELEASE SAVEPOINT dbflux_page_probe")?;
+            return Ok(None);
+        }
+        Err(error)
+            if error.code() == Some(&postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) => {}
+        Err(error) if is_in_failed_transaction(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    }
+
+    let max_rows = i32::try_from(limit).unwrap_or(i32::MAX);
+    let mut transaction = client.transaction()?;
+    let portal = transaction.bind(statement, &[])?;
+    let fetched = transaction.query_portal(&portal, max_rows)?;
+    drop(portal);
+    transaction.commit()?;
+
+    let columns = statement_columns(statement);
+    let truncated = fetched.len() >= max_rows as usize;
+    let rows: Vec<Row> = fetched
+        .iter()
+        .map(|row| {
+            (0..columns.len())
+                .map(|index| postgres_value_to_value(row, index))
+                .collect()
+        })
+        .collect();
+
+    let mut result = QueryResult::table(columns, rows, None, start.elapsed());
+    result.set_rows_truncated(truncated);
+    result.set_unsupported_types(unsupported_type_names(&result.rows));
+    Ok(Some(result))
+}
+
+fn statement_columns(statement: &postgres::Statement) -> Vec<ColumnMeta> {
+    statement
+        .columns()
+        .iter()
+        .map(|column| ColumnMeta {
+            name: column.name().to_string(),
+            type_name: column.type_().name().to_string(),
+            kind: pg_oid_to_kind(column.type_().oid()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect()
 }
 
 /// Prepares a request that splits into several statements without letting a
@@ -5398,17 +5473,7 @@ fn stream_bounded_statement(
     remaining_rows: &mut usize,
     start: Instant,
 ) -> Result<QueryResult, postgres::Error> {
-    let columns: Vec<ColumnMeta> = statement
-        .columns()
-        .iter()
-        .map(|column| ColumnMeta {
-            name: column.name().to_string(),
-            type_name: column.type_().name().to_string(),
-            kind: pg_oid_to_kind(column.type_().oid()),
-            nullable: true,
-            is_primary_key: false,
-        })
-        .collect();
+    let columns = statement_columns(statement);
 
     let mut stream = client.query_raw(statement, std::iter::empty::<i32>())?;
     let mut rows: Vec<Row> = Vec::new();
