@@ -26,6 +26,8 @@ pub(crate) struct QueryCompletionProvider {
     /// The document's selected database (document-local; the document
     /// reattaches the provider when it changes).
     database: Option<String>,
+    /// The document's selected schema, same reattach discipline as `database`.
+    schema: Option<String>,
     /// Fetch keys with an in-flight or completed table-details prefetch. A
     /// key is added once the fetch is actually spawned and removed if the
     /// fetch fails, so a transient error does not block retry for the session.
@@ -48,6 +50,7 @@ impl QueryCompletionProvider {
         app_state: Entity<AppStateEntity>,
         connection_id: Option<Uuid>,
         database: Option<String>,
+        schema: Option<String>,
         completion_query_generation: Rc<Cell<u64>>,
     ) -> Self {
         Self {
@@ -55,6 +58,7 @@ impl QueryCompletionProvider {
             app_state,
             connection_id,
             database,
+            schema,
             prefetched_tables: Rc::new(RefCell::new(HashSet::new())),
             prefetched_databases: Rc::new(RefCell::new(HashSet::new())),
             sql_context: SqlContextEngine::new(),
@@ -237,7 +241,7 @@ impl QueryCompletionProvider {
             }
         });
 
-        build_sql_completion_metadata(
+        let mut metadata = build_sql_completion_metadata(
             snapshot,
             connected
                 .database_schemas
@@ -250,7 +254,24 @@ impl QueryCompletionProvider {
                 .filter(|((database, _, _), _)| database_in_scope(database))
                 .map(|(_, details)| details),
             is_document_category,
-        )
+        );
+
+        // Drivers with real schemas complete a table reference schema first:
+        // `ra` offers the schema `raw`, and `raw.` then lists its tables.
+        // Drivers without them may still tag tables with a database name as
+        // their schema, so they keep the flat table list.
+        if connected
+            .connection
+            .metadata()
+            .capabilities
+            .contains(dbflux_core::DriverCapabilities::SCHEMAS)
+        {
+            metadata.schema_first = Some(SchemaFirst {
+                selected_schema: self.schema.as_deref().map(normalize_identifier),
+            });
+        }
+
+        metadata
     }
 
     fn mongo_completion_metadata(&self, cx: &App) -> MongoCompletionMetadata {
@@ -683,6 +704,8 @@ fn build_sql_completion_metadata<'a>(
             }
 
             for schema in &relational.schemas {
+                metadata.schema_names.insert(schema.name.clone());
+
                 for table in &schema.tables {
                     metadata.add_table(table);
                 }
@@ -831,6 +854,50 @@ impl SqlItemSink<'_> {
         self.items
     }
 
+    /// Tables and views for a table position. Schema-first metadata offers
+    /// the selected schema's relations unqualified, relations without a
+    /// schema, and the schema names themselves; a schema's other relations
+    /// are reached by typing `schema.`. Otherwise every relation is offered
+    /// both bare and schema-qualified.
+    fn push_relations(
+        &mut self,
+        metadata: &SqlCompletionMetadata,
+        relation_rank: Option<u8>,
+        schema_rank: Option<u8>,
+    ) {
+        let Some(schema_first) = &metadata.schema_first else {
+            self.push_all(
+                metadata.table_names_iter(),
+                CompletionItemKind::STRUCT,
+                relation_rank,
+            );
+            self.push_all(
+                metadata.view_names_iter(),
+                CompletionItemKind::STRUCT,
+                relation_rank,
+            );
+            return;
+        };
+
+        if let Some(schema) = &schema_first.selected_schema {
+            self.push_all(
+                metadata.relations_in_schema(schema),
+                CompletionItemKind::STRUCT,
+                relation_rank,
+            );
+        }
+        self.push_all(
+            metadata.unqualified_relations.iter().map(String::as_str),
+            CompletionItemKind::STRUCT,
+            relation_rank,
+        );
+        self.push_all(
+            metadata.schema_names.iter().map(String::as_str),
+            CompletionItemKind::MODULE,
+            schema_rank,
+        );
+    }
+
     fn has_prefix(&self) -> bool {
         !self.prefix_upper.is_empty()
     }
@@ -857,16 +924,7 @@ impl SqlItemSink<'_> {
             );
         }
 
-        self.push_all(
-            metadata.table_names_iter(),
-            CompletionItemKind::STRUCT,
-            Some(RANK_PRIMARY),
-        );
-        self.push_all(
-            metadata.view_names_iter(),
-            CompletionItemKind::STRUCT,
-            Some(RANK_PRIMARY),
-        );
+        self.push_relations(metadata, Some(RANK_PRIMARY), Some(RANK_SECONDARY));
 
         if self.stop_before_keywords() {
             return self.finish();
@@ -974,12 +1032,7 @@ impl SqlItemSink<'_> {
 
         let in_table_context = is_sql_table_context(before_cursor);
         if in_table_context || self.has_prefix() {
-            self.push_all(
-                metadata.table_names_iter(),
-                CompletionItemKind::STRUCT,
-                None,
-            );
-            self.push_all(metadata.view_names_iter(), CompletionItemKind::STRUCT, None);
+            self.push_relations(metadata, None, None);
         }
 
         if !in_table_context && self.has_prefix() {
@@ -1396,16 +1449,33 @@ struct SqlCompletionMetadata {
     /// Bare table and view names keyed by normalized schema name, so a
     /// `schema.` qualifier can list the relations of that schema.
     relations_by_schema: HashMap<String, BTreeSet<String>>,
+    /// Schema names as the driver spells them.
+    schema_names: BTreeSet<String>,
+    /// Tables and views that belong to no schema.
+    unqualified_relations: BTreeSet<String>,
+    /// Set when table positions complete schema first (see `push_relations`).
+    schema_first: Option<SchemaFirst>,
+}
+
+struct SchemaFirst {
+    /// The document's selected schema, normalized, whose relations are
+    /// offered without a qualifier.
+    selected_schema: Option<String>,
 }
 
 impl SqlCompletionMetadata {
     fn add_table(&mut self, table: &dbflux_core::TableInfo) {
         self.table_names.insert(table.name.clone());
 
-        if let Some(schema) = &table.schema {
-            self.table_names
-                .insert(format!("{}.{}", schema, table.name));
-            self.add_schema_relation(schema, &table.name);
+        match &table.schema {
+            Some(schema) => {
+                self.table_names
+                    .insert(format!("{}.{}", schema, table.name));
+                self.add_schema_relation(schema, &table.name);
+            }
+            None => {
+                self.unqualified_relations.insert(table.name.clone());
+            }
         }
 
         let mut keys = vec![normalize_identifier(&table.name)];
@@ -1438,13 +1508,19 @@ impl SqlCompletionMetadata {
     fn add_view(&mut self, view: &dbflux_core::ViewInfo) {
         self.view_names.insert(view.name.clone());
 
-        if let Some(schema) = &view.schema {
-            self.view_names.insert(format!("{}.{}", schema, view.name));
-            self.add_schema_relation(schema, &view.name);
+        match &view.schema {
+            Some(schema) => {
+                self.view_names.insert(format!("{}.{}", schema, view.name));
+                self.add_schema_relation(schema, &view.name);
+            }
+            None => {
+                self.unqualified_relations.insert(view.name.clone());
+            }
         }
     }
 
     fn add_schema_relation(&mut self, schema: &str, name: &str) {
+        self.schema_names.insert(schema.to_string());
         self.relations_by_schema
             .entry(normalize_identifier(schema))
             .or_default()
@@ -2377,6 +2453,78 @@ mod tests {
         assert!(labels.contains(&"events".to_string()));
         assert!(labels.contains(&"event_counts".to_string()));
         assert!(!labels.contains(&"users".to_string()));
+    }
+
+    /// The example from #980: `raw`, `reporting`, and `public` schemas.
+    fn schema_first_metadata(selected_schema: Option<&str>) -> SqlCompletionMetadata {
+        let mut metadata = SqlCompletionMetadata::default();
+        for (schema, table) in [
+            ("raw", "messages"),
+            ("raw", "rates_raw"),
+            ("reporting", "daily_rates"),
+            ("reporting", "revenue"),
+            ("public", "rates"),
+            ("public", "users"),
+        ] {
+            metadata.add_table(&TableInfo {
+                name: table.to_string(),
+                schema: Some(schema.to_string()),
+                ..t1_table()
+            });
+        }
+        metadata.schema_first = Some(super::SchemaFirst {
+            selected_schema: selected_schema.map(normalize_identifier),
+        });
+        metadata
+    }
+
+    /// Completion labels without SQL keywords.
+    fn non_keyword_labels(items: &[CompletionItem]) -> Vec<String> {
+        let mut found = labels(items);
+        found.retain(|label| !label.chars().all(|c| c.is_ascii_uppercase() || c == '_'));
+        found
+    }
+
+    fn table_position_labels(metadata: &SqlCompletionMetadata, source: &str) -> Vec<String> {
+        non_keyword_labels(&analyzed_items(metadata, source))
+    }
+
+    #[test]
+    fn without_a_selected_schema_a_table_position_offers_schemas_only() {
+        let metadata = schema_first_metadata(None);
+
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM ra"),
+            vec!["raw"]
+        );
+        assert_eq!(
+            non_keyword_labels(&sql_completion_items(&metadata, "SELECT * FROM ra", 16)),
+            vec!["raw"]
+        );
+        assert_eq!(
+            labels(&analyzed_items(&metadata, "SELECT * FROM raw.")),
+            vec!["messages", "rates_raw"]
+        );
+    }
+
+    #[test]
+    fn a_selected_schema_offers_its_tables_unqualified_and_the_schemas() {
+        let metadata = schema_first_metadata(Some("public"));
+
+        let found = table_position_labels(&metadata, "SELECT * FROM ra");
+        assert_eq!(found, vec!["rates", "raw"]);
+        assert!(!found.iter().any(|label| label.contains('.')));
+    }
+
+    #[test]
+    fn without_schema_first_tables_stay_bare_and_qualified() {
+        let mut metadata = schema_first_metadata(None);
+        metadata.schema_first = None;
+
+        let found = labels(&sql_completion_items(&metadata, "SELECT * FROM ra", 16));
+        assert!(found.contains(&"raw.messages".to_string()));
+        assert!(found.contains(&"rates".to_string()));
+        assert!(!found.contains(&"raw".to_string()));
     }
 
     #[test]

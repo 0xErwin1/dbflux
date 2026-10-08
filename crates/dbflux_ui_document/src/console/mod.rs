@@ -162,6 +162,7 @@ impl NativeConsole {
                     app_state.clone(),
                     Some(target.profile_id),
                     target.database.clone(),
+                    None,
                     Rc::new(Cell::new(0)),
                 ));
                 provider

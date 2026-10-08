@@ -912,6 +912,7 @@ impl CodeDocument {
                 app_state.clone(),
                 connection_id,
                 exec_ctx.database.clone(),
+                exec_ctx.schema.clone(),
                 completion_query_generation.clone(),
             ));
 
