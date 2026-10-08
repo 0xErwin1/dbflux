@@ -2298,7 +2298,7 @@ fn interrupted_operators_do_not_capture_a_later_motion(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn visual_run_query_executes_selected_sql_and_whitespace_falls_back_to_buffer(
+fn visual_run_query_executes_selected_sql_and_whitespace_falls_back_to_cursor_statement(
     cx: &mut TestAppContext,
 ) {
     let mut editor = open_editor_with(
@@ -2380,7 +2380,7 @@ fn visual_run_query_executes_selected_sql_and_whitespace_falls_back_to_buffer(
             .iter()
             .map(|request| request.sql.as_str())
             .collect::<Vec<_>>(),
-        vec!["SELECT 1;", "  SELECT 1;  \nSELECT 2;"]
+        vec!["SELECT 1;", "SELECT 1"]
     );
 }
 

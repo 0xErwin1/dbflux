@@ -88,3 +88,6 @@ tempfile = "3.10"
 
 # Async test runtime
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

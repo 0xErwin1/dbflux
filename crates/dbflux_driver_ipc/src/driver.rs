@@ -452,6 +452,10 @@ impl IpcDriver {
 
         let mut index = 0;
         while index < args.len() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the loop guard re-checks `index < args.len()` before every iteration, so this index is in bounds"
+            )]
             match args[index].as_str() {
                 "--driver" => {
                     let value = args

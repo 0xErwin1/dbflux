@@ -159,6 +159,97 @@ pub fn is_safe_read_query(sql: &str) -> bool {
         )
 }
 
+/// Whether `sql` holds a compound block: the `BEGIN ... END` body of a
+/// procedure, function or trigger, an anonymous block, `BEGIN TRY` or
+/// `BEGIN ATOMIC`. The statement splitter cuts such a block at its inner `;`,
+/// so its pieces are not standalone statements.
+///
+/// A `BEGIN` that opens a transaction is not a block, nor one used as a
+/// column name (MySQL allows `begin` unquoted). A block counts only when every
+/// dialect sees it outside comments, strings and quoted bodies, so a
+/// PostgreSQL `DO $$ BEGIN ... END $$` body is not one.
+pub fn contains_compound_block(sql: &str) -> bool {
+    DIALECT_RULES.iter().all(|rules| {
+        let tokens = tokenize(sql, rules);
+        tokens.iter().enumerate().any(|(index, token)| {
+            let previous = index.checked_sub(1).and_then(|index| tokens.get(index));
+            let next = tokens.get(index + 1);
+
+            token.word() == Some("BEGIN")
+                && !begin_opens_transaction(next)
+                && !begin_is_identifier(previous, next)
+        })
+    })
+}
+
+/// Whether a `BEGIN` between `previous` and `next` is a column or table name:
+/// qualified (`t.begin`), followed by a symbol (`begin,`, `begin = 1`), or
+/// followed by a word that continues an expression or clause. Anything else
+/// is taken as a block, which only makes the editor run the whole buffer.
+fn begin_is_identifier(previous: Option<&Token>, next: Option<&Token>) -> bool {
+    if previous.is_some_and(|token| token.is_symbol('.')) {
+        return true;
+    }
+
+    match next {
+        Some(Token {
+            kind: TokenKind::Symbol(symbol),
+        }) => *symbol != ';',
+        Some(token) => matches!(
+            token.word(),
+            Some(
+                "FROM"
+                    | "AS"
+                    | "WHERE"
+                    | "AND"
+                    | "OR"
+                    | "IS"
+                    | "IN"
+                    | "LIKE"
+                    | "BETWEEN"
+                    | "ORDER"
+                    | "GROUP"
+                    | "HAVING"
+                    | "LIMIT"
+                    | "ON"
+                    | "JOIN"
+                    | "INTO"
+                    | "UNION"
+                    | "ASC"
+                    | "DESC"
+                    | "THEN"
+                    | "ELSE"
+                    | "END"
+            )
+        ),
+        None => false,
+    }
+}
+
+/// Whether a `BEGIN` followed by `next` opens a transaction (`BEGIN;`,
+/// `BEGIN TRANSACTION`, `BEGIN ISOLATION LEVEL ...`, SQLite's
+/// `BEGIN IMMEDIATE`) rather than a compound block.
+fn begin_opens_transaction(next: Option<&Token>) -> bool {
+    match next {
+        None => true,
+        Some(token) if token.is_symbol(';') => true,
+        Some(token) => matches!(
+            token.word(),
+            Some(
+                "TRANSACTION"
+                    | "TRAN"
+                    | "WORK"
+                    | "ISOLATION"
+                    | "READ"
+                    | "DEFERRED"
+                    | "IMMEDIATE"
+                    | "EXCLUSIVE"
+                    | "DISTRIBUTED"
+            )
+        ),
+    }
+}
+
 fn classify_with_rules(sql: &str, rules: &LexRules) -> ExecutionClassification {
     let tokens = tokenize(sql, rules);
 
@@ -604,7 +695,10 @@ mod tests {
 
     use crate::QueryLanguage;
 
-    use super::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
+    use super::{
+        classify_query_for_governance, classify_sql_execution, contains_compound_block,
+        is_safe_read_query,
+    };
 
     #[test]
     fn allows_basic_read_queries() {
@@ -876,6 +970,50 @@ mod tests {
             ],
             ExecutionClassification::Write,
         );
+    }
+
+    #[test]
+    fn compound_blocks_are_told_apart_from_transactions() {
+        let procedure = "CREATE PROCEDURE purge_logs()\nBEGIN\n  DELETE FROM logs WHERE id < 10;\n  INSERT INTO audit (action) VALUES ('purge');\nEND;";
+        assert!(contains_compound_block(procedure));
+        assert!(contains_compound_block(
+            "BEGIN TRY\n  SELECT 1;\nEND TRY\nBEGIN CATCH\n  SELECT 2;\nEND CATCH;"
+        ));
+        assert!(contains_compound_block("BEGIN NOT ATOMIC SELECT 1; END;"));
+
+        for transaction in [
+            "BEGIN; SELECT 1; COMMIT;",
+            "BEGIN",
+            "BEGIN TRANSACTION; SELECT 1; COMMIT;",
+            "BEGIN TRAN; SELECT 1; COMMIT TRAN;",
+            "BEGIN WORK; SELECT 1; COMMIT;",
+            "BEGIN ISOLATION LEVEL SERIALIZABLE; SELECT 1; COMMIT;",
+            "BEGIN IMMEDIATE; SELECT 1; COMMIT;",
+        ] {
+            assert!(!contains_compound_block(transaction), "{transaction}");
+        }
+
+        assert!(!contains_compound_block(
+            "DO $$ BEGIN PERFORM 1; END $$; SELECT 1;"
+        ));
+        assert!(!contains_compound_block("SELECT 'BEGIN x'; SELECT 1;"));
+        assert!(contains_compound_block(
+            "CREATE PROCEDURE p AS BEGIN SELECT 1; SELECT 2; END;"
+        ));
+        assert!(contains_compound_block(
+            "IF @x = 1 BEGIN SELECT 1; SELECT 2; END"
+        ));
+
+        for identifier in [
+            "SELECT begin FROM t; SELECT 2;",
+            "SELECT t.begin, x FROM t; SELECT 2;",
+            "UPDATE t SET begin = 1 WHERE begin > 0; SELECT 2;",
+            "SELECT * FROM t ORDER BY begin DESC; SELECT 2;",
+            "SELECT begin AS started FROM t; SELECT 2;",
+        ] {
+            assert!(!contains_compound_block(identifier), "{identifier}");
+        }
+        assert!(!contains_compound_block("-- BEGIN x\nSELECT 1; SELECT 2;"));
     }
 
     #[test]

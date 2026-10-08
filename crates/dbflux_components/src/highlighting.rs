@@ -35,7 +35,7 @@ pub fn register_languages() {
             "sql",
             tree_sitter::Language::new(tree_sitter_sequel::LANGUAGE),
             vec![],
-            tree_sitter_sequel::HIGHLIGHTS_QUERY,
+            &sql_highlights_query(),
             "",
             "",
         ),
@@ -119,6 +119,57 @@ pub fn register_languages() {
     registry.register("text", &plaintext);
 }
 
+/// SQL captures that correct the grammar's own query. They come first
+/// because the first capture of a node wins, and each falls back to an
+/// existing role (`keyword.conditional` to `keyword`).
+const SQL_HIGHLIGHT_FIXES: &str = r#"
+; The grammar's number patterns use Lua `%d`, which a regex never matches,
+; so numbers fell through to the string capture.
+((literal) @number
+  (#match? @number "^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$"))
+; `conditional` has no style, so these had no color.
+[
+  (keyword_case)
+  (keyword_when)
+  (keyword_then)
+  (keyword_else)
+] @keyword.conditional
+; The grammar captures these as `type.qualifier`, which falls back to the
+; type color.
+[
+ (keyword_restrict)
+ (keyword_unbounded)
+ (keyword_unique)
+ (keyword_cascade)
+ (keyword_delayed)
+ (keyword_high_priority)
+ (keyword_low_priority)
+ (keyword_ignore)
+ (keyword_nothing)
+ (keyword_check)
+ (keyword_option)
+ (keyword_local)
+ (keyword_cascaded)
+ (keyword_wait)
+ (keyword_nowait)
+ (keyword_metadata)
+ (keyword_incremental)
+ (keyword_bin_pack)
+ (keyword_noscan)
+ (keyword_stats)
+ (keyword_statistics)
+ (keyword_maxvalue)
+ (keyword_minvalue)
+] @keyword.modifier
+"#;
+
+fn sql_highlights_query() -> String {
+    format!(
+        "{SQL_HIGHLIGHT_FIXES}\n{}",
+        tree_sitter_sequel::HIGHLIGHTS_QUERY
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +219,76 @@ mod tests {
             QueryLanguage::Bash,
             QueryLanguage::Custom("custom".to_string()),
         ]
+    }
+    /// Highlight roles of each token in `source`, by capture name.
+    fn sql_roles(source: &str) -> Vec<(String, String)> {
+        use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
+
+        let names = [
+            "keyword",
+            "function",
+            "type",
+            "variable",
+            "string",
+            "number",
+            "operator",
+            "punctuation.delimiter",
+            "punctuation.bracket",
+            "attribute",
+            "comment",
+        ];
+        let mut syntax = serde_json::Map::new();
+        for (index, name) in names.iter().enumerate() {
+            syntax.insert(
+                name.to_string(),
+                serde_json::json!({ "color": format!("#0000{:02x}", index + 1) }),
+            );
+        }
+        let theme: HighlightTheme = serde_json::from_value(serde_json::json!({
+            "name": "probe",
+            "appearance": "dark",
+            "style": { "syntax": syntax },
+        }))
+        .expect("probe theme");
+
+        register_languages();
+        let rope = gpui_component::Rope::from(source);
+        let mut highlighter = SyntaxHighlighter::new("sql");
+        highlighter.update(None, &rope, None);
+
+        highlighter
+            .styles(&(0..source.len()), &theme)
+            .into_iter()
+            .filter_map(|(range, style)| {
+                let color = style.color?;
+                let index = names.iter().position(|name| {
+                    theme.style.syntax.style(name).and_then(|style| style.color) == Some(color)
+                })?;
+                let text = source[range].trim().to_string();
+                (!text.is_empty()).then(|| (text, names[index].to_string()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sql_numbers_and_keywords_take_their_roles() {
+        let roles = sql_roles(
+            "SELECT 1, 1.5, 1e3, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
+             CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);",
+        );
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+
+        for number in ["1", "1.5", "1e3"] {
+            assert_eq!(role_of(number), Some("number"), "{number}");
+        }
+        assert_eq!(role_of("'7'"), Some("string"));
+        for keyword in ["CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
+            assert_eq!(role_of(keyword), Some("keyword"), "{keyword}");
+        }
     }
 }

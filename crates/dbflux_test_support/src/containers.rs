@@ -31,6 +31,11 @@ fn hub_image(image: &str, tag: &str) -> GenericImage {
     GenericImage::new(name, tag.to_string())
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -60,6 +65,11 @@ where
 /// a deliberately different database name (`testdb`) makes a swallowed
 /// `dbname=` connection parameter observable instead of silently falling back
 /// to the user name.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_trust_postgres_port<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(u16) -> Result<T, E>,
@@ -81,6 +91,11 @@ where
     run(port)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_pgvector_postgres_16_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -105,6 +120,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_mysql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -124,6 +144,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_mongodb_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -141,6 +166,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_redis_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -170,6 +200,11 @@ where
 /// to fail with a "potentially insufficient UIDs or GIDs" error. `docker
 /// exec`/`podman exec` runs as a process inside the container's own user
 /// namespace and has no such requirement.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_redis_container<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String, &Container<GenericImage>) -> Result<T, E>,
@@ -212,6 +247,11 @@ pub const REDIS_CLUSTER_PORTS: [u16; 6] = [7000, 7001, 7002, 7003, 7004, 7005];
 /// lands on the right node through the identical published mapping. This
 /// means ports 7000-7005 must be free on the host — acceptable on a CI
 /// runner, but it can collide with a Redis Cluster already running locally.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup is a hard test-infrastructure failure that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_redis_cluster_urls<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(Vec<String>) -> Result<T, E>,
@@ -251,6 +291,11 @@ pub struct ClickHouseConfig {
 }
 
 /// Spin up a ClickHouse 25.8 LTS container and wait for its HTTP API.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_clickhouse<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -312,6 +357,11 @@ where
 /// Set `TURSO_TEST_URL` (and optionally `TURSO_TEST_TOKEN`) to target an
 /// existing server instead of starting a container; the closure then receives
 /// that URL and no container is created.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_libsql_server<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -366,6 +416,11 @@ where
 /// The same constant is reused inside test URIs.
 pub const MSSQL_TEST_PASSWORD: &str = "Strong!Passw0rd";
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_mssql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -397,6 +452,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_dynamodb_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -430,6 +490,11 @@ pub struct InfluxV1Config {
 /// Spin up an InfluxDB 2.7 container and pass its endpoint + credentials to `run`.
 ///
 /// Waits until the `/health` endpoint returns a 2xx response before calling `run`.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_influxdb_v2<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -493,6 +558,11 @@ where
 }
 
 /// Spin up an InfluxDB 1.8 container and pass its endpoint to `run`.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_influxdb_v1<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -556,6 +626,11 @@ pub struct MinioConfig {
 /// MinIO has moved its startup banner between stdout and stderr across
 /// releases, so a log-line wait times out depending on the image version.
 /// The image tag is pinned for the same reason.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_minio_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -624,6 +699,11 @@ where
 /// marker with a poll of `/_localstack/health` so the test does not race a
 /// container that has printed the marker but not yet finished wiring up the
 /// scoped services.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_localstack_cloudwatch_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
