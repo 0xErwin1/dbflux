@@ -174,6 +174,11 @@ const SQL_HIGHLIGHT_ROLES: &str = r#"
 (relation alias: (identifier) @variable.alias)
 (term alias: (identifier) @variable.column_alias)
 (field name: (identifier) @field)
+; A common table expression is named like a table; its column list
+; (`argument:`) is not the name.
+(cte . (identifier) @type)
+; Bare column lists such as `JOIN … USING (id)` and `INSERT INTO t (id)`.
+(column (identifier) @field)
 "#;
 
 fn sql_highlights_query() -> String {
@@ -326,6 +331,18 @@ mod tests {
         assert_eq!(role_of("id"), Some("field"));
         assert_eq!(role_of("total"), Some("variable.column_alias"));
         assert_eq!(role_of("count"), Some("function"));
+
+        let roles = sql_roles(
+            "WITH recent AS (SELECT 1) SELECT * FROM recent r JOIN raw.driver d USING (group_id);",
+        );
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+        assert_eq!(role_of("recent"), Some("type"), "{roles:?}");
+        assert_eq!(role_of("group_id"), Some("field"), "{roles:?}");
         assert!(
             roles
                 .iter()
