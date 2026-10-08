@@ -164,16 +164,66 @@ pub fn is_safe_read_query(sql: &str) -> bool {
 /// `BEGIN ATOMIC`. The statement splitter cuts such a block at its inner `;`,
 /// so its pieces are not standalone statements.
 ///
-/// A `BEGIN` that opens a transaction is not a block. A block counts only when
-/// every dialect sees it outside comments, strings and quoted bodies, so a
+/// A `BEGIN` that opens a transaction is not a block, nor one used as a
+/// column name (MySQL allows `begin` unquoted). A block counts only when every
+/// dialect sees it outside comments, strings and quoted bodies, so a
 /// PostgreSQL `DO $$ BEGIN ... END $$` body is not one.
 pub fn contains_compound_block(sql: &str) -> bool {
     DIALECT_RULES.iter().all(|rules| {
         let tokens = tokenize(sql, rules);
         tokens.iter().enumerate().any(|(index, token)| {
-            token.word() == Some("BEGIN") && !begin_opens_transaction(tokens.get(index + 1))
+            let previous = index.checked_sub(1).and_then(|index| tokens.get(index));
+            let next = tokens.get(index + 1);
+
+            token.word() == Some("BEGIN")
+                && !begin_opens_transaction(next)
+                && !begin_is_identifier(previous, next)
         })
     })
+}
+
+/// Whether a `BEGIN` between `previous` and `next` is a column or table name:
+/// qualified (`t.begin`), followed by a symbol (`begin,`, `begin = 1`), or
+/// followed by a word that continues an expression or clause. Anything else
+/// is taken as a block, which only makes the editor run the whole buffer.
+fn begin_is_identifier(previous: Option<&Token>, next: Option<&Token>) -> bool {
+    if previous.is_some_and(|token| token.is_symbol('.')) {
+        return true;
+    }
+
+    match next {
+        Some(Token {
+            kind: TokenKind::Symbol(symbol),
+        }) => *symbol != ';',
+        Some(token) => matches!(
+            token.word(),
+            Some(
+                "FROM"
+                    | "AS"
+                    | "WHERE"
+                    | "AND"
+                    | "OR"
+                    | "IS"
+                    | "IN"
+                    | "LIKE"
+                    | "BETWEEN"
+                    | "ORDER"
+                    | "GROUP"
+                    | "HAVING"
+                    | "LIMIT"
+                    | "ON"
+                    | "JOIN"
+                    | "INTO"
+                    | "UNION"
+                    | "ASC"
+                    | "DESC"
+                    | "THEN"
+                    | "ELSE"
+                    | "END"
+            )
+        ),
+        None => false,
+    }
 }
 
 /// Whether a `BEGIN` followed by `next` opens a transaction (`BEGIN;`,
@@ -947,6 +997,22 @@ mod tests {
             "DO $$ BEGIN PERFORM 1; END $$; SELECT 1;"
         ));
         assert!(!contains_compound_block("SELECT 'BEGIN x'; SELECT 1;"));
+        assert!(contains_compound_block(
+            "CREATE PROCEDURE p AS BEGIN SELECT 1; SELECT 2; END;"
+        ));
+        assert!(contains_compound_block(
+            "IF @x = 1 BEGIN SELECT 1; SELECT 2; END"
+        ));
+
+        for identifier in [
+            "SELECT begin FROM t; SELECT 2;",
+            "SELECT t.begin, x FROM t; SELECT 2;",
+            "UPDATE t SET begin = 1 WHERE begin > 0; SELECT 2;",
+            "SELECT * FROM t ORDER BY begin DESC; SELECT 2;",
+            "SELECT begin AS started FROM t; SELECT 2;",
+        ] {
+            assert!(!contains_compound_block(identifier), "{identifier}");
+        }
         assert!(!contains_compound_block("-- BEGIN x\nSELECT 1; SELECT 2;"));
     }
 
