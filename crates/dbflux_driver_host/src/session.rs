@@ -7,30 +7,30 @@ use dbflux_ipc::driver_protocol::{
 use uuid::Uuid;
 
 /// Manages active sessions, each backed by a real `Connection`.
-pub struct SessionManager {
+pub(crate) struct SessionManager {
     sessions: HashMap<Uuid, Box<dyn Connection>>,
 }
 
 impl SessionManager {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             sessions: HashMap::new(),
         }
     }
 
-    pub fn insert(&mut self, id: Uuid, connection: Box<dyn Connection>) {
+    pub(crate) fn insert(&mut self, id: Uuid, connection: Box<dyn Connection>) {
         self.sessions.insert(id, connection);
     }
 
-    pub fn remove(&mut self, id: &Uuid) -> Option<Box<dyn Connection>> {
+    pub(crate) fn remove(&mut self, id: &Uuid) -> Option<Box<dyn Connection>> {
         self.sessions.remove(id)
     }
 
-    pub fn get(&self, id: &Uuid) -> Option<&dyn Connection> {
+    pub(crate) fn get(&self, id: &Uuid) -> Option<&dyn Connection> {
         self.sessions.get(id).map(|c| c.as_ref())
     }
 
-    pub fn close_all(&mut self) {
+    pub(crate) fn close_all(&mut self) {
         for (_, mut conn) in self.sessions.drain() {
             if let Err(e) = conn.close() {
                 log::warn!("Error closing session: {e}");
@@ -45,7 +45,7 @@ impl SessionManager {
 /// `Hello` and `OpenSession` are handled by the caller (main loop) since they
 /// don't operate on an existing session. This function handles everything else.
 #[allow(clippy::result_large_err)]
-pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverResponseBody {
+pub(crate) fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverResponseBody {
     match body {
         DriverRequestBody::Ping => match conn.ping() {
             Ok(()) => DriverResponseBody::Pong,

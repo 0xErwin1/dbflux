@@ -97,6 +97,10 @@ fn is_hello_authorized(client_token: Option<&str>, expected_auth_token: Option<&
 }
 
 /// Handles one client connection for its entire lifetime.
+#[expect(
+    clippy::expect_used,
+    reason = "the loop-top guard rejects every non-Hello request while `negotiated_version` is `None`, so these dispatch-time lookups cannot miss"
+)]
 fn handle_connection(
     mut stream: interprocess::local_socket::Stream,
     driver: &dyn DbDriver,
