@@ -27,6 +27,7 @@ pub enum DbKind {
     S3,
     ClickHouse,
     Turso,
+    DuckDB,
 }
 
 impl DbKind {
@@ -46,6 +47,7 @@ impl DbKind {
             DbKind::S3 => "Amazon S3",
             DbKind::ClickHouse => "ClickHouse",
             DbKind::Turso => "TursoDB",
+            DbKind::DuckDB => "DuckDB",
         }
     }
 }
@@ -605,6 +607,22 @@ pub enum DbConfig {
     },
     /// Remote Turso endpoint; its auth token is only stored in the canonical keyring slot.
     Turso { url: String },
+    /// Embedded DuckDB database, optionally with a DuckLake catalog attached.
+    DuckDB {
+        /// Database file; empty opens an in-memory database.
+        path: PathBuf,
+        /// DuckLake catalog attached on connect as `lake` and made the default
+        /// database, e.g. `metadata.ducklake` or `postgres:dbname=lake`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ducklake_catalog: Option<String>,
+        /// Where DuckLake writes its Parquet files, e.g. `s3://bucket/lake/`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ducklake_data_path: Option<String>,
+        /// SQL run after opening, before the DuckLake attach (extensions,
+        /// `CREATE SECRET ... (PROVIDER credential_chain)`, settings).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        init_sql: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -633,6 +651,7 @@ impl DbConfig {
             DbConfig::S3 { .. } => DbKind::S3,
             DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
             DbConfig::Turso { .. } => DbKind::Turso,
+            DbConfig::DuckDB { .. } => DbKind::DuckDB,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -794,6 +813,15 @@ impl DbConfig {
         DbConfig::Turso { url: String::new() }
     }
 
+    pub fn default_duckdb() -> Self {
+        DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        }
+    }
+
     pub fn default_clickhouse() -> Self {
         DbConfig::ClickHouse {
             url: "http://localhost:8123".to_string(),
@@ -818,6 +846,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -856,6 +885,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -907,6 +937,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -951,6 +982,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -971,6 +1003,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -1025,6 +1058,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -1059,6 +1093,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -1090,6 +1125,7 @@ impl DbConfig {
             DbConfig::SqlServer { database, .. } => database.clone(),
             DbConfig::Redshift { database, .. } => Some(database.clone()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
+            DbConfig::DuckDB { .. } => None,
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::ClickHouse { database, .. } => Some(database.clone()),
@@ -1674,6 +1710,7 @@ impl ConnectionProfile {
             DbKind::S3 => "s3",
             DbKind::ClickHouse => "clickhouse",
             DbKind::Turso => "turso",
+            DbKind::DuckDB => "duckdb",
         }
     }
 

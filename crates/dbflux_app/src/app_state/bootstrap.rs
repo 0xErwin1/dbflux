@@ -63,6 +63,8 @@ use dbflux_driver_redshift::RedshiftDriver;
 
 #[cfg(feature = "clickhouse")]
 use dbflux_driver_clickhouse::ClickHouseDriver;
+#[cfg(feature = "duckdb")]
+use dbflux_driver_duckdb::DuckDbDriver;
 #[cfg(feature = "turso")]
 use dbflux_driver_turso::TursoDriver;
 
@@ -1209,6 +1211,11 @@ impl AppState {
         #[cfg(feature = "turso")]
         {
             drivers.insert("turso".to_string(), Arc::new(TursoDriver::new()));
+        }
+
+        #[cfg(feature = "duckdb")]
+        {
+            drivers.insert("duckdb".to_string(), Arc::new(DuckDbDriver::new()));
         }
 
         #[cfg(feature = "s3")]

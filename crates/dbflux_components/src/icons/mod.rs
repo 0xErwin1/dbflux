@@ -140,6 +140,7 @@ pub enum AppIcon {
     BrandRedis,
     BrandClickhouse,
     BrandTurso,
+    BrandDuckdb,
 
     // Language brands (for script file icons)
     BrandLua,
@@ -259,6 +260,7 @@ impl AppIcon {
             Self::BrandRedis => "icons/brand/redis.svg",
             Self::BrandClickhouse => "icons/brand/clickhouse.svg",
             Self::BrandTurso => "icons/brand/turso.svg",
+            Self::BrandDuckdb => "icons/brand/duckdb.svg",
             Self::BrandLua => "icons/brand/lua.svg",
             Self::BrandPython => "icons/brand/python.svg",
             Self::BrandBash => "icons/brand/gnubash.svg",
@@ -327,6 +329,7 @@ impl AppIcon {
             Icon::S3 => Self::Boxes,
             Icon::Clickhouse => Self::BrandClickhouse,
             Icon::Turso => Self::BrandTurso,
+            Icon::Duckdb => Self::BrandDuckdb,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => match category {
@@ -366,7 +369,8 @@ impl DriverIconTone {
             | Icon::Sqlite
             | Icon::Redshift
             | Icon::Clickhouse
-            | Icon::Turso => Self::Info,
+            | Icon::Turso
+            | Icon::Duckdb => Self::Info,
             Icon::Mongodb | Icon::Dynamodb => Self::Success,
             Icon::Redis => Self::Danger,
             Icon::Influxdb => Self::Violet,

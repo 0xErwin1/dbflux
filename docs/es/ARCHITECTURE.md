@@ -497,6 +497,10 @@ crates/
     src/connection.rs       # Tokio bridge, batch execution, schema discovery, CRUD, error mapping
     src/session.rs          # ExecutionSessionFactory/ExecutionSession over per-stream connections
     src/dialect.rs          # SQLite dialect, value conversion, DDL code generation
+  dbflux_driver_duckdb/     # Embedded DuckDB driver with DuckLake catalogs
+    src/driver.rs           # Metadata, connection form, shared instance registry, DuckLake attach
+    src/connection.rs       # Execution, read-only checks, catalog discovery, CRUD, execution sessions
+    src/dialect.rs          # DuckDB dialect and value literals
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
@@ -1463,6 +1467,24 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
     transaccional del servidor
   - Reutiliza el dialecto SQLite, el descubrimiento basado en PRAGMA y los
     builders SQL compartidos; sin cancelación de queries, túnel SSH ni réplicas
+- **DuckDB**: `crates/dbflux_driver_duckdb/` — driver
+  `DatabaseCategory::Relational` y `QueryLanguage::Sql` para archivos DuckDB
+  embebidos, bases en memoria y catálogos DuckLake:
+  - Incluye DuckDB mediante el crate `duckdb`; las conexiones al mismo archivo
+    (o a la base en memoria del mismo perfil) se clonan desde una instancia
+    viva, porque DuckDB bloquea un archivo por proceso
+  - Adjunta el catálogo DuckLake del perfil como `lake` al conectar; cada
+    catálogo adjuntado es una database bajo
+    `SchemaLoadingStrategy::LazyPerDatabase`, descubierta con
+    `duckdb_databases()`, `duckdb_tables()` y `duckdb_columns()`
+  - Implementa `ExecutionSessionFactory` en la conexión raíz: cada sesión es su
+    propia conexión DuckDB a la instancia compartida, así una transaction del
+    editor nunca captura las requests del grid, el sidebar o MCP
+  - El enforcement de solo lectura acepta solo texto que el parser de DuckDB
+    serializa como statements SELECT (`json_serialize_sql`) y lo ejecuta dentro
+    de `BEGIN TRANSACTION READ ONLY`; como esa transaction todavía lee archivos
+    y URLs, rechaza las table functions fuera de una allow-list y los nombres de
+    tabla que DuckDB leería como archivos
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — driver
   `DatabaseCategory::LogStream` para AWS CloudWatch Logs:
   - Descubrimiento de log group/stream expuesto como collections; los log groups
@@ -1782,6 +1804,10 @@ IA con una capa completa de gobernanza:
   perfil, descubrimiento de schema basado en PRAGMA, CRUD tipado y sesiones de
   ejecución por stream para transactions interactivas
   (crates/dbflux_driver_turso/src/connection.rs).
+- DuckDB: driver `duckdb` incluido para archivos, bases en memoria y catálogos
+  DuckLake, con una instancia compartida por archivo, un catálogo por database,
+  cancelación de queries y transactions de solo lectura
+  (crates/dbflux_driver_duckdb/src/connection.rs).
 - Amazon S3: driver `aws-sdk-s3` con AWS profile/SSO o credenciales estáticas,
   override de endpoint y direccionamiento path-style para endpoints compatibles
   con S3 (Cloudflare R2, MinIO), CRUD de bucket/object, URLs presignadas, y

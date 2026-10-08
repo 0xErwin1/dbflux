@@ -472,6 +472,10 @@ crates/
     src/connection.rs       # Tokio bridge, batch execution, schema discovery, CRUD, error mapping
     src/session.rs          # ExecutionSessionFactory/ExecutionSession over per-stream connections
     src/dialect.rs          # SQLite dialect, value conversion, DDL code generation
+  dbflux_driver_duckdb/     # Embedded DuckDB driver with DuckLake catalogs
+    src/driver.rs           # Metadata, connection form, shared instance registry, DuckLake attach
+    src/connection.rs       # Execution, read-only checks, catalog discovery, CRUD, execution sessions
+    src/dialect.rs          # DuckDB dialect and value literals
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
@@ -867,6 +871,11 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - Wraps the async `turso_serverless` SDK behind the synchronous `Connection` contract with one Tokio runtime per profile; futures are driven from a scoped thread when the caller is already inside a Tokio context
   - Implements `ExecutionSessionFactory` on the root connection: every isolated session is a fresh Hrana stream, so editor transactions, grid CRUD, and MCP operations never share server-side transaction state
   - Reuses the SQLite dialect, PRAGMA-based discovery, and shared SQL builders; no query cancellation, SSH tunneling, or replicas
+- **DuckDB**: `crates/dbflux_driver_duckdb/` — `DatabaseCategory::Relational` and `QueryLanguage::Sql` driver for embedded DuckDB files, in-memory databases, and DuckLake catalogs:
+  - Bundles DuckDB through the `duckdb` crate; connections to the same file (or the same profile's in-memory database) are cloned from one live instance, because DuckDB locks a file per process
+  - Attaches the profile's DuckLake catalog as `lake` on connect; each attached catalog is a database under `SchemaLoadingStrategy::LazyPerDatabase`, discovered from `duckdb_databases()`, `duckdb_tables()`, and `duckdb_columns()`
+  - Implements `ExecutionSessionFactory` on the root connection: every session is its own DuckDB connection to the shared instance, so an editor transaction never captures grid, sidebar, or MCP requests
+  - Read-only enforcement accepts only text DuckDB's parser serializes as SELECT statements (`json_serialize_sql`) and runs it inside `BEGIN TRANSACTION READ ONLY`; because such a transaction still reads files and URLs, table functions outside an allow-list and table names DuckDB would read as files are refused
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — `DatabaseCategory::LogStream` driver for AWS CloudWatch Logs:
   - Log group/stream discovery exposed as collections; log groups open as event streams via `CollectionPresentation::EventStream` and a generic `EventStreamTarget`, consumed by the `AuditDocument`/log-stream viewer without any driver-specific UI branch
   - Query modes (Logs Insights QL, OpenSearch PPL/SQL) are surfaced through `SourceContextSpec`; `DriverMetadata.query_language` defaults to `Sql` for editor behavior
@@ -985,6 +994,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
 - ClickHouse: HTTP(S) driver using `reqwest` with dynamic JSON decoding, database/table discovery, and read-oriented SQL support for self-hosted ClickHouse and ClickHouse Cloud (crates/dbflux_driver_clickhouse/src/driver.rs).
 - TursoDB: `turso_serverless` driver over Hrana HTTP with per-profile Tokio bridging, PRAGMA-based schema discovery, typed CRUD, and per-stream execution sessions for interactive transactions (crates/dbflux_driver_turso/src/connection.rs).
+- DuckDB: bundled `duckdb` driver for files, in-memory databases, and DuckLake catalogs, with one shared instance per file, catalog-per-database discovery, query cancellation, and read-only transactions (crates/dbflux_driver_duckdb/src/connection.rs).
 - Amazon S3: `aws-sdk-s3` driver with AWS profile/SSO or static credentials, endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO), bucket/object CRUD, presigned URLs, and copy/versions support (crates/dbflux_driver_s3/src/driver.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, and wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.

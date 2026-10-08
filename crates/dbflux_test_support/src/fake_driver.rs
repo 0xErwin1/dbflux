@@ -347,6 +347,12 @@ impl DbDriver for FakeDriver {
             DbKind::Turso => DbConfig::Turso {
                 url: get_string(values, "url", ""),
             },
+            DbKind::DuckDB => DbConfig::DuckDB {
+                path: get_string(values, "path", "").into(),
+                ducklake_catalog: None,
+                ducklake_data_path: None,
+                init_sql: None,
+            },
         };
 
         Ok(config)
@@ -368,7 +374,7 @@ impl DbDriver for FakeDriver {
                 values.insert("user".to_string(), user.clone());
                 values.insert("database".to_string(), database.clone());
             }
-            DbConfig::SQLite { path, .. } => {
+            DbConfig::SQLite { path, .. } | DbConfig::DuckDB { path, .. } => {
                 values.insert("path".to_string(), path.display().to_string());
             }
             DbConfig::MySQL {
@@ -675,7 +681,7 @@ impl Connection for FakeConnection {
             DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB | DbKind::S3 => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::ClickHouse => SchemaLoadingStrategy::LazyPerDatabase,
+            DbKind::ClickHouse | DbKind::DuckDB => SchemaLoadingStrategy::LazyPerDatabase,
             DbKind::Turso => SchemaLoadingStrategy::SingleDatabase,
         }
     }
@@ -710,7 +716,9 @@ impl Connection for FakeConnection {
 fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
     match &profile.config {
         DbConfig::Postgres { database, .. } => Some(database.clone()),
-        DbConfig::SQLite { path, .. } => Some(path.display().to_string()),
+        DbConfig::SQLite { path, .. } | DbConfig::DuckDB { path, .. } => {
+            Some(path.display().to_string())
+        }
         DbConfig::MySQL { database, .. } => database.clone(),
         DbConfig::MongoDB { database, .. } => database.clone(),
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
@@ -746,13 +754,15 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::S3 => &FAKE_S3_METADATA,
         DbKind::ClickHouse => &FAKE_CLICKHOUSE_METADATA,
         DbKind::Turso => &FAKE_TURSO_METADATA,
+        // DuckDB is an embedded SQL engine; the SQLite fake covers it.
+        DbKind::DuckDB => &FAKE_SQLITE_METADATA,
     }
 }
 
 fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
     match kind {
         DbKind::Postgres => &POSTGRES_FORM,
-        DbKind::SQLite => &SQLITE_FORM,
+        DbKind::SQLite | DbKind::DuckDB => &SQLITE_FORM,
         DbKind::MySQL | DbKind::MariaDB => &MYSQL_FORM,
         DbKind::MongoDB => &MONGODB_FORM,
         DbKind::Redis => &REDIS_FORM,
@@ -1655,6 +1665,7 @@ mod tests {
             (DbKind::MariaDB, SchemaLoadingStrategy::LazyPerDatabase),
             (DbKind::SQLite, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Turso, SchemaLoadingStrategy::SingleDatabase),
+            (DbKind::DuckDB, SchemaLoadingStrategy::LazyPerDatabase),
             (DbKind::MongoDB, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::ClickHouse, SchemaLoadingStrategy::LazyPerDatabase),
@@ -1703,6 +1714,7 @@ mod tests {
                 DbKind::S3 => DbConfig::default_s3(),
                 DbKind::ClickHouse => DbConfig::default_clickhouse(),
                 DbKind::Turso => DbConfig::default_turso(),
+                DbKind::DuckDB => DbConfig::default_duckdb(),
             };
 
             let profile = ConnectionProfile::new("fake", config);
