@@ -1188,6 +1188,15 @@ impl AppState {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
         self.facade.connections.clear_connect_failure(profile.id);
+
+        // The navigator view and the database filter only lay out the
+        // sidebar, so an open connection takes them at once instead of
+        // waiting for the reconnect other edits need.
+        if let Some(connected) = self.connections_mut().get_mut(&profile.id) {
+            connected.profile.navigator_view = profile.navigator_view;
+            connected.profile.show_all_databases = profile.show_all_databases;
+        }
+
         self.facade.profiles.update(profile);
 
         self.record_config_event(

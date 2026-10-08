@@ -1032,6 +1032,8 @@ pub struct Sidebar {
         std::cell::RefCell<HashMap<(Uuid, String), KnownInvalidatedDatabase>>,
     /// Item IDs currently being fetched (tables, type/index/FK folders)
     loading_items: HashSet<String>,
+    /// Loading rows whose fetch `fetch_visible_inline_lists` already started.
+    inline_list_fetches: HashSet<String>,
     view_refresh_tasks: HashMap<
         String,
         (
@@ -1378,6 +1380,7 @@ impl Sidebar {
             recovered_table_databases: HashMap::new(),
             known_invalidated_databases: std::cell::RefCell::new(HashMap::new()),
             loading_items: HashSet::new(),
+            inline_list_fetches: HashSet::new(),
             view_refresh_tasks: HashMap::new(),
             active_databases: HashMap::new(),
             syncing_expansion: false,

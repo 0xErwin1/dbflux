@@ -46,6 +46,7 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricsFolder
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorsFolder
+                | Self::InstanceFolder
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
                 | Self::Bucket
@@ -85,6 +86,7 @@ impl SchemaNodeKind {
                 | Self::SavedChartsFolder
                 | Self::InstanceMetricsFolder
                 | Self::InstanceInspectorsFolder
+                | Self::InstanceFolder
                 | Self::BucketsFolder
         )
     }

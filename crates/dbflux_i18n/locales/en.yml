@@ -252,6 +252,13 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  navigator_view:
+    label: "Navigator view"
+    help: "Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines. Compact drops the folders: each schema lists its tables, views, routines and data types directly, and the instance views share one Instance folder. Simple shows only databases, schemas, and their tables and views."
+    option:
+      advanced: "Advanced"
+      compact: "Compact"
+      simple: "Simple"
   environment:
     none: "None"
     help: "Marks which environment this connection points at."
@@ -363,6 +370,7 @@ connection_manager:
     settings: Settings
     mcp: MCP
   field:
+    show_all_databases: "Show all databases"
     name: Name
     ssl_mode: SSL mode
     ca_certificate: CA certificate
@@ -370,6 +378,7 @@ connection_manager:
     client_key: Client key
   section:
     transport: TRANSPORT
+    navigator: "NAVIGATOR"
   banner:
     correct_following: Please correct the following
     testing_connection: "Testing connection…"
@@ -4972,6 +4981,7 @@ sidebar:
       saved_charts: Saved Charts
       instance_metrics: Instance Metrics
       instance_inspectors: Instance Inspectors
+      instance: Instance
       metrics: Metrics
     node:
       instance_overview: Instance Overview
