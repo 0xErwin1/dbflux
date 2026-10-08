@@ -814,6 +814,7 @@ impl Sidebar {
                         uses_lazy_loading,
                         &projected.children,
                     );
+                    let named_items = listed_databases(named_items, &connected.profile);
 
                     // See `should_collapse_database_wrapper`: when the connection
                     // exposes a single trivial database the wrapper adds no information.
@@ -2334,6 +2335,40 @@ fn build_projected_relational_children(
         }
     }
     items
+}
+
+/// The database rows the sidebar lists: all of them, or only the database
+/// the connection is configured with when the profile does not show all
+/// databases. A configured name that matches no row keeps every row, so a
+/// name the server spells differently never leaves the tree empty.
+fn listed_databases(
+    items: Vec<TreeItem>,
+    profile: &dbflux_core::ConnectionProfile,
+) -> Vec<TreeItem> {
+    if profile.show_all_databases {
+        return items;
+    }
+
+    let Some(configured) = profile
+        .config
+        .database()
+        .filter(|name| !name.trim().is_empty())
+    else {
+        return items;
+    };
+
+    let is_configured = |item: &TreeItem| {
+        matches!(
+            item.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::Database { name, .. }) if name == configured
+        )
+    };
+
+    if !items.iter().any(is_configured) {
+        return items;
+    }
+
+    items.into_iter().filter(is_configured).collect()
 }
 
 /// Build the per-database `TreeItem` nodes for a named-database connection.
@@ -4749,6 +4784,70 @@ mod tests {
 
         let simple = top_level_kinds(&build(NavigatorView::Simple));
         assert_eq!(simple, vec!["database move", "database postgres"]);
+    }
+
+    #[test]
+    fn unticking_show_all_databases_lists_only_the_configured_database() {
+        use dbflux_core::{
+            DatabaseInfo, DbConfig, NavigatorView, RelationalSchema, SchemaSnapshot,
+        };
+
+        let build = |configured: &str, show_all_databases: bool| {
+            let profile_id = Uuid::new_v4();
+            let mut connected = make_connected_profile(
+                profile_id,
+                dbflux_core::DriverCapabilities::MULTIPLE_DATABASES,
+            );
+            connected.profile.id = profile_id;
+            connected.profile.navigator_view = NavigatorView::Simple;
+            connected.profile.show_all_databases = show_all_databases;
+            let mut config = DbConfig::default_postgres();
+            if let DbConfig::Postgres { database, .. } = &mut config {
+                *database = configured.to_string();
+            }
+            connected.profile.config = config;
+            connected.schema = Some(SchemaSnapshot::relational(RelationalSchema {
+                databases: ["move", "postgres", "prefect_db"]
+                    .into_iter()
+                    .map(|name| DatabaseInfo {
+                        name: name.to_string(),
+                        is_current: name == "move",
+                    })
+                    .collect(),
+                current_database: Some("move".to_string()),
+                schemas: vec![],
+                tables: vec![],
+                views: vec![],
+            }));
+            let profile = connected.profile.clone();
+
+            let mut state =
+                dbflux_ui_base::app_state_entity::AppStateEntity::new_with_storage_runtime(
+                    dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("test storage"),
+                )
+                .expect("test app state");
+            state.connections_mut().insert(profile_id, connected);
+            Sidebar::build_profile_item_with_errors(
+                &profile,
+                &state,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+            )
+            .children
+            .iter()
+            .map(|child| child.label.to_string())
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(build("move", true).len(), 3);
+        assert_eq!(build("move", false), vec!["move"]);
+        assert_eq!(
+            build("missing", false).len(),
+            3,
+            "a name that matches no database keeps every database"
+        );
     }
 
     #[test]

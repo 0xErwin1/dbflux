@@ -409,6 +409,7 @@ fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, Str
             read_only_flag: false,
             environment: None,
             navigator_view: dbflux_core::NavigatorView::Advanced,
+            show_all_databases: true,
         });
     }
 

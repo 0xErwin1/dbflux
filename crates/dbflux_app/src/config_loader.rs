@@ -364,6 +364,7 @@ pub fn save_profiles(
                 .environment
                 .map(|environment| environment.as_str().to_string()),
             navigator_view: profile.navigator_view.as_str().to_string(),
+            show_all_databases: profile.show_all_databases,
         };
 
         repo.upsert(&dto)?;
@@ -1744,6 +1745,7 @@ fn load_profiles(
                     .as_deref()
                     .and_then(dbflux_core::ConnectionEnvironment::from_id),
                 navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
+                show_all_databases: dto.show_all_databases,
             })
         })
         .collect()
@@ -2368,11 +2370,12 @@ mod tests {
     }
 
     #[test]
-    fn profile_navigator_view_round_trips_and_defaults_to_advanced() {
+    fn profile_sidebar_options_round_trip_and_default_to_advanced_with_all_databases() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
         let mut simple = ConnectionProfile::new("simple", DbConfig::default_postgres());
         simple.navigator_view = dbflux_core::NavigatorView::Simple;
+        simple.show_all_databases = false;
         let unset = ConnectionProfile::new("unset", DbConfig::default_postgres());
 
         save_profiles(&runtime, &[simple.clone(), unset.clone()])
@@ -2394,6 +2397,8 @@ mod tests {
             find(unset.id).navigator_view,
             dbflux_core::NavigatorView::Advanced
         );
+        assert!(!find(simple.id).show_all_databases);
+        assert!(find(unset.id).show_all_databases);
     }
 
     #[test]

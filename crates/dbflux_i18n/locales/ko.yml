@@ -369,6 +369,7 @@ connection_manager:
     settings: 설정
     mcp: MCP
   field:
+    show_all_databases: "모든 데이터베이스 표시"
     name: 이름
     ssl_mode: SSL 모드
     ca_certificate: CA 인증서

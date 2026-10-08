@@ -369,6 +369,7 @@ connection_manager:
     settings: 设置
     mcp: MCP
   field:
+    show_all_databases: "显示所有数据库"
     name: 名称
     ssl_mode: SSL 模式
     ca_certificate: CA 证书

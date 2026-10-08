@@ -52,6 +52,12 @@ navegador** en la pestaña Main del administrador de conexiones:
 
 La disposición cambia en cuanto guardas la conexión, también mientras está abierta.
 
+Junto al campo **Database**, **Show all databases** decide qué bases de datos
+muestra el árbol para un servidor que tiene varias. Está activado por defecto y
+el árbol muestra todas las bases de datos. Desactívalo para mostrar solo la
+base de datos escrita en el campo. Si el campo está vacío, o nombra una base de
+datos que el servidor no lista, se siguen mostrando todas.
+
 ## Carpetas externas de scripts
 
 La vista Scripts puede listar scripts que están fuera de la carpeta de scripts

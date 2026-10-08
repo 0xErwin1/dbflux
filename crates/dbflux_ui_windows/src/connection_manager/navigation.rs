@@ -2643,6 +2643,9 @@ impl ConnectionManagerWindow {
             MainExtraStop::SslMode | MainExtraStop::NavigatorView => {
                 self.step_main_extra_choice(index, true);
             }
+            MainExtraStop::ShowAllDatabases => {
+                self.form.show_all_databases = !self.form.show_all_databases;
+            }
             MainExtraStop::SslCert(slot) => {
                 let current = self.ssl_cert_input(slot).read(cx).value().to_string();
                 let current = (!current.trim().is_empty()).then_some(current);
@@ -2700,7 +2703,7 @@ impl ConnectionManagerWindow {
                 }
                 true
             }
-            MainExtraStop::SslCert(_) => false,
+            MainExtraStop::SslCert(_) | MainExtraStop::ShowAllDatabases => false,
             MainExtraStop::NavigatorView => {
                 self.form.navigator_view = match self.form.navigator_view {
                     dbflux_core::NavigatorView::Advanced => dbflux_core::NavigatorView::Simple,
@@ -2729,6 +2732,12 @@ impl ConnectionManagerWindow {
                 .iter()
                 .filter(|section| !section.fields.is_empty())
                 .position(|section| section.fields.iter().any(|f| f.id == field.id))
+                .map_or(0, |section| section + 1),
+            Some(MainExtraStop::ShowAllDatabases) => main_tab
+                .sections
+                .iter()
+                .filter(|section| !section.fields.is_empty())
+                .position(|section| section.fields.iter().any(|f| f.id == "database"))
                 .map_or(0, |section| section + 1),
             // The navigator section follows the transport section, when
             // the driver has one.

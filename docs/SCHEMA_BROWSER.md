@@ -48,6 +48,12 @@ Main tab of the connection manager:
 
 The layout changes as soon as you save the connection, also while it is open.
 
+Next to the **Database** field, **Show all databases** decides which databases
+the tree lists for a server that holds several. It is on by default, and the
+tree lists every database. Turn it off to list only the database typed in the
+field. If the field is empty, or names a database the server does not list,
+every database is still shown.
+
 ## External scripts folders
 
 The Scripts view can list scripts that live outside DBFlux's own scripts

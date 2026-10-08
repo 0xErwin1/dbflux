@@ -424,6 +424,7 @@ mod tests {
             updated_at: String::new(),
             environment: None,
             navigator_view: "advanced".to_string(),
+            show_all_databases: true,
         })
         .expect("insert connection");
     }

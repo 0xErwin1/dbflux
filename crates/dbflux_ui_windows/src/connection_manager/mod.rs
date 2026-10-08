@@ -257,6 +257,7 @@ pub(super) enum MainExtraStop {
     SslMode,
     SslCert(SslCertSlot),
     NavigatorView,
+    ShowAllDatabases,
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -302,6 +303,9 @@ struct FormState {
     environment_cursor: Option<usize>,
     /// Sidebar layout chosen in the Main tab; saved on the profile.
     navigator_view: dbflux_core::NavigatorView,
+    /// Whether the sidebar lists every database, or only the one in the
+    /// Database field; saved on the profile.
+    show_all_databases: bool,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -927,6 +931,7 @@ impl ConnectionManagerWindow {
                 environment: None,
                 environment_cursor: None,
                 navigator_view: dbflux_core::NavigatorView::Advanced,
+                show_all_databases: true,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,
@@ -1077,6 +1082,7 @@ impl ConnectionManagerWindow {
         instance.form.form_save_password = profile.save_password;
         instance.form.environment = profile.environment();
         instance.form.navigator_view = profile.navigator_view;
+        instance.form.show_all_databases = profile.show_all_databases;
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -1884,21 +1890,27 @@ impl ConnectionManagerWindow {
         };
 
         let form_def = driver.form_definition();
-        let mut stops: Vec<MainExtraStop> = form_def
-            .main_tab()
-            .map(|tab| {
-                tab.sections
-                    .iter()
-                    .flat_map(|section| section.fields.iter())
-                    .filter(|field| {
-                        field.id != "password"
-                            && Self::field_id_to_focus(&field.id, false).is_none()
-                            && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
-                    })
-                    .map(|field| MainExtraStop::DriverField(Box::new(field.clone())))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut stops: Vec<MainExtraStop> = Vec::new();
+        if Self::shows_show_all_databases(driver.as_ref()) {
+            stops.push(MainExtraStop::ShowAllDatabases);
+        }
+        stops.extend(
+            form_def
+                .main_tab()
+                .map(|tab| {
+                    tab.sections
+                        .iter()
+                        .flat_map(|section| section.fields.iter())
+                        .filter(|field| {
+                            field.id != "password"
+                                && Self::field_id_to_focus(&field.id, false).is_none()
+                                && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
+                        })
+                        .map(|field| MainExtraStop::DriverField(Box::new(field.clone())))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        );
 
         let metadata = driver.metadata();
         if metadata.ssl_modes.is_some() {
@@ -1932,6 +1944,26 @@ impl ConnectionManagerWindow {
             .metadata()
             .capabilities
             .contains(DriverCapabilities::SCHEMAS)
+    }
+
+    /// "Show all databases" sits next to the Database field of a driver
+    /// whose server holds several databases.
+    pub(super) fn shows_show_all_databases(driver: &dyn DbDriver) -> bool {
+        driver
+            .metadata()
+            .capabilities
+            .contains(DriverCapabilities::MULTIPLE_DATABASES)
+            && driver.form_definition().main_tab().is_some_and(|tab| {
+                tab.sections
+                    .iter()
+                    .flat_map(|section| section.fields.iter())
+                    .any(|field| field.id == "database")
+            })
+    }
+
+    /// The ring stop of the "Show all databases" checkbox.
+    fn main_extra_focus_for_show_all_databases(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ShowAllDatabases))
     }
 
     /// The ring stop of the navigator view control.

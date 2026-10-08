@@ -1539,6 +1539,15 @@ pub struct ConnectionProfile {
     /// How the sidebar lays out this connection's objects.
     #[serde(default)]
     pub navigator_view: NavigatorView,
+
+    /// Whether the sidebar lists every database on the server. When `false`,
+    /// it lists only the database the connection is configured with.
+    #[serde(default = "default_show_all_databases")]
+    pub show_all_databases: bool,
+}
+
+fn default_show_all_databases() -> bool {
+    true
 }
 
 impl ConnectionProfile {
@@ -1563,6 +1572,7 @@ impl ConnectionProfile {
             read_only_flag: false,
             environment: None,
             navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
         }
     }
 
@@ -1589,6 +1599,7 @@ impl ConnectionProfile {
             read_only_flag: false,
             environment: None,
             navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
             mcp_governance: None,
         }
     }
@@ -1619,6 +1630,7 @@ impl ConnectionProfile {
             read_only_flag: false,
             environment: None,
             navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
         }
     }
 
@@ -1654,6 +1666,7 @@ impl ConnectionProfile {
             read_only_flag: false,
             environment: None,
             navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
         }
     }
 

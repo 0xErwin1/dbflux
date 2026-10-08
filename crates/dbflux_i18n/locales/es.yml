@@ -369,6 +369,7 @@ connection_manager:
     settings: Ajustes
     mcp: MCP
   field:
+    show_all_databases: "Mostrar todas las bases de datos"
     name: Nombre
     ssl_mode: Modo SSL
     ca_certificate: Certificado de CA
