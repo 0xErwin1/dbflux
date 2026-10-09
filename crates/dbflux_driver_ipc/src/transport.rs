@@ -1345,7 +1345,11 @@ mod tests {
 
         if run_in_isolated_fixture(
             "transport::tests::spawned_driver_host_receives_store_token_explicitly",
-            &[("XDG_DATA_HOME", data_dir.as_os_str())],
+            &[
+                ("XDG_DATA_HOME", data_dir.as_os_str()),
+                ("HOME", data_dir.as_os_str()),
+                ("APPDATA", data_dir.as_os_str()),
+            ],
         )
         .expect("isolated fixture must pass")
         {
@@ -1413,6 +1417,8 @@ mod tests {
             "transport::tests::spawned_driver_host_env_token_beats_launch_config_when_store_is_empty",
             &[
                 ("XDG_DATA_HOME", data_dir.as_os_str()),
+                ("HOME", data_dir.as_os_str()),
+                ("APPDATA", data_dir.as_os_str()),
                 (
                     "DBFLUX_DRIVER_IPC_TOKEN",
                     std::ffi::OsStr::new("env-fallback-token"),
@@ -1487,6 +1493,8 @@ mod tests {
             "transport::tests::driver_hello_carries_env_token_when_store_is_empty",
             &[
                 ("XDG_DATA_HOME", data_dir.as_os_str()),
+                ("HOME", data_dir.as_os_str()),
+                ("APPDATA", data_dir.as_os_str()),
                 (
                     "DBFLUX_DRIVER_IPC_TOKEN",
                     std::ffi::OsStr::new("fallback-env-token"),
