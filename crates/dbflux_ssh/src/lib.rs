@@ -23,6 +23,16 @@ use ssh2::Session;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
+// OpenSSH config resolution (feature #837)
+// ---------------------------------------------------------------------------
+
+pub mod ssh_config;
+
+pub use ssh_config::{
+    ResolvedHost, SshConfigError, SshConfigFile, SshConfigHost, UnsupportedDirective,
+};
+
+// ---------------------------------------------------------------------------
 // Session passphrase vault
 // ---------------------------------------------------------------------------
 
