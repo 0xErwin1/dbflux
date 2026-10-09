@@ -1470,6 +1470,25 @@ mod tests {
             updated.returning_row,
             Some(vec![Value::Int(1), Value::Text("uno".into())])
         );
+
+        // Inside a transaction the caller opened, the update joins it.
+        connection
+            .execute(&QueryRequest::new("BEGIN TRANSACTION"))
+            .unwrap();
+        connection
+            .update_row(&RowPatch::new(
+                identity.clone(),
+                "items".into(),
+                None,
+                vec![("name".into(), Value::Text("eins".into()))],
+            ))
+            .unwrap();
+        connection.execute(&QueryRequest::new("ROLLBACK")).unwrap();
+        let name = connection
+            .execute(&QueryRequest::new("SELECT name FROM items WHERE id = 1"))
+            .unwrap();
+        assert_eq!(name.rows, vec![vec![Value::Text("uno".into())]]);
+
         connection
             .execute(&QueryRequest::new("DELETE FROM orders"))
             .unwrap();

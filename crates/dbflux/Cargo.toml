@@ -98,3 +98,6 @@ serde_json.workspace = true
 # `gpui_platform::application()` and no source path can ever contain the
 # package name.
 ignored = ["tokio", "dbflux_ssh", "gpui-pre-platform"]
+
+[lints]
+workspace = true

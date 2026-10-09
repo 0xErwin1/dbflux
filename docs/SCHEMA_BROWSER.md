@@ -31,6 +31,34 @@ from the rail collapses the sidebar.
   <img src="images/schema-browser/tree-light.webp" alt="The sidebar schema tree of a PostgreSQL connection, with a table expanded to its columns, indexes and constraints">
 </picture>
 
+## Simple and advanced layout
+
+Each connection to a database with schemas has a **Navigator view** in the
+Main tab of the connection manager:
+
+- **Advanced** (the default) — each schema groups its tables and views in
+  **Tables** and **Views** folders, next to its types, indexes, foreign keys
+  and, where the driver supports them, routines.
+- **Compact** — the tree hides intermediate folders: the connection lists its
+  databases, each database its schemas, and each schema its tables, views,
+  routines and data types directly. Tables still expand to their columns,
+  indexes, foreign keys and constraints, so the schema-level Indexes and
+  Foreign Keys folders are left out. Instance Overview, Instance Metrics and
+  Instance Inspectors are grouped under one **Instance** folder. Nothing that
+  Advanced shows becomes unreachable.
+- **Simple** — only databases, their schemas, and each schema's tables and
+  views, as DBeaver's simple view does. Routines, data types, dashboards and
+  the instance views are hidden; switch to Compact or Advanced to reach them.
+  Tables still expand to their columns, indexes and constraints.
+
+The layout changes as soon as you save the connection, also while it is open.
+
+Next to the **Database** field, **Show all databases** decides which databases
+the tree lists for a server that holds several. It is on by default, and the
+tree lists every database. Turn it off to list only the database typed in the
+field. If the field is empty, or names a database the server does not list,
+every database is still shown.
+
 ## External scripts folders
 
 The Scripts view can list scripts that live outside DBFlux's own scripts

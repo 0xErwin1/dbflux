@@ -365,6 +365,12 @@ pub enum SchemaNodeId {
         metric_id: String,
     },
 
+    /// Folder that holds the instance overview, metrics and inspectors in the
+    /// Simple navigator view.
+    InstanceFolder {
+        profile_id: Uuid,
+    },
+
     // Instance overview sidebar node (gated on INSTANCE_METRICS | INSTANCE_INSPECTOR)
     /// Clickable leaf that opens the synthesized read-only "Instance Overview" dashboard.
     InstanceOverviewLeaf {
@@ -453,6 +459,7 @@ pub enum SchemaNodeKind {
     InstanceInspectorsFolder,
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
+    InstanceFolder,
     Bucket,
     BucketsFolder,
 }
@@ -526,6 +533,7 @@ impl SchemaNodeId {
             Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
+            Self::InstanceFolder { .. } => SchemaNodeKind::InstanceFolder,
             Self::Bucket { .. } => SchemaNodeKind::Bucket,
             Self::BucketsFolder { .. } => SchemaNodeKind::BucketsFolder,
         }
@@ -597,6 +605,7 @@ impl SchemaNodeId {
             | Self::InstanceInspectorsFolder { profile_id, .. }
             | Self::InstanceInspectorLeaf { profile_id, .. }
             | Self::InstanceOverviewLeaf { profile_id, .. }
+            | Self::InstanceFolder { profile_id, .. }
             | Self::Bucket { profile_id, .. }
             | Self::BucketsFolder { profile_id } => Some(*profile_id),
         }
@@ -665,6 +674,7 @@ const P_INST_METRIC_LEAF: &str = "IML";
 const P_INST_INSPECTORS_FOLDER: &str = "IIF";
 const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
+const P_INST_FOLDER: &str = "INSF";
 // Object-storage bucket leaf.
 const P_BUCKET: &str = "BKT";
 const P_BUCKETS_FOLDER: &str = "BKTF";
@@ -1311,6 +1321,7 @@ mod tests {
         let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
 
         roundtrip(SchemaNodeId::InstanceMetricsFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::InstanceFolder { profile_id: uuid });
         roundtrip(SchemaNodeId::InstanceMetricLeaf {
             profile_id: uuid,
             metric_id: "pg.tx_commit_rate".into(),

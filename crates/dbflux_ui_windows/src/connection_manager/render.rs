@@ -631,6 +631,33 @@ impl ConnectionManagerWindow {
                     let selector_focused = show_focus && self.form_focus == selector_focus;
                     let input_focused = show_focus && self.form_focus == input_focus;
 
+                    let show_all_databases = (field_def.id == "database"
+                        && self
+                            .form
+                            .selected_driver
+                            .as_deref()
+                            .is_some_and(Self::shows_show_all_databases))
+                    .then(|| {
+                        let focused = show_focus
+                            && self.main_extra_focus_for_show_all_databases()
+                                == Some(self.form_focus);
+
+                        layout::cursor_ring(
+                            focused,
+                            Checkbox::new("cm-show-all-databases")
+                                .checked(self.form.show_all_databases)
+                                .label(dbflux_i18n::t!(
+                                    "connection_manager.field.show_all_databases"
+                                ))
+                                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                    this.form.show_all_databases = *checked;
+                                    window.focus(&this.focus_handle, cx);
+                                    cx.notify();
+                                })),
+                            cx,
+                        )
+                    });
+
                     let control = layout::inline_controls()
                         .child(
                             self.cm_control_frame(
@@ -659,7 +686,8 @@ impl ConnectionManagerWindow {
                                     .disabled(!field_enabled),
                                 cx,
                             ),
-                        );
+                        )
+                        .children(show_all_databases);
 
                     return Self::field_row_cm(
                         field_def.label.clone(),

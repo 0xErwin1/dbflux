@@ -134,6 +134,12 @@ impl KeyChord {
 
         let key_part = parts.last().ok_or(ParseError::Empty)?;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`parts.last().ok_or(ParseError::Empty)?` above proves at \
+                      least one part, so `parts.len() - 1` is a valid slice \
+                      endpoint"
+        )]
         for part in &parts[..parts.len() - 1] {
             match part.to_lowercase().as_str() {
                 "ctrl" | "control" => modifiers.ctrl = true,
@@ -319,6 +325,13 @@ impl KeySequence {
     }
 
     /// The first chord, the one the sequence starts with.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`new` rejects empty vectors, `From<KeyChord>` creates a \
+                  singleton, and `with_leader`/Clone preserve length; parsing \
+                  delegates to `new` and the inner field is private, so index 0 \
+                  exists"
+    )]
     pub fn first(&self) -> &KeyChord {
         &self.0[0]
     }

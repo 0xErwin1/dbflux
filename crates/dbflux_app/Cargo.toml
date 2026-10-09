@@ -73,3 +73,6 @@ s3 = ["dep:dbflux_driver_s3"]
 lua = ["dbflux_lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws"]
 mcp = ["dbflux_approval", "dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_core/mcp"]
+
+[lints]
+workspace = true

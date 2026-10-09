@@ -224,6 +224,7 @@ impl CodeDocument {
                 self.app_state.clone(),
                 connection_id,
                 self.source.exec_ctx.database.clone(),
+                self.source.exec_ctx.schema.clone(),
                 self.editor.completion_query_generation.clone(),
             ));
         let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
@@ -895,6 +896,9 @@ impl CodeDocument {
 
     fn on_schema_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
         self.source.exec_ctx.schema = Some(item.value.to_string());
+        // Reattach the completion provider, which captures the selected
+        // schema at construction.
+        self.sync_editor_language(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
@@ -1044,6 +1048,7 @@ impl CodeDocument {
         });
 
         self.refresh_schema_dropdown_with_default(cx);
+        self.sync_editor_language(cx);
     }
 
     // === Data fetching helpers ===

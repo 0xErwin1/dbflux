@@ -124,9 +124,10 @@ pub fn register_languages() {
 /// existing role (`keyword.conditional` to `keyword`).
 const SQL_HIGHLIGHT_FIXES: &str = r#"
 ; The grammar's number patterns use Lua `%d`, which a regex never matches,
-; so numbers fell through to the string capture.
+; so numbers fell through to the string capture. This covers every numeric
+; form the grammar's `_integer` and `_decimal_number` accept.
 ((literal) @number
-  (#match? @number "^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$"))
+  (#match? @number "^[-+]?(0[xX][0-9A-Fa-f_]+|0[oO][0-7_]+|0[bB][01_]+|([0-9][0-9_]*[.]?[0-9_]*|[.][0-9][0-9_]*)([eE][-+]?[0-9][0-9_]*)?)$"))
 ; `conditional` has no style, so these had no color.
 [
   (keyword_case)
@@ -163,9 +164,27 @@ const SQL_HIGHLIGHT_FIXES: &str = r#"
 ] @keyword.modifier
 "#;
 
+/// SQL captures finer than the grammar's own query: schemas, columns, table
+/// aliases and column aliases get roles of their own. Each falls back to the
+/// role it had before in a theme without that slot (`variable.alias` to
+/// `variable`).
+const SQL_HIGHLIGHT_ROLES: &str = r#"
+(object_reference schema: (identifier) @namespace)
+(object_reference database: (identifier) @namespace)
+(field (object_reference name: (identifier) @type.alias))
+(relation alias: (identifier) @variable.alias)
+(term alias: (identifier) @variable.column_alias)
+(field name: (identifier) @field)
+; A common table expression is named like a table; its column list
+; (`argument:`) is not the name.
+(cte . (identifier) @type)
+; Bare column lists such as `JOIN … USING (id)` and `INSERT INTO t (id)`.
+(column (identifier) @field)
+"#;
+
 fn sql_highlights_query() -> String {
     format!(
-        "{SQL_HIGHLIGHT_FIXES}\n{}",
+        "{SQL_HIGHLIGHT_ROLES}\n{SQL_HIGHLIGHT_FIXES}\n{}",
         tree_sitter_sequel::HIGHLIGHTS_QUERY
     )
 }
@@ -228,7 +247,12 @@ mod tests {
             "keyword",
             "function",
             "type",
+            "type.alias",
+            "namespace",
+            "field",
             "variable",
+            "variable.alias",
+            "variable.column_alias",
             "string",
             "number",
             "operator",
@@ -273,7 +297,7 @@ mod tests {
     #[test]
     fn sql_numbers_and_keywords_take_their_roles() {
         let roles = sql_roles(
-            "SELECT 1, 1.5, 1e3, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
+            "SELECT 1, 1.5, 1e3, 1_000, 0xFF, 0o77, 0b1010, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
              CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);",
         );
         let role_of = |text: &str| {
@@ -283,12 +307,48 @@ mod tests {
                 .map(|(_, role)| role.as_str())
         };
 
-        for number in ["1", "1.5", "1e3"] {
+        for number in ["1", "1.5", "1e3", "1_000", "0xFF", "0o77", "0b1010"] {
             assert_eq!(role_of(number), Some("number"), "{number}");
         }
         assert_eq!(role_of("'7'"), Some("string"));
         for keyword in ["CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
             assert_eq!(role_of(keyword), Some("keyword"), "{keyword}");
         }
+    }
+
+    #[test]
+    fn sql_captures_give_each_identifier_its_role() {
+        let roles = sql_roles("SELECT d.id, count(*) AS total FROM raw.driver d WHERE d.n = 1;");
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+
+        assert_eq!(role_of("raw"), Some("namespace"));
+        assert_eq!(role_of("driver"), Some("type"));
+        assert_eq!(role_of("d"), Some("type.alias"));
+        assert_eq!(role_of("id"), Some("field"));
+        assert_eq!(role_of("total"), Some("variable.column_alias"));
+        assert_eq!(role_of("count"), Some("function"));
+
+        let roles = sql_roles(
+            "WITH recent AS (SELECT 1) SELECT * FROM recent r JOIN raw.driver d USING (group_id);",
+        );
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+        assert_eq!(role_of("recent"), Some("type"), "{roles:?}");
+        assert_eq!(role_of("group_id"), Some("field"), "{roles:?}");
+        assert!(
+            roles
+                .iter()
+                .any(|(token, role)| token == "d" && role == "variable.alias"),
+            "the alias declared after the table is a table alias: {roles:?}"
+        );
     }
 }

@@ -304,6 +304,12 @@ impl AppState {
     /// Initializes the audit backend used during startup, falling back to a
     /// degraded in-memory store when the real SQLite-backed store cannot be
     /// opened, and derives the external-audit emitter from it.
+    #[expect(
+        clippy::expect_used,
+        reason = "the existing degraded-startup path aborts if constructing \
+                  the fallback audit store fails; this annotation preserves \
+                  that failure policy rather than changing audit initialization"
+    )]
     fn init_audit_backend(
         db_path: &std::path::Path,
     ) -> (
@@ -513,6 +519,13 @@ impl AppState {
     ///
     /// Providers not present in the registry are skipped (their secret layout is
     /// unknown), leaving their data untouched.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`count` is captured from `items.len()` before the loop and no \
+                  statement inside the loop body removes from or reassigns \
+                  `auth_profiles.items`, so every `items[idx]` access has \
+                  `idx < items.len()`"
+    )]
     fn hydrate_and_migrate_auth_secrets(&mut self) {
         let mut needs_persist = false;
         let count = self.facade.auth_profiles.items.len();
@@ -876,6 +889,14 @@ impl AppState {
 
     #[allow(clippy::result_large_err)]
     fn build_default_drivers() -> Result<DefaultDriverBuild, dbflux_storage::error::StorageError> {
+        #[expect(
+            clippy::expect_used,
+            clippy::unwrap_in_result,
+            reason = "internal storage bootstrap failure is unrecoverable: the \
+                      application cannot start without its database, so \
+                      aborting here is the intended behavior rather than \
+                      propagating a `StorageError`"
+        )]
         let runtime = dbflux_storage::bootstrap::initialize()
             .expect("failed to initialize internal storage — cannot continue");
 

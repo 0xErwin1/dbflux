@@ -689,6 +689,14 @@ mod tests {
         }
     }
 
+    // Only the form/field methods below are exercised by the export tests; the
+    // remaining trait methods are deliberately unimplemented on this stub.
+    #[expect(
+        clippy::unimplemented,
+        reason = "export tests stub: they exercise only `form_definition`, \
+                  `extract_values` and `export_field_hint` and never call the \
+                  methods marked `unimplemented!` below"
+    )]
     impl dbflux_core::DbDriver for FakeDriver {
         fn kind(&self) -> DbKind {
             DbKind::SQLite

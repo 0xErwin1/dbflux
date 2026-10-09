@@ -95,6 +95,11 @@ impl ChangelogRelease {
             .all(|section| section.entries.is_empty())
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index is a `position()` hit inside `self.sections` (< len) or \
+                  `len - 1` taken right after a push, so it is always in range"
+    )]
     fn section_mut(&mut self, kind: SectionKind) -> &mut ChangelogSection {
         let index = match self
             .sections
@@ -468,6 +473,11 @@ fn plain_text(markdown: &str) -> String {
 
 /// Text up to the first sentence end (a period followed by a space and an
 /// uppercase letter), or the whole text when there is none.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the loop index is bounded by `characters.len()` and both the \
+              element access and the `[..index]` slice use that same index"
+)]
 fn first_sentence(text: &str) -> String {
     let characters: Vec<char> = text.chars().collect();
 
