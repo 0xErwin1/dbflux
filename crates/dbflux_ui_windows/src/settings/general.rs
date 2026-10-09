@@ -49,6 +49,8 @@ impl GeneralSection {
             current.dangerous_requires_preview != saved.dangerous_requires_preview,
             current.vim_mode != saved.vim_mode,
             current.vim_leader != saved.vim_leader,
+            current.table_alias_completion != saved.table_alias_completion,
+            current.table_alias_use_as != saved.table_alias_use_as,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
@@ -120,6 +122,8 @@ impl GeneralSection {
             GeneralFormRow::GridFontSize,
             GeneralFormRow::VimMode,
             GeneralFormRow::VimLeader,
+            GeneralFormRow::TableAlias,
+            GeneralFormRow::TableAliasUseAs,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -259,6 +263,15 @@ impl GeneralSection {
             Some(GeneralFormRow::VimLeader) => {
                 self.dropdown_vim_leader
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::TableAlias) => {
+                self.gen_settings.table_alias_completion =
+                    !self.gen_settings.table_alias_completion;
+                cx.notify();
+            }
+            Some(GeneralFormRow::TableAliasUseAs) => {
+                self.gen_settings.table_alias_use_as = !self.gen_settings.table_alias_use_as;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -965,6 +978,26 @@ impl GeneralSection {
                 Some(dbflux_i18n::t!("settings.general.vim_leader.hint")),
                 self.dropdown_vim_leader.clone(),
                 GeneralFormRow::VimLeader,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "table-alias",
+                dbflux_i18n::t!("settings.general.table_alias_completion.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.table_alias_completion.hint"
+                )),
+                self.gen_settings.table_alias_completion,
+                GeneralFormRow::TableAlias,
+                |this, value, _cx| this.gen_settings.table_alias_completion = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "table-alias-as",
+                dbflux_i18n::t!("settings.general.table_alias_use_as.label"),
+                Some(dbflux_i18n::t!("settings.general.table_alias_use_as.hint")),
+                self.gen_settings.table_alias_use_as,
+                GeneralFormRow::TableAliasUseAs,
+                |this, value, _cx| this.gen_settings.table_alias_use_as = value,
                 cx,
             ));
 

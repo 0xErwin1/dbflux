@@ -84,6 +84,8 @@ y permanece en English por ahora.
 | ---------------------------- | ------- | -------- |
 | **Vim mode in editors**      | Off     | Edición modal en todos los editores de varias líneas (editor de código, editor de objetos, diálogos JSON, panel de valor, vista JSON y pipeline de colecciones; solo movimientos en los visores de solo lectura): modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de [modo Vim](KEYBOARD.md#modo-vim-opcional) en la referencia de teclado. |
 | **Leader key**               | Space   | La tecla que inicia las secuencias de líder de Vim en los modos Normal y Visual, como la líder y luego `a` para las acciones del panel: espacio, coma o barra invertida. Se aplica a los editores abiertos al guardar, y los atajos de líder que cambiaste en **Keybindings** la siguen. |
+| **Add an alias to table completions** | On | Al aceptar una tabla, vista o CTE del autocompletado SQL después de `FROM` o `JOIN` se inserta con un alias formado por las iniciales de su nombre: `access_control` pasa a ser `access_control ac` y `public.order_items` pasa a ser `public.order_items oi`. Un alias ya usado en la sentencia o una palabra reservada recibe un número (`ac2`). No se añade alias cuando ya hay uno después del cursor, ni después de `INSERT INTO`, `UPDATE` y `DELETE FROM`. |
+| **Write the alias with AS** | Off | Inserta `access_control AS ac` en lugar de `access_control ac`. |
 
 ### Inicio y sesión
 

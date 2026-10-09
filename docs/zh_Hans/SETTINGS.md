@@ -58,6 +58,8 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 |---------|---------|--------------|
 | **在编辑器中使用 Vim 模式** | 关 | 所有多行编辑器中的模式化编辑（代码编辑器、对象编辑器、JSON 对话框、值面板、集合的 JSON 视图和管道；只读查看器中仅支持移动）：使用 `h`、`j`、`k`、`l`、`i`、`Escape`、`x`、`u` 的普通模式与插入模式。保存后应用于已打开的编辑器。参见键盘参考中的[Vim 模式](KEYBOARD.md#vim-模式可选)一节。 |
 | **Leader 键** | 空格 | 在普通模式和可视模式下开始 Vim Leader 序列的按键，例如先按 Leader 再按 `a` 打开面板操作：可选空格、逗号或反斜杠。保存后应用于已打开的编辑器，你在 **快捷键** 中修改过的 Leader 绑定也会随之改变。 |
+| **补全表名时添加别名** | 开 | 在 `FROM` 或 `JOIN` 之后从 SQL 补全中接受表、视图或 CTE 时，会一并插入由其名称首字母组成的别名：`access_control` 变为 `access_control ac`，`public.order_items` 变为 `public.order_items oi`。若该别名已在语句中使用或是保留字，则追加数字（`ac2`）。光标后已有别名时，或在 `INSERT INTO`、`UPDATE` 和 `DELETE FROM` 之后，不添加别名。 |
+| **使用 AS 书写别名** | 关 | 插入 `access_control AS ac`，而不是 `access_control ac`。 |
 
 ### 启动与会话
 

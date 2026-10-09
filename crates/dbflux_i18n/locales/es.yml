@@ -3805,6 +3805,12 @@ settings:
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."
+    table_alias_completion:
+      label: "Añadir un alias al completar tablas"
+      hint: "Al aceptar una tabla después de FROM o JOIN se inserta con un alias formado por sus iniciales: access_control pasa a ser access_control ac."
+    table_alias_use_as:
+      label: "Escribir el alias con AS"
+      hint: "Inserta access_control AS ac en lugar de access_control ac."
     vim_leader:
       label: "Tecla líder"
       hint: "Inicia las secuencias de líder de Vim en los modos Normal y Visual, como líder y luego a para las acciones del panel. Se aplica a los editores abiertos al guardar."
