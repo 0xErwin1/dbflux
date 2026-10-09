@@ -92,6 +92,7 @@ mod tests {
                 port,
                 user: user.to_string(),
                 auth_method: SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         )
     }

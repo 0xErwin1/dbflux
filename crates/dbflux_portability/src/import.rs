@@ -485,6 +485,7 @@ pub fn apply(
                 port: ssh_entry.port,
                 user: ssh_entry.user.clone(),
                 auth_method,
+                ssh_config_host: ssh_entry.ssh_config_host.clone(),
             },
             save_secret: false,
         });
@@ -1068,6 +1069,7 @@ mod tests {
             host: "bastion.example.com".to_string(),
             port: 22,
             user: "ec2-user".to_string(),
+            ssh_config_host: None,
             auth_method: SshAuthMethodKind::Password,
             key_embedded: false,
             required_refs: vec![],
@@ -1137,6 +1139,7 @@ mod tests {
                 port,
                 user: user.to_string(),
                 auth_method: SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         )
     }
@@ -1325,6 +1328,37 @@ encryption = "none"
         let bundle = empty_bundle(EncryptionMode::None);
         let bytes = bundle_bytes(&bundle);
         assert!(parse(&bytes).is_ok());
+    }
+
+    #[test]
+    fn apply_preserves_ssh_alias_and_defaults_missing_alias_to_none() {
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut aliased = make_ssh_entry("ssh-alias-1");
+        aliased.ssh_config_host = Some("web-prod".to_string());
+        bundle.ssh_tunnels.push(aliased);
+        bundle.ssh_tunnels.push(make_ssh_entry("ssh-plain-1"));
+
+        let bytes = bundle_bytes(&bundle);
+        let parsed = parse(&bytes).expect("parse bundle");
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let actions = apply(&parsed, &import_plan, &ResolutionChoices::default()).expect("apply");
+
+        assert_eq!(actions.ssh_tunnels.len(), 2);
+
+        let aliased: Vec<_> = actions
+            .ssh_tunnels
+            .iter()
+            .filter(|t| t.config.ssh_config_host.as_deref() == Some("web-prod"))
+            .collect();
+        assert_eq!(aliased.len(), 1, "exactly one tunnel keeps the alias");
+
+        let plain: Vec<_> = actions
+            .ssh_tunnels
+            .iter()
+            .filter(|t| t.config.ssh_config_host.is_none())
+            .collect();
+        assert_eq!(plain.len(), 1, "exactly one tunnel has no alias");
     }
 
     // -----------------------------------------------------------------------

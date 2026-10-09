@@ -43,6 +43,7 @@ pub fn build_ssh_config(
         port: parsed_port,
         user: user.to_string(),
         auth_method: auth,
+        ssh_config_host: None,
     }
 }
 

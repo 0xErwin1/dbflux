@@ -638,6 +638,7 @@ fn build_ssh_entries(
                 host: ssh.config.host.clone(),
                 port: ssh.config.port,
                 user: ssh.config.user.clone(),
+                ssh_config_host: ssh.config.ssh_config_host.clone(),
                 auth_method,
                 key_embedded,
                 required_refs,
@@ -1211,6 +1212,53 @@ mod tests {
     }
 
     #[test]
+    fn ssh_alias_survives_export_to_bundle() {
+        use dbflux_core::{SshTunnelConfig, SshTunnelProfile};
+
+        let profile = postgres_profile();
+        let ssh = SshTunnelProfile::new(
+            "Bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: Some("web-prod".to_string()),
+            },
+        );
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+        };
+
+        let (bytes, _report) = export(
+            &graph,
+            &default_opts_plaintext(),
+            &IncludeAllHints,
+            &NoTransforms,
+            &NoSecrets,
+        )
+        .expect("export");
+
+        let text = String::from_utf8(bytes).expect("utf8");
+        let bundle: crate::bundle::Bundle = toml::from_str(&text).expect("parse bundle");
+
+        assert_eq!(bundle.ssh_tunnels.len(), 1);
+        assert_eq!(
+            bundle.ssh_tunnels[0].ssh_config_host.as_deref(),
+            Some("web-prod")
+        );
+    }
+
+    #[test]
     fn ssh_key_embedded_in_secrets_when_opted_in() {
         let profile = postgres_profile();
         let ssh = SshTunnelProfile::new(
@@ -1220,6 +1268,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: dbflux_core::SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
             },
         );
 
@@ -1953,6 +2002,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         );
 
@@ -2005,6 +2055,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
             },
         );
 
@@ -2159,6 +2210,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         );
 
@@ -2369,6 +2421,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
             },
         );
 
@@ -2413,6 +2466,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
             },
         );
 

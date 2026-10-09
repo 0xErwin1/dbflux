@@ -222,6 +222,12 @@ pub struct SshEntry {
     pub port: u16,
     pub user: String,
 
+    /// Alias of a host in the recipient user's SSH config this tunnel
+    /// references. When set, it is resolved at connect time and `host`, `port`
+    /// and `user` are never dialed from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_config_host: Option<String>,
+
     /// `"private_key"` or `"password"`. When private_key and `embed_ssh_keys = true`
     /// the key bytes are in `[secrets]` under `ssh_tunnel:<local_id>:private_key`.
     pub auth_method: SshAuthMethodKind,
@@ -404,6 +410,7 @@ mod tests {
                 host: "bastion.example.com".to_string(),
                 port: 22,
                 user: "ec2-user".to_string(),
+                ssh_config_host: None,
                 auth_method: SshAuthMethodKind::PrivateKey,
                 key_embedded: false,
                 required_refs: vec![],
