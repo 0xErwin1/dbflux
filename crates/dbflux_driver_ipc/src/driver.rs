@@ -370,7 +370,7 @@ impl IpcDriver {
         // Explicit injection prevents the driver host from depending on implicit
         // env inheritance — belt-and-suspenders alongside the fail-closed check
         // in dbflux_driver_host::main.
-        if let Ok(token) = std::env::var(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV) {
+        if let Some(token) = dbflux_ipc::process_auth_token() {
             command.env(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV, token);
         }
 

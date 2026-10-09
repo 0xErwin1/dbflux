@@ -9,7 +9,7 @@ use dbflux_ipc::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
     },
-    driver_rpc_supported_versions, framing,
+    driver_rpc_supported_versions, framing, process_auth_token,
 };
 use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
 use uuid::Uuid;
@@ -150,9 +150,17 @@ impl RpcClient {
     }
 
     fn perform_hello(inner: &mut RpcClientInner) -> Result<DriverHelloResponse, RpcError> {
-        let auth_token = std::env::var(DRIVER_RPC_AUTH_TOKEN_ENV)
-            .ok()
-            .filter(|token| !token.is_empty());
+        // The process-global store is the primary source; the caller-supplied
+        // environment variable remains the fallback for processes that never
+        // initialized the store (e.g. standalone `dbflux mcp`).
+        let auth_token = process_auth_token()
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var(DRIVER_RPC_AUTH_TOKEN_ENV)
+                    .ok()
+                    .filter(|token| !token.is_empty())
+            });
 
         let request = DriverRequestEnvelope::new(
             DRIVER_RPC_VERSION,
@@ -1250,6 +1258,214 @@ mod tests {
             emitter.call_count(),
             200,
             "all 200 audit frames must be forwarded to the emitter by the transport loop"
+        );
+    }
+
+    // =========================================================================
+    // Process token store — delivery to spawned hosts and env fallback
+    // =========================================================================
+
+    const ISOLATED_MARKER_VAR: &str = "DBFLUX_DRIVER_IPC_TOKEN_ISOLATED_FIXTURE";
+
+    /// OS variables required to locate and run executables on each platform.
+    const OS_ESSENTIAL_VARS: &[&str] =
+        &["PATH", "SystemRoot", "SystemDrive", "TEMP", "TMP", "TMPDIR"];
+
+    /// Runs `test_name` in an isolated child process with a cleared environment
+    /// (the approach of `dbflux_core::isolated_env`). Returns `Ok(false)` when
+    /// the caller is the isolated child; `Ok(true)` when the parent ran the
+    /// child and it passed exactly the named test once; `Err` otherwise.
+    fn run_in_isolated_fixture(
+        test_name: &str,
+        fixture_variables: &[(&str, &std::ffi::OsStr)],
+    ) -> Result<bool, String> {
+        if std::env::var_os(ISOLATED_MARKER_VAR).is_some_and(|marker| marker == test_name) {
+            return Ok(false);
+        }
+
+        let test_executable = std::env::current_exe()
+            .map_err(|error| format!("current test binary must be locatable: {error}"))?;
+        let mut command = std::process::Command::new(test_executable);
+        command
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env_clear();
+        for key in OS_ESSENTIAL_VARS {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        for (key, value) in fixture_variables {
+            command.env(key, value);
+        }
+        command.env(ISOLATED_MARKER_VAR, test_name);
+
+        let output = command.output().map_err(|error| {
+            format!("isolated fixture child process must be spawnable: {error}")
+        })?;
+
+        let summary = String::from_utf8_lossy(&output.stdout);
+        if !(output.status.success() && summary.contains("1 passed; 0 failed")) {
+            return Err(format!(
+                "isolated fixture child must run and pass exactly the selected test (anti-vacuum); status: {:?}; child stderr (first 8k chars): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(8192)
+                    .collect::<String>()
+            ));
+        }
+        Ok(true)
+    }
+
+    /// Unique scratch data directory for a fixture child, so the token file
+    /// write never touches user data.
+    fn fixture_data_dir(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or_default();
+        std::env::temp_dir().join(format!(
+            "dbflux-driver-ipc-token-fixture-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    /// A managed driver-host launch whose "host" is a shell command that
+    /// records the token it received into a file, so the spawn-time delivery
+    /// path is observable without running a real driver host. Unix only: it
+    /// relies on `sh`.
+    #[cfg(unix)]
+    #[test]
+    fn spawned_driver_host_receives_store_token_explicitly() {
+        use crate::driver::{IpcDriver, IpcDriverLaunchConfig};
+
+        let data_dir = fixture_data_dir("driver-spawn");
+
+        if run_in_isolated_fixture(
+            "transport::tests::spawned_driver_host_receives_store_token_explicitly",
+            &[("XDG_DATA_HOME", data_dir.as_os_str())],
+        )
+        .expect("isolated fixture must pass")
+        {
+            return;
+        }
+
+        // Child side: the store holds the token; the environment does not.
+        let token =
+            dbflux_ipc::init_process_auth_tokens().expect("token initialization must succeed");
+
+        // The scratch dir is whatever the parent provisioned via the fixture.
+        let data_dir = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .expect("fixture must provide XDG_DATA_HOME");
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or_default();
+        let socket_id = format!("drv-token-{}-{}", std::process::id(), nanos);
+        let token_out = data_dir.join("driver_host_token");
+
+        let launch = IpcDriverLaunchConfig {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf '%s' \"$DBFLUX_DRIVER_IPC_TOKEN\" > \"$TOKEN_OUT_FILE\"".to_string(),
+            ],
+            env: vec![(
+                "TOKEN_OUT_FILE".to_string(),
+                token_out.display().to_string(),
+            )],
+            startup_timeout: std::time::Duration::from_millis(500),
+        };
+
+        // The probe fails by design: the shell host exits without serving a
+        // socket. Its error is irrelevant; the delivered token is the assertion.
+        let _probe_error = IpcDriver::probe_driver(&socket_id, Some(&launch));
+        if let Err(error) = &_probe_error {
+            eprintln!("probe error (expected, host is a stub): {error}");
+        }
+
+        let delivered = std::fs::read_to_string(&token_out)
+            .expect("spawned driver host must write the delivered token");
+        assert!(
+            delivered == token,
+            "spawned driver host must receive the store token explicitly \
+             (delivered length {}, expected length {})",
+            delivered.len(),
+            token.len()
+        );
+    }
+
+    /// Previous behavior preserved: when the store is empty (no
+    /// `init_process_auth_tokens()` call, e.g. standalone `dbflux mcp`), a
+    /// caller-supplied `DBFLUX_DRIVER_IPC_TOKEN` must still reach the Hello.
+    #[test]
+    fn driver_hello_carries_env_token_when_store_is_empty() {
+        use interprocess::local_socket::traits::Listener;
+        use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
+
+        let data_dir = fixture_data_dir("driver-fallback");
+
+        if run_in_isolated_fixture(
+            "transport::tests::driver_hello_carries_env_token_when_store_is_empty",
+            &[
+                ("XDG_DATA_HOME", data_dir.as_os_str()),
+                (
+                    "DBFLUX_DRIVER_IPC_TOKEN",
+                    std::ffi::OsStr::new("fallback-env-token"),
+                ),
+            ],
+        )
+        .expect("isolated fixture must pass")
+        {
+            return;
+        }
+
+        // Child side: no init call, so the store is empty; the fixture-provided
+        // environment variable is the only token source.
+        let expected = std::env::var(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV)
+            .ok()
+            .filter(|token| !token.is_empty())
+            .expect("fixture must provide the fallback token variable");
+
+        let socket_id = format!(
+            "drv-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        );
+        let name = dbflux_ipc::driver_socket_name(&socket_id).expect("socket name");
+
+        let listener = ListenerOptions::new()
+            .name(name.borrow())
+            .nonblocking(Neither)
+            .create_sync()
+            .expect("fake driver listener must bind");
+
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().expect("accept must succeed");
+            let request: dbflux_ipc::driver_protocol::DriverRequestEnvelope =
+                dbflux_ipc::framing::recv_msg(&mut stream).expect("hello request must be readable");
+            request
+        });
+
+        // The client fails once the server drops the stream after reading the
+        // Hello; the captured request is the assertion.
+        let _client = RpcClient::connect(name.borrow());
+
+        let request = server.join().expect("server thread must not panic");
+        let dbflux_ipc::driver_protocol::DriverRequestBody::Hello(hello) = request.body else {
+            panic!("expected a Hello request");
+        };
+        assert_eq!(
+            hello.auth_token.as_deref(),
+            Some(expected.as_str()),
+            "hello must carry the caller-supplied environment token when the store is empty"
         );
     }
 }
