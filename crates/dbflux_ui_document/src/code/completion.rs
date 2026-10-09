@@ -371,7 +371,13 @@ impl QueryCompletionProvider {
 
         let settings = self.app_state.read(cx).general_settings();
         if settings.table_alias_completion {
-            append_table_aliases(&mut items, source, cursor, settings.table_alias_use_as);
+            append_table_aliases(
+                &mut items,
+                &metadata,
+                source,
+                cursor,
+                settings.table_alias_use_as,
+            );
         }
 
         items
@@ -2093,8 +2099,15 @@ fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
 /// being completed follows `FROM` or `JOIN` and no alias follows the cursor:
 /// accepting `access_control` inserts `access_control ac`. Positions where
 /// an alias is invalid in some dialect (`INSERT INTO`, `UPDATE`,
-/// `DELETE FROM`) are left bare.
-fn append_table_aliases(items: &mut [CompletionItem], source: &str, cursor: usize, use_as: bool) {
+/// `DELETE FROM`) are left bare. As in DBeaver, an alias that names a known
+/// table or view is treated as taken, so `t2` is aliased `t3`, not `t2`.
+fn append_table_aliases(
+    items: &mut [CompletionItem],
+    metadata: &SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+    use_as: bool,
+) {
     let mut reference_start = scan_identifier_start(source, cursor);
     if reference_start > 0 && source.as_bytes()[reference_start - 1] == b'.' {
         reference_start = scan_identifier_start(source, reference_start - 1);
@@ -2109,6 +2122,14 @@ fn append_table_aliases(items: &mut [CompletionItem], source: &str, cursor: usiz
     for (alias, table) in extract_sql_aliases(statement) {
         taken.insert(alias);
         taken.insert(table);
+    }
+    for relation in metadata
+        .table_names_iter()
+        .chain(metadata.view_names_iter())
+        .chain(metadata.unqualified_relations.iter().map(String::as_str))
+    {
+        let bare = relation.rsplit('.').next().unwrap_or(relation);
+        taken.insert(normalize_identifier(bare));
     }
 
     let separator = if use_as { " AS " } else { " " };
@@ -2995,8 +3016,9 @@ mod tests {
     }
 
     fn aliased_insert_text(source: &str, label: &str, use_as: bool) -> String {
-        let mut items = analyzed_items(&context_metadata(), source);
-        append_table_aliases(&mut items, source, source.len(), use_as);
+        let metadata = context_metadata();
+        let mut items = analyzed_items(&metadata, source);
+        append_table_aliases(&mut items, &metadata, source, source.len(), use_as);
         let item = items
             .iter()
             .find(|item| item.label == label)
@@ -3016,8 +3038,8 @@ mod tests {
         );
         assert_eq!(
             aliased_insert_text("SELECT * FROM t1 t JOIN ", "t2", false),
-            "t2 t2",
-            "an alias already used in the statement is numbered"
+            "t2 t3",
+            "an alias used in the statement or naming a known table is numbered"
         );
     }
 
@@ -3029,9 +3051,10 @@ mod tests {
             "DELETE FROM ",
             "SELECT * FROM t1 WHERE c1 = 1",
         ] {
-            let mut items = analyzed_items(&context_metadata(), source);
+            let metadata = context_metadata();
+            let mut items = analyzed_items(&metadata, source);
             let before: Vec<_> = items.iter().map(|item| item.text_edit.clone()).collect();
-            append_table_aliases(&mut items, source, source.len(), false);
+            append_table_aliases(&mut items, &metadata, source, source.len(), false);
             let after: Vec<_> = items.iter().map(|item| item.text_edit.clone()).collect();
             assert_eq!(before, after, "no alias for {source:?}");
         }

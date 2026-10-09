@@ -51,7 +51,7 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 | 설정 | 기본값 | 설명 |
 |---------|---------|--------------|
 | **Vim mode in code editors** | Off | 코드 편집기의 모드 편집: `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, `u`를 쓰는 노멀 모드와 삽입 모드. 저장하면 열려 있는 편집기에 적용됩니다. 키보드 참조의 [Vim 모드](KEYBOARD.md#vim-모드선택-사항) 섹션을 참고하세요. |
-| **Add an alias to table completions** | On | `FROM` 또는 `JOIN` 뒤에서 SQL 자동 완성의 테이블, 뷰 또는 CTE를 선택하면 이름의 머리글자로 만든 별칭과 함께 삽입합니다. `access_control`은 `access_control ac`가 되고 `public.order_items`는 `public.order_items oi`가 됩니다. 문에서 이미 쓰인 별칭이나 예약어에는 숫자를 붙입니다(`ac2`). 커서 뒤에 별칭이 이미 있거나 `INSERT INTO`, `UPDATE`, `DELETE FROM` 뒤에서는 별칭을 추가하지 않습니다. |
+| **Add an alias to table completions** | On | `FROM` 또는 `JOIN` 뒤에서 SQL 자동 완성의 테이블, 뷰 또는 CTE를 선택하면 이름의 머리글자로 만든 별칭과 함께 삽입합니다. `access_control`은 `access_control ac`가 되고 `public.order_items`는 `public.order_items oi`가 됩니다. 문에서 이미 쓰인 별칭, 예약어 또는 알려진 테이블 이름에는 숫자를 붙입니다(`ac2`). 커서 뒤에 별칭이 이미 있거나 `INSERT INTO`, `UPDATE`, `DELETE FROM` 뒤에서는 별칭을 추가하지 않습니다. |
 | **Write the alias with AS** | Off | `access_control ac` 대신 `access_control AS ac`를 삽입합니다. |
 
 ### 시작 및 세션
