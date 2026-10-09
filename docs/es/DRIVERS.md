@@ -169,8 +169,9 @@ catálogo adjuntado es una base de datos en el sidebar, con sus schemas, tables 
 views cargados bajo demanda. Soporta parámetros vinculados, scripts
 multi-statement, límite de filas, cancelación, CRUD tipado con `RETURNING` y
 enforcement de solo lectura mediante una transaction `READ ONLY` que además
-rechaza lecturas de archivos y de red mediante table functions; las funciones
-escalares que agregan las extensiones no se verifican. No soporta timeouts de
+rechaza lecturas de archivos y de red mediante table functions nombradas en el
+statement; no se verifican las views y macros creadas antes ni las funciones
+escalares que agregan las extensiones. No soporta timeouts de
 statement. Ver
 [`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md).
 

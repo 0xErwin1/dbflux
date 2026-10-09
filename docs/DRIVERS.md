@@ -160,8 +160,9 @@ default database. Every attached catalog is a database in the sidebar, with its
 schemas, tables, and views loaded lazily. It supports bound parameters,
 multi-statement scripts, row limits, cancellation, typed CRUD with `RETURNING`,
 and read-only enforcement through a `READ ONLY` transaction that also refuses
-file and network reads through table functions; scalar functions added by
-extensions are not checked. Statement timeouts are not supported. See
+file and network reads through table functions named in the statement; views
+and macros created earlier, and scalar functions added by extensions, are not
+checked. Statement timeouts are not supported. See
 [`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md).
 
 ### Amazon S3

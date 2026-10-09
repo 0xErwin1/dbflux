@@ -84,7 +84,7 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 
 ### DuckDB
 
-基于内置 DuckDB 引擎的嵌入式分析型 SQL 驱动程序。配置可以打开一个数据库文件；路径留空时打开内存数据库。它还可以挂载一个 DuckLake 目录（本地元数据文件，或 PostgreSQL、SQLite、MySQL 目录，数据可放在本地磁盘或对象存储上），该目录会成为默认数据库。每个已挂载的目录都在侧边栏中显示为一个数据库，其 schema、表与视图按需加载。支持绑定参数、多语句脚本、行数限制、查询取消、带 `RETURNING` 的类型化 CRUD，以及通过 `READ ONLY` 事务实现、并拒绝通过表函数读取文件与网络的只读强制（不检查扩展添加的标量函数）。不支持语句超时。参见 [`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md)。
+基于内置 DuckDB 引擎的嵌入式分析型 SQL 驱动程序。配置可以打开一个数据库文件；路径留空时打开内存数据库。它还可以挂载一个 DuckLake 目录（本地元数据文件，或 PostgreSQL、SQLite、MySQL 目录，数据可放在本地磁盘或对象存储上），该目录会成为默认数据库。每个已挂载的目录都在侧边栏中显示为一个数据库，其 schema、表与视图按需加载。支持绑定参数、多语句脚本、行数限制、查询取消、带 `RETURNING` 的类型化 CRUD，以及通过 `READ ONLY` 事务实现、并拒绝语句中直接引用的表函数读取文件与网络的只读强制（不检查此前创建的视图和宏，也不检查扩展添加的标量函数）。不支持语句超时。参见 [`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md)。
 
 ### Amazon S3
 

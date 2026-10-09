@@ -163,6 +163,8 @@ pub enum FormSectionIcon {
     Topology,
     /// Schema discovery options.
     Schema,
+    /// Statements run when the connection opens.
+    Startup,
 }
 
 /// A section of related form fields.

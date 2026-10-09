@@ -55,7 +55,7 @@ pub static DUCKDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef
             },
             FormSection {
                 title: "Startup".into(),
-                icon: None,
+                icon: Some(FormSectionIcon::Startup),
                 fields: vec![field(
                     "init_sql",
                     "Init SQL",
@@ -99,7 +99,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::QUERY_CANCELLATION.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
-            | DriverCapabilities::BULK_INSERT.bits(),
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits(),
     ),
     default_port: None,
     uri_scheme: "duckdb".into(),
@@ -293,6 +294,14 @@ fn instance_slot(key: &str) -> Result<Arc<InstanceSlot>, DbError> {
     let mut instances = INSTANCES
         .lock()
         .map_err(|_| DbError::connection_failed("DuckDB instance registry poisoned"))?;
+    // Forget files whose connections are all gone. A slot someone else still
+    // holds is kept, since it may be about to register a connection.
+    instances.retain(|_, slot| {
+        Arc::strong_count(slot) > 1
+            || slot.lock().map_or(true, |entries| {
+                entries.iter().any(|entry| entry.strong_count() > 0)
+            })
+    });
     Ok(instances.entry(key.to_string()).or_default().clone())
 }
 

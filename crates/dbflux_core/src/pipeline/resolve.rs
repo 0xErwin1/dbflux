@@ -161,11 +161,12 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             path,
             ducklake_catalog,
             ducklake_data_path,
-            ..
+            init_sql,
         } => match field {
             "path" => *path = val.into(),
             "ducklake_catalog" => *ducklake_catalog = Some(val.to_string()),
             "ducklake_data_path" => *ducklake_data_path = Some(val.to_string()),
+            "init_sql" => *init_sql = Some(val.to_string()),
             _ => {}
         },
 

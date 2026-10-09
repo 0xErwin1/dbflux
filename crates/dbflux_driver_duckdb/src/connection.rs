@@ -10,8 +10,8 @@ use dbflux_core::{
     ExecutionSession, ExecutionSessionFactory, ExplainRequest, ForeignKeyInfo, IndexData,
     IndexInfo, KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest,
     QueryResult, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
-    TableInfo, Value, ViewInfo,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, TableInfo, Value, ViewInfo,
 };
 use duckdb::arrow::datatypes::{DataType, TimeUnit as ArrowTimeUnit};
 use duckdb::types::{TimeUnit, Value as DuckValue};
@@ -80,14 +80,22 @@ struct DuckDbSessionFactory {
     shared: Arc<SharedDuckDb>,
     root_catalog: Arc<Mutex<Option<String>>>,
     closed: AtomicBool,
-    children: Mutex<Vec<Weak<DuckDbSession>>>,
+    children: Arc<SessionRegistry>,
+}
+
+type SessionRegistry = Mutex<Vec<Weak<DuckDbSession>>>;
+
+fn lock_sessions(
+    registry: &SessionRegistry,
+) -> Result<MutexGuard<'_, Vec<Weak<DuckDbSession>>>, DbError> {
+    registry
+        .lock()
+        .map_err(|_| DbError::query_failed("DuckDB session registry poisoned"))
 }
 
 impl DuckDbSessionFactory {
     fn children(&self) -> Result<MutexGuard<'_, Vec<Weak<DuckDbSession>>>, DbError> {
-        self.children
-            .lock()
-            .map_err(|_| DbError::query_failed("DuckDB session registry poisoned"))
+        lock_sessions(&self.children)
     }
 }
 
@@ -178,12 +186,25 @@ impl ExecutionSession for DuckDbSession {
 struct DuckDbCancelHandle {
     shared: Arc<SharedDuckDb>,
     cancelled: Arc<AtomicBool>,
+    /// The editor runs on session connections, each with its own interrupt
+    /// handle, while cancel reaches the root, so the root interrupts them too.
+    sessions: Option<Arc<SessionRegistry>>,
 }
 
 impl QueryCancelHandle for DuckDbCancelHandle {
     fn cancel(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
         self.shared.interrupt.interrupt();
+        if let Some(sessions) = &self.sessions {
+            let open: Vec<Arc<DuckDbSession>> = lock_sessions(sessions)?
+                .iter()
+                .filter_map(Weak::upgrade)
+                .filter(|session| !session.is_closed())
+                .collect();
+            for session in open {
+                session.connection.cancel_active()?;
+            }
+        }
         Ok(())
     }
 
@@ -210,7 +231,7 @@ impl DuckDbConnection {
             shared: shared.clone(),
             root_catalog: active_catalog.clone(),
             closed: AtomicBool::new(false),
-            children: Mutex::new(Vec::new()),
+            children: Arc::new(Mutex::new(Vec::new())),
         });
         let connection = Self {
             shared,
@@ -329,26 +350,29 @@ impl DuckDbConnection {
     }
 
     /// The primary key columns, foreign keys, and CHECK and UNIQUE constraints
-    /// of the table `filter` selects.
-    fn load_constraints(&self, filter: &str, schema: &str) -> Result<TableConstraints, DbError> {
+    /// of each table `filter` selects, by table name.
+    fn load_constraints(
+        &self,
+        filter: &str,
+        schema: &str,
+    ) -> Result<BTreeMap<String, TableConstraints>, DbError> {
         let rows = self
             .run(
                 &format!(
-                    "SELECT constraint_type, constraint_name, constraint_column_names, \
+                    "SELECT table_name, constraint_type, constraint_name, constraint_column_names, \
                      referenced_table, referenced_column_names, expression \
-                     FROM duckdb_constraints() WHERE {filter} ORDER BY constraint_index"
+                     FROM duckdb_constraints() WHERE {filter} ORDER BY table_name, constraint_index"
                 ),
                 &[],
                 None,
             )?
             .rows;
 
-        let mut primary_key = Vec::new();
-        let mut foreign_keys = Vec::new();
-        let mut checks_and_uniques = Vec::new();
+        let mut tables = BTreeMap::<String, TableConstraints>::new();
         for row in rows {
             let Ok(
                 [
+                    table,
                     kind,
                     name,
                     columns,
@@ -356,16 +380,22 @@ impl DuckDbConnection {
                     referenced_columns,
                     expression,
                 ],
-            ) = <[Value; 6]>::try_from(row)
+            ) = <[Value; 7]>::try_from(row)
             else {
                 continue;
             };
-            let (Value::Text(kind), Value::Text(name)) = (kind, name) else {
+            let (Value::Text(table), Value::Text(kind), Value::Text(name)) = (table, kind, name)
+            else {
                 continue;
             };
+            let TableConstraints {
+                primary_key,
+                foreign_keys,
+                checks_and_uniques,
+            } = tables.entry(table).or_default();
             let columns = text_list(columns);
             match kind.as_str() {
-                "PRIMARY KEY" => primary_key = columns,
+                "PRIMARY KEY" => *primary_key = columns,
                 "FOREIGN KEY" => {
                     if let Value::Text(referenced_table) = referenced_table {
                         foreign_keys.push(ForeignKeyInfo {
@@ -398,11 +428,7 @@ impl DuckDbConnection {
                 _ => {}
             }
         }
-        Ok(TableConstraints {
-            primary_key,
-            foreign_keys,
-            checks_and_uniques,
-        })
+        Ok(tables)
     }
 
     fn load_columns(
@@ -446,47 +472,77 @@ impl DuckDbConnection {
         table: &str,
         primary_key: Vec<String>,
     ) -> Result<Vec<IndexInfo>, DbError> {
-        let mut indexes: Vec<IndexInfo> = (!primary_key.is_empty())
-            .then(|| IndexInfo {
-                name: format!("{table}_pkey"),
-                columns: primary_key,
-                is_unique: true,
-                is_primary: true,
-            })
-            .into_iter()
-            .collect();
-        // `expressions` is the indexed expression list as text, such as `[a, b]`.
+        let mut indexes: Vec<IndexInfo> =
+            primary_key_index(table, primary_key).into_iter().collect();
         indexes.extend(
-            self.run(
+            self.load_index_rows(filter)?
+                .into_iter()
+                .map(|(_, index)| index),
+        );
+        Ok(indexes)
+    }
+
+    /// The indexes `filter` selects with the table each belongs to. Primary
+    /// keys have no entry here; they come from the constraints.
+    fn load_index_rows(&self, filter: &str) -> Result<Vec<(String, IndexInfo)>, DbError> {
+        // `expressions` is the indexed expression list as text, such as `[a, b]`.
+        Ok(self
+            .run(
                 &format!(
-                    "SELECT index_name, is_unique, expressions FROM duckdb_indexes() \
-                     WHERE {filter} ORDER BY index_name"
+                    "SELECT table_name, index_name, is_unique, expressions FROM duckdb_indexes() \
+                     WHERE {filter} ORDER BY table_name, index_name"
                 ),
                 &[],
                 None,
             )?
             .rows
             .into_iter()
-            .filter_map(|row| match <[Value; 3]>::try_from(row) {
-                Ok([Value::Text(name), is_unique, Value::Text(expressions)]) => Some(IndexInfo {
-                    name,
-                    columns: expressions
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
-                        .split(", ")
-                        .filter(|column| !column.is_empty())
-                        .map(str::to_string)
-                        .collect(),
-                    is_unique: is_unique == Value::Bool(true),
-                    is_primary: false,
-                }),
+            .filter_map(|row| match <[Value; 4]>::try_from(row) {
+                Ok(
+                    [
+                        Value::Text(table),
+                        Value::Text(name),
+                        is_unique,
+                        Value::Text(expressions),
+                    ],
+                ) => Some((
+                    table,
+                    IndexInfo {
+                        name,
+                        columns: expressions
+                            .trim_start_matches('[')
+                            .trim_end_matches(']')
+                            .split(", ")
+                            .filter(|column| !column.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                        is_unique: is_unique == Value::Bool(true),
+                        is_primary: false,
+                    },
+                )),
                 _ => None,
-            }),
-        );
-        Ok(indexes)
+            })
+            .collect())
     }
 
-    /// Runs a mutation with `RETURNING *` and reports the first returned row.
+    /// The filter selecting every object of `schema` in `database`, the active
+    /// catalog when `database` is empty.
+    fn schema_filter(&self, database: &str, schema: Option<&str>) -> (String, String) {
+        let catalog = match database {
+            "" => self.active_database().unwrap_or_default(),
+            name => name.to_string(),
+        };
+        let schema = schema.unwrap_or("main").to_string();
+        let filter = format!(
+            "database_name = {} AND schema_name = {}",
+            Self::literal(&catalog),
+            Self::literal(&schema)
+        );
+        (filter, schema)
+    }
+
+    /// Runs an insert or delete with `RETURNING *` and reports the first
+    /// returned row.
     fn run_returning(&self, sql: Option<String>) -> Result<CrudResult, DbError> {
         let sql = sql.ok_or_else(|| DbError::query_failed("Failed to build the statement"))?;
         log::debug!("[DUCKDB] {sql}");
@@ -537,6 +593,10 @@ impl Connection for DuckDbConnection {
         Arc::new(DuckDbCancelHandle {
             shared: self.shared.clone(),
             cancelled: self.cancelled.clone(),
+            sessions: self
+                .sessions
+                .as_ref()
+                .map(|factory| factory.children.clone()),
         })
     }
 
@@ -634,29 +694,23 @@ impl Connection for DuckDbConnection {
         schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        let catalog = match database {
-            "" => self.active_database().unwrap_or_default(),
-            name => name.to_string(),
-        };
-        let schema = schema.unwrap_or("main");
-        let filter = format!(
-            "database_name = {} AND schema_name = {} AND table_name = {}",
-            Self::literal(&catalog),
-            Self::literal(schema),
-            Self::literal(table)
-        );
+        let (schema_filter, schema) = self.schema_filter(database, schema);
+        let filter = format!("{schema_filter} AND table_name = {}", Self::literal(table));
 
         let TableConstraints {
             primary_key,
             foreign_keys,
             checks_and_uniques,
-        } = self.load_constraints(&filter, schema)?;
+        } = self
+            .load_constraints(&filter, &schema)?
+            .remove(table)
+            .unwrap_or_default();
         let columns = self.load_columns(&filter, &primary_key)?;
         let indexes = self.load_indexes(&filter, table, primary_key)?;
 
         Ok(TableInfo {
             name: table.to_string(),
-            schema: Some(schema.to_string()),
+            schema: Some(schema),
             columns: Some(columns),
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
@@ -667,6 +721,59 @@ impl Connection for DuckDbConnection {
             storage_hints: None,
             pseudo_columns: Box::default(),
         })
+    }
+
+    fn schema_indexes(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        let (filter, schema) = self.schema_filter(database, schema);
+        let primary_keys = self
+            .load_constraints(&filter, &schema)?
+            .into_iter()
+            .filter_map(|(table, constraints)| {
+                primary_key_index(&table, constraints.primary_key).map(|index| (table, index))
+            });
+        let mut indexes: Vec<(String, IndexInfo)> = primary_keys.collect();
+        indexes.extend(self.load_index_rows(&filter)?);
+        Ok(indexes
+            .into_iter()
+            .map(|(table_name, index)| SchemaIndexInfo {
+                name: index.name,
+                table_name,
+                columns: index.columns,
+                is_unique: index.is_unique,
+                is_primary: index.is_primary,
+            })
+            .collect())
+    }
+
+    fn schema_foreign_keys(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        let (filter, schema) = self.schema_filter(database, schema);
+        Ok(self
+            .load_constraints(&filter, &schema)?
+            .into_iter()
+            .flat_map(|(table_name, constraints)| {
+                constraints
+                    .foreign_keys
+                    .into_iter()
+                    .map(move |key| SchemaForeignKeyInfo {
+                        name: key.name,
+                        table_name: table_name.clone(),
+                        columns: key.columns,
+                        referenced_schema: key.referenced_schema,
+                        referenced_table: key.referenced_table,
+                        referenced_columns: key.referenced_columns,
+                        on_delete: key.on_delete,
+                        on_update: key.on_update,
+                    })
+            })
+            .collect())
     }
 
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
@@ -710,7 +817,32 @@ impl Connection for DuckDbConnection {
         if !patch.has_changes() {
             return Err(DbError::query_failed("No changes to save"));
         }
-        self.run_returning(SqlQueryBuilder::new(&DUCKDB_DIALECT).build_update(patch, true))
+        // DuckDB refuses `UPDATE ... RETURNING` on a row a foreign key
+        // references, even when no key column changes, so the row is read back
+        // separately.
+        let builder = SqlQueryBuilder::new(&DUCKDB_DIALECT);
+        let update = builder
+            .build_update(patch, false)
+            .ok_or_else(|| DbError::query_failed("Failed to build the statement"))?;
+        log::debug!("[DUCKDB] {update}");
+        let affected = match self
+            .run(&update, &[], None)?
+            .rows
+            .first()
+            .map(Vec::as_slice)
+        {
+            Some([Value::Int(count)]) => *count,
+            _ => 0,
+        };
+        if affected == 0 {
+            return Ok(CrudResult::empty());
+        }
+
+        let select = builder
+            .build_select_by_identity(patch.schema.as_deref(), &patch.table, &patch.identity)
+            .ok_or_else(|| DbError::query_failed("Failed to build the statement"))?;
+        let row = self.run(&select, &[], None)?.rows.into_iter().next();
+        Ok(CrudResult::new(affected as u64, row))
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
@@ -790,7 +922,19 @@ fn read_only_rejection(serialized: &str) -> Option<String> {
         Err(error) => return Some(format!("could not read the parsed statements ({error})")),
     };
     if parsed.get("error").and_then(serde_json::Value::as_bool) != Some(false) {
-        return Some("accepts SELECT statements only".to_string());
+        // A syntax error also lands here, and its message says more than the
+        // SELECT-only rule does.
+        return Some(
+            match parsed
+                .get("error_message")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(message) if !message.is_empty() => {
+                    format!("accepts SELECT statements only ({message})")
+                }
+                _ => "accepts SELECT statements only".to_string(),
+            },
+        );
     }
     parsed.get("statements").and_then(external_reference)
 }
@@ -907,10 +1051,21 @@ fn to_duckdb_value(value: &Value) -> DuckValue {
     }
 }
 
+#[derive(Default)]
 struct TableConstraints {
     primary_key: Vec<String>,
     foreign_keys: Vec<ForeignKeyInfo>,
     checks_and_uniques: Vec<ConstraintInfo>,
+}
+
+/// DuckDB lists no index for a primary key, so the key is shown as one.
+fn primary_key_index(table: &str, primary_key: Vec<String>) -> Option<IndexInfo> {
+    (!primary_key.is_empty()).then(|| IndexInfo {
+        name: format!("{table}_pkey"),
+        columns: primary_key,
+        is_unique: true,
+        is_primary: true,
+    })
 }
 
 fn text_list(value: Value) -> Vec<String> {
@@ -948,7 +1103,13 @@ fn from_duckdb_value(value: DuckValue) -> Value {
         DuckValue::UHugeInt(value) => i128::try_from(value)
             .map(integer)
             .unwrap_or_else(|_| Value::Decimal(value.to_string())),
-        DuckValue::Float(value) => Value::Float(value.into()),
+        // Widening the f32 directly would show 3.14 as 3.140000104904175.
+        DuckValue::Float(value) => Value::Float(
+            value
+                .to_string()
+                .parse()
+                .unwrap_or_else(|_| f64::from(value)),
+        ),
         DuckValue::Double(value) => Value::Float(value),
         DuckValue::Decimal(value) => Value::Decimal(value.to_string()),
         DuckValue::Timestamp(unit, value) => DateTime::from_timestamp_micros(unit.to_micros(value))
@@ -973,7 +1134,7 @@ fn from_duckdb_value(value: DuckValue) -> Value {
             months,
             days,
             nanos,
-        } => Value::Text(format!("{months} months {days} days {}us", nanos / 1000)),
+        } => Value::Text(interval_text(months, days, nanos)),
         DuckValue::List(values) | DuckValue::Array(values) => {
             Value::Array(values.into_iter().map(from_duckdb_value).collect())
         }
@@ -998,6 +1159,36 @@ fn from_duckdb_value(value: DuckValue) -> Value {
         DuckValue::Union(value) => from_duckdb_value(*value),
         other => Value::Unsupported(format!("{other:?}")),
     }
+}
+
+/// An interval in DuckDB's own notation, such as `1 year 2 months 3 days 00:01:30`.
+fn interval_text(months: i32, days: i32, nanos: i64) -> String {
+    let mut parts: Vec<String> = [(months / 12, "year"), (months % 12, "month"), (days, "day")]
+        .into_iter()
+        .filter(|(value, _)| *value != 0)
+        .map(|(value, unit)| {
+            let plural = if value.abs() == 1 { "" } else { "s" };
+            format!("{value} {unit}{plural}")
+        })
+        .collect();
+
+    let micros = nanos / 1000;
+    if micros != 0 || parts.is_empty() {
+        let sign = if micros < 0 { "-" } else { "" };
+        let micros = micros.unsigned_abs();
+        let seconds = micros / 1_000_000;
+        let mut time = format!(
+            "{sign}{:02}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        );
+        if !micros.is_multiple_of(1_000_000) {
+            time.push_str(&format!(".{:06}", micros % 1_000_000));
+        }
+        parts.push(time);
+    }
+    parts.join(" ")
 }
 
 fn type_name(data_type: &DataType) -> String {
@@ -1069,7 +1260,7 @@ fn column_kind(data_type: &DataType) -> ColumnKind {
 mod tests {
     use super::*;
     use crate::DuckDbDriver;
-    use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, RowIdentity};
+    use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, RowIdentity, RowPatch};
 
     fn connect() -> Box<dyn Connection> {
         DuckDbDriver::new()
@@ -1187,6 +1378,22 @@ mod tests {
         assert!(indexes.iter().any(|index| {
             index.name == "orders_qty" && !index.is_unique && index.columns == ["qty"]
         }));
+
+        let schema_indexes = connection.schema_indexes(&catalog, Some("sales")).unwrap();
+        assert!(schema_indexes.iter().any(|index| {
+            index.table_name == "customers" && index.is_primary && index.columns == ["id"]
+        }));
+        assert!(
+            schema_indexes
+                .iter()
+                .any(|index| index.table_name == "orders" && index.name == "orders_qty")
+        );
+        let schema_foreign_keys = connection
+            .schema_foreign_keys(&catalog, Some("sales"))
+            .unwrap();
+        assert_eq!(schema_foreign_keys.len(), 1);
+        assert_eq!(schema_foreign_keys[0].table_name, "orders");
+        assert_eq!(schema_foreign_keys[0].referenced_table, "customers");
     }
 
     #[test]
@@ -1242,7 +1449,31 @@ mod tests {
             Some(vec![Value::Int(1), Value::Text("one".into())])
         );
 
+        // DuckDB refuses `UPDATE ... RETURNING` on a row a foreign key references.
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE orders (id INTEGER PRIMARY KEY, item INTEGER REFERENCES items(id));
+                 INSERT INTO orders VALUES (10, 1)",
+            ))
+            .unwrap();
         let identity = RowIdentity::new(vec!["id".into()], vec![Value::Int(1)]);
+        let updated = connection
+            .update_row(&RowPatch::new(
+                identity.clone(),
+                "items".into(),
+                None,
+                vec![("name".into(), Value::Text("uno".into()))],
+            ))
+            .unwrap();
+        assert_eq!(updated.affected_rows, 1);
+        assert_eq!(
+            updated.returning_row,
+            Some(vec![Value::Int(1), Value::Text("uno".into())])
+        );
+        connection
+            .execute(&QueryRequest::new("DELETE FROM orders"))
+            .unwrap();
+
         let deleted = connection
             .delete_row(&RowDelete::new(identity, "items".into(), None))
             .unwrap();
@@ -1264,6 +1495,63 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
         handle.cancel().unwrap();
         assert!(matches!(worker.join().unwrap(), Err(DbError::Cancelled)));
+    }
+
+    #[test]
+    fn cancel_on_the_root_interrupts_session_queries() {
+        let connection: Arc<dyn Connection> = Arc::from(connect());
+        let factory = connection.execution_session_factory().unwrap();
+        let busy = factory.open().unwrap();
+        let idle = factory.open().unwrap();
+
+        let worker = std::thread::spawn({
+            let busy = busy.connection();
+            move || {
+                busy.execute(&QueryRequest::new(
+                    "SELECT count(*) FROM range(10000000000) a",
+                ))
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        connection.cancel_handle().cancel().unwrap();
+        assert!(matches!(worker.join().unwrap(), Err(DbError::Cancelled)));
+
+        let after = idle
+            .connection()
+            .execute(&QueryRequest::new("SELECT 1"))
+            .unwrap();
+        assert_eq!(after.rows, vec![vec![Value::Int(1)]]);
+    }
+
+    #[test]
+    fn reals_and_intervals_read_as_written() {
+        let connection = connect();
+        let row = connection
+            .execute(&QueryRequest::new(
+                "SELECT 2.71::REAL, INTERVAL 90 SECONDS, INTERVAL '1 year 2 months 1 day', \
+                 INTERVAL '1.5 seconds', INTERVAL 0 SECONDS",
+            ))
+            .unwrap()
+            .rows
+            .remove(0);
+        assert_eq!(
+            row,
+            vec![
+                Value::Float(2.71),
+                Value::Text("00:01:30".into()),
+                Value::Text("1 year 2 months 1 day".into()),
+                Value::Text("00:00:01.500000".into()),
+                Value::Text("00:00:00".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_only_syntax_errors_name_the_error() {
+        let Err(DbError::NotSupported(message)) = connect().execute(&read_only("SELEC 1")) else {
+            panic!("a syntax error is refused");
+        };
+        assert!(message.contains("syntax error"), "{message}");
     }
 
     fn read_only(sql: &str) -> QueryRequest {
