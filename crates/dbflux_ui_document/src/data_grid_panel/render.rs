@@ -1,7 +1,7 @@
 use super::context_menu::ExportMenuEntry;
 use super::{
-    ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
-    documents,
+    ChartRailTab, DataGridEvent, DataGridPanel, DataSource, EditState, GridFocusMode, GridState,
+    LimitedRowTotal, ToolbarFocus, documents,
 };
 use crate::data_grid_panel::filter_bar::{
     filter_input_has_error, render_relational_chip, render_relational_error,
@@ -74,7 +74,6 @@ struct RenderState {
     can_undo: bool,
     can_redo: bool,
     show_grouped_warning: bool,
-    show_rows_omitted_warning: bool,
     show_pk_warning: bool,
     show_builder_readonly_hint: bool,
     show_edit_toolbar: bool,
@@ -107,26 +106,46 @@ pub(super) enum DataGridContentMode {
     Table,
 }
 
-fn shows_rows_omitted_warning(result: &QueryResult) -> bool {
-    result.rows_truncated()
-}
+impl DataGridPanel {
+    /// The footer's row count. A result the row limit cut short says it holds
+    /// only the first rows, and how many there are in all once counted.
+    fn row_count_footer(&self, row_count: usize) -> String {
+        if !self.result.rows_truncated() {
+            return crate::labels::row_count_label(row_count);
+        }
 
-#[cfg(test)]
-mod omission_tests {
-    use super::shows_rows_omitted_warning;
-    use dbflux_core::QueryResult;
+        match self.limited_rows.total {
+            LimitedRowTotal::Known(total) => {
+                crate::labels::limited_row_count_of_total_label(row_count, total)
+            }
+            LimitedRowTotal::Unknown | LimitedRowTotal::Counting => {
+                crate::labels::limited_row_count_label(row_count)
+            }
+        }
+    }
 
-    #[test]
-    fn banner_follows_current_result_set_even_when_empty() {
-        let mut first = QueryResult::empty();
-        let mut second = QueryResult::empty();
-        second.set_rows_truncated(true);
-        assert!(!shows_rows_omitted_warning(&first));
-        assert!(shows_rows_omitted_warning(&second));
-        first = second;
-        assert!(shows_rows_omitted_warning(&first));
-        first = QueryResult::empty();
-        assert!(!shows_rows_omitted_warning(&first));
+    pub(super) fn offers_count_rows(&self) -> bool {
+        self.result.rows_truncated()
+            && self.limited_rows.actions.count
+            && self.limited_rows.total == LimitedRowTotal::Unknown
+    }
+
+    pub(super) fn offers_load_all_rows(&self) -> bool {
+        self.result.rows_truncated() && self.limited_rows.actions.load_all
+    }
+
+    pub(super) fn request_count_rows(&mut self, cx: &mut Context<Self>) {
+        if self.offers_count_rows() {
+            self.limited_rows.total = LimitedRowTotal::Counting;
+            cx.emit(DataGridEvent::CountRowsRequested);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn request_load_all_rows(&mut self, cx: &mut Context<Self>) {
+        if self.offers_load_all_rows() {
+            cx.emit(DataGridEvent::LoadAllRowsRequested);
+        }
     }
 }
 
@@ -498,7 +517,6 @@ impl DataGridPanel {
             can_undo,
             can_redo,
             show_grouped_warning,
-            show_rows_omitted_warning: shows_rows_omitted_warning(&self.result),
             show_pk_warning,
             show_builder_readonly_hint,
             show_edit_toolbar,
@@ -530,24 +548,6 @@ impl DataGridPanel {
     /// always emitted so the call site never needs a conditional.
     fn render_warning_banners(&self, st: &RenderState) -> impl IntoElement {
         div()
-            .when(st.show_rows_omitted_warning, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .bg(st.theme.warning.opacity(0.15))
-                        .border_b_1()
-                        .border_color(st.theme.warning.opacity(0.3))
-                        .child(Icon::new(AppIcon::TriangleAlert).small().warning())
-                        .child(
-                            Text::caption(dbflux_i18n::t!("document.data.grid.rows_omitted"))
-                                .warning(),
-                        ),
-                )
-            })
             .when(st.show_grouped_warning, |d| {
                 d.child(
                     div()
@@ -3598,9 +3598,34 @@ impl DataGridPanel {
                 if self.collection.raw.is_some() {
                     self.document_count_footer()
                 } else {
-                    crate::labels::row_count_label(row_count)
+                    self.row_count_footer(row_count)
                 },
             ))
+            .when(self.limited_rows.loading_next, |d| {
+                d.child(Text::caption(crate::labels::loading_next_rows_label()))
+            })
+            .when(self.offers_count_rows(), |d| {
+                d.child(
+                    Button::new("footer-count-rows", crate::labels::count_rows_label())
+                        .ghost()
+                        .icon(AppIcon::Hash)
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_count_rows(cx);
+                        })),
+                )
+            })
+            .when(self.offers_load_all_rows(), |d| {
+                d.child(
+                    Button::new("footer-load-all-rows", crate::labels::load_all_rows_label())
+                        .ghost()
+                        .icon(AppIcon::Download)
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_load_all_rows(cx);
+                        })),
+                )
+            })
             .when(shows_read_only, |d| {
                 d.child(
                     footer_item(

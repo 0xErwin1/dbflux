@@ -875,22 +875,27 @@ mod tests {
         });
         window.run_until_parked();
 
-        let (toast_count, toast_title) = window.update(|_, cx| {
-            let host = cx.global::<ToastGlobal>().host.read(cx);
-            (host.toast_count(), host.last_toast_title())
+        // A row limit that cut the result short shows in the grid's footer,
+        // so a preserved result reaches the grid with its truncation flag and
+        // a discarded one reaches no grid at all.
+        let published_truncated = window.update(|_, cx| {
+            document
+                .read(cx)
+                .active_result_grid()
+                .map(|grid| grid.read(cx).result().rows_truncated())
         });
-        let omission_title =
-            dbflux_i18n::t!("document.shared.result_warnings.rows_omitted.summary");
         match interruption {
             CompletionInterruption::Cancel => {
-                assert_eq!(toast_count, 1, "preserved result must warn exactly once");
-                assert_eq!(toast_title.as_deref(), Some(omission_title.as_ref()));
+                assert_eq!(
+                    published_truncated,
+                    Some(true),
+                    "preserved result must be shown"
+                );
             }
             CompletionInterruption::ChangeDatabaseContext => {
-                assert_ne!(
-                    toast_title.as_deref(),
-                    Some(omission_title.as_ref()),
-                    "discarded result must not display an omission warning (visible toasts: {toast_count})"
+                assert_eq!(
+                    published_truncated, None,
+                    "discarded result must not be shown"
                 );
             }
         }

@@ -1356,6 +1356,9 @@ document:
         run_script: "Executar script %{name}"
       copy_error: Copiar erro
       result_tab_title: "Resultado %{index}"
+      count_rows_failed: Não foi possível contar as linhas da consulta
+      next_rows_failed: "Não foi possível carregar mais linhas da consulta"
+      load_all_rows_context_changed: "A conexão ou o banco de dados mudou desde que este resultado foi obtido. Execute a consulta novamente para carregar todas as linhas."
       error:
         select_source: Selecione pelo menos uma origem
         start_time_required: O horário inicial é obrigatório
@@ -1619,7 +1622,6 @@ document:
           insert_failed: "Falha ao inserir o documento: %{error}"
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
-      rows_omitted: Linhas omitidas deste conjunto de resultados porque um limite de execução foi atingido.
       edit_bar:
         clean: Nenhuma alteração não salva
         dirty:
@@ -1663,6 +1665,12 @@ document:
         rows:
           one: "%{count} linha"
           many: "%{count} linhas"
+        limited_rows:
+          first: "Primeiras %{count} linhas carregadas"
+          of_total: "%{loaded}/%{total} linhas carregadas"
+          count: Contar linhas
+          load_all: Carregar todas as linhas
+          loading_next: "Carregando mais linhas…"
         pending_changes:
           one: "%{count} alteração pendente"
           many: "%{count} alterações pendentes"
@@ -3224,9 +3232,6 @@ document:
       custom: Personalizado
       on_open: Ao abrir
     result_warnings:
-      rows_omitted:
-        summary: Linhas omitidas do resultado da consulta
-        cause: Pelo menos um conjunto de resultados omitiu linhas porque um limite de execução foi atingido.
       context:
         query: resultado da consulta
         table_browse: resultado da navegação na tabela

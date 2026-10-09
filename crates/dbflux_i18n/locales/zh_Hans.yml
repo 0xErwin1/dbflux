@@ -1356,6 +1356,9 @@ document:
         run_script: "执行 %{name} 脚本"
       copy_error: 复制错误
       result_tab_title: "结果 %{index}"
+      count_rows_failed: 无法统计查询的行数
+      next_rows_failed: "无法加载查询的更多行"
+      load_all_rows_context_changed: "此结果运行后连接或数据库已更改。请重新运行查询以加载所有行。"
       error:
         select_source: 请至少选择一个来源
         start_time_required: 需要开始时间
@@ -1619,7 +1622,6 @@ document:
           insert_failed: "插入文档失败：%{error}"
           update_failed: "更新文档失败：%{error}"
     grid:
-      rows_omitted: 达到执行限制后，此结果集中的部分行被省略。
       edit_bar:
         clean: 无未保存的更改
         dirty:
@@ -1663,6 +1665,12 @@ document:
         rows:
           one: "%{count} 行"
           many: "%{count} 行"
+        limited_rows:
+          first: "已加载前 %{count} 行"
+          of_total: "已加载 %{loaded}/%{total} 行"
+          count: 统计行数
+          load_all: 加载全部行
+          loading_next: "正在加载更多行…"
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
@@ -3224,9 +3232,6 @@ document:
       custom: 自定义
       on_open: 打开时
     result_warnings:
-      rows_omitted:
-        summary: 查询结果中有行被省略
-        cause: 达到执行限制后，至少一个结果集中的部分行被省略。
       context:
         query: 查询结果
         table_browse: 表浏览结果

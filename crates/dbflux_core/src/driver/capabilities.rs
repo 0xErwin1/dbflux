@@ -1337,7 +1337,7 @@ fn split_sql_statements(text: &str) -> Vec<String> {
     clippy::indexing_slicing,
     reason = "every chars[index] is under `while index < len` and every chars[index + 1] lookahead under a separate `index + 1 < len` guard; offsets come from char_indices so text[range] slices stay on char boundaries"
 )]
-fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let len = chars.len();
 

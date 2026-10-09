@@ -249,6 +249,51 @@ pub enum DataGridEvent {
     /// The panel wants to close itself, because the mutation a close was waiting
     /// on landed.
     RequestClose,
+
+    /// Count the rows of the query behind a result the row limit cut short,
+    /// without fetching them. Only emitted when the host offered it through
+    /// [`DataGridPanel::set_limited_row_actions`].
+    CountRowsRequested,
+
+    /// Run the query behind a result the row limit cut short again, without
+    /// the limit. Only emitted when the host offered it.
+    LoadAllRowsRequested,
+
+    /// Fetch the next rows of a result the row limit cut short, because its
+    /// last row came into view. Only emitted when the host offered it; the
+    /// host answers with [`DataGridPanel::append_next_rows`] or
+    /// [`DataGridPanel::next_rows_failed`].
+    NextRowsRequested,
+}
+
+/// What the footer offers for a query result the editor row limit cut short.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LimitedRowActions {
+    /// The host can count the query's rows without fetching them.
+    pub(crate) count: bool,
+    /// The host can run the query again without the row limit.
+    pub(crate) load_all: bool,
+    /// The host can fetch the next rows when the last one comes into view.
+    pub(crate) next_rows: bool,
+}
+
+/// The total row count of a limited result, as far as it is known.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum LimitedRowTotal {
+    #[default]
+    Unknown,
+    Counting,
+    Known(u64),
+}
+
+/// Footer state of a query result the row limit cut short. Reset with every
+/// new result, because a total belongs to the query that produced it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LimitedRows {
+    pub(crate) actions: LimitedRowActions,
+    pub(crate) total: LimitedRowTotal,
+    /// The host is fetching the next rows.
+    pub(crate) loading_next: bool,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -808,6 +853,10 @@ pub struct DataGridPanel {
     /// Pending "Save chart from collection" state.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
+    limited_rows: LimitedRows,
+    /// Bumped by every `set_query_result`, so a host's asynchronous answer
+    /// about one result is not applied to the next.
+    result_generation: u64,
 }
 
 /// Pending mutation execution — holds the spec and options while the
@@ -1614,6 +1663,8 @@ impl DataGridPanel {
             close_after_apply: false,
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
+            limited_rows: LimitedRows::default(),
+            result_generation: 0,
         };
 
         panel.follow_vim_setting(cx);
@@ -2816,6 +2867,109 @@ impl DataGridPanel {
     }
 
     /// Update source to a new query result (used by ScriptDocument).
+    /// Offers the footer actions for a result the row limit cut short. The
+    /// offer is dropped with the next result, so the host sets it again for
+    /// each one.
+    pub(crate) fn set_limited_row_actions(
+        &mut self,
+        actions: LimitedRowActions,
+        cx: &mut Context<Self>,
+    ) {
+        self.limited_rows.actions = actions;
+        cx.notify();
+    }
+
+    pub(crate) fn set_limited_row_total(&mut self, total: LimitedRowTotal, cx: &mut Context<Self>) {
+        self.limited_rows.total = total;
+        cx.notify();
+    }
+
+    /// Fetches the next rows when the last loaded one comes into view.
+    ///
+    /// ponytail: skipped while an in-memory sort is active, because appended
+    /// rows would land unsorted below sorted ones; re-sort after appending if
+    /// that matters.
+    fn request_next_rows(&mut self, cx: &mut Context<Self>) {
+        if self.result.rows_truncated()
+            && self.limited_rows.actions.next_rows
+            && !self.limited_rows.loading_next
+            && self.grid_table.local_sort_state.is_none()
+        {
+            self.limited_rows.loading_next = true;
+            cx.emit(DataGridEvent::NextRowsRequested);
+            cx.notify();
+        }
+    }
+
+    /// Number of rows the query result holds, before any result search hides
+    /// some of them.
+    pub(crate) fn loaded_row_count(&self) -> usize {
+        match &self.source {
+            DataSource::QueryResult { result, .. } => result.rows.len(),
+            _ => self.result.rows.len(),
+        }
+    }
+
+    /// Appends the rows of `rerun` past the ones already loaded. `rerun` is the
+    /// same query run again with a higher row limit, so its first rows are the
+    /// ones the grid holds. Column widths, scroll position and the cursor stay.
+    pub(crate) fn append_next_rows(&mut self, rerun: QueryResult, cx: &mut Context<Self>) {
+        self.limited_rows.loading_next = false;
+
+        let DataSource::QueryResult { result, .. } = &mut self.source else {
+            cx.notify();
+            return;
+        };
+
+        // A different shape means the data changed under the query; keep what
+        // is shown rather than mixing two shapes.
+        if rerun.columns.len() != result.columns.len() {
+            cx.notify();
+            return;
+        }
+
+        // Rows that changed between the two runs shift the rerun, so its rows
+        // past the loaded count are not the next ones; show the rerun whole.
+        let loaded = result.rows.len();
+        let combined = if rerun.rows.get(..loaded) == Some(result.rows.as_slice()) {
+            let mut combined = (**result).clone();
+            let truncated = rerun.rows_truncated();
+            combined.rows.extend(rerun.rows.into_iter().skip(loaded));
+            combined.set_rows_truncated(truncated);
+            combined
+        } else {
+            rerun
+        };
+        *result = Arc::new(combined.clone());
+
+        self.grid_table.reload = TableReload::Preserve;
+        self.set_result(combined, cx);
+    }
+
+    /// The host could not fetch the next rows; the next time the last row
+    /// comes into view tries again.
+    pub(crate) fn next_rows_failed(&mut self, cx: &mut Context<Self>) {
+        self.limited_rows.loading_next = false;
+        if let Some(table_state) = &self.grid_table.table_state {
+            table_state.update(cx, |state, _cx| state.forget_reached_end());
+        }
+        cx.notify();
+    }
+
+    /// Identifies the current query result, for a host to check that an
+    /// asynchronous answer still belongs to it.
+    pub(crate) fn result_generation(&self) -> u64 {
+        self.result_generation
+    }
+
+    /// The query text behind a query result, for a host re-running it.
+    pub(crate) fn result_query(&self) -> Option<&str> {
+        match &self.source {
+            DataSource::QueryResult { original_query, .. } => Some(original_query),
+            _ => None,
+        }
+    }
+
     pub fn set_query_result(
         &mut self,
         result: Arc<QueryResult>,
@@ -2837,6 +2991,8 @@ impl DataGridPanel {
             original_query: query,
             profile_id,
         };
+        self.limited_rows = LimitedRows::default();
+        self.result_generation += 1;
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         // The new result may have a different shape, so the sort column index
@@ -3203,6 +3359,9 @@ impl DataGridPanel {
                             dirty_rows.clone(),
                             cx,
                         );
+                    }
+                    DataTableEvent::ReachedEnd => {
+                        this.request_next_rows(cx);
                     }
                 }
             });
