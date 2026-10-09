@@ -56,7 +56,7 @@ impl SshHostSnapshot {
 /// is `load_error` and never a panic. Pure and synchronous: the caller runs
 /// it off the foreground thread (C4).
 pub fn load_ssh_hosts(config_dir: &Path, home: &Path) -> SshHostSnapshot {
-    match SshConfigFile::load(config_dir) {
+    match SshConfigFile::load_with_home(config_dir, home) {
         Ok(file) => SshHostSnapshot {
             hosts: file.hosts(home),
             diagnostics: file.diagnostics().to_vec(),

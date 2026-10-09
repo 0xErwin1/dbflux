@@ -12,6 +12,35 @@
 //! - `Match exec` never spawns a process (the block never applies);
 //! - `Include` is bounded by a recursion-depth cap and a total byte cap;
 //! - the SSH config is only ever read, never written.
+//!
+//! Semantics follow OpenSSH's `readconf.c` (verified against `ssh -G`,
+//! OpenSSH 10.5p1):
+//! - every file (the root config and each included file) starts with the
+//!   block state **active**: top-level directives before the first
+//!   `Host`/`Match` apply to every alias;
+//! - `Host` patterns match **case-sensitively**; `Match host` / `Match user`
+//!   match case-insensitively, like OpenSSH;
+//! - `Include` is processed at its position, unconditionally. The included
+//!   file is its own nested scope: it inherits the enclosing block state,
+//!   its own `Host`/`Match` lines evaluate against the alias, and when the
+//!   included file ends the enclosing file's state is restored. An `Include`
+//!   inside an inactive block is still read, but with OpenSSH's `NEVERMATCH`
+//!   behaviour: no block inside it can ever become active;
+//! - the value of `HostName`, `User`, `Port` and `IdentityFile` is the first
+//!   whitespace-delimited token (quotes respected); the rest of the line,
+//!   including trailing comments, is ignored. `ProxyJump` and `ProxyCommand`
+//!   take the rest of the line, like OpenSSH's `parse_command`, so a quoted
+//!   command is never silently dropped.
+//!
+//! Known, documented divergences from OpenSSH:
+//! - `Port 0` (and any unparsable `Port`) records a diagnostic and leaves the
+//!   port unset instead of failing the whole file; the default of 22 then
+//!   applies;
+//! - the byte cap (1 MiB) and the depth cap (16) are DBFlux additions, not
+//!   OpenSSH behaviour; the root config counts toward the byte cap;
+//! - the top-level active region (directives before the first `Host`/`Match`)
+//!   applies its values, but cannot by itself make an alias resolvable: an
+//!   alias no `Host`/`Match` block ever matched is still `UnknownHost`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -120,7 +149,19 @@ pub struct SshConfigFile {
 impl SshConfigFile {
     /// Reads `config_dir/config`. A missing file is not an error: it yields an
     /// empty config.
+    ///
+    /// A leading `~` in an `Include` path expands against `config_dir`'s
+    /// parent, which is the home directory for the standard `<home>/.ssh`
+    /// layout. When the caller knows the home directory independently, prefer
+    /// [`SshConfigFile::load_with_home`].
     pub fn load(config_dir: &Path) -> Result<Self, SshConfigError> {
+        let home = config_dir.parent().unwrap_or(config_dir);
+        Self::load_with_home(config_dir, home)
+    }
+
+    /// Same as [`SshConfigFile::load`] with the home directory used to expand
+    /// a leading `~` in `Include` paths injected by the caller.
+    pub fn load_with_home(config_dir: &Path, home: &Path) -> Result<Self, SshConfigError> {
         let path = config_dir.join("config");
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -134,10 +175,13 @@ impl SshConfigFile {
                 });
             }
         };
-        Ok(Self::parse(&text, config_dir))
+        Ok(Self::parse(&text, config_dir, home))
     }
 
     /// Parses already-read text; `Include` is still followed relative to `config_dir`.
+    ///
+    /// `home` is the home directory used to expand a leading `~` in `Include`
+    /// paths.
     ///
     /// # Examples
     ///
@@ -148,6 +192,7 @@ impl SshConfigFile {
     /// let config = SshConfigFile::parse(
     ///     "Host prod-bastion\n  HostName bastion.example.com\n  User deploy\n  Port 2222\n",
     ///     config_dir.path(),
+    ///     config_dir.path(),
     /// );
     /// let home = config_dir.path();
     /// let resolved = config.resolve_with_local_user("prod-bastion", "alice", home).unwrap();
@@ -155,14 +200,21 @@ impl SshConfigFile {
     /// assert_eq!(resolved.user.as_deref(), Some("deploy"));
     /// assert_eq!(resolved.port, 2222);
     /// ```
-    pub fn parse(text: &str, config_dir: &Path) -> Self {
+    pub fn parse(text: &str, config_dir: &Path, home: &Path) -> Self {
         let mut parser = Parser {
             config_dir,
+            home,
             directives: Vec::new(),
             diagnostics: Vec::new(),
             bytes_read: text.len() as u64,
             depth: 0,
         };
+        if parser.bytes_read > MAX_TOTAL_BYTES {
+            parser.diagnostics.push(format!(
+                "config is {} bytes, over the byte cap of {MAX_TOTAL_BYTES} bytes (1 MiB); included files are refused",
+                parser.bytes_read
+            ));
+        }
         parser.parse_text(text);
         Self {
             directives: parser.directives,
@@ -180,18 +232,7 @@ impl SshConfigFile {
     /// environment.
     pub fn hosts(&self, home: &Path) -> Vec<SshConfigHost> {
         let mut aliases: Vec<String> = Vec::new();
-        for directive in &self.directives {
-            if let Directive::Host { patterns } = directive {
-                for pattern in patterns {
-                    let pickable = !pattern.contains('*')
-                        && !pattern.contains('?')
-                        && !pattern.starts_with('!');
-                    if pickable && !aliases.contains(pattern) {
-                        aliases.push(pattern.clone());
-                    }
-                }
-            }
-        }
+        Self::collect_aliases(&self.directives, &mut aliases);
         aliases
             .into_iter()
             .map(|alias| {
@@ -251,8 +292,28 @@ impl SshConfigFile {
         &self.diagnostics
     }
 
+    /// Collects pickable aliases across the root config and every nested
+    /// `Include` scope, in file order.
+    fn collect_aliases(directives: &[Directive], aliases: &mut Vec<String>) {
+        for directive in directives {
+            match directive {
+                Directive::Host { patterns } => {
+                    for pattern in patterns {
+                        let pickable = !pattern.contains('*')
+                            && !pattern.contains('?')
+                            && !pattern.starts_with('!');
+                        if pickable && !aliases.contains(pattern) {
+                            aliases.push(pattern.clone());
+                        }
+                    }
+                }
+                Directive::Include(nested) => Self::collect_aliases(nested, aliases),
+                Directive::Match { .. } | Directive::Keyword(_) => {}
+            }
+        }
+    }
+
     fn resolve_state_with_local_user(&self, alias: &str, local_user: &str) -> Resolution {
-        let alias_lower = alias.to_lowercase();
         let mut state = Resolution {
             matched: false,
             host_name: None,
@@ -261,19 +322,58 @@ impl SshConfigFile {
             identity_file: None,
             unsupported: None,
         };
-        let mut active = false;
-        for directive in &self.directives {
+        // OpenSSH's `read_config_file` starts with the block state active:
+        // top-level directives before the first `Host`/`Match` apply to every
+        // alias. They cannot make an unknown alias resolvable on their own:
+        // `matched` is only set by an actually matching block.
+        let mut active = true;
+        self.resolve_directives(
+            &self.directives,
+            alias,
+            local_user,
+            &mut state,
+            &mut active,
+            false,
+        );
+        state
+    }
+
+    /// Sequential first-value-wins pass over one file's directives.
+    ///
+    /// `active` is the block state of the file currently being walked;
+    /// `never_match` is OpenSSH's `SSHCONF_NEVERMATCH`: inside an `Include`
+    /// reached from an inactive block, no `Host`/`Match` line may activate.
+    fn resolve_directives(
+        &self,
+        directives: &[Directive],
+        alias: &str,
+        local_user: &str,
+        state: &mut Resolution,
+        active: &mut bool,
+        never_match: bool,
+    ) {
+        for directive in directives {
             match directive {
                 Directive::Host { patterns } => {
-                    active = pattern_list_matches(patterns, &alias_lower);
-                    state.matched |= active;
+                    if never_match {
+                        *active = false;
+                        continue;
+                    }
+                    // `Host` patterns are case-sensitive; `Match host` /
+                    // `Match user` below stay case-insensitive, like OpenSSH.
+                    *active = host_patterns_match(patterns, alias);
+                    state.matched |= *active;
                 }
                 Directive::Match { conditions } => {
+                    if never_match {
+                        *active = false;
+                        continue;
+                    }
                     // `Match host` sees the host name in effect so far, `Match
                     // user` the user in effect or the local-user fallback (A6).
                     let host_in_effect = state.host_name.as_deref().unwrap_or(alias).to_lowercase();
                     let user_in_effect = state.user.as_deref().unwrap_or(local_user).to_lowercase();
-                    active = conditions.iter().all(|condition| match condition {
+                    *active = conditions.iter().all(|condition| match condition {
                         MatchCondition::All => true,
                         MatchCondition::Host(patterns) => {
                             pattern_list_matches(patterns, &host_in_effect)
@@ -283,10 +383,10 @@ impl SshConfigFile {
                         }
                         MatchCondition::Never => false,
                     });
-                    state.matched |= active;
+                    state.matched |= *active;
                 }
                 Directive::Keyword(keyword) => {
-                    if !active {
+                    if !*active {
                         continue;
                     }
                     // First value obtained for a keyword wins (OpenSSH).
@@ -319,9 +419,16 @@ impl SshConfigFile {
                         }
                     }
                 }
+                Directive::Include(nested) => {
+                    // The included file is its own scope: it inherits the
+                    // enclosing block state, and when it ends the enclosing
+                    // file's state is restored (OpenSSH's `*activep = oactive`).
+                    let enclosing = *active;
+                    self.resolve_directives(nested, alias, local_user, state, active, !enclosing);
+                    *active = enclosing;
+                }
             }
         }
-        state
     }
 
     fn finalize(
@@ -355,9 +462,18 @@ const DEFAULT_PORT: u16 = 22;
 
 #[derive(Debug, Clone)]
 enum Directive {
-    Host { patterns: Vec<String> },
-    Match { conditions: Vec<MatchCondition> },
+    Host {
+        patterns: Vec<String>,
+    },
+    Match {
+        conditions: Vec<MatchCondition>,
+    },
     Keyword(KnownKeyword),
+    /// An `Include` expanded at its position. The nested directives form
+    /// their own block-state scope: they inherit the enclosing state, and
+    /// when they end the enclosing file's state is restored (OpenSSH
+    /// `readconf.c`: `*activep = oactive` after each included file).
+    Include(Vec<Directive>),
 }
 
 #[derive(Debug, Clone)]
@@ -403,6 +519,8 @@ impl Resolution {
 
 struct Parser<'a> {
     config_dir: &'a Path,
+    /// Home directory for a leading `~` in `Include` paths.
+    home: &'a Path,
     directives: Vec<Directive>,
     diagnostics: Vec<String>,
     bytes_read: u64,
@@ -444,17 +562,16 @@ impl<'a> Parser<'a> {
             },
             "match" => self.parse_match(rest, number, line),
             "include" => self.parse_include(rest, number, line),
-            "hostname" => self.push_value_keyword(rest, number, line, KnownKeyword::HostName),
-            "user" => self.push_value_keyword(rest, number, line, KnownKeyword::User),
+            "hostname" => self.push_token_keyword(rest, number, line, KnownKeyword::HostName),
+            "user" => self.push_token_keyword(rest, number, line, KnownKeyword::User),
             "identityfile" => {
-                self.push_value_keyword(rest, number, line, KnownKeyword::IdentityFile);
+                self.push_token_keyword(rest, number, line, KnownKeyword::IdentityFile);
             }
-            "proxyjump" => self.push_value_keyword(rest, number, line, KnownKeyword::ProxyJump),
-            "proxycommand" => {
-                self.push_value_keyword(rest, number, line, KnownKeyword::ProxyCommand);
-            }
+            "proxyjump" => self.push_line_keyword(rest, KnownKeyword::ProxyJump),
+            "proxycommand" => self.push_line_keyword(rest, KnownKeyword::ProxyCommand),
             "port" => {
-                match parse_value(rest).and_then(|value| value.parse::<u16>().map_err(|_| ())) {
+                // First token only: a trailing comment is not part of the port.
+                match first_token(rest).and_then(|value| value.parse::<u16>().map_err(|_| ())) {
                     Ok(port) if port > 0 => {
                         self.directives
                             .push(Directive::Keyword(KnownKeyword::Port(port)));
@@ -467,17 +584,29 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn push_value_keyword(
+    /// `HostName`, `User` and `IdentityFile` take one token: quoted with
+    /// `"..."` or the first whitespace-delimited word; the rest of the line
+    /// (including trailing comments) is ignored, like OpenSSH's argv parsing.
+    fn push_token_keyword(
         &mut self,
         rest: &str,
         number: usize,
         line: &str,
         make: fn(String) -> KnownKeyword,
     ) {
-        match parse_value(rest) {
+        match first_token(rest) {
             Ok(value) => self.directives.push(Directive::Keyword(make(value))),
             Err(()) => self.diagnostic(number, line, "unterminated quote"),
         }
+    }
+
+    /// `ProxyJump` and `ProxyCommand` take the rest of the line, like
+    /// OpenSSH's `parse_command`. No quote processing: a quoted command must
+    /// never be dropped, because dropping a proxy directive would dial the
+    /// host directly (S5).
+    fn push_line_keyword(&mut self, rest: &str, make: fn(String) -> KnownKeyword) {
+        self.directives
+            .push(Directive::Keyword(make(rest.trim_end().to_string())));
     }
 
     fn parse_match(&mut self, rest: &str, number: usize, line: &str) {
@@ -540,12 +669,14 @@ impl<'a> Parser<'a> {
     }
 
     fn include_one(&mut self, raw: &str, number: usize, line: &str) {
-        let path = if Path::new(raw).is_absolute() {
-            PathBuf::from(raw)
+        let expanded = expand_tilde(raw, self.home);
+        let pattern_text = expanded.to_string_lossy().into_owned();
+        let path = if Path::new(&expanded).is_absolute() {
+            expanded
         } else {
-            self.config_dir.join(raw)
+            self.config_dir.join(&expanded)
         };
-        let is_glob = raw.contains('*') || raw.contains('?');
+        let is_glob = pattern_text.contains('*') || pattern_text.contains('?');
         let candidates = if is_glob {
             match self.glob_include(&path) {
                 Ok(candidates) => candidates,
@@ -565,7 +696,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn glob_include(&self, path: &Path) -> Result<Vec<PathBuf>, String> {
+    fn glob_include(&mut self, path: &Path) -> Result<Vec<PathBuf>, String> {
         let Some(parent) = path.parent() else {
             return Err(format!(
                 "include pattern has no parent directory: {}",
@@ -587,17 +718,31 @@ impl<'a> Parser<'a> {
                 path.display()
             )
         })?;
-        let mut matches: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().is_file())
-            .filter(|entry| {
-                glob_matches(
-                    &pattern,
-                    &entry.file_name().to_string_lossy().to_lowercase(),
-                )
-            })
-            .map(|entry| entry.path())
-            .collect();
+        let mut matches: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // An unreadable directory entry is a diagnostic, never a
+                // silent skip: dropping an include file can drop a proxy
+                // directive (S5).
+                Err(error) => {
+                    self.diagnostics.push(format!(
+                        "cannot read directory entry for include pattern {}: {error}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            if !entry.path().is_file() {
+                continue;
+            }
+            if glob_matches(
+                &pattern,
+                &entry.file_name().to_string_lossy().to_lowercase(),
+            ) {
+                matches.push(entry.path());
+            }
+        }
         matches.sort();
         Ok(matches)
     }
@@ -635,8 +780,18 @@ impl<'a> Parser<'a> {
         };
         self.bytes_read += text.len() as u64;
         self.depth += 1;
+        // The included file's directives form their own nested scope, not a
+        // splice into the enclosing flat list: splicing let the included
+        // file's `Host` lines hijack the enclosing block state, which could
+        // hide a `ProxyJump` after the `Include` and dial the host directly
+        // (S5). `parse_text` may recurse into further `read_include` calls,
+        // each swapping out the directives being built.
+        let enclosing = std::mem::take(&mut self.directives);
         self.parse_text(&text);
         self.depth -= 1;
+        let nested = std::mem::take(&mut self.directives);
+        self.directives = enclosing;
+        self.directives.push(Directive::Include(nested));
     }
 }
 
@@ -665,21 +820,23 @@ fn strip_separator(rest: &str) -> &str {
     }
 }
 
-/// Single-value argument: quoted with `"..."` or everything up to the end of
-/// the line (trailing comments are not stripped, like OpenSSH).
-fn parse_value(rest: &str) -> Result<String, ()> {
-    let Some(after_quote) = rest.strip_prefix('"') else {
-        // A quote inside a plain token never closes (OpenSSH quotes wrap the
-        // whole argument), so treat it as unterminated.
-        return if rest.contains('"') {
-            Err(())
-        } else {
-            Ok(rest.trim_end().to_string())
-        };
-    };
-    match after_quote.find('"') {
-        Some(end) => after_quote.get(..end).map(str::to_string).ok_or(()),
-        None => Err(()),
+/// First whitespace-delimited token, honouring `"..."` quotes; adjacent
+/// quoted and unquoted text concatenates. The rest of the line (including
+/// trailing comments) is ignored, like OpenSSH's argv parsing. `Err` on an
+/// unterminated quote.
+fn first_token(rest: &str) -> Result<String, ()> {
+    split_words(rest)?.into_iter().next().ok_or(())
+}
+
+/// Expands a leading `~` in an `Include` path against the caller-provided
+/// home directory; anything else is returned unchanged.
+fn expand_tilde(raw: &str, home: &Path) -> PathBuf {
+    if raw == "~" {
+        home.to_path_buf()
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        PathBuf::from(raw)
     }
 }
 
@@ -729,7 +886,7 @@ fn pattern_list(argument: &str) -> Vec<String> {
 
 /// A pattern list matches when no negated pattern matches and at least one
 /// positive pattern matches. Matching is case-insensitive, like OpenSSH's
-/// `match_pattern_list`.
+/// `match_pattern_list` — this is the `Match host` / `Match user` path.
 fn pattern_list_matches(patterns: &[String], candidate: &str) -> bool {
     let mut has_positive = false;
     for pattern in patterns {
@@ -739,6 +896,22 @@ fn pattern_list_matches(patterns: &[String], candidate: &str) -> bool {
                 return false;
             }
         } else if glob_matches(&lowered, candidate) {
+            has_positive = true;
+        }
+    }
+    has_positive
+}
+
+/// `Host` pattern matching, case-sensitive, like OpenSSH's `oHost` handler
+/// calling `match_pattern` on each whitespace-separated pattern.
+fn host_patterns_match(patterns: &[String], candidate: &str) -> bool {
+    let mut has_positive = false;
+    for pattern in patterns {
+        if let Some(negated) = pattern.strip_prefix('!') {
+            if glob_matches(negated, candidate) {
+                return false;
+            }
+        } else if glob_matches(pattern, candidate) {
             has_positive = true;
         }
     }
@@ -1220,6 +1393,173 @@ mod tests {
         let diagnostics = config.diagnostics().join("\n");
         assert!(diagnostics.contains("oops"), "got: {diagnostics}");
         assert!(diagnostics.contains("unterminated"), "got: {diagnostics}");
+    }
+
+    #[test]
+    fn trailing_comment_after_a_value_is_not_part_of_the_value() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host db\n  HostName db.example.com # note\n  Port 2222 # note\n  IdentityFile ~/id # note\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("db", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "db.example.com");
+        assert_eq!(resolved.port, 2222);
+        assert_eq!(resolved.identity_file, Some(fixture.home().join("id")));
+    }
+
+    #[test]
+    fn host_glob_matching_is_case_sensitive() {
+        let fixture = Fixture::new();
+        fixture.write("ssh/config", "Host *.example.com\n  User lower\n");
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("FOO.EXAMPLE.COM", "alice", &fixture.home()),
+            Err(SshConfigError::UnknownHost {
+                alias: "FOO.EXAMPLE.COM".to_string()
+            })
+        );
+        let lower = config
+            .resolve_with_local_user("foo.example.com", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(lower.user.as_deref(), Some("lower"));
+    }
+
+    #[test]
+    fn conditional_include_does_not_leak_active_state() {
+        let fixture = Fixture::new();
+        let include = fixture.dir.path().join("a.conf");
+        fixture.write("a.conf", "Host inner\n  HostName inner.example.com\n");
+        fixture.write(
+            "ssh/config",
+            &format!("Host glob\n  Include {}\n  Port 2020\n", include.display()),
+        );
+        let config = fixture.load();
+        let glob = config
+            .resolve_with_local_user("glob", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(glob.port, 2020);
+        assert_eq!(
+            config.resolve_with_local_user("inner", "alice", &fixture.home()),
+            Err(SshConfigError::UnknownHost {
+                alias: "inner".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn proxy_directive_after_a_conditional_include_fails_closed() {
+        let fixture = Fixture::new();
+        let include = fixture.dir.path().join("a.conf");
+        fixture.write("a.conf", "Host inner\n  HostName inner.example.com\n");
+        fixture.write(
+            "ssh/config",
+            &format!(
+                "Host prod\n  HostName prod.example.com\n  Include {}\n  ProxyJump bastion\n",
+                include.display()
+            ),
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+    }
+
+    #[test]
+    fn tilde_include_is_expanded_and_does_not_drop_a_proxy() {
+        let fixture = Fixture::new();
+        fixture.write(".ssh/config.d/99-proxy.conf", "ProxyJump bastion\n");
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  Include ~/.ssh/config.d/*.conf\n",
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+    }
+
+    #[test]
+    fn include_inside_a_matching_block_inherits_the_active_state() {
+        // Oracle: `ssh -G prod` reports `user incuser` and `port 2223`; the
+        // included file's own `Host inner` block never applies to either
+        // alias (NEVERMATCH is only lifted for the alias that reached the
+        // `Include` through an active block).
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/inc.conf",
+            "User incuser\nHost inner\n  HostName inner.example.com\n",
+        );
+        fixture.write("ssh/config", "Host prod\n  Include inc.conf\n  Port 2223\n");
+        let config = fixture.load();
+        let prod = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(prod.user.as_deref(), Some("incuser"));
+        assert_eq!(prod.port, 2223);
+        assert_eq!(prod.host_name, "prod");
+        assert_eq!(
+            config.resolve_with_local_user("inner", "alice", &fixture.home()),
+            Err(SshConfigError::UnknownHost {
+                alias: "inner".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn alias_defined_only_inside_an_included_file_still_resolves() {
+        // The `Include` sits at the top level, so the included file is read
+        // with an active block state and its own Host blocks can match.
+        let fixture = Fixture::new();
+        fixture.write("ssh/config", "Include conf.d/*.conf\n");
+        fixture.write(
+            "ssh/conf.d/inner.conf",
+            "Host inner\n  HostName inner.example.com\n  Port 2021\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("inner", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "inner.example.com");
+        assert_eq!(resolved.port, 2021);
+    }
+
+    #[test]
+    fn root_config_over_the_byte_cap_is_reported_and_includes_are_refused() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            &format!(
+                "{}\nInclude inc.conf\n",
+                "#".repeat(MAX_TOTAL_BYTES as usize + 1)
+            ),
+        );
+        fixture.write("ssh/inc.conf", "Host inc\n  HostName inc.example.com\n");
+        let config = fixture.load();
+        assert!(
+            config.diagnostics().iter().any(|d| d.contains("byte cap")),
+            "root byte cap must be reported: {:?}",
+            config.diagnostics()
+        );
+        assert!(
+            config
+                .diagnostics()
+                .iter()
+                .any(|d| d.contains("inc.conf") && d.contains("byte")),
+            "include refused by the cap must be reported: {:?}",
+            config.diagnostics()
+        );
     }
 
     #[test]

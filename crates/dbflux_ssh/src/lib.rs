@@ -34,8 +34,9 @@ pub use ssh_config::{
 
 /// Resolves the SSH config alias a tunnel references, if any, into the parameters to dial.
 ///
-/// A tunnel with no alias is returned unchanged and no SSH config is read. A resolution
-/// failure is an error: the stored host, port and user are never used as a fallback (A7).
+/// A tunnel with no alias is returned unchanged and no SSH config is read. An empty
+/// or whitespace-only alias is an error. A resolution failure is an error: the stored
+/// host, port and user are never used as a fallback (A7).
 pub fn resolve_for_dial(config: &SshTunnelConfig) -> Result<SshTunnelConfig, DbError> {
     let Some(alias) = config.ssh_config_host.as_deref() else {
         let mut resolved = config.clone();
@@ -62,9 +63,17 @@ pub fn resolve_for_dial_in(
         resolved.ssh_config_host = None;
         return Ok(resolved);
     };
+    if alias.trim().is_empty() {
+        // A hand-edited row or an imported bundle can carry an empty alias;
+        // it must never select a block (a `Host *` catch-all would match it)
+        // and must never fall back to the stored host/port/user (A7).
+        return Err(DbError::connection_failed(
+            "SSH config host alias is empty; pick a host from the SSH config or clear the field",
+        ));
+    }
     let config_dir = home.join(".ssh");
     let config_path = config_dir.join("config");
-    let file = SshConfigFile::load(&config_dir).map_err(|error| match error {
+    let file = SshConfigFile::load_with_home(&config_dir, home).map_err(|error| match error {
         SshConfigError::Read { path, message } => DbError::connection_failed(format!(
             "Failed to read SSH config {}: {message}",
             path.display()
@@ -1075,6 +1084,23 @@ mod resolve_for_dial_tests {
             key_path_of(&resolved.auth_method),
             Some(&*home.join(format!("keys/web.example.com_alice_{}", home.display())) as &Path)
         );
+    }
+
+    #[test]
+    fn empty_alias_does_not_resolve_through_a_catch_all_block() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host *\n  HostName catchall.example.com\n");
+
+        // An empty or whitespace-only alias must fail closed, never falling
+        // back to the stored host/port/user (A7), and never matching `Host *`.
+        for alias in ["", "   "] {
+            let config = aliased_tunnel(alias, None);
+            let error = resolve_for_dial_in(&config, "alice", &fixture.home())
+                .expect_err("empty alias must not resolve");
+            let message = error.to_string();
+            assert!(!message.contains("catchall.example.com"), "got: {message}");
+            assert!(!message.contains("Failed to connect"), "got: {message}");
+        }
     }
 
     #[test]
