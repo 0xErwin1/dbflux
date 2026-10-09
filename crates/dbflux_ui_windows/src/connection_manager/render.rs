@@ -1246,6 +1246,7 @@ impl ConnectionManagerWindow {
     /// Labelled text field used by the Access tab: the label over the
     /// framed input.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn form_field_input(
         &self,
         label: &str,
@@ -1255,6 +1256,7 @@ impl ConnectionManagerWindow {
         focused: bool,
         _ring_color: Hsla,
         field: FormFocus,
+        disabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
@@ -1271,7 +1273,8 @@ impl ConnectionManagerWindow {
                     true,
                     Input::new(input)
                         .id(cm_field_id(field_id))
-                        .aria_label(label.to_string()),
+                        .aria_label(label.to_string())
+                        .disabled(disabled),
                     cx,
                 ),
             )
@@ -1306,6 +1309,10 @@ impl Render for ConnectionManagerWindow {
             self.access.input_ssh_key_path.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
+        }
+
+        if let Some(index) = self.pending.ssh_config_host_selection.take() {
+            self.apply_ssh_config_host_index(index, window, cx);
         }
 
         if let Some(path) = self.pending.file_path.take()

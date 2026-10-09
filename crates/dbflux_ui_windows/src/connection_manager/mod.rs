@@ -27,6 +27,7 @@ pub fn window_bounds(cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
 }
 pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
+use crate::ssh_host_picker::{SshHostPicker, SshHostsLoaded};
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_components::components::form_renderer::{self, FormRendererState};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
@@ -155,6 +156,9 @@ enum FormFocus {
     SshEnabled,
     SshTunnelSelector,
     SshTunnelClear,
+    /// The shared `~/.ssh/config` host picker of the inline SSH form,
+    /// above the manual host/port/user inputs.
+    SshConfigHost,
     SshEditInSettings,
     SshHost,
     SshPort,
@@ -343,6 +347,15 @@ struct FormState {
     syncing_uri: bool,
 }
 
+/// Manual host/port/user typed into the inline SSH form before an SSH
+/// config alias was picked; restored when the alias is cleared (A7).
+#[derive(Default)]
+struct SshManualValues {
+    host: String,
+    port: String,
+    user: String,
+}
+
 /// SSH tunnel, proxy, and SSM inline connection access widgets.
 struct AccessState {
     ssh_enabled: bool,
@@ -350,6 +363,12 @@ struct AccessState {
     selected_ssh_tunnel_id: Option<Uuid>,
     ssh_tunnel_dropdown: Entity<dbflux_components::controls::Dropdown>,
     ssh_tunnel_uuids: Vec<Uuid>,
+    /// Shared picker of hosts declared in the user's `~/.ssh/config`
+    /// (#837). Applies to the inline SSH form only; a selected saved
+    /// tunnel profile replaces the inline fields.
+    ssh_host_picker: Entity<SshHostPicker>,
+    /// Manual values typed before the active alias, restored on clear.
+    ssh_manual_backup: Option<SshManualValues>,
     input_ssh_host: Entity<InputState>,
     input_ssh_port: Entity<InputState>,
     input_ssh_user: Entity<InputState>,
@@ -437,6 +456,9 @@ struct PendingActions {
     auth_profile_selection: Option<Option<Uuid>>,
     ssm_auth_profile_selection: Option<Option<Uuid>>,
     ssh_tunnel_selection: Option<Uuid>,
+    /// Pending SSH config host picker index, drained into the inline form
+    /// on the next render where a `Window` is available.
+    ssh_config_host_selection: Option<usize>,
     ssh_key_path: Option<String>,
     file_path: Option<String>,
     /// Pending cert-file path drained into `ssl_ca_cert_input` on next render.
@@ -586,6 +608,8 @@ impl ConnectionManagerWindow {
                 "connection_manager.placeholder.select_ssh_tunnel"
             ))
         });
+        let ssh_host_picker = SshHostPicker::load_default(cx);
+        let ssh_config_host_dropdown = ssh_host_picker.read(cx).dropdown().clone();
         let proxy_dropdown = cx.new(|_cx| {
             Dropdown::new("proxy-dropdown").placeholder(dbflux_i18n::t!(
                 "connection_manager.placeholder.select_proxy"
@@ -711,6 +735,22 @@ impl ConnectionManagerWindow {
             &ssh_tunnel_dropdown,
             |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                 this.handle_ssh_tunnel_dropdown_selection(event, cx);
+            },
+        );
+
+        let ssh_config_host_picker_sub = cx.subscribe(
+            &ssh_host_picker,
+            |_this, _picker, _: &SshHostsLoaded, cx| {
+                // The config hosts arrived off the foreground thread; the
+                // inline form re-renders with them.
+                cx.notify();
+            },
+        );
+
+        let ssh_config_host_dropdown_sub = cx.subscribe(
+            &ssh_config_host_dropdown,
+            |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                this.handle_ssh_config_host_dropdown_selection(event, cx);
             },
         );
 
@@ -872,6 +912,8 @@ impl ConnectionManagerWindow {
             import_panel_sub,
             driver_filter_focus_sub,
             dropdown_subscription,
+            ssh_config_host_picker_sub,
+            ssh_config_host_dropdown_sub,
             proxy_dropdown_subscription,
             auth_profile_dropdown_sub,
             access_method_dropdown_sub,
@@ -960,6 +1002,8 @@ impl ConnectionManagerWindow {
                 selected_ssh_tunnel_id: None,
                 ssh_tunnel_dropdown,
                 ssh_tunnel_uuids: Vec::new(),
+                ssh_host_picker,
+                ssh_manual_backup: None,
                 input_ssh_host,
                 input_ssh_port,
                 input_ssh_user,
@@ -1282,6 +1326,15 @@ impl ConnectionManagerWindow {
                 state.set_value(&ssh.user, window, cx);
             });
 
+            // The saved alias, not the cleared manual fields, is the source
+            // of the target (A7): the picker shows it and the manual inputs
+            // stay as the profile stores them — empty while aliased.
+            instance.access.ssh_manual_backup = None;
+            let saved_alias = ssh.ssh_config_host.clone();
+            instance.access.ssh_host_picker.update(cx, |picker, cx| {
+                picker.set_selected_alias(saved_alias.as_deref(), cx);
+            });
+
             match &ssh.auth_method {
                 dbflux_core::SshAuthMethod::PrivateKey { key_path } => {
                     instance.access.ssh_auth_method = SshAuthSelection::PrivateKey;
@@ -1333,6 +1386,11 @@ impl ConnectionManagerWindow {
         self.access.ssh_enabled = false;
         self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form.form_save_ssh_secret = true;
+        // A fresh form starts manual: no referenced SSH config alias.
+        self.access.ssh_manual_backup = None;
+        self.access
+            .ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(None, cx));
         self.active_tab = ActiveTab::Main;
         self.validation_errors.clear();
         self.test_status = TestStatus::None;
@@ -3681,6 +3739,91 @@ impl ConnectionManagerWindow {
         }
     }
 
+    pub(super) fn handle_ssh_config_host_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending.ssh_config_host_selection = Some(event.index);
+        cx.notify();
+    }
+
+    /// The alias of the `~/.ssh/config` host the inline form references,
+    /// if any.
+    pub(super) fn ssh_config_alias(&self, cx: &App) -> Option<String> {
+        self.access
+            .ssh_host_picker
+            .read(cx)
+            .selected_alias()
+            .map(str::to_string)
+    }
+
+    /// Maps the picker dropdown's selection to the inline form: index 0 is
+    /// the manual entry, any other index stores its alias.
+    pub(super) fn apply_ssh_config_host_index(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let alias = self.access.ssh_host_picker.read(cx).alias_at(index);
+        self.set_ssh_config_host(alias.as_deref(), window, cx);
+    }
+
+    /// Applies an SSH config host selection to the inline form. Picking an
+    /// alias backs up and clears the manual host/port/user inputs (A7);
+    /// choosing the manual entry restores them exactly.
+    pub(super) fn set_ssh_config_host(
+        &mut self,
+        alias: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_active = self
+            .access
+            .ssh_host_picker
+            .read(cx)
+            .selected_alias()
+            .is_some();
+        let is_active = alias.is_some();
+
+        if is_active && !was_active {
+            self.access.ssh_manual_backup = Some(SshManualValues {
+                host: self.access.input_ssh_host.read(cx).value().to_string(),
+                port: self.access.input_ssh_port.read(cx).value().to_string(),
+                user: self.access.input_ssh_user.read(cx).value().to_string(),
+            });
+        }
+
+        if is_active {
+            self.access.input_ssh_host.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+            self.access.input_ssh_port.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+            self.access.input_ssh_user.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+        } else if was_active {
+            let backup = self.access.ssh_manual_backup.take().unwrap_or_default();
+            self.access.input_ssh_host.update(cx, |state, cx| {
+                state.set_value(backup.host, window, cx);
+            });
+            self.access.input_ssh_port.update(cx, |state, cx| {
+                state.set_value(backup.port, window, cx);
+            });
+            self.access.input_ssh_user.update(cx, |state, cx| {
+                state.set_value(backup.user, window, cx);
+            });
+        }
+
+        self.access
+            .ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(alias, cx));
+        cx.notify();
+    }
+
     pub(super) fn apply_ssh_tunnel(
         &mut self,
         tunnel: &SshTunnelProfile,
@@ -3699,6 +3842,14 @@ impl ConnectionManagerWindow {
         });
         self.access.input_ssh_user.update(cx, |state, cx| {
             state.set_value(&tunnel.config.user, window, cx);
+        });
+
+        // An aliased saved tunnel shows its alias in the picker; the manual
+        // inputs keep the profile's (empty) values (A7).
+        self.access.ssh_manual_backup = None;
+        let saved_alias = tunnel.config.ssh_config_host.clone();
+        self.access.ssh_host_picker.update(cx, |picker, cx| {
+            picker.set_selected_alias(saved_alias.as_deref(), cx)
         });
 
         match &tunnel.config.auth_method {
@@ -3763,6 +3914,13 @@ impl ConnectionManagerWindow {
             state.set_value("", window, cx);
         });
 
+        // Clearing the tunnel selection also clears any referenced alias:
+        // the inline form starts manual again.
+        self.access.ssh_manual_backup = None;
+        self.access
+            .ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(None, cx));
+
         self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form.form_save_ssh_secret = true;
         self.ssh_test_status = TestStatus::None;
@@ -3775,7 +3933,12 @@ impl ConnectionManagerWindow {
             return;
         };
 
-        let name = format!("{}@{}", config.user, config.host);
+        // With an alias the manual host and user are empty (A7): the
+        // profile is named after the alias instead of an empty "@" pair.
+        let name = match &config.ssh_config_host {
+            Some(alias) => alias.clone(),
+            None => format!("{}@{}", config.user, config.host),
+        };
         let secret = self.get_ssh_secret(cx);
 
         let tunnel = SshTunnelProfile {
@@ -4804,21 +4967,34 @@ mod keyboard_coverage_tests {
         window.run_until_parked();
         check(window, "test-connection");
 
-        for (expected, tab, mode) in [
+        for (expected, tab, mode, ssh_enabled) in [
             (
                 "access-method-dropdown",
                 ActiveTab::Access,
                 AccessTabMode::Direct,
+                false,
             ),
-            ("ssh-enabled", ActiveTab::Access, AccessTabMode::Ssh),
-            ("tab-access", ActiveTab::Access, AccessTabMode::Proxy),
-            ("conn-pre-hook", ActiveTab::Settings, AccessTabMode::Direct),
-            ("tab-mcp", ActiveTab::Mcp, AccessTabMode::Direct),
+            ("ssh-enabled", ActiveTab::Access, AccessTabMode::Ssh, true),
+            (
+                "ssh-config-host-picker",
+                ActiveTab::Access,
+                AccessTabMode::Ssh,
+                true,
+            ),
+            ("tab-access", ActiveTab::Access, AccessTabMode::Proxy, false),
+            (
+                "conn-pre-hook",
+                ActiveTab::Settings,
+                AccessTabMode::Direct,
+                false,
+            ),
+            ("tab-mcp", ActiveTab::Mcp, AccessTabMode::Direct, false),
         ] {
             window.update(|_, cx| {
                 manager.update(cx, |manager, cx| {
                     manager.active_tab = tab;
                     manager.access.access_tab_mode = mode;
+                    manager.access.ssh_enabled = ssh_enabled;
                     cx.notify();
                 })
             });

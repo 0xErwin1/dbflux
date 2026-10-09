@@ -349,6 +349,22 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         ("ssh-enabled", KeyboardPath::Command(Command::Execute)),
+        (
+            "ssh-config-host-picker.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "seg-ctl-item-private-key",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
+            "seg-ctl-item-password",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
+            "toggle-ssh-passphrase",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("browse-ssh-key", KeyboardPath::Command(Command::Execute)),
         ("clear-ssh-tunnel", KeyboardPath::Command(Command::Execute)),
         (
