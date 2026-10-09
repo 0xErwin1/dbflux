@@ -42,6 +42,12 @@ impl RemoteDashboardCache {
 
     /// Return the cached dashboard listing for `profile_id`, if a fetch has
     /// completed. `None` means the caller should spawn a fetch and `store` it.
+    #[expect(
+        clippy::expect_used,
+        reason = "the cache intentionally retains its existing panic-on-poison \
+                  policy; map mutation and cached-value destruction run under \
+                  the mutex"
+    )]
     pub fn peek(&self, profile_id: Uuid) -> Option<Arc<Vec<DashboardRef>>> {
         self.inner
             .lock()
@@ -51,6 +57,12 @@ impl RemoteDashboardCache {
     }
 
     /// Store a completed dashboard listing.
+    #[expect(
+        clippy::expect_used,
+        reason = "the cache intentionally retains its existing panic-on-poison \
+                  policy; map mutation and cached-value destruction run under \
+                  the mutex"
+    )]
     pub fn store(&self, profile_id: Uuid, dashboards: Vec<DashboardRef>) {
         self.inner
             .lock()
@@ -59,6 +71,12 @@ impl RemoteDashboardCache {
     }
 
     /// Remove the cached listing for `profile_id` (on disconnect or refresh).
+    #[expect(
+        clippy::expect_used,
+        reason = "the cache intentionally retains its existing panic-on-poison \
+                  policy; map mutation and cached-value destruction run under \
+                  the mutex"
+    )]
     pub fn invalidate(&self, profile_id: Uuid) {
         self.inner
             .lock()

@@ -252,6 +252,13 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  navigator_view:
+    label: "Vista del navegador"
+    help: "Avanzada agrupa tablas y vistas en carpetas, junto a los tipos, índices, claves foráneas y rutinas del esquema. Compacta quita las carpetas: cada esquema muestra directamente sus tablas, vistas, rutinas y tipos de datos, y las vistas de la instancia comparten una carpeta Instance. Simple muestra solo bases de datos, esquemas y sus tablas y vistas."
+    option:
+      advanced: "Avanzada"
+      compact: "Compacta"
+      simple: "Simple"
   environment:
     none: "Ninguno"
     help: "Indica a qué entorno apunta esta conexión."
@@ -363,6 +370,7 @@ connection_manager:
     settings: Ajustes
     mcp: MCP
   field:
+    show_all_databases: "Mostrar todas las bases de datos"
     name: Nombre
     ssl_mode: Modo SSL
     ca_certificate: Certificado de CA
@@ -370,6 +378,7 @@ connection_manager:
     client_key: Clave de cliente
   section:
     transport: TRANSPORTE
+    navigator: "NAVEGADOR"
   banner:
     correct_following: Corrige lo siguiente
     testing_connection: "Probando la conexión…"
@@ -4999,6 +5008,7 @@ sidebar:
       saved_charts: Gráficos guardados
       instance_metrics: Métricas de instancia
       instance_inspectors: Inspectores de instancia
+      instance: Instancia
       metrics: Métricas
     node:
       instance_overview: Resumen de instancia

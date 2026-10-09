@@ -252,6 +252,13 @@ connection_manager:
     ssm: "SSM"
     proxy: "代理"
     ssh: "SSH"
+  navigator_view:
+    label: "导航器视图"
+    help: "高级视图将表和视图分组到文件夹中，并与模式的类型、索引、外键和例程并列显示。紧凑视图不使用文件夹，每个模式直接列出其表、视图、例程和数据类型，并将实例视图归入一个 Instance 文件夹。简单视图只显示数据库、模式及其表和视图。"
+    option:
+      advanced: "高级"
+      compact: "紧凑"
+      simple: "简单"
   environment:
     none: "无"
     help: "标明此连接指向的环境。"
@@ -363,6 +370,7 @@ connection_manager:
     settings: 设置
     mcp: MCP
   field:
+    show_all_databases: "显示所有数据库"
     name: 名称
     ssl_mode: SSL 模式
     ca_certificate: CA 证书
@@ -370,6 +378,7 @@ connection_manager:
     client_key: 客户端密钥
   section:
     transport: 传输
+    navigator: "导航器"
   banner:
     correct_following: 请更正以下内容
     testing_connection: 正在测试连接…
@@ -4997,6 +5006,7 @@ sidebar:
       saved_charts: 已保存图表
       instance_metrics: 实例指标
       instance_inspectors: 实例检查器
+      instance: 实例
       metrics: 指标
     node:
       instance_overview: 实例概览

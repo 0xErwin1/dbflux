@@ -184,6 +184,8 @@ impl MigrationRegistry {
         registry.register(mod_039_cfg_script_roots::MigrationImpl);
         registry.register(mod_040_general_settings_fonts::MigrationImpl);
         registry.register(mod_041_general_settings_toast_timeout::MigrationImpl);
+        registry.register(mod_042_connection_profile_navigator_view::MigrationImpl);
+        registry.register(mod_043_connection_profile_show_all_databases::MigrationImpl);
         registry.register(mod_044_general_settings_syntax_colors::MigrationImpl);
         registry
     }
@@ -416,6 +418,8 @@ mod mod_038_general_settings_vim_leader;
 mod mod_039_cfg_script_roots;
 mod mod_040_general_settings_fonts;
 mod mod_041_general_settings_toast_timeout;
+mod mod_042_connection_profile_navigator_view;
+mod mod_043_connection_profile_show_all_databases;
 mod mod_044_general_settings_syntax_colors;
 
 pub use mod_001_initial::MigrationImpl;
@@ -1076,7 +1080,11 @@ mod tests {
     #[test]
     fn test_044_general_settings_syntax_colors_upgrades_and_is_idempotent() {
         let temp_dir = temp_dir("044_general_settings_syntax_colors");
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        if let Err(error) = std::fs::remove_dir_all(&temp_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            panic!("clear stale temp dir: {error}");
+        }
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_path = temp_dir.join("test.db");
 
@@ -1119,7 +1127,7 @@ mod tests {
         assert_eq!(applied, 1);
 
         drop(conn);
-        let _ = std::fs::remove_dir_all(temp_dir);
+        std::fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 
     #[test]
@@ -1177,6 +1185,8 @@ mod tests {
             "039_cfg_script_roots",
             "040_general_settings_fonts",
             "041_general_settings_toast_timeout",
+            "042_connection_profile_navigator_view",
+            "043_connection_profile_show_all_databases",
             "044_general_settings_syntax_colors",
         ];
 

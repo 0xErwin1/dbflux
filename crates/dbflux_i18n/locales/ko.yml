@@ -252,6 +252,13 @@ connection_manager:
     ssm: "SSM"
     proxy: "프록시"
     ssh: "SSH"
+  navigator_view:
+    label: "탐색기 보기"
+    help: "고급은 테이블과 뷰를 폴더로 묶고 스키마의 타입, 인덱스, 외래 키, 루틴과 함께 표시합니다. 간결은 폴더 없이 각 스키마의 테이블, 뷰, 루틴, 데이터 타입을 바로 나열하고, 인스턴스 보기를 하나의 Instance 폴더로 묶습니다. 단순은 데이터베이스, 스키마, 그리고 테이블과 뷰만 표시합니다."
+    option:
+      advanced: "고급"
+      compact: "간결"
+      simple: "단순"
   environment:
     none: "없음"
     help: "이 연결이 가리키는 환경을 표시합니다."
@@ -363,6 +370,7 @@ connection_manager:
     settings: 설정
     mcp: MCP
   field:
+    show_all_databases: "모든 데이터베이스 표시"
     name: 이름
     ssl_mode: SSL 모드
     ca_certificate: CA 인증서
@@ -370,6 +378,7 @@ connection_manager:
     client_key: 클라이언트 키
   section:
     transport: 전송
+    navigator: "탐색기"
   banner:
     correct_following: 다음 항목을 수정하세요
     testing_connection: "연결 테스트 중…"
@@ -4998,6 +5007,7 @@ sidebar:
       saved_charts: 저장된 차트
       instance_metrics: 인스턴스 지표
       instance_inspectors: 인스턴스 검사기
+      instance: 인스턴스
       metrics: 지표
     node:
       instance_overview: 인스턴스 개요

@@ -240,6 +240,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::SavedChartsFolder
                 | SchemaNodeKind::InstanceMetricsFolder
                 | SchemaNodeKind::InstanceInspectorsFolder
+                | SchemaNodeKind::InstanceFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -1396,6 +1397,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceInspectorsFolder => Some(AppIcon::Server),
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
+        SchemaNodeKind::InstanceFolder => Some(AppIcon::Server),
         SchemaNodeKind::Bucket => Some(AppIcon::Box),
         SchemaNodeKind::BucketsFolder => Some(AppIcon::Box),
         _ => None,
@@ -1513,7 +1515,7 @@ fn resolve_node_icon(
             (Some(AppIcon::ChartSpline), "", params.color_orange)
         }
         SchemaNodeKind::InstanceMetricLeaf => (Some(AppIcon::ChartSpline), "", params.color_teal),
-        SchemaNodeKind::InstanceInspectorsFolder => {
+        SchemaNodeKind::InstanceInspectorsFolder | SchemaNodeKind::InstanceFolder => {
             (Some(AppIcon::Server), "", params.color_orange)
         }
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
