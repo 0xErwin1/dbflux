@@ -673,6 +673,10 @@ impl Render for ToastHost {
         if hidden > 0 {
             items.push(self.render_hidden_summary(hidden, cx));
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`hidden_count` returns either 0 or `toasts.len() - VISIBLE_TOAST_LIMIT` (saturating), so `first_visible <= self.toasts.len()` and the tail slice is in bounds"
+        )]
         items.extend(
             self.toasts[first_visible..]
                 .iter()

@@ -174,6 +174,10 @@ pub fn resolve_window_placement(
 
     let host = host_work_area_index(saved, work_areas).unwrap_or(0);
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`work_areas` is non-empty here because `work_areas.first()?` above returned otherwise, and `host` is either 0 or an index produced by `host_work_area_index` from `position`/`enumerate` over `work_areas`, so `host < work_areas.len()`"
+    )]
     Some((host, saved.placed_in(work_areas[host])))
 }
 

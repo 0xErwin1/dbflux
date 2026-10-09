@@ -44,3 +44,6 @@ aws = ["dbflux_aws", "dbflux_app/aws"]
 # Installs the gpui-mcp automation bridge in every window. Development only: the
 # bridge exposes rendered UI text to local processes of the same user.
 ui-automation = ["dep:gpui-mcp"]
+
+[lints]
+workspace = true

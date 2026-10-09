@@ -555,6 +555,10 @@ impl DashboardManager {
     }
 
     /// Renames a dashboard, bumps `updated_at`, and updates the cache.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`idx` comes from `position` over `self.dashboards` and `self.dashboards` is not mutated between that search and the two indexes below, so `idx < self.dashboards.len()` holds"
+    )]
     pub fn rename_dashboard(
         &mut self,
         dashboard_id: Uuid,
@@ -645,6 +649,10 @@ impl DashboardManager {
     }
 
     /// Updates the shared time-range preset and bumps `updated_at`.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`idx` comes from `position` over `self.dashboards` and `self.dashboards` is not mutated between that search and the two indexes below, so `idx < self.dashboards.len()` holds"
+    )]
     pub fn update_shared_time_range(
         &mut self,
         dashboard_id: Uuid,
@@ -668,6 +676,10 @@ impl DashboardManager {
     }
 
     /// Updates the shared refresh policy and bumps `updated_at`.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`idx` comes from `position` over `self.dashboards` and `self.dashboards` is not mutated between that search and the two indexes below, so `idx < self.dashboards.len()` holds"
+    )]
     pub fn update_shared_refresh_policy(
         &mut self,
         dashboard_id: Uuid,
