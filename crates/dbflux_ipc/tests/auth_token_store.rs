@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use dbflux_ipc::{
     APP_CONTROL_AUTH_TOKEN_ENV, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_AUTH_TOKEN_ENV,
-    init_process_auth_tokens, process_auth_token,
+    init_process_auth_tokens, process_auth_token, read_app_control_token,
 };
 #[cfg(unix)]
 use dbflux_ipc::{IpcServiceLaunchConfig, RpcAuthProvider};
@@ -181,5 +181,41 @@ fn spawned_auth_provider_host_receives_store_token_explicitly() {
          (delivered length {}, expected length {})",
         delivered.len(),
         token.len()
+    );
+}
+
+/// Repeated initialization must stay consistent: the token in force is the one
+/// returned and the one written to the app-control file. If a second call
+/// generated a fresh token while the store kept the first, the parent and a
+/// spawned child could authenticate with different values.
+#[test]
+fn init_process_auth_tokens_is_idempotent() {
+    let data_dir = fixture_data_dir("idempotent");
+
+    if run_in_isolated_fixture(
+        "init_process_auth_tokens_is_idempotent",
+        &[("XDG_DATA_HOME", data_dir.as_os_str())],
+    )
+    .expect("isolated fixture must pass")
+    {
+        return;
+    }
+
+    let first = init_process_auth_tokens().expect("first init must succeed");
+    let second = init_process_auth_tokens().expect("second init must succeed");
+
+    assert_eq!(
+        first, second,
+        "a repeated init must return the token already in force"
+    );
+    assert_eq!(
+        process_auth_token(),
+        Some(first.as_str()),
+        "the store must keep the token the caller received"
+    );
+    assert_eq!(
+        read_app_control_token().expect("token file must be readable"),
+        first,
+        "the written file must match the token in force"
     );
 }

@@ -17,11 +17,12 @@ const AUTH_TOKEN_FILE: &str = "ipc_auth_token";
 static PROCESS_AUTH_TOKEN: OnceLock<String> = OnceLock::new();
 
 pub fn init_process_auth_tokens() -> io::Result<String> {
-    let token = uuid::Uuid::new_v4().to_string();
-
-    if PROCESS_AUTH_TOKEN.set(token.clone()).is_err() {
-        log::debug!("IPC auth token store already initialized; retaining the first token");
-    }
+    // Idempotent: the store decides the token, so a repeated call returns the
+    // token already in force and rewrites the same bytes to the file instead of
+    // diverging from a freshly generated one.
+    let token = PROCESS_AUTH_TOKEN
+        .get_or_init(|| uuid::Uuid::new_v4().to_string())
+        .clone();
 
     write_app_control_token(&token)?;
     Ok(token)
