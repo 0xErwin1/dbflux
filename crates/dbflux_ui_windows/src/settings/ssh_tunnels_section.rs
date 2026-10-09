@@ -6,11 +6,14 @@ use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use super::ssh_tunnels::SshFormNav;
 use crate::connection_manager::ExportTarget;
 use crate::labels::ssh_tunnels_delete_body;
+use crate::ssh_host_picker::{SshHostPicker, SshHostsLoaded, SshPickerStatus};
 use crate::ssh_shared::SshAuthSelection;
 use crate::tokens::{FormMetrics, SettingsMetrics};
-use dbflux_components::controls::{Button, Checkbox, Input, InputState};
+use dbflux_components::controls::{Button, Checkbox, DropdownSelectionChanged, Input, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{BannerBlock, BannerVariant, SegmentedControl, SegmentedItem};
+use dbflux_components::primitives::{
+    BannerBlock, BannerVariant, SegmentedControl, SegmentedItem, Text,
+};
 use dbflux_core::SshTunnelProfile;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
@@ -28,6 +31,7 @@ pub(super) enum SshFocus {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum SshFormField {
     Name,
+    SshConfigHost,
     Host,
     Port,
     User,
@@ -50,6 +54,15 @@ pub(super) enum SshTestStatus {
     Testing,
     Success,
     Failed,
+}
+
+/// Manual host/port/user the user had typed before picking an SSH config
+/// host, restored when the alias is cleared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SshManualValues {
+    pub(super) host: String,
+    pub(super) port: String,
+    pub(super) user: String,
 }
 
 pub(super) struct SshTunnelsSection {
@@ -77,6 +90,11 @@ pub(super) struct SshTunnelsSection {
     pub(super) pending_ssh_key_path: Option<String>,
     pub(super) pending_delete_tunnel_id: Option<Uuid>,
     pub(super) pending_sync_from_app_state: bool,
+    pub(super) ssh_host_picker: Entity<SshHostPicker>,
+    pub(super) ssh_manual_backup: Option<SshManualValues>,
+    /// Dropdown selection drained in `render`, where a `Window` is
+    /// available (the selection subscription has none).
+    pub(super) pending_ssh_config_host_index: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -176,6 +194,11 @@ impl FormSection for SshTunnelsSection {
                 self.input_tunnel_name
                     .update(cx, |s, cx| s.focus(window, cx));
             }
+            SshFormField::SshConfigHost => {
+                self.ssh_editing_field = false;
+                let dropdown = self.ssh_host_picker.read(cx).dropdown().clone();
+                dropdown.update(cx, |dropdown, cx| dropdown.focus(window, cx));
+            }
             SshFormField::Host => {
                 self.input_ssh_host.update(cx, |s, cx| s.focus(window, cx));
             }
@@ -205,6 +228,10 @@ impl FormSection for SshTunnelsSection {
 
     fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.ssh_form_field {
+            SshFormField::SshConfigHost => {
+                let dropdown = self.ssh_host_picker.read(cx).dropdown().clone();
+                dropdown.update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+            }
             SshFormField::AuthPrivateKey => {
                 self.ssh_auth_method = SshAuthSelection::PrivateKey;
                 self.validate_form_field();
@@ -289,6 +316,20 @@ impl SshTunnelsSection {
         let blur_ssh_key_passphrase = create_blur_subscription(cx, &input_ssh_key_passphrase);
         let blur_ssh_password = create_blur_subscription(cx, &input_ssh_password);
 
+        let ssh_host_picker = SshHostPicker::load_default(cx);
+        let picker_loaded_subscription =
+            cx.subscribe(&ssh_host_picker, |_this, _, _: &SshHostsLoaded, cx| {
+                cx.notify();
+            });
+        let picker_dropdown = ssh_host_picker.read(cx).dropdown().clone();
+        let picker_subscription = cx.subscribe(
+            &picker_dropdown,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.pending_ssh_config_host_index = Some(event.index);
+                cx.notify();
+            },
+        );
+
         Self {
             app_state,
             editing_tunnel_id: None,
@@ -314,6 +355,9 @@ impl SshTunnelsSection {
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
             pending_sync_from_app_state: false,
+            ssh_host_picker: crate::ssh_host_picker::SshHostPicker::load_default(cx),
+            ssh_manual_backup: None,
+            pending_ssh_config_host_index: None,
             _subscriptions: vec![
                 subscription,
                 blur_tunnel_name,
@@ -323,6 +367,8 @@ impl SshTunnelsSection {
                 blur_ssh_key_path,
                 blur_ssh_key_passphrase,
                 blur_ssh_password,
+                picker_loaded_subscription,
+                picker_subscription,
             ],
         }
     }
@@ -358,6 +404,43 @@ impl SshTunnelsSection {
             && !self.ssh_editing_field
     }
 
+    /// Whether the form currently references an SSH config host: the manual
+    /// host/port/user inputs are then cleared and disabled (A7).
+    fn ssh_alias_active(&self, cx: &App) -> bool {
+        self.ssh_host_picker.read(cx).selected_alias().is_some()
+    }
+
+    /// The shared SSH config host dropdown with its status lines (resolved
+    /// target, load error, resolver diagnostics).
+    fn render_ssh_config_host_picker(&self, cx: &Context<Self>) -> Div {
+        let (dropdown, statuses) = {
+            let picker = self.ssh_host_picker.read(cx);
+            (picker.dropdown().clone(), picker.statuses())
+        };
+
+        let mut column =
+            div()
+                .flex()
+                .flex_col()
+                .gap(FormMetrics::HELP_GAP)
+                .child(layout::cursor_ring(
+                    self.is_cursor_on(SshFormField::SshConfigHost),
+                    dropdown,
+                    cx,
+                ));
+
+        for status in statuses {
+            let text = match &status {
+                SshPickerStatus::Resolved(text) => Text::caption(text.clone()),
+                SshPickerStatus::Warning(text) => Text::caption(text.clone()).warning(),
+                SshPickerStatus::Error(text) => Text::caption(text.clone()).danger(),
+            };
+            column = column.child(text);
+        }
+
+        column
+    }
+
     fn select_field(&mut self, field: SshFormField, window: &mut Window, cx: &mut Context<Self>) {
         self.switching_input = true;
         self.ssh_focus = SshFocus::Form;
@@ -376,6 +459,7 @@ impl SshTunnelsSection {
         width: Option<Rems>,
         mono: bool,
         suffix: Option<AnyElement>,
+        disabled: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let is_secret = matches!(field, SshFormField::Passphrase | SshFormField::Password);
@@ -384,7 +468,8 @@ impl SshTunnelsSection {
         let mut control = Input::new(input)
             .id(SharedString::from(element_id))
             .aria_label(label)
-            .secret(is_secret);
+            .secret(is_secret)
+            .disabled(disabled);
 
         if let Some(suffix) = suffix {
             control = control.suffix(suffix);
@@ -491,6 +576,7 @@ impl SshTunnelsSection {
                 None,
                 true,
                 None,
+                false,
                 cx,
             ))
             .child(
@@ -514,6 +600,7 @@ impl SshTunnelsSection {
                 Some(SettingsMetrics::SELECT_WIDTH),
                 false,
                 Some(passphrase_toggle),
+                false,
                 cx,
             ))
             .when(keyring_available, |row| {
@@ -559,6 +646,7 @@ impl SshTunnelsSection {
                 Some(SettingsMetrics::SELECT_WIDTH),
                 false,
                 Some(password_toggle),
+                false,
                 cx,
             ))
             .when(keyring_available, |row| {
@@ -683,6 +771,7 @@ impl SshTunnelsSection {
 
     fn render_ssh_form(&self, keyring_available: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let alias_active = self.ssh_alias_active(cx);
 
         let host_port = layout::inline_controls()
             .child(self.render_ssh_input(
@@ -692,6 +781,7 @@ impl SshTunnelsSection {
                 None,
                 true,
                 None,
+                alias_active,
                 cx,
             ))
             .child(self.render_ssh_input(
@@ -701,6 +791,7 @@ impl SshTunnelsSection {
                 Some(SettingsMetrics::PORT_FIELD_WIDTH),
                 true,
                 None,
+                alias_active,
                 cx,
             ));
 
@@ -722,8 +813,14 @@ impl SshTunnelsSection {
                         Some(SettingsMetrics::TEXT_FIELD_WIDTH),
                         false,
                         None,
+                        false,
                         cx,
                     ),
+                    None,
+                ))
+                .child(layout::form_row(
+                    dbflux_i18n::t!("ssh.config_host.label"),
+                    self.render_ssh_config_host_picker(cx),
                     None,
                 ))
                 .child(layout::form_row(
@@ -740,6 +837,7 @@ impl SshTunnelsSection {
                         Some(SettingsMetrics::TEXT_FIELD_WIDTH),
                         true,
                         None,
+                        alias_active,
                         cx,
                     ),
                     None,
@@ -843,6 +941,7 @@ impl SshTunnelsSection {
 fn ssh_field_id(field: SshFormField) -> &'static str {
     match field {
         SshFormField::Name => "name",
+        SshFormField::SshConfigHost => "config-host",
         SshFormField::Host => "host",
         SshFormField::Port => "port",
         SshFormField::User => "user",
@@ -908,6 +1007,10 @@ impl Render for SshTunnelsSection {
         if self.pending_sync_from_app_state {
             self.pending_sync_from_app_state = false;
             self.sync_from_app_state(window, cx);
+        }
+
+        if let Some(index) = self.pending_ssh_config_host_index.take() {
+            self.apply_ssh_config_host_index(index, window, cx);
         }
 
         if let Some(key_path) = self.pending_ssh_key_path.take() {

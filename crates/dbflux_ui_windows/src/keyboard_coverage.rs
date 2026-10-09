@@ -190,6 +190,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         (
+            "ssh-config-host-picker.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "drv-confirm-dangerous.*",
             KeyboardPath::Command(Command::Execute),
         ),

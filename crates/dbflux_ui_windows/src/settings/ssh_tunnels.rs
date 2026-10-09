@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use super::form_nav::FormGridNav;
 use super::form_section::FormSection;
-use super::ssh_tunnels_section::{SshFocus, SshFormField, SshTestStatus, SshTunnelsSection};
+use super::ssh_tunnels_section::{
+    SshFocus, SshFormField, SshManualValues, SshTestStatus, SshTunnelsSection,
+};
 
 /// SSH form navigation. Wraps `FormGridNav` with auth/editing context
 /// to compute which rows are visible.
@@ -46,6 +48,7 @@ impl SshFormNav {
     pub(super) fn form_rows(&self) -> Vec<Vec<SshFormField>> {
         let mut rows = vec![
             vec![SshFormField::Name],
+            vec![SshFormField::SshConfigHost],
             vec![SshFormField::Host, SshFormField::Port],
             vec![SshFormField::User],
             vec![SshFormField::AuthPrivateKey, SshFormField::AuthPassword],
@@ -140,6 +143,10 @@ impl SshTunnelsSection {
         self.ssh_editing_field = false;
         self.ssh_test_status = SshTestStatus::None;
         self.ssh_test_error = None;
+        self.ssh_manual_backup = None;
+        self.pending_ssh_config_host_index = None;
+        self.ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(None, cx));
 
         self.input_tunnel_name
             .update(cx, |s, cx| s.set_value("", window, cx));
@@ -170,6 +177,7 @@ impl SshTunnelsSection {
         self.ssh_editing_field = false;
         self.ssh_test_status = SshTestStatus::None;
         self.ssh_test_error = None;
+        self.ssh_manual_backup = None;
 
         self.input_tunnel_name
             .update(cx, |s, cx| s.set_value(&tunnel.name, window, cx));
@@ -215,6 +223,81 @@ impl SshTunnelsSection {
         }
 
         self.form_save_secret = tunnel.save_secret;
+
+        let saved_alias = tunnel.config.ssh_config_host.clone();
+        if saved_alias.is_some() {
+            // While an alias is active the manual fields must not present a
+            // value that is not the target: they stay cleared and disabled
+            // (A7) and the resolved target shows next to the picker.
+            self.input_ssh_host
+                .update(cx, |s, cx| s.set_value("", window, cx));
+            self.input_ssh_port
+                .update(cx, |s, cx| s.set_value("", window, cx));
+            self.input_ssh_user
+                .update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        self.ssh_host_picker.update(cx, |picker, cx| {
+            picker.set_selected_alias(saved_alias.as_deref(), cx)
+        });
+
+        cx.notify();
+    }
+
+    /// Maps a dropdown selection to the form: index 0 is the manual entry,
+    /// any other index stores its alias.
+    pub(super) fn apply_ssh_config_host_index(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let alias = self.ssh_host_picker.read(cx).alias_at(index);
+        self.set_ssh_config_host(alias.as_deref(), window, cx);
+    }
+
+    /// Applies an SSH config host selection to the form. Picking an alias
+    /// keeps what the user had typed and clears the manual fields (A7);
+    /// choosing the manual entry restores them exactly.
+    pub(super) fn set_ssh_config_host(
+        &mut self,
+        alias: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_active = self.ssh_host_picker.read(cx).selected_alias().is_some();
+        let is_active = alias.is_some();
+
+        if is_active && !was_active {
+            self.ssh_manual_backup = Some(SshManualValues {
+                host: self.input_ssh_host.read(cx).value().to_string(),
+                port: self.input_ssh_port.read(cx).value().to_string(),
+                user: self.input_ssh_user.read(cx).value().to_string(),
+            });
+        }
+
+        if is_active {
+            self.input_ssh_host
+                .update(cx, |s, cx| s.set_value("", window, cx));
+            self.input_ssh_port
+                .update(cx, |s, cx| s.set_value("", window, cx));
+            self.input_ssh_user
+                .update(cx, |s, cx| s.set_value("", window, cx));
+        } else if was_active {
+            let backup = self.ssh_manual_backup.take().unwrap_or(SshManualValues {
+                host: String::new(),
+                port: "22".to_string(),
+                user: String::new(),
+            });
+            self.input_ssh_host
+                .update(cx, |s, cx| s.set_value(backup.host, window, cx));
+            self.input_ssh_port
+                .update(cx, |s, cx| s.set_value(backup.port, window, cx));
+            self.input_ssh_user
+                .update(cx, |s, cx| s.set_value(backup.user, window, cx));
+        }
+
+        self.ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(alias, cx));
         cx.notify();
     }
 
@@ -230,13 +313,19 @@ impl SshTunnelsSection {
         let key_path_str = self.input_ssh_key_path.read(cx).value().trim().to_string();
         let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
         let password = self.input_ssh_password.read(cx).value().to_string();
+        let ssh_config_host = self
+            .ssh_host_picker
+            .read(cx)
+            .selected_alias()
+            .map(str::to_string);
 
-        let config = ssh_shared::build_ssh_config(
+        let config = ssh_shared::build_ssh_config_with_alias(
             &host,
             &port_str,
             &user,
             self.ssh_auth_method,
             &key_path_str,
+            ssh_config_host.as_deref(),
         );
 
         let secret = ssh_shared::get_ssh_secret(self.ssh_auth_method, &passphrase, &password)
@@ -294,7 +383,18 @@ impl SshTunnelsSection {
         let port_str = self.input_ssh_port.read(cx).value().trim().to_string();
         let user = self.input_ssh_user.read(cx).value().trim().to_string();
 
-        if host.is_empty() || user.is_empty() {
+        let key_path_str = self.input_ssh_key_path.read(cx).value().trim().to_string();
+        let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
+        let password = self.input_ssh_password.read(cx).value().to_string();
+        let ssh_config_host = self
+            .ssh_host_picker
+            .read(cx)
+            .selected_alias()
+            .map(str::to_string);
+
+        // With an alias the alias is the only source of the target (A7);
+        // the manual host and user stay empty and are not required.
+        if ssh_config_host.is_none() && (host.is_empty() || user.is_empty()) {
             self.ssh_test_status = SshTestStatus::Failed;
             self.ssh_test_error = Some(dbflux_i18n::t!(
                 "settings.ssh_tunnels.error.host_and_user_required"
@@ -303,16 +403,13 @@ impl SshTunnelsSection {
             return;
         }
 
-        let key_path_str = self.input_ssh_key_path.read(cx).value().trim().to_string();
-        let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
-        let password = self.input_ssh_password.read(cx).value().to_string();
-
-        let config = ssh_shared::build_ssh_config(
+        let config = ssh_shared::build_ssh_config_with_alias(
             &host,
             &port_str,
             &user,
             self.ssh_auth_method,
             &key_path_str,
+            ssh_config_host.as_deref(),
         );
 
         let secret = ssh_shared::get_ssh_secret(self.ssh_auth_method, &passphrase, &password);
@@ -418,11 +515,24 @@ impl SshTunnelsSection {
             let port_str = self.input_ssh_port.read(cx).value().trim().to_string();
             let user = self.input_ssh_user.read(cx).value().trim().to_string();
 
-            if name != saved.name
-                || host != saved.config.host
-                || port_str != saved.config.port.to_string()
-                || user != saved.config.user
-                || self.form_save_secret != saved.save_secret
+            if name != saved.name || self.form_save_secret != saved.save_secret {
+                return true;
+            }
+
+            // With an alias the manual host/port/user inputs are cleared
+            // and disabled, so only the alias itself is compared (A7).
+            let form_alias = self
+                .ssh_host_picker
+                .read(cx)
+                .selected_alias()
+                .map(str::to_string);
+            if form_alias != saved.config.ssh_config_host {
+                return true;
+            }
+            if form_alias.is_none()
+                && (host != saved.config.host
+                    || port_str != saved.config.port.to_string()
+                    || user != saved.config.user)
             {
                 return true;
             }
@@ -472,6 +582,7 @@ impl SshTunnelsSection {
                 || !self.input_ssh_password.read(cx).value().is_empty()
                 || self.ssh_auth_method != SshAuthSelection::PrivateKey
                 || !self.form_save_secret
+                || self.ssh_host_picker.read(cx).selected_alias().is_some()
         }
     }
 
@@ -716,6 +827,85 @@ mod tests {
     use crate::ssh_shared::SshAuthSelection;
     use uuid::Uuid;
 
+    /// Loading a saved tunnel that references an SSH config alias shows the
+    /// alias in the picker and is not dirty: the alias and the cleared
+    /// manual fields are exactly what the profile stores.
+    #[gpui::test]
+    fn loading_an_aliased_profile_reports_no_changes(cx: &mut gpui::TestAppContext) {
+        use crate::settings::ssh_tunnels_section::SshTunnelsSection;
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use dbflux_ui_base::AppStateEntity;
+        use dbflux_ui_base::keymap::init_keymap;
+        use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+        use gpui::{AppContext as _, Entity};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let tunnel = SshTunnelProfile {
+            id: Uuid::new_v4(),
+            name: "aliased".to_string(),
+            config: SshTunnelConfig {
+                host: String::new(),
+                port: 22,
+                user: String::new(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: Some("alpha".to_string()),
+            },
+            save_secret: true,
+        };
+
+        let slot: Rc<RefCell<Option<Entity<SshTunnelsSection>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            let app_state = app_state.clone();
+            move |window, cx| {
+                let section = cx.new(|cx| SshTunnelsSection::new(app_state, window, cx));
+                slot.replace(Some(section.clone()));
+                gpui_component::Root::new(section, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let section = slot.borrow().clone().expect("the SSH section is built");
+        let (alias_loaded, not_dirty) = window.update(|window, cx| {
+            app_state.update(cx, |state, _| state.add_ssh_tunnel(tunnel.clone()));
+            section.update(cx, |section, cx| {
+                section.edit_tunnel(&tunnel, window, cx);
+                (
+                    section
+                        .ssh_host_picker
+                        .read(cx)
+                        .selected_alias()
+                        .map(str::to_string),
+                    !section.has_unsaved_ssh_changes(cx),
+                )
+            })
+        });
+
+        assert_eq!(
+            alias_loaded.as_deref(),
+            Some("alpha"),
+            "the form shows the loaded alias"
+        );
+        assert!(not_dirty, "a freshly loaded aliased profile is not dirty");
+    }
+
     fn nav_private_key_new() -> SshFormNav {
         SshFormNav::new(SshAuthSelection::PrivateKey, None, SshFormField::Name)
     }
@@ -790,9 +980,11 @@ mod tests {
     }
 
     #[test]
-    fn move_down_from_name_to_host() {
+    fn move_down_from_name_to_config_host_and_to_host() {
         let mut nav = nav_private_key_new();
         nav.set_field(SshFormField::Name);
+        nav.move_down();
+        assert_eq!(nav.field(), SshFormField::SshConfigHost);
         nav.move_down();
         assert_eq!(nav.field(), SshFormField::Host);
     }
@@ -857,6 +1049,7 @@ mod tests {
         assert!(SshFormNav::is_input_field(SshFormField::Passphrase));
         assert!(SshFormNav::is_input_field(SshFormField::Password));
 
+        assert!(!SshFormNav::is_input_field(SshFormField::SshConfigHost));
         assert!(!SshFormNav::is_input_field(SshFormField::AuthPrivateKey));
         assert!(!SshFormNav::is_input_field(SshFormField::AuthPassword));
         assert!(!SshFormNav::is_input_field(SshFormField::KeyBrowse));
