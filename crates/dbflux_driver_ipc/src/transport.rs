@@ -1399,6 +1399,80 @@ mod tests {
         );
     }
 
+    /// Regression: with an empty store the parent authenticates with the
+    /// caller-supplied environment token, so the child must receive that same
+    /// token — a launch-config entry for the same variable must not win.
+    #[cfg(unix)]
+    #[test]
+    fn spawned_driver_host_env_token_beats_launch_config_when_store_is_empty() {
+        use crate::driver::{IpcDriver, IpcDriverLaunchConfig};
+
+        let data_dir = fixture_data_dir("driver-spawn-env");
+
+        if run_in_isolated_fixture(
+            "transport::tests::spawned_driver_host_env_token_beats_launch_config_when_store_is_empty",
+            &[
+                ("XDG_DATA_HOME", data_dir.as_os_str()),
+                (
+                    "DBFLUX_DRIVER_IPC_TOKEN",
+                    std::ffi::OsStr::new("env-fallback-token"),
+                ),
+            ],
+        )
+        .expect("isolated fixture must pass")
+        {
+            return;
+        }
+
+        // Child side: no init call, so the store is empty and the environment is
+        // the only token source the parent uses.
+        let data_dir = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .expect("fixture must provide XDG_DATA_HOME");
+
+        // Nothing here initializes the token store, so unlike the store test
+        // this fixture must create the directory it writes into.
+        std::fs::create_dir_all(&data_dir).expect("fixture data dir must be creatable");
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or_default();
+        let socket_id = format!("drv-env-token-{}-{}", std::process::id(), nanos);
+        let token_out = data_dir.join("driver_host_env_token");
+
+        let launch = IpcDriverLaunchConfig {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf '%s' \"$DBFLUX_DRIVER_IPC_TOKEN\" > \"$TOKEN_OUT_FILE\"".to_string(),
+            ],
+            env: vec![
+                (
+                    "TOKEN_OUT_FILE".to_string(),
+                    token_out.display().to_string(),
+                ),
+                (
+                    dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV.to_string(),
+                    "stale-launch-config-token".to_string(),
+                ),
+            ],
+            startup_timeout: std::time::Duration::from_millis(500),
+        };
+
+        // The probe fails by design: the shell host exits without serving a
+        // socket. Its error is irrelevant; the delivered token is the assertion.
+        let _probe_error = IpcDriver::probe_driver(&socket_id, Some(&launch));
+
+        let delivered = std::fs::read_to_string(&token_out)
+            .expect("spawned driver host must write the delivered token");
+        assert!(
+            delivered == "env-fallback-token",
+            "an empty store must inject the caller supplied environment token, \
+             not the launch-config entry (delivered {delivered:?})"
+        );
+    }
+
     /// Previous behavior preserved: when the store is empty (no
     /// `init_process_auth_tokens()` call, e.g. standalone `dbflux mcp`), a
     /// caller-supplied `DBFLUX_DRIVER_IPC_TOKEN` must still reach the Hello.
