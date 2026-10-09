@@ -740,6 +740,10 @@ impl MongoDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
+        // Resolve before logging, so a tunnel that references a host from the user's SSH
+        // config reports the target it actually dials (#837).
+        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
+
         log::info!(
             "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
             tunnel_config.user,
@@ -750,7 +754,7 @@ impl MongoDriver {
         );
 
         let phase_start = Instant::now();
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
+        let ssh_session = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
         log::info!(
             "[CONNECT] SSH session phase completed in {:.2}ms",
             phase_start.elapsed().as_secs_f64() * 1000.0
