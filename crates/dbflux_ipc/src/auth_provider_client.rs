@@ -14,7 +14,7 @@ use dbflux_core::auth::{
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 
 use crate::audit::{ExternalAuditEmitter, ExternalAuditSource};
-use crate::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
+use crate::auth::{AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, process_auth_token};
 use crate::auth_provider_protocol::{
     AuthProviderHelloRequest, AuthProviderRequestBody, AuthProviderRequestEnvelope,
     AuthProviderResponseBody, AuthProviderResponseEnvelope, FetchFieldOptionsError,
@@ -193,9 +193,17 @@ impl RpcAuthProvider {
         let mut stream = IpcStream::connect(name)
             .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
-        let auth_token = std::env::var(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
-            .ok()
-            .filter(|token| !token.is_empty());
+        // The process-global store is the primary source; the caller-supplied
+        // environment variable remains the fallback for processes that never
+        // initialized the store (e.g. standalone `dbflux mcp`).
+        let auth_token = process_auth_token()
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
+                    .ok()
+                    .filter(|token| !token.is_empty())
+            });
 
         let request = AuthProviderRequestEnvelope::new(
             AUTH_PROVIDER_RPC_API_CONTRACT.version,
@@ -861,6 +869,12 @@ fn ensure_host_running_for(
     let mut command = Command::new(&launch.program);
     command.args(&launch.args);
     command.envs(launch.env.iter().cloned());
+
+    // The token no longer travels by environment inheritance from this
+    // process; inject it explicitly when the process store has one.
+    if let Some(token) = process_auth_token() {
+        command.env(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, token);
+    }
 
     let child = command.spawn().map_err(DbError::IoError)?;
     register_managed_host(socket_id, child)?;
