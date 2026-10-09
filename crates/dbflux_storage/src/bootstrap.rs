@@ -53,17 +53,21 @@ pub struct StorageRuntime {
     /// Content stays on disk; metadata about paths lives in dbflux.db.
     artifacts: ArtifactStore,
     /// The temporary directory [`StorageRuntime::in_memory`] created, removed
-    /// when the runtime drops. Without it every test runtime leaves a migrated
-    /// database behind in the temp dir, which on a RAM-backed `/tmp` fills
-    /// memory after a few full test runs.
-    owned_temp_dir: Option<PathBuf>,
+    /// when the runtime drops, and its locked owner file. Without it every test
+    /// runtime leaves a migrated database behind in the temp dir, which on a
+    /// RAM-backed `/tmp` fills memory after a few full test runs.
+    owned_temp_dir: Option<(PathBuf, std::fs::File)>,
 }
 
 impl Drop for StorageRuntime {
     fn drop(&mut self) {
-        if let Some(temp_dir) = self.owned_temp_dir.take()
-            && let Err(error) = std::fs::remove_dir_all(&temp_dir)
-        {
+        let Some((temp_dir, owner)) = self.owned_temp_dir.take() else {
+            return;
+        };
+        // Windows refuses to remove a directory holding an open file.
+        drop(owner);
+
+        if let Err(error) = std::fs::remove_dir_all(&temp_dir) {
             log::warn!(
                 "Could not remove test storage directory {}: {error}",
                 temp_dir.display()
@@ -89,8 +93,14 @@ fn unique_test_runtime_dir_name() -> String {
 
 const TEST_RUNTIME_DIR_PREFIX: &str = "dbflux_storage_test_";
 
-/// A test runtime directory this old belongs to a test process that has
-/// finished: each test runs in its own short-lived process.
+/// A file in each test runtime directory that the runtime holds an exclusive
+/// lock on for as long as it lives. The operating system drops the lock when
+/// the owning process exits, however it exits, so a lock the sweep can take
+/// proves the directory has no owner left.
+const TEST_RUNTIME_OWNER_FILE: &str = "owner.lock";
+
+/// Only directories at least this old are checked for an owner, so the sweep
+/// leaves alone a directory whose runtime is still being set up.
 const STALE_TEST_RUNTIME_AGE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Removes test runtime directories that finished test processes left behind.
@@ -99,8 +109,6 @@ const STALE_TEST_RUNTIME_AGE: std::time::Duration = std::time::Duration::from_se
 /// does not tear its app down before the process exits, so `Drop` alone
 /// cannot clean up after it. Sweeping once per process keeps the temp dir
 /// bounded.
-// ponytail: age-based sweep; a test runtime alive for more than five minutes
-// would lose its directory, switch to a per-process lock file if that happens.
 fn sweep_stale_test_runtime_dirs(temp_root: &Path, max_age: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(temp_root) else {
         return;
@@ -120,6 +128,7 @@ fn sweep_stale_test_runtime_dirs(temp_root: &Path, max_age: std::time::Duration)
 
         if is_test_runtime
             && is_stale
+            && test_runtime_owner_has_exited(&entry.path())
             && let Err(error) = std::fs::remove_dir_all(entry.path())
         {
             log::debug!(
@@ -127,6 +136,15 @@ fn sweep_stale_test_runtime_dirs(temp_root: &Path, max_age: std::time::Duration)
                 entry.path().display()
             );
         }
+    }
+}
+
+/// Whether no live runtime holds the owner lock of a test runtime directory.
+/// A directory without an owner file predates the lock and has no owner.
+fn test_runtime_owner_has_exited(runtime_dir: &Path) -> bool {
+    match std::fs::File::open(runtime_dir.join(TEST_RUNTIME_OWNER_FILE)) {
+        Ok(owner) => owner.try_lock().is_ok(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
     }
 }
 
@@ -203,11 +221,16 @@ impl StorageRuntime {
             source,
         })?;
 
-        let dbflux_db_path = temp_dir.join("dbflux.db");
+        let owner = std::fs::File::create(temp_dir.join(TEST_RUNTIME_OWNER_FILE))
+            .and_then(|owner| owner.lock().map(|()| owner))
+            .map_err(|source| StorageError::Io {
+                path: temp_dir.clone(),
+                source,
+            });
 
-        match Self::for_path(dbflux_db_path) {
-            Ok(mut runtime) => {
-                runtime.owned_temp_dir = Some(temp_dir);
+        match owner.and_then(|owner| Ok((owner, Self::for_path(temp_dir.join("dbflux.db"))?))) {
+            Ok((owner, mut runtime)) => {
+                runtime.owned_temp_dir = Some((temp_dir, owner));
                 Ok(runtime)
             }
             Err(error) => {
@@ -579,10 +602,24 @@ mod tests {
         sweep_stale_test_runtime_dirs(&root, STALE_TEST_RUNTIME_AGE);
         assert!(runtime_dir.exists(), "a fresh directory is kept");
 
+        let live_dir = root.join(format!("{TEST_RUNTIME_DIR_PREFIX}2_b"));
+        std::fs::create_dir_all(&live_dir).expect("live dir");
+        let live_owner =
+            std::fs::File::create(live_dir.join(TEST_RUNTIME_OWNER_FILE)).expect("owner file");
+        live_owner.lock().expect("owner lock");
+
         std::thread::sleep(std::time::Duration::from_millis(20));
         sweep_stale_test_runtime_dirs(&root, std::time::Duration::from_millis(10));
         assert!(!runtime_dir.exists(), "a stale directory is removed");
         assert!(other_dir.exists(), "other directories are never touched");
+        assert!(live_dir.exists(), "a directory with a live owner is kept");
+
+        drop(live_owner);
+        sweep_stale_test_runtime_dirs(&root, std::time::Duration::from_millis(10));
+        assert!(
+            !live_dir.exists(),
+            "a directory whose owner exited is removed"
+        );
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
