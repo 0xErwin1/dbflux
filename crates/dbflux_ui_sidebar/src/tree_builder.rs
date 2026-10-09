@@ -791,8 +791,6 @@ impl Sidebar {
                     && strategy != SchemaLoadingStrategy::LazyPerDatabase
                     && projected.children.len() == 1;
                 if implicit_flat {
-                    // `implicit_flat` requires `projected.children.len() == 1`, so
-                    // `children[0]` exists.
                     #[expect(
                         clippy::indexing_slicing,
                         reason = "`implicit_flat` requires `projected.children.len() \
@@ -2288,9 +2286,6 @@ fn build_projected_relational_children(
     } else {
         database
     };
-    // `nodes.len() == 1` is evaluated earlier in the same `&&` chain, so `nodes[0]`
-    // exists; the same bound covers the `&nodes[0].children` access in the
-    // `flatten` branch below.
     #[expect(
         clippy::indexing_slicing,
         reason = "`flatten` requires `nodes.len() == 1`, evaluated earlier in the \
