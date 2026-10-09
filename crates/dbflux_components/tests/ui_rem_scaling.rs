@@ -65,6 +65,12 @@ fn open_window(cx: &mut TestAppContext) -> &mut VisualTestContext {
     window
 }
 
+// Attribute on the function: this helper is not a `#[test]` fn, so the shared
+// clippy.toml test exemptions do not apply to it.
+#[expect(
+    clippy::panic,
+    reason = "a missing element here means the fixture failed to lay out the selector, and the test must fail loudly"
+)]
 fn bounds(window: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
     window
         .debug_bounds(selector)

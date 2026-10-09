@@ -316,6 +316,10 @@ impl MultiSelect {
         if labels.len() <= 3 {
             labels.join(", ").into()
         } else {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the else arm runs only when labels.len() > 3, so the ..2 slice is within 0..len"
+            )]
             format!(
                 "{}, {}",
                 labels[..2].join(", "),

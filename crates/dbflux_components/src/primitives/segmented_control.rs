@@ -56,6 +56,12 @@ pub fn new_active_id(items: &[SegmentedItem], _current: &str, clicked: &str) -> 
 ///
 /// A segmented field that is a single stop in a form moves its choice with
 /// Left and Right through this, the way a radio group does.
+// Attribute on the function: the only indexing is the ids[target] inside
+// the call-chain tail expression.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "current comes from ids.iter().position(), last == ids.len() - 1 (checked_sub), and target = current.saturating_add_signed(step).min(last) stays in 0..=last, which is below ids.len()"
+)]
 pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option<&'a str> {
     let current = ids.iter().position(|id| *id == active)?;
     let last = ids.len().checked_sub(1)?;

@@ -1281,6 +1281,10 @@ impl EditBuffer {
         }
 
         // Record action for undo
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the bounds check above returns early when insert_idx >= self.pending_inserts.len()"
+        )]
         let insert = &self.pending_inserts[insert_idx];
         self.push_undo(EditAction::RemoveInsert {
             insert_idx,
@@ -1329,6 +1333,10 @@ impl EditBuffer {
                 new_value: value.clone(),
             });
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the get_mut + col < insert.data.len() guards above establish both bounds"
+            )]
             if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
                 && col < insert.data.len()
             {
@@ -1456,6 +1464,10 @@ impl EditBuffer {
                 old_value,
                 new_value,
             } => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the get_mut + col < insert.data.len() guards above establish both bounds"
+                )]
                 if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
                     && col < insert.data.len()
                 {
@@ -1567,6 +1579,10 @@ impl EditBuffer {
                 old_value,
                 new_value,
             } => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the get_mut + col < insert.data.len() guards above establish both bounds"
+                )]
                 if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
                     && col < insert.data.len()
                 {

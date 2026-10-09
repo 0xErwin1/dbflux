@@ -211,6 +211,10 @@ impl ChartView {
         // selected window) coexist with populated siblings instead of forcing
         // the whole chart to fail with `NoUsableData`.
         for (row_idx, row) in result.rows.iter().enumerate() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "x_col is validated against the column list; row indexing retains the existing assumption that callers supply one cell per column (not checked here)"
+            )]
             let x_val = extract_f64(&row[x_col], x_is_time);
             let Some(x) = x_val else { continue };
 
@@ -226,8 +230,16 @@ impl ChartView {
                     _ => true,
                 };
 
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "s.column_index was validated against result.columns.len() in the loop above"
+                )]
                 let col_kind = result.columns[s.column_index].kind;
                 let y_val = if in_group {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "s.column_index is validated against the column list; indexing the row retains the existing caller assumption that it contains a cell for each column (not checked here)"
+                    )]
                     extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp)
                 } else {
                     None
@@ -245,6 +257,10 @@ impl ChartView {
                 raw_x.push(x);
                 raw_rows.push(row_idx);
                 for (i, y) in y_vals.into_iter().enumerate() {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "raw_series has one Vec per spec.series entry and i enumerates that same series list, so i < raw_series.len()"
+                    )]
                     raw_series[i].push(y);
                 }
             }
@@ -258,6 +274,10 @@ impl ChartView {
 
         let mut indices: Vec<usize> = (0..raw_x.len()).collect();
         let mut swapped = false;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a and b come from indices collected over 0..raw_x.len(), so both are in bounds"
+        )]
         indices.sort_by(|&a, &b| {
             raw_x[a]
                 .partial_cmp(&raw_x[b])
@@ -273,6 +293,10 @@ impl ChartView {
         let raw_x_sorted: Vec<f64>;
         let raw_series_sorted: Vec<Vec<f64>>;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "indices is a permutation of 0..raw_x.len() (collected above), so every i it yields is in bounds; every series vec in raw_series holds one value per retained row, the same length as raw_x"
+        )]
         if swapped {
             tracing_debug_non_monotonic();
             raw_x_sorted = indices.iter().map(|&i| raw_x[i]).collect();
@@ -294,6 +318,10 @@ impl ChartView {
         // sort reorders through `indices` (sorted_pos -> raw_pos), and
         // `raw_rows` maps raw_pos past the rows the extraction skipped.
         let sorted_source_indices: Vec<usize> = if swapped {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "indices only holds positions below raw_x.len() and raw_rows grows by one for every pushed raw_x, so the lengths match"
+            )]
             indices.iter().map(|&raw_pos| raw_rows[raw_pos]).collect()
         } else {
             raw_rows
@@ -583,7 +611,15 @@ impl ChartView {
         } else if pos >= pts.len() {
             Some(pts.len() - 1)
         } else {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the arms above return early for pos == 0 and pos >= pts.len(), so pos < pts.len() here"
+            )]
             let lo = pts[pos - 1].0;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the arms above return early for pos == 0 and pos >= pts.len(), so pos < pts.len() here"
+            )]
             let hi = pts[pos].0;
             if (cursor_data_x - lo).abs() <= (hi - cursor_data_x).abs() {
                 Some(pos - 1)
@@ -724,6 +760,10 @@ impl ChartView {
             .iter()
             .position(|index| *index == self.focused_series_idx)
             .unwrap_or(0);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "rem_euclid by visible.len() always yields a value in 0..visible.len()"
+        )]
         let next = visible[(current as isize + delta).rem_euclid(visible.len() as isize) as usize];
 
         let anchor_x = self.keyboard_point_value().map(|(x, _)| x);
@@ -946,6 +986,10 @@ impl ChartView {
 
             for (group_pos, &s_idx) in visible.iter().enumerate() {
                 let offset = group_pos as f32 * bar_w - group_w / 2.0;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "visible is built from 0..self.render_model.decimated.len(), so s_idx is in bounds"
+                )]
                 for &(x, _) in &self.render_model.decimated[s_idx] {
                     let bar_left = data_to_screen_x(x) + offset;
                     let bar_right = bar_left + bar_w * 0.92;
@@ -1077,6 +1121,10 @@ impl ChartView {
             let totals: Vec<(usize, f64)> = visible
                 .iter()
                 .filter_map(|&s_idx| {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "visible is built from 0..self.render_model.decimated.len(), so s_idx is in bounds"
+                    )]
                     let total: f64 = self.render_model.decimated[s_idx]
                         .iter()
                         .map(|(_, y)| *y)
@@ -1174,6 +1222,10 @@ impl ChartView {
 
         // Dead-band: only switch when the new series is strictly closer than the
         // current focused series by >= 2 px, mitigating jitter between near lines.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "hit_test_focused_series only returns indices from decimated.iter().enumerate(), so new_idx < decimated.len()"
+        )]
         let dist_new = interpolate_y_at_x(&self.render_model.decimated[new_idx], cursor_data_x)
             .map(|y| (data_to_screen_y(y) - cursor_screen_y).abs())
             .unwrap_or(f32::INFINITY);
@@ -1815,7 +1867,15 @@ fn paint_line_series(
         }
         if pts.len() == 1 {
             let half = stroke_w * 1.5;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+            )]
             let sx = data_to_screen_x(pts[0].0);
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+            )]
             let sy = data_to_screen_y(pts[0].1);
             window.paint_quad(fill(
                 gpui::Bounds {
@@ -1829,6 +1889,10 @@ fn paint_line_series(
             ));
         } else {
             let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the closure returns early when pts.is_empty(), so pts[0] exists in the else branch"
+            )]
             let (x0, y0) = pts[0];
             builder.move_to(point(
                 gpui::px(data_to_screen_x(x0)),
@@ -2328,6 +2392,10 @@ fn paint_bars<FX, FY>(
 
         let offset = group_pos as f32 * bar_w - group_w / 2.0;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+        )]
         for &(x, y) in &decimated[s_idx] {
             let bar_left = data_to_screen_x(x) + offset;
             let value_sy = data_to_screen_y(y);
@@ -2548,6 +2616,10 @@ fn paint_pie(
     let totals: Vec<(usize, f64)> = visible
         .iter()
         .filter_map(|&s_idx| {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+            )]
             let total: f64 = decimated[s_idx]
                 .iter()
                 .map(|(_, y)| *y)
@@ -2683,6 +2755,10 @@ fn paint_scatter<FX, FY>(
             (base_color, 3.5_f32)
         };
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+        )]
         for &(x, y) in &decimated[s_idx] {
             let sx = data_to_screen_x(x);
             let sy = data_to_screen_y(y);
@@ -2749,6 +2825,10 @@ fn paint_area<FX, FY>(
                 continue;
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+            )]
             let pts = &decimated[s_idx];
             if pts.is_empty() {
                 continue;
@@ -2766,7 +2846,15 @@ fn paint_area<FX, FY>(
 
             if pts.len() == 1 {
                 // Single-point: fill a thin vertical rect from the data point to the baseline.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sx = data_to_screen_x(pts[0].0);
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sy = data_to_screen_y(pts[0].1);
                 let (rect_top, rect_h) = if sy <= baseline_sy {
                     (sy, baseline_sy - sy)
@@ -2785,7 +2873,15 @@ fn paint_area<FX, FY>(
                 ));
             } else {
                 // Build a closed filled path: baseline→first, data points, last→baseline.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the pts.is_empty() continue above leaves only non-empty slices in the else branch"
+                )]
                 let (x0, _) = pts[0];
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "pts is non-empty here, so pts.len() - 1 is the last index"
+                )]
                 let (xn, _) = pts[pts.len() - 1];
 
                 let mut builder = PathBuilder::fill();
@@ -2819,7 +2915,15 @@ fn paint_area<FX, FY>(
             if pts.len() == 1 {
                 // Single-point fallback: a square marker, same as the Line arm.
                 let half = stroke_w * 1.5;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sx = data_to_screen_x(pts[0].0);
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sy = data_to_screen_y(pts[0].1);
                 window.paint_quad(fill(
                     gpui::Bounds {
@@ -2833,6 +2937,10 @@ fn paint_area<FX, FY>(
                 ));
             } else {
                 let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the pts.is_empty() continue above leaves only non-empty slices in the else branch"
+                )]
                 let (x0, y0) = pts[0];
                 builder.move_to(point(
                     gpui::px(data_to_screen_x(x0)),
@@ -3094,6 +3202,10 @@ fn format_readout_time(x_ms: f64, x_range_ms: f64) -> String {
 
 /// Locate the sample in `points` whose X coordinate is closest to `target_x`.
 /// Assumes `points` is sorted by X (the engine sorts during `build`).
+#[expect(
+    clippy::indexing_slicing,
+    reason = "both callers pass a non-empty, X-sorted slice (they filter out empty series first); binary_search_by yields an index below len on Ok and an insertion point in 0..=len on Err, and the arms below handle 0 and len explicitly"
+)]
 fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
     match points.binary_search_by(|p| {
         p.0.partial_cmp(&target_x)
