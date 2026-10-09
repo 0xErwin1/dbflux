@@ -3740,7 +3740,7 @@ settings:
       role:
         keyword: "关键字"
         string: "字符串"
-        number: "数字和 NULL"
+        number: "数字"
         comment: "注释"
         type: "类型"
         function: "函数"

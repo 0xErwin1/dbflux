@@ -1235,7 +1235,7 @@ impl DataTable {
             "table-rows",
             row_count,
             move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
-                let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
+                let null_color = crate::tokens::SyntaxColors::for_current(cx).keyword;
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);

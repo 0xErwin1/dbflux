@@ -177,8 +177,8 @@ accent applies to every open window when you save.
 ### Syntax colors
 
 The colors of the code editor's syntax highlighting can be changed per role:
-keywords, strings, numbers and NULL, comments, types, functions, operators and
-punctuation, identifiers, schemas, and columns. **Colors for** picks which theme you are editing,
+keywords, strings, numbers, comments, types, functions, operators and
+punctuation, identifiers, schemas, and columns. `NULL` takes the keyword color. **Colors for** picks which theme you are editing,
 Dark or Light; each theme keeps its own colors, and **Follow system** uses the
 colors of the theme it resolves to.
 

@@ -782,7 +782,7 @@ impl Render for RowInspectorContent {
         let header = self.render_header(cx);
         let footer = self.render_footer(cx);
 
-        let null_color = SyntaxColors::for_current(cx).number;
+        let null_color = SyntaxColors::for_current(cx).keyword;
         let theme = cx.theme();
         let has_fk = self.snapshot.cells.iter().any(|cell| cell.is_foreign_key);
         let shows_references = !self.references.is_empty() || (!self.references_ready && has_fk);

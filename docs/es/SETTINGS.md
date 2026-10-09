@@ -189,8 +189,9 @@ ventanas abiertas al guardar.
 ### Colores de sintaxis
 
 Los colores del resaltado de sintaxis del editor de código se pueden cambiar por
-rol: palabras clave, cadenas, números y NULL, comentarios, tipos, funciones,
-operadores y puntuación, identificadores, schemas y columnas. **Colores para** elige qué theme
+rol: palabras clave, cadenas, números, comentarios, tipos, funciones,
+operadores y puntuación, identificadores, schemas y columnas. `NULL` toma el
+color de las palabras clave. **Colores para** elige qué theme
 estás editando, Oscuro o Claro; cada theme guarda sus propios colores, y
 **Seguir al sistema** usa los colores del theme que resulte.
 

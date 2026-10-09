@@ -3740,7 +3740,7 @@ settings:
       role:
         keyword: "키워드"
         string: "문자열"
-        number: "숫자 및 NULL"
+        number: "숫자"
         comment: "주석"
         type: "타입"
         function: "함수"

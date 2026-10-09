@@ -228,7 +228,7 @@ fn render_fields(
     };
     let is_pending_delete = record.state.is_pending_delete();
     let null_value = CellValue::null();
-    let null_color = SyntaxColors::for_current(cx).number;
+    let null_color = SyntaxColors::for_current(cx).keyword;
 
     visible_range
         .map(|col_ix| {

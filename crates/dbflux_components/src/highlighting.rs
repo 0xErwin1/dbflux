@@ -128,6 +128,11 @@ const SQL_HIGHLIGHT_FIXES: &str = r#"
 ; form the grammar's `_integer` and `_decimal_number` accept.
 ((literal) @number
   (#match? @number "^[-+]?(0[xX][0-9A-Fa-f_]+|0[oO][0-7_]+|0[bB][01_]+|([0-9][0-9_]*[.]?[0-9_]*|[.][0-9][0-9_]*)([eE][-+]?[0-9][0-9_]*)?)$"))
+; A `NULL` value is a `literal` too, so it also took the string color, and
+; the grammar captures the bare keyword (`IS NULL`, `NOT NULL`) as a type.
+((literal) @keyword
+  (#match? @keyword "^[Nn][Uu][Ll][Ll]$"))
+(keyword_null) @keyword
 ; `conditional` has no style, so these had no color.
 [
   (keyword_case)
@@ -297,7 +302,7 @@ mod tests {
     #[test]
     fn sql_numbers_and_keywords_take_their_roles() {
         let roles = sql_roles(
-            "SELECT 1, 1.5, 1e3, 1_000, 0xFF, 0o77, 0b1010, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
+            "SELECT 1, 1.5, 1e3, 1_000, 0xFF, 0o77, 0b1010, '7', NULL FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
              CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);",
         );
         let role_of = |text: &str| {
@@ -311,8 +316,25 @@ mod tests {
             assert_eq!(role_of(number), Some("number"), "{number}");
         }
         assert_eq!(role_of("'7'"), Some("string"));
-        for keyword in ["CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
+        for keyword in ["NULL", "CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
             assert_eq!(role_of(keyword), Some("keyword"), "{keyword}");
+        }
+    }
+
+    #[test]
+    fn sql_null_takes_the_keyword_role_wherever_it_appears() {
+        let roles = sql_roles(
+            "SELECT NULL FROM t WHERE a IS NULL AND b = null;\n\
+             CREATE TABLE u (id integer NOT NULL, n text DEFAULT NULL);",
+        );
+        let nulls: Vec<_> = roles
+            .iter()
+            .filter(|(token, _)| token.eq_ignore_ascii_case("null"))
+            .collect();
+
+        assert_eq!(nulls.len(), 5, "{roles:?}");
+        for (token, role) in nulls {
+            assert_eq!(role, "keyword", "{token}");
         }
     }
 

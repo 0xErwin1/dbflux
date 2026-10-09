@@ -3740,7 +3740,7 @@ settings:
       role:
         keyword: "Keywords"
         string: "Strings"
-        number: "Numbers and NULL"
+        number: "Numbers"
         comment: "Comments"
         type: "Types"
         function: "Functions"

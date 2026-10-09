@@ -3740,7 +3740,7 @@ settings:
       role:
         keyword: "Palavras-chave"
         string: "Strings"
-        number: "Números e NULL"
+        number: "Números"
         comment: "Comentários"
         type: "Tipos"
         function: "Funções"
