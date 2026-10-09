@@ -226,6 +226,14 @@ mod tests {
 
     /// Renders one checkbox with its text drawn beside it and returns the
     /// checkbox's accessible name.
+    // Attribute on the function: the shared clippy.toml test exemptions do not
+    // cover `unwrap_in_result`, and the expects are fixture assertions, not
+    // Option plumbing that could become `?` without changing what the test
+    // checks.
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "in this test helper the expects are fixture assertions (lock poisoned, frame never rendered, checkbox missing); returning None instead would turn a broken fixture into a passing-looking assertion"
+    )]
     fn render_checkbox_name(named: bool, cx: &mut TestAppContext) -> Option<String> {
         cx.update(gpui_component::init);
 

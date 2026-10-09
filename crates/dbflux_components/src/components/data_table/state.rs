@@ -569,6 +569,10 @@ impl DataTableState {
     }
 
     pub fn set_column_width(&mut self, col: usize, width: f32, cx: &mut Context<Self>) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the branch is guarded by col < self.column_widths.len()"
+        )]
         if col < self.column_widths.len() {
             let min_width = super::theme::MIN_COLUMN_WIDTH;
             self.column_widths[col] = width.max(min_width);
@@ -898,11 +902,19 @@ impl DataTableState {
 
         // Columns start after the row-number column; scrolling to the first
         // column keeps the row numbers in view.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "scroll_to_column returns early above when col >= self.column_offsets.len(), and the else arm runs only when col != 0, so col is in bounds"
+        )]
         let col_left = if col == 0 {
             px(0.0)
         } else {
             ROW_NUMBER_WIDTH + px(self.column_offsets[col])
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "col is in bounds (early return above); the preceding bounds check makes column_offsets[col] safe, including the eager unwrap_or argument"
+        )]
         let col_right = ROW_NUMBER_WIDTH
             + px(*self
                 .column_offsets
@@ -1149,6 +1161,10 @@ impl DataTableState {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
                     if coord.col < insert_data.len() {
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "guarded by coord.col < insert_data.len()"
+                        )]
                         let cell = &insert_data[coord.col];
                         (
                             cell.edit_text(),

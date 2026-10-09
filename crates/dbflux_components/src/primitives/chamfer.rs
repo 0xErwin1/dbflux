@@ -843,7 +843,15 @@ fn paint_polygon(points: &[Point<Pixels>], color: Hsla, window: &mut Window) {
     }
 
     let mut builder = PathBuilder::fill();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the len < 3 early return above guarantees a first element"
+    )]
     builder.move_to(points[0]);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "len >= 3 here, so the 1.. slice is within the polygon"
+    )]
     for point in &points[1..] {
         builder.line_to(*point);
     }
@@ -867,7 +875,15 @@ fn stroke_closed_polygon(
     }
 
     let mut builder = PathBuilder::stroke(thickness);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the len < 3 early return above guarantees a first element"
+    )]
     builder.move_to(points[0]);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "len >= 3 here, so the 1.. slice is within the polygon"
+    )]
     for point in &points[1..] {
         builder.line_to(*point);
     }
@@ -968,6 +984,10 @@ fn clip_half_plane(
     let mut output = Vec::with_capacity(polygon.len() + 2);
 
     for (index, &current) in polygon.iter().enumerate() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the loop body only runs when polygon is non-empty, and index < len, so (index + len - 1) % len is a valid index into polygon"
+        )]
         let previous = polygon[(index + polygon.len() - 1) % polygon.len()];
 
         match (inside(previous), inside(current)) {

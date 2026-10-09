@@ -37,6 +37,10 @@ impl Loader {
         cx.spawn(async move |this, cx| {
             let loaded = work.await;
 
+            #[expect(
+                clippy::panic,
+                reason = "this integration test intentionally panics when the background result cannot update its released loader entity; the existing loud-failure policy is retained"
+            )]
             if let Err(error) = this.update(cx, |this, cx| {
                 this.loaded = loaded;
                 cx.notify();

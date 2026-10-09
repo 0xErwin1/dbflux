@@ -912,11 +912,16 @@ impl VimBinding {
             self.pending_keys.clear();
             cx.notify();
             if !key.command_modifier && !key.shift && key.key.len() == 1 {
+                #[expect(clippy::indexing_slicing, reason = "guarded by key.key.len() == 1")]
                 let letter = key.key.as_bytes()[0];
                 if letter.is_ascii_lowercase() {
                     let index = usize::from(letter - b'a');
                     if prefix == 'm' {
                         let cursor = self.editor_cursor(cx);
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "index is usize::from(letter - b'a') with letter an ASCII lowercase byte, and self.marks is a fixed [Option<_>; 26]"
+                        )]
                         self.input.update(cx, |state, _| {
                             if let Some(previous) = self.marks[index].take() {
                                 state.remove_edit_anchor(previous);
@@ -925,6 +930,10 @@ impl VimBinding {
                                 state.create_edit_anchor(cursor, EditAnchorAffinity::Right);
                         });
                     } else {
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "index is usize::from(letter - b'a') with letter an ASCII lowercase byte, and self.marks is a fixed [Option<_>; 26]"
+                        )]
                         let destination = {
                             let target = self.input.read(cx);
                             self.marks[index]

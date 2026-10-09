@@ -415,7 +415,7 @@ pub fn render_menu_container(children: Vec<impl IntoElement>, cx: &App) -> Div {
 }
 
 /// Render the popup panel container for a menu with a caller-controlled minimum width.
-pub fn render_menu_container_with_min_width(
+pub(super) fn render_menu_container_with_min_width(
     children: Vec<impl IntoElement>,
     min_width: Pixels,
     cx: &App,

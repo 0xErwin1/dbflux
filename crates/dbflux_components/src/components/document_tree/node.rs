@@ -191,7 +191,7 @@ impl TreeNode {
 }
 
 /// The fields of a document in `order` first, then every other field by key.
-pub fn ordered_fields<'a>(
+pub(super) fn ordered_fields<'a>(
     fields: &'a BTreeMap<String, Value>,
     order: Option<&[String]>,
 ) -> Vec<(&'a String, &'a Value)> {
@@ -211,7 +211,7 @@ pub fn ordered_fields<'a>(
 /// Up to `limit` fields that identify a document at a glance: the first short
 /// text or integer fields in document order, `_id` excluded. Rendered as
 /// `{ sku: "CAT-00335", name: "Walnut lamp 335" }`.
-pub fn identifying_summary(
+pub(super) fn identifying_summary(
     fields: &BTreeMap<String, Value>,
     order: Option<&[String]>,
     limit: usize,

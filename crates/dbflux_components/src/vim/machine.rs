@@ -94,6 +94,13 @@ pub struct VimKey<'a> {
 
 /// Maps a key to its command in `mode`. `None` means the key is not Vim's to
 /// handle and continues to the editor and the application keymap.
+// Attribute on the function: the indexing site is the byte access in the digit
+// match arm, nested inside the mode and key matches rather than being the
+// function's tail expression.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the digit arm guard requires digit.len() == 1, so byte index 0 always exists"
+)]
 pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
     if key.command_modifier {
         return None;
@@ -533,10 +540,22 @@ pub fn change_word_range_with_class(
     let first_class = word_class(chars.get(index)?.1, big);
     let mut remaining = count.max(1);
     while index < chars.len() && remaining > 0 {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the while condition checks index < chars.len() on every pass and chars is not mutated in this function"
+        )]
         let class = word_class(chars[index].1, big);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the while condition checks index < chars.len() on every pass and chars is not mutated in this function"
+        )]
         if matches!(chars[index].1, '\r' | '\n') {
             break;
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the loop condition checks index < chars.len() on every pass and chars is not mutated in this function"
+        )]
         while index < chars.len()
             && !matches!(chars[index].1, '\r' | '\n')
             && word_class(chars[index].1, big) == class
@@ -545,6 +564,10 @@ pub fn change_word_range_with_class(
         }
         remaining -= 1;
         if class != WordClass::Space && remaining > 0 {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the loop condition checks index < chars.len() on every pass and chars is not mutated in this function"
+            )]
             while index < chars.len()
                 && chars[index].1.is_whitespace()
                 && !matches!(chars[index].1, '\r' | '\n')
@@ -566,6 +589,12 @@ pub fn word_offsets(text: &Rope) -> Vec<(usize, char)> {
     text.to_string().char_indices().collect()
 }
 
+// Attribute on the function: the indexing sites span the initial clamp, the
+// class closure, and the Backward and End match arms.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "chars is non-empty (early return above) and never mutated; the initial partition_point index is clamped with saturating_sub so it stays below chars.len(), forward and End access is guarded by index < chars.len() checks, and Backward decrements are bounded by index > 0, so chars[index] stays in bounds across all arms"
+)]
 pub fn step_word(
     text: &Rope,
     chars: &[(usize, char)],
@@ -692,6 +721,10 @@ pub fn horizontal_operator_range(
     }
     let index = line.char_count_before(column);
     let columns: Vec<usize> = line.content.char_indices().map(|(at, _)| at).collect();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "last is clamped to columns.len() - 1 on a non-empty columns vec (the is_empty early return above), so columns[last] is in bounds and columns[last] is a valid byte offset into line.content; index comes from char_count_before(column), which callers pass from a cursor offset inside the line"
+    )]
     let (start, end) = if right {
         let last = index.saturating_add(count).min(columns.len() - 1);
         (

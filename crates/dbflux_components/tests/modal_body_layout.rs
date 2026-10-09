@@ -33,6 +33,12 @@ impl Render for Host {
 
 /// Opens the modal built by `open` in a fresh window and returns the bounds of
 /// each selector in `selectors`, in order.
+// Attribute on the function: this helper is not a `#[test]` fn, so the shared
+// clippy.toml test exemptions do not apply to it.
+#[expect(
+    clippy::panic,
+    reason = "a missing element here means the fixture failed to render the selector, and the test must fail loudly"
+)]
 fn render_modal(
     cx: &mut TestAppContext,
     open: impl FnOnce(&mut Window, &mut App) -> AnyView + 'static,
@@ -221,6 +227,12 @@ fn active_query_preview_and_elapsed_line_are_not_covered_by_the_footer(cx: &mut 
 }
 
 /// Height of the active-query preview text when the modal shows `sql`.
+// Attribute on the function: this helper is not a `#[test]` fn, so the shared
+// clippy.toml test exemptions do not apply to it.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "render_modal is called with exactly one selector above, so bounds holds exactly one element"
+)]
 fn active_query_preview_height(cx: &mut TestAppContext, sql: String) -> Pixels {
     let bounds = render_modal(
         cx,

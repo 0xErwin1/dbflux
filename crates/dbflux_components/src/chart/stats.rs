@@ -43,12 +43,20 @@ pub fn compute_series_stats(points: &[(f64, f64)]) -> Option<SeriesStats> {
     let min = ys.iter().cloned().fold(f64::INFINITY, f64::min);
     let max = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let avg = ys.iter().sum::<f64>() / n as f64;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "compute_series_stats returns None above when points is empty, so n >= 1 and n - 1 is the last index"
+    )]
     let last = ys[n - 1];
 
     // Sort a copy for percentile computation.
     let mut sorted = ys.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "n >= 1 here (empty input returned above) and the index is clamped with .min(n - 1)"
+    )]
     let percentile = |p: f64| -> f64 {
         let idx = ((p / 100.0) * (n as f64 - 1.0)).round() as usize;
         sorted[idx.min(n - 1)]
@@ -80,11 +88,19 @@ pub fn interpolate_y_at_x(points: &[(f64, f64)], target_x: f64) -> Option<f64> {
         return None;
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the is_empty check above guarantees points.len() >= 1, so index 0 is in bounds"
+    )]
     if target_x <= points[0].0 {
         return Some(points[0].1);
     }
 
     let last_idx = points.len() - 1;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "last_idx == points.len() - 1 on a non-empty slice, so it is the last index"
+    )]
     if target_x >= points[last_idx].0 {
         return Some(points[last_idx].1);
     }
@@ -93,7 +109,15 @@ pub fn interpolate_y_at_x(points: &[(f64, f64)], target_x: f64) -> Option<f64> {
     let insert = points.partition_point(|p| p.0 <= target_x);
 
     // `insert` is in range [1, last_idx] because we handled the edge cases above.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "insert >= 1 because target_x > points[0].0 at this point (the <= case returned above), so insert - 1 is in bounds; this assumes a finite target_x — the engine filters non-finite data before interpolation"
+    )]
     let lo = points[insert - 1];
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "insert <= last_idx because target_x < points[last_idx].0 excludes the last element from partition_point; this also assumes a finite target_x (the engine filters non-finite data before interpolation)"
+    )]
     let hi = points[insert];
 
     let span = hi.0 - lo.0;
