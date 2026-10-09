@@ -644,7 +644,7 @@ impl SyntaxColors {
     pub fn light() -> Self {
         Self {
             keyword: rgb(0x702963).into(),
-            string: rgb(0xCAC580).into(),
+            string: rgb(0x736F30).into(),
             number: rgb(0x6B4FD8).into(),
             comment: rgb(0x6B6572).into(),
             type_name: rgb(0x1F5FD1).into(),
