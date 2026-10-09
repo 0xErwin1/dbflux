@@ -8,12 +8,20 @@
 
 use std::ffi::OsStr;
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// Only the Unix-only provider-spawn test needs these; importing them
+// unconditionally would leave them unused on Windows, where that test is
+// compiled out.
+#[cfg(unix)]
+use std::time::Duration;
 
 use dbflux_ipc::{
     APP_CONTROL_AUTH_TOKEN_ENV, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_AUTH_TOKEN_ENV,
-    IpcServiceLaunchConfig, RpcAuthProvider, init_process_auth_tokens, process_auth_token,
+    init_process_auth_tokens, process_auth_token,
 };
+#[cfg(unix)]
+use dbflux_ipc::{IpcServiceLaunchConfig, RpcAuthProvider};
 
 const MARKER_VAR: &str = "DBFLUX_IPC_AUTH_TOKEN_ISOLATED_FIXTURE";
 
