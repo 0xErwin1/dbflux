@@ -667,6 +667,10 @@ impl ModalAddPanelPicker {
             .iter()
             .position(|tab| *tab == self.active_tab)
             .unwrap_or(0);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`visible_tabs_for` always returns at least the Saved and Query tabs, and `rem_euclid` over the positive `tabs.len()` yields an index in `[0, tabs.len())`"
+        )]
         let next = tabs[(current as isize + delta).rem_euclid(tabs.len() as isize) as usize];
 
         self.set_active_tab(next, cx);
