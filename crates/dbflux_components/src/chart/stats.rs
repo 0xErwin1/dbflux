@@ -111,12 +111,12 @@ pub fn interpolate_y_at_x(points: &[(f64, f64)], target_x: f64) -> Option<f64> {
     // `insert` is in range [1, last_idx] because we handled the edge cases above.
     #[expect(
         clippy::indexing_slicing,
-        reason = "insert >= 1 because target_x > points[0].0 at this point (the <= case returned above), so insert - 1 is in bounds; this assumes a finite target_x — the engine filters non-finite data before interpolation"
+        reason = "insert >= 1 because target_x > points[0].0 at this point (the <= case returned above), so insert - 1 is in bounds; a non-finite target_x is an unchecked caller expectation here and would break that reasoning"
     )]
     let lo = points[insert - 1];
     #[expect(
         clippy::indexing_slicing,
-        reason = "insert <= last_idx because target_x < points[last_idx].0 excludes the last element from partition_point; this also assumes a finite target_x (the engine filters non-finite data before interpolation)"
+        reason = "insert <= last_idx because target_x < points[last_idx].0 excludes the last element from partition_point; a non-finite target_x is likewise unchecked by this function"
     )]
     let hi = points[insert];
 
