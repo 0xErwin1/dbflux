@@ -854,6 +854,9 @@ pub struct DataGridPanel {
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
     limited_rows: LimitedRows,
+    /// Bumped by every `set_query_result`, so a host's asynchronous answer
+    /// about one result is not applied to the next.
+    result_generation: u64,
 }
 
 /// Pending mutation execution — holds the spec and options while the
@@ -1661,6 +1664,7 @@ impl DataGridPanel {
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
             limited_rows: LimitedRows::default(),
+            result_generation: 0,
         };
 
         panel.follow_vim_setting(cx);
@@ -2924,11 +2928,18 @@ impl DataGridPanel {
             return;
         }
 
-        let mut combined = (**result).clone();
-        let truncated = rerun.rows_truncated();
-        let loaded = combined.rows.len();
-        combined.rows.extend(rerun.rows.into_iter().skip(loaded));
-        combined.set_rows_truncated(truncated);
+        // Rows that changed between the two runs shift the rerun, so its rows
+        // past the loaded count are not the next ones; show the rerun whole.
+        let loaded = result.rows.len();
+        let combined = if rerun.rows.get(..loaded) == Some(result.rows.as_slice()) {
+            let mut combined = (**result).clone();
+            let truncated = rerun.rows_truncated();
+            combined.rows.extend(rerun.rows.into_iter().skip(loaded));
+            combined.set_rows_truncated(truncated);
+            combined
+        } else {
+            rerun
+        };
         *result = Arc::new(combined.clone());
 
         self.grid_table.reload = TableReload::Preserve;
@@ -2943,6 +2954,12 @@ impl DataGridPanel {
             table_state.update(cx, |state, _cx| state.forget_reached_end());
         }
         cx.notify();
+    }
+
+    /// Identifies the current query result, for a host to check that an
+    /// asynchronous answer still belongs to it.
+    pub(crate) fn result_generation(&self) -> u64 {
+        self.result_generation
     }
 
     /// The query text behind a query result, for a host re-running it.
@@ -2975,6 +2992,7 @@ impl DataGridPanel {
             profile_id,
         };
         self.limited_rows = LimitedRows::default();
+        self.result_generation += 1;
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         // The new result may have a different shape, so the sort column index

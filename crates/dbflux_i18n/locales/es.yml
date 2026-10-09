@@ -1358,6 +1358,7 @@ document:
       result_tab_title: "Resultado %{index}"
       count_rows_failed: No se pudieron contar las filas de la consulta
       next_rows_failed: "No se pudieron cargar más filas de la consulta"
+      load_all_rows_context_changed: "La conexión o la base de datos cambió desde que se obtuvo este resultado. Vuelve a ejecutar la consulta para cargar todas las filas."
       error:
         select_source: Selecciona al menos un origen
         start_time_required: La hora de inicio es obligatoria

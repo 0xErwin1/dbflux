@@ -387,6 +387,8 @@ impl DataTableState {
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
+        // A new row set has its own end, even at the same row count.
+        self.reached_end_rows = None;
 
         match swap {
             ModelSwap::KeepCursor => self.clamp_selection(),
@@ -1856,6 +1858,18 @@ mod tests {
         window.update(|_, app| state.update(app, |s, _| s.forget_reached_end()));
         report(window);
         assert_eq!(reports.get(), 2, "a forgotten end is reported again");
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.set_model(two_row_model(), super::ModelSwap::KeepCursor, cx)
+            })
+        });
+        report(window);
+        assert_eq!(
+            reports.get(),
+            3,
+            "a new model of the same size has its own end"
+        );
     }
 
     /// Negative: start_editing on a column in readonly_columns returns false.

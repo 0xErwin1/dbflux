@@ -324,6 +324,30 @@ mod tests {
         });
     }
 
+    /// A rerun whose first rows differ from the loaded ones replaces them,
+    /// rather than appending rows that shifted.
+    #[gpui::test]
+    fn next_rows_replace_the_result_when_the_prefix_changed(cx: &mut TestAppContext) {
+        let (panel, window) = rendered_result(cx);
+
+        let mut rerun = people();
+        rerun.rows.insert(
+            0,
+            vec![Value::Text("0".to_string()), Value::Text("Ada".to_string())],
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.append_next_rows(rerun, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(panel.loaded_row_count(), people().rows.len() + 1);
+            assert_eq!(names(panel).first().map(String::as_str), Some("Ada"));
+        });
+    }
+
     #[gpui::test]
     fn search_keeps_only_the_rows_with_a_matching_cell(cx: &mut TestAppContext) {
         let (panel, window) = rendered_result(cx);

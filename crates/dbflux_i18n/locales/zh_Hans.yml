@@ -1358,6 +1358,7 @@ document:
       result_tab_title: "结果 %{index}"
       count_rows_failed: 无法统计查询的行数
       next_rows_failed: "无法加载查询的更多行"
+      load_all_rows_context_changed: "此结果运行后连接或数据库已更改。请重新运行查询以加载所有行。"
       error:
         select_source: 请至少选择一个来源
         start_time_required: 需要开始时间
