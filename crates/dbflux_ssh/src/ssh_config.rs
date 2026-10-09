@@ -18,14 +18,21 @@
 //! - every file (the root config and each included file) starts with the
 //!   block state **active**: top-level directives before the first
 //!   `Host`/`Match` apply to every alias;
-//! - `Host` patterns match **case-sensitively**; `Match host` / `Match user`
-//!   match case-insensitively, like OpenSSH;
+//! - `Host` patterns match **case-sensitively**; `Match host` matches
+//!   case-insensitively while `Match user` matches **case-sensitively** —
+//!   the two conditions genuinely differ, because that is what OpenSSH
+//!   itself does;
 //! - `Include` is processed at its position, unconditionally. The included
 //!   file is its own nested scope: it inherits the enclosing block state,
 //!   its own `Host`/`Match` lines evaluate against the alias, and when the
 //!   included file ends the enclosing file's state is restored. An `Include`
 //!   inside an inactive block is still read, but with OpenSSH's `NEVERMATCH`
 //!   behaviour: no block inside it can ever become active;
+//! - an `Include` that matched but could not be read is **fatal** for
+//!   `resolve` / `resolve_with_local_user`, like OpenSSH aborting the whole
+//!   file: resolving past an unreadable include could dial directly where the
+//!   unreadable file declared a proxy (S5). `hosts()` never fails; it keeps
+//!   the other aliases and the diagnostic is recorded for the picker;
 //! - the value of `HostName`, `User`, `Port` and `IdentityFile` is the first
 //!   whitespace-delimited token (quotes respected); the rest of the line,
 //!   including trailing comments, is ignored. `ProxyJump` and `ProxyCommand`
@@ -111,7 +118,9 @@ pub enum SshConfigError {
     },
     /// No `Host` or `Match` block matched the alias.
     UnknownHost { alias: String },
-    /// The config file exists but could not be read.
+    /// A config file (the root config or an included file that matched an
+    /// `Include`) exists but could not be read. For an included file this is
+    /// fatal for `resolve` (S5, fail closed).
     Read { path: PathBuf, message: String },
 }
 
@@ -144,6 +153,9 @@ impl std::error::Error for SshConfigError {}
 pub struct SshConfigFile {
     directives: Vec<Directive>,
     diagnostics: Vec<String>,
+    /// First included file that matched an `Include` but could not be read.
+    /// Fatal for `resolve` (S5); `hosts()` only surfaces the diagnostic.
+    unreadable_include: Option<(PathBuf, String)>,
 }
 
 impl SshConfigFile {
@@ -206,6 +218,7 @@ impl SshConfigFile {
             home,
             directives: Vec::new(),
             diagnostics: Vec::new(),
+            unreadable_include: None,
             bytes_read: text.len() as u64,
             depth: 0,
         };
@@ -219,12 +232,20 @@ impl SshConfigFile {
         Self {
             directives: parser.directives,
             diagnostics: parser.diagnostics,
+            unreadable_include: parser.unreadable_include,
         }
     }
 
     /// Concrete, pickable hosts in file order, deduplicated by alias (first
     /// occurrence wins). Patterns containing `*` or `?` are omitted (A5), but
     /// they still participate in resolution. Never fails.
+    ///
+    /// Aliases that no `Host`/`Match` block can ever match — for example one
+    /// reachable only through an `Include` inside an inactive block — are
+    /// omitted: the picker must not offer an alias whose connection would
+    /// then fail. Aliases that resolve to an unsupported directive stay
+    /// listed and marked (S5). An unreadable include is not fatal here: the
+    /// remaining aliases stay listed and the diagnostic is recorded.
     ///
     /// `home` is the home directory used to expand a leading `~` and `%d`
     /// inside `IdentityFile`. When no effective `User` is set, `%r` is left
@@ -237,6 +258,12 @@ impl SshConfigFile {
             .into_iter()
             .map(|alias| {
                 let state = self.resolve_state_with_local_user(&alias, "");
+                (alias, state)
+            })
+            // An alias no block can ever match is not pickable: its
+            // connection would fail with "was not found".
+            .filter(|(_, state)| state.matched)
+            .map(|(alias, state)| {
                 let host_name = state.host_name.clone().unwrap_or_else(|| alias.clone());
                 let identity_file = state
                     .identity_file
@@ -271,6 +298,15 @@ impl SshConfigFile {
         local_user: &str,
         home: &Path,
     ) -> Result<ResolvedHost, SshConfigError> {
+        if let Some((path, message)) = &self.unreadable_include {
+            // S5, fail closed: OpenSSH aborts the whole file when an included
+            // file cannot be read. Resolving anyway could dial directly where
+            // the unreadable file declared a proxy.
+            return Err(SshConfigError::Read {
+                path: path.clone(),
+                message: message.clone(),
+            });
+        }
         let state = self.resolve_state_with_local_user(alias, local_user);
         if !state.matched {
             return Err(SshConfigError::UnknownHost {
@@ -359,8 +395,8 @@ impl SshConfigFile {
                         *active = false;
                         continue;
                     }
-                    // `Host` patterns are case-sensitive; `Match host` /
-                    // `Match user` below stay case-insensitive, like OpenSSH.
+                    // `Host` patterns and `Match user` are case-sensitive;
+                    // `Match host` below stays case-insensitive, like OpenSSH.
                     *active = host_patterns_match(patterns, alias);
                     state.matched |= *active;
                 }
@@ -372,14 +408,14 @@ impl SshConfigFile {
                     // `Match host` sees the host name in effect so far, `Match
                     // user` the user in effect or the local-user fallback (A6).
                     let host_in_effect = state.host_name.as_deref().unwrap_or(alias).to_lowercase();
-                    let user_in_effect = state.user.as_deref().unwrap_or(local_user).to_lowercase();
+                    let user_in_effect = state.user.as_deref().unwrap_or(local_user);
                     *active = conditions.iter().all(|condition| match condition {
                         MatchCondition::All => true,
                         MatchCondition::Host(patterns) => {
-                            pattern_list_matches(patterns, &host_in_effect)
+                            pattern_list_matches(patterns, &host_in_effect, true)
                         }
                         MatchCondition::User(patterns) => {
-                            pattern_list_matches(patterns, &user_in_effect)
+                            pattern_list_matches(patterns, user_in_effect, false)
                         }
                         MatchCondition::Never => false,
                     });
@@ -523,6 +559,7 @@ struct Parser<'a> {
     home: &'a Path,
     directives: Vec<Directive>,
     diagnostics: Vec<String>,
+    unreadable_include: Option<(PathBuf, String)>,
     bytes_read: u64,
     depth: usize,
 }
@@ -747,6 +784,17 @@ impl<'a> Parser<'a> {
         Ok(matches)
     }
 
+    /// An included file that matched but cannot be read is recorded twice:
+    /// as a diagnostic for the picker, and as the fatal condition `resolve`
+    /// returns (S5 — OpenSSH aborts the whole file).
+    fn record_unreadable_include(&mut self, path: &Path, message: &str) {
+        self.diagnostics
+            .push(format!("cannot read include {}: {message}", path.display()));
+        if self.unreadable_include.is_none() {
+            self.unreadable_include = Some((path.to_path_buf(), message.to_string()));
+        }
+    }
+
     fn read_include(&mut self, path: PathBuf) {
         if self.depth >= MAX_INCLUDE_DEPTH {
             self.diagnostics.push(format!(
@@ -758,8 +806,7 @@ impl<'a> Parser<'a> {
         let size = match fs::metadata(&path) {
             Ok(metadata) => metadata.len(),
             Err(error) => {
-                self.diagnostics
-                    .push(format!("cannot read include {}: {error}", path.display()));
+                self.record_unreadable_include(&path, &error.to_string());
                 return;
             }
         };
@@ -773,8 +820,7 @@ impl<'a> Parser<'a> {
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) => {
-                self.diagnostics
-                    .push(format!("cannot read include {}: {error}", path.display()));
+                self.record_unreadable_include(&path, &error.to_string());
                 return;
             }
         };
@@ -885,21 +931,32 @@ fn pattern_list(argument: &str) -> Vec<String> {
 }
 
 /// A pattern list matches when no negated pattern matches and at least one
-/// positive pattern matches. Matching is case-insensitive, like OpenSSH's
-/// `match_pattern_list` — this is the `Match host` / `Match user` path.
-fn pattern_list_matches(patterns: &[String], candidate: &str) -> bool {
+/// positive pattern matches. `case_insensitive` is how OpenSSH treats host
+/// names in `Match host`; `Match user` compares case-sensitively, so the
+/// caller passes `false` there.
+fn pattern_list_matches(patterns: &[String], candidate: &str, case_insensitive: bool) -> bool {
     let mut has_positive = false;
     for pattern in patterns {
-        let lowered = pattern.to_lowercase();
-        if let Some(negated) = lowered.strip_prefix('!') {
-            if glob_matches(negated, candidate) {
-                return false;
+        let matched = match pattern.strip_prefix('!') {
+            Some(negated) => {
+                if match_one_pattern(negated, candidate, case_insensitive) {
+                    return false;
+                }
+                continue;
             }
-        } else if glob_matches(&lowered, candidate) {
-            has_positive = true;
-        }
+            None => match_one_pattern(pattern, candidate, case_insensitive),
+        };
+        has_positive |= matched;
     }
     has_positive
+}
+
+fn match_one_pattern(pattern: &str, candidate: &str, case_insensitive: bool) -> bool {
+    if case_insensitive {
+        glob_matches(&pattern.to_lowercase(), &candidate.to_lowercase())
+    } else {
+        glob_matches(pattern, candidate)
+    }
 }
 
 /// `Host` pattern matching, case-sensitive, like OpenSSH's `oHost` handler
@@ -1587,5 +1644,110 @@ mod tests {
             tilde.identity_file,
             Some(isolated_home.join("only_in_fixture"))
         );
+    }
+
+    #[test]
+    fn nested_include_after_a_non_matching_host_cannot_introduce_a_proxy() {
+        // Round-1 regression lock: `b.conf` is only ever reached through a
+        // `Host nomatch` block, so its `Host prod` must never activate for the
+        // real `prod` alias and its `ProxyJump` must never apply.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.example.com\n  Include a.conf\n",
+        );
+        fixture.write(
+            "ssh/a.conf",
+            "Host nomatch\n  HostName x.example.com\n  Include b.conf\n",
+        );
+        fixture.write("ssh/b.conf", "Host prod\n  ProxyJump bastion\n");
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "prod.example.com");
+    }
+
+    #[test]
+    fn match_user_is_case_sensitive_like_openssh() {
+        // Oracle (local user `iperez`): `Match user IPEREZ` does not apply,
+        // while `Match host` is case-insensitive — the two conditions differ
+        // because that is what OpenSSH itself does. The `Host anyhost` block
+        // makes the alias resolvable at all; if the `Match user` block were
+        // (wrongly) applied, first-value-wins would report port 2299.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Match user IPEREZ\n  Port 2299\n\nHost anyhost\n  HostName anyhost.example.com\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("anyhost", "iperez", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.port, 22);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_include_glob_entry_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.example.com\n  Include conf.d/*.conf\n",
+        );
+        fixture.write("ssh/conf.d/a.conf", "User a_user\n");
+        // `b.conf` sorts after `a.conf` and carries the proxy: an unreadable
+        // entry must fail resolution instead of resolving without it (S5).
+        fixture.write("ssh/conf.d/b.conf", "ProxyJump bastion\n");
+        let b_conf = fixture.dir.path().join("ssh/conf.d/b.conf");
+        fs::set_permissions(&b_conf, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // On a machine running the tests as root the chmod does not deny the
+        // read; skip with a note rather than reporting a false pass.
+        if fs::read_to_string(&b_conf).is_ok() {
+            eprintln!(
+                "skipping unreadable-include assertion: running as root, chmod 000 did not deny the read"
+            );
+            return;
+        }
+
+        let config = fixture.load();
+        let error = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .expect_err("an include that matched but cannot be read must fail resolution");
+        match error {
+            SshConfigError::Read { path, .. } => {
+                assert_eq!(path, b_conf);
+            }
+            other => panic!("expected SshConfigError::Read, got: {other:?}"),
+        }
+        assert!(
+            config.diagnostics().iter().any(|d| d.contains("b.conf")),
+            "the unreadable include must still be reported for the picker: {:?}",
+            config.diagnostics()
+        );
+    }
+
+    #[test]
+    fn hosts_does_not_offer_an_alias_that_cannot_resolve() {
+        // `secret` sits in a scope that can never match (the `Include` is
+        // reached from a `Host other` block), so the picker must not offer it:
+        // selecting it would only fail with "was not found".
+        let fixture = Fixture::new();
+        let include = fixture.dir.path().join("inc.conf");
+        fixture.write("inc.conf", "Host secret\n  HostName secret.example.com\n");
+        fixture.write(
+            "ssh/config",
+            &format!("Host other\n  Include {}\n", include.display()),
+        );
+        let config = fixture.load();
+        let aliases: Vec<String> = config
+            .hosts(&fixture.home())
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert!(!aliases.contains(&"secret".to_string()), "got: {aliases:?}");
+        assert!(aliases.contains(&"other".to_string()), "got: {aliases:?}");
     }
 }

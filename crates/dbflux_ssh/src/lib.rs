@@ -1137,6 +1137,34 @@ mod resolve_for_dial_tests {
 
         assert!(error.to_string().contains("ghost"));
     }
+
+    /// Round-1 regression lock: a hand-edited or imported whitespace-only
+    /// alias must fail closed and the error must never leak a stored value or
+    /// a `Host *` catch-all value (A7).
+    #[test]
+    fn empty_alias_never_falls_back_to_stored_values() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host *\n  HostName catchall.example.com\n");
+        let config = SshTunnelConfig {
+            host: "stored.example.com".to_string(),
+            port: 5433,
+            user: "storeduser".to_string(),
+            ..aliased_tunnel("   ", None)
+        };
+
+        let message = resolve_for_dial_in(&config, "alice", &fixture.home())
+            .expect_err("an empty alias must fail closed")
+            .to_string();
+
+        for forbidden in [
+            "stored.example.com",
+            "storeduser",
+            "5433",
+            "catchall.example.com",
+        ] {
+            assert!(!message.contains(forbidden), "got: {message}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
