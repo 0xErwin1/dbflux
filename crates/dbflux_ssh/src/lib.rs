@@ -32,6 +32,98 @@ pub use ssh_config::{
     ResolvedHost, SshConfigError, SshConfigFile, SshConfigHost, UnsupportedDirective,
 };
 
+/// Resolves the SSH config alias a tunnel references, if any, into the parameters to dial.
+///
+/// A tunnel with no alias is returned unchanged and no SSH config is read. A resolution
+/// failure is an error: the stored host, port and user are never used as a fallback (A7).
+pub fn resolve_for_dial(config: &SshTunnelConfig) -> Result<SshTunnelConfig, DbError> {
+    let Some(alias) = config.ssh_config_host.as_deref() else {
+        let mut resolved = config.clone();
+        resolved.ssh_config_host = None;
+        return Ok(resolved);
+    };
+    let Some(home) = dirs::home_dir() else {
+        return Err(DbError::connection_failed(format!(
+            "No home directory available to resolve SSH config host '{alias}'"
+        )));
+    };
+    resolve_for_dial_in(config, &ssh_config::local_user_from_env(), &home)
+}
+
+/// Same as [`resolve_for_dial`] with the home directory and local user injected, so callers
+/// and tests never depend on the environment.
+pub fn resolve_for_dial_in(
+    config: &SshTunnelConfig,
+    local_user: &str,
+    home: &Path,
+) -> Result<SshTunnelConfig, DbError> {
+    let Some(alias) = config.ssh_config_host.as_deref() else {
+        let mut resolved = config.clone();
+        resolved.ssh_config_host = None;
+        return Ok(resolved);
+    };
+    let config_dir = home.join(".ssh");
+    let config_path = config_dir.join("config");
+    let file = SshConfigFile::load(&config_dir).map_err(|error| match error {
+        SshConfigError::Read { path, message } => DbError::connection_failed(format!(
+            "Failed to read SSH config {}: {message}",
+            path.display()
+        )),
+        other => DbError::connection_failed(format!(
+            "Failed to read SSH config {}: {other}",
+            config_path.display()
+        )),
+    })?;
+    let resolved = file
+        .resolve_with_local_user(alias, local_user, home)
+        .map_err(|error| match error {
+            SshConfigError::UnknownHost { alias } => DbError::connection_failed(format!(
+                "SSH config host '{alias}' was not found in {}",
+                config_path.display()
+            )),
+            SshConfigError::UnsupportedHost { alias, directive } => {
+                DbError::connection_failed(format!(
+                    "SSH config host '{alias}' uses the {directive} directive, which DBFlux's \
+                     SSH tunnel does not support"
+                ))
+            }
+            SshConfigError::Read { path, message } => DbError::connection_failed(format!(
+                "Failed to read SSH config {}: {message}",
+                path.display()
+            )),
+        })?;
+    Ok(SshTunnelConfig {
+        host: resolved.host_name,
+        port: resolved.port,
+        user: resolved.user.unwrap_or_else(|| local_user.to_string()),
+        auth_method: resolve_auth_method(&config.auth_method, resolved.identity_file),
+        ssh_config_host: None,
+    })
+}
+
+/// Auth precedence for a referenced host (A2): a `Password` profile stays
+/// `Password` because the user chose it; a `PrivateKey` profile with a
+/// non-empty `key_path` keeps that path; an empty or absent profile path
+/// takes the config's `IdentityFile`, or stays `None` so the SSH agent and
+/// the default keys are tried (S3).
+fn resolve_auth_method(
+    auth_method: &SshAuthMethod,
+    identity_file: Option<PathBuf>,
+) -> SshAuthMethod {
+    match auth_method {
+        SshAuthMethod::Password => SshAuthMethod::Password,
+        SshAuthMethod::PrivateKey { key_path } => {
+            let profile_path = key_path
+                .as_ref()
+                .filter(|path| !path.as_os_str().is_empty())
+                .cloned();
+            SshAuthMethod::PrivateKey {
+                key_path: profile_path.or(identity_file),
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Session passphrase vault
 // ---------------------------------------------------------------------------
@@ -193,6 +285,12 @@ pub fn establish_session(
     secret: Option<&str>,
 ) -> Result<Session, DbError> {
     let total_start = std::time::Instant::now();
+
+    // Resolve the SSH config alias first (feature #837): every dial below —
+    // TCP connect, handshake, TOFU host-key step (keyed on the resolved
+    // host and port, A1) and authentication — uses the resolved target.
+    let resolved = resolve_for_dial(config)?;
+    let config = &resolved;
 
     log::info!(
         "[SSH] Phase 1/3: TCP connect to {}:{}",
@@ -738,6 +836,281 @@ fn run_ssh_tunnel_loop(
     }
 
     log::info!("[SSH] Tunnel loop shutting down");
+}
+
+// ---------------------------------------------------------------------------
+// Tests — resolve_for_dial (feature #837, T3)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod resolve_for_dial_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Fixture rooted at a `TempDir`: `dir/.ssh/config` is the SSH config and
+    /// `dir` doubles as the home directory handed to the resolver. Nothing
+    /// outside the temp directory is ever touched (S7).
+    struct Fixture {
+        dir: TempDir,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                dir: TempDir::new().unwrap(),
+            }
+        }
+
+        fn home(&self) -> PathBuf {
+            self.dir.path().to_path_buf()
+        }
+
+        fn write_ssh_config(&self, content: &str) {
+            let path = self.dir.path().join(".ssh").join("config");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
+        }
+    }
+
+    fn aliased_tunnel(alias: &str, key_path: Option<PathBuf>) -> SshTunnelConfig {
+        SshTunnelConfig {
+            host: String::new(),
+            port: 22,
+            user: String::new(),
+            auth_method: SshAuthMethod::PrivateKey { key_path },
+            ssh_config_host: Some(alias.to_string()),
+        }
+    }
+
+    fn key_path_of(auth: &SshAuthMethod) -> Option<&Path> {
+        match auth {
+            SshAuthMethod::PrivateKey { key_path } => key_path.as_deref(),
+            SshAuthMethod::Password => None,
+        }
+    }
+
+    #[test]
+    fn no_alias_returns_the_input_unchanged_without_reading_ssh_config() {
+        // The home directory has no `.ssh` directory at all: the no-alias path
+        // must not touch it (and must not fail because it is absent).
+        let home = TempDir::new().unwrap();
+        let config = SshTunnelConfig {
+            host: "db.internal.example.com".to_string(),
+            port: 5433,
+            user: "manual".to_string(),
+            auth_method: SshAuthMethod::PrivateKey {
+                key_path: Some(PathBuf::from("/keys/id_ed25519")),
+            },
+            ssh_config_host: None,
+        };
+
+        let resolved = resolve_for_dial_in(&config, "alice", home.path()).unwrap();
+
+        assert_eq!(resolved.host, "db.internal.example.com");
+        assert_eq!(resolved.port, 5433);
+        assert_eq!(resolved.user, "manual");
+        assert_eq!(
+            resolved.auth_method,
+            SshAuthMethod::PrivateKey {
+                key_path: Some(PathBuf::from("/keys/id_ed25519"))
+            }
+        );
+        assert_eq!(resolved.ssh_config_host, None);
+    }
+
+    #[test]
+    fn alias_resolves_host_port_and_user_and_clears_the_alias() {
+        let fixture = Fixture::new();
+        fixture
+            .write_ssh_config("Host web\n  HostName web.example.com\n  User deploy\n  Port 2222\n");
+        let config = aliased_tunnel("web", None);
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(resolved.host, "web.example.com");
+        assert_eq!(resolved.port, 2222);
+        assert_eq!(resolved.user, "deploy");
+        assert_eq!(resolved.ssh_config_host, None);
+    }
+
+    #[test]
+    fn config_without_user_falls_back_to_the_injected_local_user() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host web\n  HostName web.example.com\n");
+        let config = aliased_tunnel("web", None);
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(resolved.user, "alice");
+    }
+
+    #[test]
+    fn unknown_alias_error_names_the_alias_not_the_stored_host() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host web\n  HostName web.example.com\n");
+        let config = aliased_tunnel("ghost", None);
+
+        let error = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap_err();
+        let message = error.to_string();
+
+        // The stored host is empty, so a dial attempt could not have produced
+        // this message: it must come from resolution, naming the alias.
+        assert!(message.contains("ghost"), "got: {message}");
+        assert!(message.contains("was not found"), "got: {message}");
+        assert!(
+            message.contains(fixture.home().join(".ssh/config").to_str().unwrap()),
+            "got: {message}"
+        );
+        assert!(!message.contains("Failed to connect"), "got: {message}");
+    }
+
+    #[test]
+    fn proxy_jump_error_names_the_directive_and_never_dials() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host via\n  HostName bastion.example.com\n  ProxyJump jump.example.com\n",
+        );
+        let config = aliased_tunnel("via", None);
+
+        let message = resolve_for_dial_in(&config, "alice", &fixture.home())
+            .unwrap_err()
+            .to_string();
+
+        assert!(message.contains("ProxyJump"), "got: {message}");
+        assert!(message.contains("does not support"), "got: {message}");
+        assert!(!message.contains("Failed to connect"), "got: {message}");
+    }
+
+    #[test]
+    fn proxy_command_error_names_the_directive_and_never_dials() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host viacmd\n  HostName bastion.example.com\n  ProxyCommand nc -w 1 %h %p\n",
+        );
+        let config = aliased_tunnel("viacmd", None);
+
+        let message = resolve_for_dial_in(&config, "alice", &fixture.home())
+            .unwrap_err()
+            .to_string();
+
+        assert!(message.contains("ProxyCommand"), "got: {message}");
+        assert!(message.contains("does not support"), "got: {message}");
+        assert!(!message.contains("Failed to connect"), "got: {message}");
+    }
+
+    #[test]
+    fn password_auth_survives_a_config_identity_file() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host web\n  HostName web.example.com\n  IdentityFile ~/id_ed25519\n",
+        );
+        let config = SshTunnelConfig {
+            auth_method: SshAuthMethod::Password,
+            ..aliased_tunnel("web", None)
+        };
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(resolved.auth_method, SshAuthMethod::Password);
+    }
+
+    #[test]
+    fn non_empty_profile_key_path_wins_over_the_config_identity_file() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host web\n  HostName web.example.com\n  IdentityFile ~/config_key\n",
+        );
+        let config = aliased_tunnel("web", Some(PathBuf::from("/profile_key")));
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(
+            key_path_of(&resolved.auth_method),
+            Some(Path::new("/profile_key"))
+        );
+    }
+
+    #[test]
+    fn empty_profile_key_path_takes_the_config_identity_file() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host web\n  HostName web.example.com\n  IdentityFile ~/config_key\n",
+        );
+        let config = aliased_tunnel("web", Some(PathBuf::new()));
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(
+            key_path_of(&resolved.auth_method),
+            Some(&*fixture.home().join("config_key"))
+        );
+    }
+
+    #[test]
+    fn no_identity_file_anywhere_leaves_key_path_none_for_the_agent() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host web\n  HostName web.example.com\n");
+        let config = aliased_tunnel("web", None);
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(key_path_of(&resolved.auth_method), None);
+    }
+
+    #[test]
+    fn identity_file_tokens_expand_into_the_resolved_auth_method() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host web\n  HostName web.example.com\n  User alice\n  IdentityFile ~/keys/%h_%r_%d\n",
+        );
+        let config = aliased_tunnel("web", None);
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        let home = fixture.home();
+        assert_eq!(
+            key_path_of(&resolved.auth_method),
+            Some(&*home.join(format!("keys/web.example.com_alice_{}", home.display())) as &Path)
+        );
+    }
+
+    #[test]
+    fn unreadable_config_error_names_the_path_and_the_underlying_message() {
+        let fixture = Fixture::new();
+        // `.ssh/config` is a directory, so reading it fails with a non-NotFound
+        // error instead of yielding the empty-config default.
+        fs::create_dir_all(fixture.home().join(".ssh").join("config")).unwrap();
+        let config = aliased_tunnel("web", None);
+
+        let message = resolve_for_dial_in(&config, "alice", &fixture.home())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            message.contains(fixture.home().join(".ssh/config").to_str().unwrap()),
+            "got: {message}"
+        );
+    }
+
+    /// S5's fail-closed requirement, proven at the seam `establish_session`
+    /// itself calls first. A direct `establish_session` call would have to read
+    /// `dirs::home_dir()` (its alias path does), which S7 forbids in tests, so
+    /// the env-dependent outer function is exercised through its injected
+    /// core here: `establish_session` starts with `resolve_for_dial(config)?`,
+    /// so this error is returned before any `TcpStream::connect`.
+    #[test]
+    fn unresolved_alias_fails_closed_before_any_tcp_connect_at_the_session_seam() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host web\n  HostName web.example.com\n");
+        let config = aliased_tunnel("ghost", None);
+
+        let error = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap_err();
+
+        assert!(error.to_string().contains("ghost"));
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -830,7 +830,9 @@ fn expand_tokens(value: &str, host_name: &str, user: Option<&str>, home: &Path) 
 
 /// Local user name for the `User` fallback and `%r`. `USER` first, then
 /// `USERNAME` (Windows); the only environment reads in this module.
-fn local_user_from_env() -> String {
+/// Also the local-user source for [`crate::resolve_for_dial`], so both
+/// resolution entry points share one definition.
+pub fn local_user_from_env() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default()
