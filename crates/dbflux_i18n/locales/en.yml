@@ -3728,9 +3728,12 @@ settings:
   appearance:
     header:
       title: "Appearance"
-      subtitle: "Theme, density, language, fonts and the editor's syntax colors."
+      subtitle: "Theme, density, language, fonts, the accent color and the editor's syntax colors."
+    accent:
+      label: "Accent color"
+      help: "Fills primary buttons, checked boxes and the progress bar, and tints the selection, the cursor and highlighted text. Hover and pressed shades follow it."
     syntax:
-      group: "Syntax colors"
+      group: "Colors"
       variant:
         label: "Colors for"
         help: "Each theme keeps its own colors. Changes apply when you save."
@@ -3748,8 +3751,8 @@ settings:
       reset: "Reset"
       reset_all:
         button: "Restore defaults"
-        label: "All syntax colors"
-        help: "Restores every syntax color of this theme to its default."
+        label: "All colors"
+        help: "Restores the accent and every syntax color of this theme to their defaults."
       error: "Enter a color as #RRGGBB, or leave the field empty for the default."
   general:
     unit:

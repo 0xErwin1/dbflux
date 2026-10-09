@@ -284,14 +284,19 @@ impl ChartColors {
         }
     }
 
-    /// Return the `ChartColors` for the currently active theme.
+    /// Return the `ChartColors` for the currently active theme, with the
+    /// checkbox fill following the user's accent.
     ///
     /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
     pub fn for_current(cx: &App) -> Self {
-        match ThemeSettingGlobal::get(cx) {
+        let mut colors = match ThemeSettingGlobal::get(cx) {
             ThemeSetting::Light => Self::light(),
             ThemeSetting::Dark | ThemeSetting::System => Self::dark(),
+        };
+        if let Some(tint) = crate::theme::accent_tint(cx) {
+            colors.checkbox_checked = tint;
         }
+        colors
     }
 }
 

@@ -3728,9 +3728,12 @@ settings:
   appearance:
     header:
       title: "Aparência"
-      subtitle: "Tema, densidade, idioma, fontes e as cores de sintaxe do editor."
+      subtitle: "Tema, densidade, idioma, fontes, a cor de destaque e as cores de sintaxe do editor."
+    accent:
+      label: "Cor de destaque"
+      help: "Preenche os botões principais, as caixas marcadas e a barra de progresso, e tinge a seleção, o cursor e o texto destacado. Os tons ao passar o ponteiro e ao pressionar a acompanham."
     syntax:
-      group: "Cores de sintaxe"
+      group: "Cores"
       variant:
         label: "Cores para"
         help: "Cada tema guarda as próprias cores. As alterações valem ao salvar."
@@ -3748,8 +3751,8 @@ settings:
       reset: "Redefinir"
       reset_all:
         button: "Restaurar padrões"
-        label: "Todas as cores de sintaxe"
-        help: "Restaura cada cor de sintaxe deste tema para o padrão."
+        label: "Todas as cores"
+        help: "Restaura a cor de destaque e cada cor de sintaxe deste tema para o padrão."
       error: "Digite uma cor como #RRGGBB ou deixe o campo vazio para usar o padrão."
   general:
     unit:

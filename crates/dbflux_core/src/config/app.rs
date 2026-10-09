@@ -407,6 +407,11 @@ pub struct GeneralSettings {
     #[serde(default, skip_serializing_if = "SyntaxColorOverrides::is_empty")]
     pub syntax_colors: SyntaxColorOverrides,
 
+    /// Accent colors the user picked in place of the palette's, per palette
+    /// variant. A variant without one uses the palette's accent.
+    #[serde(default, skip_serializing_if = "AccentColorOverrides::is_empty")]
+    pub accent_colors: AccentColorOverrides,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -540,6 +545,7 @@ impl Default for GeneralSettings {
             grid_font_family: None,
             grid_font_size: Self::DEFAULT_GRID_FONT_SIZE,
             syntax_colors: SyntaxColorOverrides::default(),
+            accent_colors: AccentColorOverrides::default(),
         }
     }
 }
@@ -605,6 +611,37 @@ impl SyntaxColorOverrides {
     }
 
     pub fn for_variant_mut(&mut self, variant: ThemeSetting) -> &mut BTreeMap<SyntaxRole, String> {
+        match variant {
+            ThemeSetting::Light => &mut self.light,
+            ThemeSetting::Dark | ThemeSetting::System => &mut self.dark,
+        }
+    }
+}
+
+/// Accent colors that replace the palette's, per palette variant, as
+/// `#RRGGBB` text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccentColorOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light: Option<String>,
+}
+
+impl AccentColorOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.dark.is_none() && self.light.is_none()
+    }
+
+    /// The accent of `variant`; `System` has none of its own.
+    pub fn for_variant(&self, variant: ThemeSetting) -> Option<&str> {
+        match variant {
+            ThemeSetting::Light => self.light.as_deref(),
+            ThemeSetting::Dark | ThemeSetting::System => self.dark.as_deref(),
+        }
+    }
+
+    pub fn for_variant_mut(&mut self, variant: ThemeSetting) -> &mut Option<String> {
         match variant {
             ThemeSetting::Light => &mut self.light,
             ThemeSetting::Dark | ThemeSetting::System => &mut self.dark,

@@ -3728,9 +3728,12 @@ settings:
   appearance:
     header:
       title: "外观"
-      subtitle: "主题、密度、语言、字体以及编辑器的语法颜色。"
+      subtitle: "主题、密度、语言、字体、强调色以及编辑器的语法颜色。"
+    accent:
+      label: "强调色"
+      help: "填充主要按钮、已勾选的复选框和进度条，并为选区、光标和高亮文本着色。悬停和按下时的色调随之变化。"
     syntax:
-      group: "语法颜色"
+      group: "颜色"
       variant:
         label: "适用主题"
         help: "每个主题保存各自的颜色。更改在保存后生效。"
@@ -3748,8 +3751,8 @@ settings:
       reset: "重置"
       reset_all:
         button: "恢复默认值"
-        label: "全部语法颜色"
-        help: "将此主题的所有语法颜色恢复为默认值。"
+        label: "全部颜色"
+        help: "将此主题的强调色和所有语法颜色恢复为默认值。"
       error: "请以 #RRGGBB 格式输入颜色，或留空以使用默认值。"
   general:
     unit:

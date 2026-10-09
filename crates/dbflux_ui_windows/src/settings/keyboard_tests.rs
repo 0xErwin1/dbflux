@@ -571,6 +571,32 @@ fn r_and_shift_r_restore_appearance_syntax_colors(cx: &mut TestAppContext) {
         "other rows keep theirs"
     );
 
+    let dark_accent = |window: &mut VisualTestContext| {
+        window.update(|_, cx| section.read(cx).gen_settings.accent_colors.dark.clone())
+    };
+    window.update(|_, cx| {
+        section.update(cx, |section, _| {
+            section.set_accent_override("#333333".to_string());
+            section.gen_form_cursor = section
+                .gen_form_rows()
+                .iter()
+                .position(|row| *row == GeneralFormRow::AccentColor)
+                .expect("accent row");
+        });
+    });
+    window.simulate_keystrokes("r");
+    assert_eq!(dark_accent(window), None, "R resets the accent row");
+    assert!(
+        dark_overrides(window).contains_key(&SyntaxRole::String),
+        "R on the accent row keeps the syntax colors"
+    );
+
+    window.update(|_, cx| {
+        section.update(cx, |section, _| {
+            section.set_accent_override("#333333".to_string())
+        });
+    });
     window.simulate_keystrokes("shift-r");
     assert!(dark_overrides(window).is_empty(), "Shift+R resets them all");
+    assert_eq!(dark_accent(window), None, "Shift+R resets the accent too");
 }

@@ -3728,9 +3728,12 @@ settings:
   appearance:
     header:
       title: "모양"
-      subtitle: "테마, 밀도, 언어, 글꼴 및 편집기의 구문 색상."
+      subtitle: "테마, 밀도, 언어, 글꼴, 강조 색상 및 편집기의 구문 색상."
+    accent:
+      label: "강조 색상"
+      help: "기본 버튼, 선택된 체크박스, 진행률 표시줄을 채우고 선택 영역, 커서, 강조된 텍스트에 색을 입힙니다. 마우스를 올리거나 누를 때의 색조도 이 색을 따릅니다."
     syntax:
-      group: "구문 색상"
+      group: "색상"
       variant:
         label: "적용 테마"
         help: "테마마다 자체 색상을 유지합니다. 변경 사항은 저장할 때 적용됩니다."
@@ -3748,8 +3751,8 @@ settings:
       reset: "초기화"
       reset_all:
         button: "기본값 복원"
-        label: "모든 구문 색상"
-        help: "이 테마의 모든 구문 색상을 기본값으로 복원합니다."
+        label: "모든 색상"
+        help: "이 테마의 강조 색상과 모든 구문 색상을 기본값으로 복원합니다."
       error: "색상을 #RRGGBB 형식으로 입력하거나, 기본값을 쓰려면 비워 두세요."
   general:
     unit:

@@ -121,6 +121,8 @@ pub fn save_general_settings(
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
         syntax_colors_json,
+        accent_color_dark: settings.accent_colors.dark.clone(),
+        accent_color_light: settings.accent_colors.light.clone(),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1129,6 +1131,10 @@ fn load_general_settings(
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
         syntax_colors: syntax_colors_from_storage(&dto.syntax_colors_json),
+        accent_colors: dbflux_core::AccentColorOverrides {
+            dark: dto.accent_color_dark.clone(),
+            light: dto.accent_color_light.clone(),
+        },
     }
 }
 
@@ -2575,6 +2581,8 @@ mod tests {
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
             syntax_colors_json: String::new(),
+            accent_color_dark: None,
+            accent_color_light: None,
             updated_at: String::new(),
         };
 
@@ -2671,6 +2679,8 @@ mod tests {
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
             syntax_colors_json: String::new(),
+            accent_color_dark: None,
+            accent_color_light: None,
             updated_at: String::new(),
         };
         runtime
@@ -2967,6 +2977,24 @@ mod tests {
     }
 
     #[test]
+    fn accent_colors_round_trip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(loaded.general_settings.accent_colors.is_empty());
+
+        let mut settings = GeneralSettings::default();
+        settings.accent_colors.light = Some("#1F5FD1".to_string());
+        super::save_general_settings(&runtime, &settings).expect("save accent colors");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.accent_colors,
+            settings.accent_colors
+        );
+    }
+
+    #[test]
     fn out_of_range_font_sizes_and_blank_families_are_normalized_on_load() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
@@ -3037,6 +3065,8 @@ mod tests {
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
             syntax_colors_json: String::new(),
+            accent_color_dark: None,
+            accent_color_light: None,
             updated_at: String::new(),
         };
         runtime

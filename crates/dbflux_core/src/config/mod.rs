@@ -3,7 +3,7 @@ pub(crate) mod refresh_policy;
 pub(crate) mod scripts_directory;
 
 pub use app::{
-    AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
+    AccentColorOverrides, AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
     GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicySetting, RpcServiceKind,
     ServiceConfig, ServiceRpcApiContract, StartupFocus, SyntaxColorOverrides, SyntaxRole,

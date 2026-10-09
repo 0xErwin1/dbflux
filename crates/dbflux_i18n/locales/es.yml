@@ -3728,9 +3728,12 @@ settings:
   appearance:
     header:
       title: "Apariencia"
-      subtitle: "Tema, densidad, idioma, fuentes y los colores de sintaxis del editor."
+      subtitle: "Tema, densidad, idioma, fuentes, el color de acento y los colores de sintaxis del editor."
+    accent:
+      label: "Color de acento"
+      help: "Rellena los botones principales, las casillas marcadas y la barra de progreso, y tiñe la selección, el cursor y el texto resaltado. Los tonos al pasar el puntero y al pulsar lo siguen."
     syntax:
-      group: "Colores de sintaxis"
+      group: "Colores"
       variant:
         label: "Colores para"
         help: "Cada tema guarda sus propios colores. Los cambios se aplican al guardar."
@@ -3748,8 +3751,8 @@ settings:
       reset: "Restablecer"
       reset_all:
         button: "Restaurar valores predeterminados"
-        label: "Todos los colores de sintaxis"
-        help: "Restaura cada color de sintaxis de este tema a su valor predeterminado."
+        label: "Todos los colores"
+        help: "Restaura el acento y cada color de sintaxis de este tema a sus valores predeterminados."
       error: "Escribe un color como #RRGGBB, o deja el campo vacío para usar el predeterminado."
   general:
     unit:

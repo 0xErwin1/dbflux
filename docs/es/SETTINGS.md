@@ -10,7 +10,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [General](#general)                                 | Comportamiento a nivel de app: editor, inicio, refresh, seguridad de queries. |
-| [Apariencia](#apariencia) | Theme, densidad, idioma, fuentes y los colores de sintaxis del editor. |
+| [Apariencia](#apariencia) | Theme, densidad, idioma, fuentes, el color de acento y los colores de sintaxis del editor. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
@@ -169,6 +169,23 @@ recurren a English para el texto general aún no traducido. Este release solo
 traduce la sección General; el resto de la UI se está convirtiendo crate por crate
 y permanece en English por ahora.
 
+### Color de acento
+
+**Color de acento** reemplaza el color principal del theme, Byzantine
+(`#702963`). Rellena los botones principales, las casillas marcadas y la barra
+de progreso, y tiñe el cursor de texto, la selección, el anillo de foco y las
+filas seleccionadas del sidebar y del data grid. La fila está bajo **Colores
+para**, así que Oscuro y Claro guardan cada uno su propio acento, y tiene la
+misma muestra, campo y botón **Restablecer** (`R` en la fila) que los colores
+de sintaxis.
+
+Los tonos alrededor del acento lo siguen: los estados al pasar el puntero y al
+pulsar son algo más claros y más oscuros, y el tinte del texto se aclara en
+Oscuro o se oscurece en Claro cuando el acento sería difícil de leer sobre el
+fondo de ese theme. El texto de un botón principal pasa a oscuro cuando el
+acento es demasiado claro para texto blanco. El acento se aplica a todas las
+ventanas abiertas al guardar.
+
 ### Colores de sintaxis
 
 Los colores del resaltado de sintaxis del editor de código se pueden cambiar por
@@ -182,7 +199,7 @@ muestra el color en uso, el predeterminado hasta que lo cambies, así que se pue
 copiar. Escribe un color como `#RRGGBB` (el `#` es opcional); un campo vacío, o el
 color predeterminado, mantiene el predeterminado. **Restablecer** (o `R` en
 la fila) restaura el color predeterminado de ese rol, y **Restaurar valores
-predeterminados** (o `Shift+R`) restaura todos los colores del theme mostrado.
+predeterminados** (o `Shift+R`) restaura todos los colores del theme mostrado, el acento incluido.
 Los cambios se aplican a los editores abiertos al guardar. Los mismos colores
 tiñen los iconos del árbol de schema y los valores NULL del data grid.
 

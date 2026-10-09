@@ -3,7 +3,7 @@ use crate::semantic::ThemeSettingGlobal;
 use crate::tokens::{BASE_REM, SyntaxColors};
 pub use crate::typography::AppFonts;
 use crate::typography::load_bundled_fonts;
-use dbflux_core::{AppStyle, SyntaxColorOverrides, ThemeSetting};
+use dbflux_core::{AccentColorOverrides, AppStyle, SyntaxColorOverrides, ThemeSetting};
 use gpui::{App, Global, Hsla, Window, WindowAppearance, hsla, px};
 use gpui_component::{
     highlighter::{HighlightTheme, ThemeStyle},
@@ -57,6 +57,52 @@ pub fn syntax_overrides(cx: &App) -> Option<&SyntaxColorOverrides> {
         .map(|global| &global.0)
 }
 
+/// The accent colors the user picked in place of the palette's.
+#[derive(Default)]
+struct AccentOverridesGlobal(AccentColorOverrides);
+
+impl Global for AccentOverridesGlobal {}
+
+/// Store the user's accent colors. They take effect with the next
+/// [`apply_theme`].
+pub fn set_accent_overrides(overrides: AccentColorOverrides, cx: &mut App) {
+    cx.set_global(AccentOverridesGlobal(overrides));
+}
+
+/// The user's accent colors, empty until [`set_accent_overrides`] runs.
+pub fn accent_overrides(cx: &App) -> Option<&AccentColorOverrides> {
+    cx.try_global::<AccentOverridesGlobal>()
+        .map(|global| &global.0)
+}
+
+/// The palette's own accent for `variant`, before the user's override.
+pub fn default_accent(variant: ThemeSetting) -> Hsla {
+    Palette::for_variant(variant).byzantine
+}
+
+/// The accent `text` names, or the palette's accent for `variant` when
+/// `text` is absent or does not parse.
+pub fn accent_or_default(text: Option<&str>, variant: ThemeSetting) -> Hsla {
+    text.and_then(dbflux_core::parse_hex_color)
+        .map(rgb_to_hsla)
+        .unwrap_or_else(|| default_accent(variant))
+}
+
+/// The user's accent for `variant`, when one is set and parses.
+fn accent_override(variant: ThemeSetting, cx: &App) -> Option<Hsla> {
+    accent_overrides(cx)?
+        .for_variant(variant)
+        .and_then(dbflux_core::parse_hex_color)
+        .map(rgb_to_hsla)
+}
+
+/// The text tint derived from the user's accent for the theme on screen, or
+/// `None` while the palette's own accent is in use.
+pub fn accent_tint(cx: &App) -> Option<Hsla> {
+    let variant = ThemeSettingGlobal::get(cx);
+    accent_override(variant, cx).map(|accent| tint_for_accent(accent, variant))
+}
+
 /// Write the active font settings into the global theme without changing
 /// its palette, so open windows pick them up on their next render.
 ///
@@ -94,10 +140,10 @@ pub fn apply_theme(
         ThemeSetting::Dark | ThemeSetting::Light => setting,
     };
 
-    let mut palette = match resolved {
-        ThemeSetting::Light => Palette::light(),
-        ThemeSetting::Dark | ThemeSetting::System => Palette::dark(),
-    };
+    let mut palette = Palette::for_variant(resolved);
+    if let Some(accent) = accent_override(resolved, cx) {
+        palette = palette.with_accent(accent, resolved);
+    }
     if let Some(overrides) = syntax_overrides(cx) {
         palette.syntax = palette
             .syntax
@@ -438,6 +484,29 @@ struct Palette {
 }
 
 impl Palette {
+    fn for_variant(variant: ThemeSetting) -> Self {
+        match variant {
+            ThemeSetting::Light => Self::light(),
+            ThemeSetting::Dark | ThemeSetting::System => Self::dark(),
+        }
+    }
+
+    /// This palette with `accent` in place of byzantine, and every color the
+    /// palette derives from byzantine derived from `accent` instead.
+    fn with_accent(mut self, accent: Hsla, variant: ThemeSetting) -> Self {
+        let tint = tint_for_accent(accent, variant);
+
+        self.byzantine = accent;
+        self.byzantine_hover = shift_lightness(accent, HOVER_LIGHTNESS_STEP);
+        self.byzantine_deep = shift_lightness(accent, ACTIVE_LIGHTNESS_STEP);
+        self.tint = tint;
+        self.ink = foreground_on(accent);
+        self.selected_row_wash = with_alpha(tint, self.selected_row_wash.a);
+        self.selected_item_wash = with_alpha(tint, self.selected_item_wash.a);
+        self.progress = tint;
+        self
+    }
+
     fn dark() -> Self {
         let tint = rgb_to_hsla(0xD48CC8);
         let byzantine = rgb_to_hsla(0x702963);
@@ -548,6 +617,47 @@ fn lighter_variant(color: Hsla) -> Hsla {
 
 fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla { a: alpha, ..color }
+}
+
+/// Lowest lightness of the text tint on the dark palette, so tinted text
+/// stays readable on its near-black surfaces (`#D48CC8` sits at 0.69).
+const DARK_TINT_MIN_LIGHTNESS: f32 = 0.68;
+
+/// Highest lightness of the text tint on the light palette, so tinted text
+/// stays readable on its near-white surfaces (byzantine sits at 0.30).
+const LIGHT_TINT_MAX_LIGHTNESS: f32 = 0.40;
+
+/// Relative luminance above which near-black text contrasts more with a fill
+/// than white does: the point where both WCAG contrast ratios are equal.
+const DARK_FOREGROUND_LUMINANCE: f32 = 0.179;
+
+/// The text tint for `accent`: the accent itself, lightened on the dark
+/// palette or darkened on the light one when it would be hard to read.
+fn tint_for_accent(accent: Hsla, variant: ThemeSetting) -> Hsla {
+    let l = match variant {
+        ThemeSetting::Light => accent.l.min(LIGHT_TINT_MAX_LIGHTNESS),
+        ThemeSetting::Dark | ThemeSetting::System => accent.l.max(DARK_TINT_MIN_LIGHTNESS),
+    };
+    Hsla { l, ..accent }
+}
+
+/// White or near-black, whichever reads better on `fill`.
+fn foreground_on(fill: Hsla) -> Hsla {
+    let rgba = gpui::Rgba::from(fill);
+    let linear = |channel: f32| {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(rgba.r) + 0.7152 * linear(rgba.g) + 0.0722 * linear(rgba.b);
+
+    if luminance > DARK_FOREGROUND_LUMINANCE {
+        rgb_to_hsla(0x09090B)
+    } else {
+        rgb_to_hsla(0xFFFFFF)
+    }
 }
 
 fn apply_palette(palette: &Palette, style: AppStyle, cx: &mut App) {
@@ -1010,6 +1120,70 @@ mod tests {
                 syntax_hex(Theme::global(cx), "keyword"),
                 Some(hex_of(SyntaxColors::dark().keyword))
             );
+        });
+    }
+
+    /// The user's accent fills primary buttons and tints the selection only
+    /// in its own variant, keeps tinted text readable, picks a readable
+    /// foreground, and clearing it restores byzantine.
+    #[gpui::test]
+    fn accent_override_recolors_only_its_variant(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let overrides = AccentColorOverrides {
+            dark: Some("#1F5FD1".to_string()),
+            light: Some("#FFD54F".to_string()),
+        };
+        cx.update(|cx| {
+            set_accent_overrides(overrides, cx);
+            apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
+        });
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            let accent = rgb_to_hsla(0x1F5FD1);
+            assert_eq!(theme.tokens.button_primary.color, accent);
+            assert_eq!(theme.colors.primary_foreground, rgb_to_hsla(0xFFFFFF));
+            assert!(
+                theme.colors.ring.l >= DARK_TINT_MIN_LIGHTNESS,
+                "the dark tint is lightened to stay readable"
+            );
+            assert_eq!(theme.colors.ring.h, accent.h);
+            assert_eq!(
+                theme.colors.table_active,
+                with_alpha(theme.colors.ring, 0.07)
+            );
+            assert_eq!(
+                theme.colors.list_active,
+                with_alpha(theme.colors.ring, 0.12)
+            );
+            assert_eq!(accent_tint(cx), Some(theme.colors.ring));
+            assert_eq!(
+                crate::semantic::ChartColors::for_current(cx).checkbox_checked,
+                theme.colors.ring
+            );
+        });
+
+        cx.update(|cx| apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx));
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(theme.colors.primary, rgb_to_hsla(0xFFD54F));
+            assert_eq!(
+                theme.colors.primary_foreground,
+                rgb_to_hsla(0x09090B),
+                "a light accent takes dark text"
+            );
+            assert!(theme.colors.ring.l <= LIGHT_TINT_MAX_LIGHTNESS);
+        });
+
+        cx.update(|cx| {
+            set_accent_overrides(AccentColorOverrides::default(), cx);
+            apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
+        });
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(theme.colors.primary, default_accent(ThemeSetting::Dark));
+            assert_eq!(theme.colors.ring, rgb_to_hsla(0xD48CC8));
+            assert_eq!(accent_tint(cx), None);
         });
     }
 

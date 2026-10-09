@@ -59,6 +59,7 @@ pub(super) enum GeneralFormRow {
     ToastTimeout,
     ShareStableDb,
     SyntaxVariant,
+    AccentColor,
     SyntaxColor(SyntaxRole),
     SyntaxReset,
     SaveButton,
@@ -136,6 +137,9 @@ pub(super) struct GeneralSection {
     /// One `#RRGGBB` field per syntax role, in `SyntaxRole::ALL` order. An
     /// empty field keeps the palette's color.
     pub(super) syntax_inputs: Vec<(SyntaxRole, Entity<InputState>)>,
+    /// The `#RRGGBB` field of the edited variant's accent color. An empty
+    /// field keeps the palette's accent.
+    pub(super) accent_input: Entity<InputState>,
     /// Set when the syntax fields must show `syntax_variant`'s colors again,
     /// done on the next render, which has the window the fields need.
     pub(super) pending_syntax_reload: bool,
@@ -352,6 +356,29 @@ impl GeneralSection {
             })
             .collect();
 
+        let accent_input = cx.new(|cx| {
+            let default = Self::default_accent_hex(syntax_variant);
+            let shown = settings
+                .accent_colors
+                .for_variant(syntax_variant)
+                .map(str::to_string)
+                .unwrap_or_else(|| default.clone());
+            InputState::new(window, cx)
+                .placeholder(default)
+                .default_value(shown)
+        });
+
+        let accent_subscription =
+            cx.subscribe(&accent_input, |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = input.read(cx).value().trim().to_string();
+                    this.set_accent_override(text);
+                    cx.notify();
+                } else {
+                    this.return_focus_on_blur(input, event, cx);
+                }
+            });
+
         let language_subscription = cx.subscribe(
             &dropdown_language,
             |this, _, event: &DropdownSelectionChanged, cx| {
@@ -496,6 +523,7 @@ impl GeneralSection {
             input_key_value_size_limit,
             syntax_variant,
             syntax_inputs,
+            accent_input,
             pending_syntax_reload: false,
             gen_field_error: None,
             pending_reveal: None,
@@ -521,6 +549,7 @@ impl GeneralSection {
             .into_iter()
             .chain(font_subscriptions)
             .chain(syntax_subscriptions)
+            .chain(std::iter::once(accent_subscription))
             .collect(),
         }
     }
@@ -566,12 +595,44 @@ impl GeneralSection {
         self.pending_syntax_reload = true;
     }
 
-    /// Restores every palette color of the edited variant.
-    pub(super) fn reset_syntax_colors(&mut self) {
+    /// Restores every palette color of the edited variant, the accent
+    /// included.
+    pub(super) fn reset_variant_colors(&mut self) {
         self.gen_settings
             .syntax_colors
             .for_variant_mut(self.syntax_variant)
             .clear();
+        *self
+            .gen_settings
+            .accent_colors
+            .for_variant_mut(self.syntax_variant) = None;
+        self.pending_syntax_reload = true;
+    }
+
+    /// The palette's own accent in `variant`, as `#RRGGBB`.
+    pub(super) fn default_accent_hex(variant: ThemeSetting) -> String {
+        dbflux_components::tokens::SyntaxColors::hex(dbflux_components::theme::default_accent(
+            variant,
+        ))
+    }
+
+    /// Stores the accent field's text for the edited variant. Empty text, or
+    /// the palette's own accent, keeps the palette's accent.
+    pub(super) fn set_accent_override(&mut self, text: String) {
+        let default = Self::default_accent_hex(self.syntax_variant);
+        let is_default = dbflux_core::parse_hex_color(&text).is_some()
+            && dbflux_core::parse_hex_color(&text) == dbflux_core::parse_hex_color(&default);
+
+        *self
+            .gen_settings
+            .accent_colors
+            .for_variant_mut(self.syntax_variant) =
+            (!text.is_empty() && !is_default).then_some(text);
+    }
+
+    /// Restores the palette's accent in the edited variant.
+    pub(super) fn reset_accent_color(&mut self) {
+        self.set_accent_override(String::new());
         self.pending_syntax_reload = true;
     }
 
@@ -587,8 +648,8 @@ impl GeneralSection {
             .map(|(_, input)| input)
     }
 
-    /// Shows the edited variant's colors in the syntax fields: each override,
-    /// or the palette's color for a role without one.
+    /// Shows the edited variant's colors in the accent and syntax fields:
+    /// each override, or the palette's color where there is none.
     pub(super) fn reload_syntax_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.pending_syntax_reload) {
             return;
@@ -610,6 +671,18 @@ impl GeneralSection {
                 state.set_placeholder(placeholder, window, cx);
             });
         }
+
+        let placeholder = Self::default_accent_hex(variant);
+        let value = self
+            .gen_settings
+            .accent_colors
+            .for_variant(variant)
+            .map(str::to_string)
+            .unwrap_or_else(|| placeholder.clone());
+        self.accent_input.update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+            state.set_placeholder(placeholder, window, cx);
+        });
     }
 
     /// Syntax variant segments: Dark, then Light.
@@ -1469,7 +1542,7 @@ mod tests {
                 "the reset field shows the default color"
             );
 
-            section.reset_syntax_colors();
+            section.reset_variant_colors();
             assert!(section.gen_settings.syntax_colors.dark.is_empty());
             assert_eq!(
                 section.gen_settings.syntax_colors.light.len(),
@@ -1480,11 +1553,100 @@ mod tests {
     }
 
     #[test]
+    fn the_accent_color_saves_normalized_rejects_invalid_text_and_resets_with_its_variant() {
+        use dbflux_core::{SyntaxRole, ThemeSetting};
+
+        with_section(GeneralPage::Appearance, |section, _, window, cx| {
+            assert!(
+                section
+                    .gen_form_rows()
+                    .contains(&GeneralFormRow::AccentColor)
+            );
+            section.set_syntax_variant(ThemeSetting::Dark);
+            section.reload_syntax_inputs(window, cx);
+            assert_eq!(
+                section.accent_input.read(cx).value().to_string(),
+                "#702963",
+                "the field shows the default accent"
+            );
+
+            section.set_accent_override("#702963".to_string());
+            assert_eq!(
+                section.general_change_count(cx),
+                0,
+                "typing the default accent is not a change"
+            );
+
+            section.set_syntax_variant(ThemeSetting::Light);
+            section.set_accent_override("#12".to_string());
+            section.set_syntax_variant(ThemeSetting::Dark);
+            section.save_general_settings(window, cx);
+            assert_eq!(section.syntax_variant, ThemeSetting::Light);
+            assert_eq!(
+                section.gen_field_error.as_ref().map(|(row, _)| *row),
+                Some(GeneralFormRow::AccentColor)
+            );
+            assert!(
+                section
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .accent_colors
+                    .is_empty(),
+                "nothing is saved"
+            );
+
+            section.set_accent_override("1f5fd1".to_string());
+            assert_eq!(section.general_change_count(cx), 1);
+            section.save_general_settings(window, cx);
+
+            let saved = section
+                .app_state
+                .read(cx)
+                .general_settings()
+                .accent_colors
+                .clone();
+            assert_eq!(saved.light.as_deref(), Some("#1F5FD1"));
+            assert_eq!(saved.dark, None);
+            let stored = section
+                .app_state
+                .read(cx)
+                .storage_runtime()
+                .general_settings()
+                .get()
+                .expect("stored general settings readable")
+                .and_then(|settings| settings.accent_color_light);
+            assert_eq!(stored.as_deref(), Some("#1F5FD1"));
+            assert_eq!(
+                dbflux_components::theme::accent_overrides(cx),
+                Some(&saved),
+                "the theme picks the saved accent up"
+            );
+
+            section.set_syntax_override(SyntaxRole::Keyword, "#111111".to_string());
+            section.reset_variant_colors();
+            assert_eq!(section.gen_settings.accent_colors.light, None);
+            assert!(section.gen_settings.syntax_colors.light.is_empty());
+
+            section.set_accent_override("#222222".to_string());
+            section.reset_accent_color();
+            section.reload_syntax_inputs(window, cx);
+            assert_eq!(section.gen_settings.accent_colors.light, None);
+            assert_eq!(
+                section.accent_input.read(cx).value().to_string(),
+                GeneralSection::default_accent_hex(ThemeSetting::Light)
+            );
+        });
+    }
+
+    #[test]
     fn appearance_copy_resolves_in_every_locale() {
         let keys = [
             "settings.nav.appearance",
             "settings.appearance.header.title",
             "settings.appearance.header.subtitle",
+            "settings.appearance.accent.label",
+            "settings.appearance.accent.help",
             "settings.appearance.syntax.group",
             "settings.appearance.syntax.variant.label",
             "settings.appearance.syntax.variant.help",

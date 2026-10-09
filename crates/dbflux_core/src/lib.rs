@@ -35,7 +35,7 @@ pub use auth::{
 };
 
 pub use config::{
-    AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
+    AccentColorOverrides, AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, ExternalScriptRoot, GeneralSettings,
     GlobalOverrides, GovernanceSettings, LoadedAppConfig, MountedScriptRoot, PolicyRoleConfig,
     RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry, ScriptRootAvailability,

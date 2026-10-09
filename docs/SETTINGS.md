@@ -9,7 +9,7 @@ window is organized into sections down the left side.
 | Section | Covers |
 |---------|--------|
 | [General](#general) | App-wide behavior: editor, startup, refresh, query safety. |
-| [Appearance](#appearance) | Theme, density, language, fonts and the editor's syntax colors. |
+| [Appearance](#appearance) | Theme, density, language, fonts, the accent color and the editor's syntax colors. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
@@ -159,6 +159,21 @@ effect. Partial catalogs fall back to English for untranslated general UI text.
 This release only translates the General section; the rest of the UI is being
 converted crate by crate and stays in English for now.
 
+### Accent color
+
+**Accent color** replaces the theme's main color, Byzantine (`#702963`). It
+fills primary buttons, checked checkboxes and the progress bar, and tints the
+text cursor, the selection, the focus ring and the selected rows of the sidebar
+and the data grid. The row sits under **Colors for**, so Dark and Light each
+keep their own accent, and it has the same swatch, field and **Reset** button
+(`R` on the row) as the syntax colors.
+
+The shades around the accent follow it: hover and pressed states are a little
+lighter and darker, and the text tint is lightened on Dark or darkened on Light
+when the accent would be hard to read on that theme's background. Text on a
+primary button turns dark when the accent is too light for white text. The
+accent applies to every open window when you save.
+
 ### Syntax colors
 
 The colors of the code editor's syntax highlighting can be changed per role:
@@ -172,7 +187,7 @@ the color in use, the default until you change it, so it can be copied. Type a
 color as `#RRGGBB` (the `#` is optional); an empty field, or the default color,
 keeps the default. **Reset** (or `R` on the row) restores the
 default color of that role, and **Restore defaults** (or `Shift+R`) restores
-every color of the theme shown. Changes apply to open editors when you save. The
+every color of the theme shown, the accent included. Changes apply to open editors when you save. The
 same colors tint the schema tree icons and NULL values in the data grid.
 
 ---
