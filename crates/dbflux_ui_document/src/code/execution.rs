@@ -1,4 +1,5 @@
 use super::*;
+use crate::data_grid_panel::{LimitedRowActions, LimitedRowTotal};
 use dbflux_core::observability::actions as audit_actions;
 
 /// Resolve the `ExecutionSourceContext` for the next query, giving precedence
@@ -179,6 +180,8 @@ impl CodeDocument {
     }
 
     fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.execution.unlimited_rows_for = None;
+
         // A selection always runs as-is, without the script confirmation.
         if let Some(query) = self.selected_query(window, cx) {
             self.execution.query_origin = None;
@@ -717,13 +720,24 @@ impl CodeDocument {
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
+        let unlimited_rows = self
+            .execution
+            .unlimited_rows_for
+            .take()
+            .is_some_and(|unlimited_query| unlimited_query == query);
+        let row_limit = if unlimited_rows {
+            usize::MAX
+        } else {
+            self.app_state.read(cx).general_settings().editor_row_limit
+        };
+
         let session_database = active_database.clone();
         let mut request = query_request_for_execution(
             query.clone(),
             active_database,
             &self.source.exec_ctx,
             self.effective_language().clone(),
-            self.app_state.read(cx).general_settings().editor_row_limit,
+            row_limit,
         );
 
         // Governance ceiling for a driver-dispatched multi-statement script
@@ -1242,6 +1256,7 @@ impl CodeDocument {
             return;
         }
 
+        self.execution.unlimited_rows_for = None;
         let (query, from_selection) = self.auto_refresh_query(cx);
         self.execution.query_origin = if from_selection { None } else { Some(0) };
         self.run_query_text_with(query, false, ReadOnlyEnforcement::Required, window, cx);
@@ -1587,6 +1602,8 @@ impl CodeDocument {
 
         self.result_tabs.run_in_new_tab = false;
 
+        let limited_row_actions = self.limited_row_actions(&query, cx);
+
         if should_create_new_tab {
             self.create_result_tab(result, query, caption, window, cx);
         } else if let Some(index) = self.result_tabs.active_result_index
@@ -1596,6 +1613,12 @@ impl CodeDocument {
             tab.grid.update(cx, |g, cx| {
                 g.set_query_result(result, query.clone(), profile_id, cx);
                 g.set_result_caption(caption, cx);
+            });
+        }
+
+        if let Some(grid) = self.active_result_grid() {
+            grid.update(cx, |grid, cx| {
+                grid.set_limited_row_actions(limited_row_actions, cx);
             });
         }
     }
@@ -1668,9 +1691,8 @@ impl CodeDocument {
             });
         }
 
-        let subscription = cx.subscribe(
-            &grid,
-            |this, _grid, event: &DataGridEvent, cx| match event {
+        let subscription =
+            cx.subscribe(&grid, |this, grid, event: &DataGridEvent, cx| match event {
                 DataGridEvent::RequestHide => {
                     this.hide_results(cx);
                 }
@@ -1726,14 +1748,20 @@ impl CodeDocument {
                     // from it. A code document's own close flow decides when its
                     // result tab goes, so `RequestClose` is not forwarded here.
                 }
+                DataGridEvent::CountRowsRequested => {
+                    this.count_result_rows(grid, cx);
+                }
+                DataGridEvent::LoadAllRowsRequested => {
+                    this.pending.load_all_rows = Some(grid.entity_id());
+                    cx.notify();
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
                     // Builder events are only emitted from table-browsing grids.
                     // CodeDocument result grids never have a builder panel.
                 }
-            },
-        );
+            });
 
         let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
         let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
@@ -1748,6 +1776,122 @@ impl CodeDocument {
 
         self.result_tabs.result_tabs.push(tab);
         self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
+    }
+
+    /// What a result of `query` may offer when the row limit cuts it short.
+    ///
+    /// Both actions run the query again, so they are offered only for one
+    /// statement that reads. Counting wraps the statement in `COUNT(*)`, which
+    /// only SQL can express.
+    fn limited_row_actions(&self, query: &str, cx: &App) -> LimitedRowActions {
+        if self.read_only {
+            return LimitedRowActions::default();
+        }
+
+        let language = self.effective_language();
+        if language.statement_count(query) != 1 {
+            return LimitedRowActions::default();
+        }
+
+        let Some(connected) = self
+            .connection_id
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+        else {
+            return LimitedRowActions::default();
+        };
+
+        let classification = dbflux_core::classify_query_for_language_with_service(
+            language,
+            query,
+            Some(connected.connection.language_service()),
+        );
+        let reads = classification == dbflux_core::ExecutionClassification::Read;
+
+        LimitedRowActions {
+            count: reads && *language == QueryLanguage::Sql,
+            load_all: reads,
+        }
+    }
+
+    /// Counts the rows of the query behind a result tab, without fetching
+    /// them, on the session the query ran on.
+    fn count_result_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let query = grid.read(cx).result_query().map(str::to_string);
+        let (Some(query), Some(context)) = (query, self.execution_session_context.as_ref()) else {
+            grid.update(cx, |grid, cx| {
+                grid.set_limited_row_total(LimitedRowTotal::Unknown, cx);
+            });
+            return;
+        };
+
+        let root = context.root.clone();
+        let database = context.database.clone();
+        let request = QueryRequest::new(dbflux_core::count_query_from_sql(&query))
+            .with_database(database.clone())
+            .with_limit(1);
+        let session = self.execution_session.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { session.execute(root, database, &request).result });
+
+        cx.spawn(async move |_this, cx| {
+            let total = match task.await {
+                Ok(result) => result
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(count_value)
+                    .ok_or_else(|| "the count query returned no number".to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| match total {
+                    Ok(total) => grid.set_limited_row_total(LimitedRowTotal::Known(total), cx),
+                    Err(error) => {
+                        grid.set_limited_row_total(LimitedRowTotal::Unknown, cx);
+                        dbflux_ui_base::user_error::report_error(
+                            dbflux_ui_base::user_error::UserFacingError::new(
+                                dbflux_ui_base::user_error::ErrorKind::Driver,
+                                dbflux_i18n::t!("document.code.execution.count_rows_failed"),
+                            )
+                            .with_cause(error),
+                            cx,
+                        );
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Runs the query behind a result tab again without the editor row limit,
+    /// replacing that tab's rows.
+    pub(super) fn process_pending_load_all_rows(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(grid_id) = self.pending.load_all_rows.take() else {
+            return;
+        };
+
+        let Some((index, query)) = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .enumerate()
+            .find(|(_, tab)| tab.grid.entity_id() == grid_id)
+            .and_then(|(index, tab)| Some((index, tab.grid.read(cx).result_query()?.to_string())))
+        else {
+            return;
+        };
+
+        self.result_tabs.active_result_index = Some(index);
+        self.execution.query_origin = None;
+        self.execution.unlimited_rows_for = Some(query.clone());
+        self.run_query_text(query, false, window, cx);
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
@@ -2402,6 +2546,16 @@ impl CodeDocument {
     }
 }
 
+/// Reads the single value a `COUNT(*)` query returns as a row count.
+fn count_value(value: &dbflux_core::Value) -> Option<u64> {
+    use dbflux_core::Value;
+    match value {
+        Value::Int(count) => u64::try_from(*count).ok(),
+        Value::Text(count) | Value::Decimal(count) => count.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{query_request_for_execution, resolve_source_context};
@@ -2462,6 +2616,17 @@ mod tests {
             assert_eq!(request.limit, Some(explicit_limit));
             assert_eq!(request.statement_timeout, None);
         }
+    }
+
+    #[test]
+    fn count_value_reads_the_count_drivers_return() {
+        use dbflux_core::Value;
+
+        assert_eq!(super::count_value(&Value::Int(52_310)), Some(52_310));
+        assert_eq!(super::count_value(&Value::Text(" 7 ".into())), Some(7));
+        assert_eq!(super::count_value(&Value::Decimal("12".into())), Some(12));
+        assert_eq!(super::count_value(&Value::Int(-1)), None);
+        assert_eq!(super::count_value(&Value::Null), None);
     }
 
     #[test]

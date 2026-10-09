@@ -1356,6 +1356,7 @@ document:
         run_script: "Run %{name} script"
       copy_error: Copy error
       result_tab_title: "Result %{index}"
+      count_rows_failed: Could not count the rows of the query
       error:
         select_source: Select at least one source
         start_time_required: Start time is required
@@ -1619,7 +1620,6 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
-      rows_omitted: Rows omitted from this result set because an execution limit was reached.
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -1663,6 +1663,11 @@ document:
         rows:
           one: "%{count} row"
           many: "%{count} rows"
+        limited_rows:
+          first: "First %{count} rows loaded"
+          of_total: "%{loaded}/%{total} rows loaded"
+          count: Count rows
+          load_all: Load all rows
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"
@@ -3224,9 +3229,6 @@ document:
       custom: Custom
       on_open: On open
     result_warnings:
-      rows_omitted:
-        summary: Rows omitted from query result
-        cause: At least one result set omitted rows because an execution limit was reached.
       context:
         query: query result
         table_browse: table browse result

@@ -249,6 +249,41 @@ pub enum DataGridEvent {
     /// The panel wants to close itself, because the mutation a close was waiting
     /// on landed.
     RequestClose,
+
+    /// Count the rows of the query behind a result the row limit cut short,
+    /// without fetching them. Only emitted when the host offered it through
+    /// [`DataGridPanel::set_limited_row_actions`].
+    CountRowsRequested,
+
+    /// Run the query behind a result the row limit cut short again, without
+    /// the limit. Only emitted when the host offered it.
+    LoadAllRowsRequested,
+}
+
+/// What the footer offers for a query result the editor row limit cut short.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LimitedRowActions {
+    /// The host can count the query's rows without fetching them.
+    pub(crate) count: bool,
+    /// The host can run the query again without the row limit.
+    pub(crate) load_all: bool,
+}
+
+/// The total row count of a limited result, as far as it is known.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum LimitedRowTotal {
+    #[default]
+    Unknown,
+    Counting,
+    Known(u64),
+}
+
+/// Footer state of a query result the row limit cut short. Reset with every
+/// new result, because a total belongs to the query that produced it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LimitedRows {
+    pub(crate) actions: LimitedRowActions,
+    pub(crate) total: LimitedRowTotal,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -808,6 +843,7 @@ pub struct DataGridPanel {
     /// Pending "Save chart from collection" state.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
+    limited_rows: LimitedRows,
 }
 
 /// Pending mutation execution — holds the spec and options while the
@@ -1614,6 +1650,7 @@ impl DataGridPanel {
             close_after_apply: false,
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
+            limited_rows: LimitedRows::default(),
         };
 
         panel.follow_vim_setting(cx);
@@ -2816,6 +2853,31 @@ impl DataGridPanel {
     }
 
     /// Update source to a new query result (used by ScriptDocument).
+    /// Offers the footer actions for a result the row limit cut short. The
+    /// offer is dropped with the next result, so the host sets it again for
+    /// each one.
+    pub(crate) fn set_limited_row_actions(
+        &mut self,
+        actions: LimitedRowActions,
+        cx: &mut Context<Self>,
+    ) {
+        self.limited_rows.actions = actions;
+        cx.notify();
+    }
+
+    pub(crate) fn set_limited_row_total(&mut self, total: LimitedRowTotal, cx: &mut Context<Self>) {
+        self.limited_rows.total = total;
+        cx.notify();
+    }
+
+    /// The query text behind a query result, for a host re-running it.
+    pub(crate) fn result_query(&self) -> Option<&str> {
+        match &self.source {
+            DataSource::QueryResult { original_query, .. } => Some(original_query),
+            _ => None,
+        }
+    }
+
     pub fn set_query_result(
         &mut self,
         result: Arc<QueryResult>,
@@ -2837,6 +2899,7 @@ impl DataGridPanel {
             original_query: query,
             profile_id,
         };
+        self.limited_rows = LimitedRows::default();
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         // The new result may have a different shape, so the sort column index

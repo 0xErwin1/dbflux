@@ -133,9 +133,15 @@ query editor returns. It is a separate execution-safety setting, not one of the
 three dangerous-query controls above. It accepts any whole number from 1 upward
 and cannot be set to zero or turned off: saving any other value shows an error
 and keeps the previous limit. DBFlux sends the limit to the driver with every
-editor query instead of adding a `LIMIT` to the query text, and shows a warning
-when a result left rows out. In a script with several statements the limit is
-one budget shared by all of its result sets, and every statement still runs.
+editor query instead of adding a `LIMIT` to the query text. When a result left
+rows out, its footer reads "First 10,000 rows loaded" instead of the row count.
+For a single statement that only reads, the footer then offers **Count rows**,
+which runs the statement inside `SELECT COUNT(*)` without fetching its rows and
+shows "10,000/52,310 rows loaded" (SQL connections only), and **Load all
+rows**, which runs the statement again without the limit in the same result
+tab. Both are also in the table menu (`m`). In a script with several statements
+the limit is one budget shared by all of its result sets, and every statement
+still runs.
 
 Drivers that cannot enforce a row limit refuse the query before running it
 rather than ignore the cap. Editor queries therefore fail with an "Operation

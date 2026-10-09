@@ -1356,6 +1356,7 @@ document:
         run_script: "%{name} 스크립트 실행"
       copy_error: 오류 복사
       result_tab_title: "결과 %{index}"
+      count_rows_failed: 쿼리의 행 수를 셀 수 없습니다
       error:
         select_source: 소스를 하나 이상 선택하세요
         start_time_required: 시작 시간은 필수입니다
@@ -1619,7 +1620,6 @@ document:
           insert_failed: "문서를 삽입하지 못했습니다: %{error}"
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
-      rows_omitted: 실행 제한에 도달하여 이 결과 집합의 일부 행이 생략되었습니다.
       edit_bar:
         clean: 저장하지 않은 변경 사항 없음
         dirty:
@@ -1663,6 +1663,11 @@ document:
         rows:
           one: "행 %{count}개"
           many: "행 %{count}개"
+        limited_rows:
+          first: "처음 %{count}개 행 로드됨"
+          of_total: "%{loaded}/%{total}개 행 로드됨"
+          count: 행 수 세기
+          load_all: 모든 행 로드
         pending_changes:
           one: "대기 중인 변경 사항 %{count}개"
           many: "대기 중인 변경 사항 %{count}개"
@@ -3224,9 +3229,6 @@ document:
       custom: "사용자 지정"
       on_open: 열 때
     result_warnings:
-      rows_omitted:
-        summary: 쿼리 결과에서 행이 생략되었습니다
-        cause: 실행 제한에 도달하여 하나 이상의 결과 집합에서 행이 생략되었습니다.
       context:
         query: 쿼리 결과
         table_browse: 테이블 탐색 결과

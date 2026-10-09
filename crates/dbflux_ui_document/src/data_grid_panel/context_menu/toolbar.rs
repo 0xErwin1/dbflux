@@ -86,6 +86,10 @@ pub(crate) enum ToolbarAction {
     ToggleMaximize,
     /// Hide in the embedded panel's header.
     HidePanel,
+    /// Count rows next to the footer's row count of a limited result.
+    CountRows,
+    /// Load all rows next to the footer's row count of a limited result.
+    LoadAllRows,
 }
 
 /// A control of the chart's custom range row.
@@ -167,6 +171,8 @@ impl ToolbarAction {
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => "value-save",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
+            ToolbarAction::CountRows => "count-rows",
+            ToolbarAction::LoadAllRows => "load-all-rows",
         }
     }
 
@@ -205,6 +211,8 @@ impl ToolbarAction {
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => AppIcon::Save,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
+            ToolbarAction::CountRows => AppIcon::Hash,
+            ToolbarAction::LoadAllRows => AppIcon::Download,
         }
     }
 
@@ -343,6 +351,14 @@ impl DataGridPanel {
                     .into_iter()
                     .map(ToolbarAction::ValuePanel),
             );
+        }
+
+        if self.offers_count_rows() {
+            actions.push(ToolbarAction::CountRows);
+        }
+
+        if self.offers_load_all_rows() {
+            actions.push(ToolbarAction::LoadAllRows);
         }
 
         if self.chrome.show_panel_controls {
@@ -540,6 +556,8 @@ impl DataGridPanel {
             ToolbarAction::HidePanel => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.hide")
             }
+            ToolbarAction::CountRows => crate::labels::count_rows_label(),
+            ToolbarAction::LoadAllRows => crate::labels::load_all_rows_label(),
         }
     }
 
@@ -698,6 +716,8 @@ impl DataGridPanel {
             }
             ToolbarAction::ToggleMaximize => self.request_toggle_maximize(cx),
             ToolbarAction::HidePanel => self.request_hide(cx),
+            ToolbarAction::CountRows => self.request_count_rows(cx),
+            ToolbarAction::LoadAllRows => self.request_load_all_rows(cx),
         }
 
         cx.notify();

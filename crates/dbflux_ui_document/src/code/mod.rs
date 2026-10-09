@@ -381,6 +381,10 @@ pub(super) struct Execution {
     /// Byte offset in the buffer where the text of the latest run starts,
     /// used to name the statement lines behind each result.
     pub(super) query_origin: Option<usize>,
+    /// The query a result tab's Load all rows asked to run without the editor
+    /// row limit. The next execution takes it, and drops the limit only when
+    /// it runs that same query.
+    pub(super) unlimited_rows_for: Option<String>,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -403,6 +407,8 @@ pub(super) struct PendingActions {
     result: Option<PendingQueryResult>,
     set_query: Option<HistoryQuerySelected>,
     auto_refresh: bool,
+    /// A result tab asked to load every row of its query.
+    load_all_rows: Option<gpui::EntityId>,
     history_focus_restore: bool,
     drift_query: Option<PendingDriftQuery>,
     source_input_values: Option<(String, String)>,
@@ -1063,6 +1069,7 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
                 query_origin: None,
+                unlimited_rows_for: None,
             },
             execution_session: ExecutionSessionBinding::new(),
             execution_session_context: None,

@@ -1356,6 +1356,7 @@ document:
         run_script: "Ejecutar script %{name}"
       copy_error: Copiar error
       result_tab_title: "Resultado %{index}"
+      count_rows_failed: No se pudieron contar las filas de la consulta
       error:
         select_source: Selecciona al menos un origen
         start_time_required: La hora de inicio es obligatoria
@@ -1619,7 +1620,6 @@ document:
           insert_failed: "Error al insertar el documento: %{error}"
           update_failed: "Error al actualizar el documento: %{error}"
     grid:
-      rows_omitted: Se omitieron filas de este conjunto de resultados porque se alcanzó un límite de ejecución.
       edit_bar:
         clean: Sin cambios pendientes
         dirty:
@@ -1663,6 +1663,11 @@ document:
         rows:
           one: "%{count} fila"
           many: "%{count} filas"
+        limited_rows:
+          first: "Primeras %{count} filas cargadas"
+          of_total: "%{loaded}/%{total} filas cargadas"
+          count: Contar filas
+          load_all: Cargar todas las filas
         pending_changes:
           one: "%{count} cambio pendiente"
           many: "%{count} cambios pendientes"
@@ -3224,9 +3229,6 @@ document:
       custom: Personalizado
       on_open: Al abrir
     result_warnings:
-      rows_omitted:
-        summary: Se omitieron filas del resultado de la consulta
-        cause: Se omitieron filas de al menos un conjunto de resultados porque se alcanzó un límite de ejecución.
       context:
         query: resultado de consulta
         table_browse: resultado de exploración de tabla
