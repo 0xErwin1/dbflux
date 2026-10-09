@@ -202,7 +202,9 @@ impl QueryCancelHandle for DuckDbCancelHandle {
                 .filter(|session| !session.is_closed())
                 .collect();
             for session in open {
-                session.connection.cancel_active()?;
+                if let Err(error) = session.connection.cancel_active() {
+                    log::warn!("DuckDB failed to cancel a session query: {error}");
+                }
             }
         }
         Ok(())
