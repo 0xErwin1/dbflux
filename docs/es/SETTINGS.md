@@ -32,7 +32,7 @@ Integration](MCP_AI_INTEGRATION.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
-  <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
+  <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de editor y arranque">
 </picture>
 
 ### Editor

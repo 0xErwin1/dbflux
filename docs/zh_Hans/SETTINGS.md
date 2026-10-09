@@ -26,7 +26,7 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
-  <img src="../images/settings/general-light.webp" alt="设置窗口的常规部分，显示外观、编辑器与启动设置">
+  <img src="../images/settings/general-light.webp" alt="设置窗口的常规部分，显示编辑器与启动设置">
 </picture>
 
 ### 编辑器

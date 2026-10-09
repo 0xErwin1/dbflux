@@ -28,7 +28,7 @@ MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 �
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
-  <img src="../images/settings/general-light.webp" alt="모양, 편집기, 시작 설정이 보이는 설정 창의 일반 섹션">
+  <img src="../images/settings/general-light.webp" alt="편집기와 시작 설정이 보이는 설정 창의 일반 섹션">
 </picture>
 
 ### 편집기
