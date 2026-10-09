@@ -1348,7 +1348,6 @@ mod tests {
             &[
                 ("XDG_DATA_HOME", data_dir.as_os_str()),
                 ("HOME", data_dir.as_os_str()),
-                ("APPDATA", data_dir.as_os_str()),
             ],
         )
         .expect("isolated fixture must pass")
@@ -1418,8 +1417,7 @@ mod tests {
             &[
                 ("XDG_DATA_HOME", data_dir.as_os_str()),
                 ("HOME", data_dir.as_os_str()),
-                ("APPDATA", data_dir.as_os_str()),
-                (
+                    (
                     "DBFLUX_DRIVER_IPC_TOKEN",
                     std::ffi::OsStr::new("env-fallback-token"),
                 ),
@@ -1494,7 +1492,6 @@ mod tests {
             &[
                 ("XDG_DATA_HOME", data_dir.as_os_str()),
                 ("HOME", data_dir.as_os_str()),
-                ("APPDATA", data_dir.as_os_str()),
                 (
                     "DBFLUX_DRIVER_IPC_TOKEN",
                     std::ffi::OsStr::new("fallback-env-token"),

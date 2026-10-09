@@ -6,9 +6,15 @@
 //! in a process whose environment is controlled by the test, never in the
 //! multithreaded harness process. Token values are never printed.
 //!
-//! The fixtures redirect every base variable `dirs::data_dir()` consults —
-//! `XDG_DATA_HOME` on Linux, `HOME` on macOS and `APPDATA` on Windows — so the
-//! token file is never written into the developer's real data directory.
+//! Unix only. `init_process_auth_tokens()` writes `ipc_auth_token` under
+//! `dirs::data_dir()`, which on Linux honours `XDG_DATA_HOME` and on macOS
+//! derives from `HOME`, so the fixtures can redirect it to a scratch directory.
+//! On Windows the same call resolves through
+//! `SHGetKnownFolderPath(FOLDERID_RoamingAppData)`, which no environment
+//! variable overrides, so these tests cannot be isolated there and would write
+//! the developer's real token file. Windows still compiles this target under
+//! CI's strict Clippy; it does not execute it.
+#![cfg(unix)]
 
 use std::ffi::OsStr;
 use std::process::Command;
@@ -104,7 +110,6 @@ fn init_process_auth_tokens_leaves_process_environment_untouched() {
         &[
             ("XDG_DATA_HOME", data_dir.as_os_str()),
             ("HOME", data_dir.as_os_str()),
-            ("APPDATA", data_dir.as_os_str()),
         ],
     )
     .expect("isolated fixture must pass")
@@ -145,7 +150,6 @@ fn spawned_auth_provider_host_receives_store_token_explicitly() {
         &[
             ("XDG_DATA_HOME", data_dir.as_os_str()),
             ("HOME", data_dir.as_os_str()),
-            ("APPDATA", data_dir.as_os_str()),
         ],
     )
     .expect("isolated fixture must pass")
@@ -209,7 +213,6 @@ fn init_process_auth_tokens_is_idempotent() {
         &[
             ("XDG_DATA_HOME", data_dir.as_os_str()),
             ("HOME", data_dir.as_os_str()),
-            ("APPDATA", data_dir.as_os_str()),
         ],
     )
     .expect("isolated fixture must pass")
@@ -217,10 +220,9 @@ fn init_process_auth_tokens_is_idempotent() {
         return;
     }
 
-    // Whatever base variable this platform uses, the resolved token file must
-    // land inside the fixture directory. Without the HOME and APPDATA entries
-    // alongside XDG_DATA_HOME this assertion fails on macOS and Windows, where
-    // the fixture would otherwise write the developer's real token file.
+    // The fixture must redirect whichever base variable this platform uses:
+    // XDG_DATA_HOME on Linux, HOME on macOS. Without those entries the token
+    // file would land in the developer's real data directory.
     let fixture_dir = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .expect("fixture must provide XDG_DATA_HOME");
