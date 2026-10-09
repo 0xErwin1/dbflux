@@ -129,6 +129,25 @@ you choose **Private Key** and leave the key path blank.
 
 **Test SSH** verifies the tunnel without saving the connection.
 
+### Referencing a host from your SSH config
+
+The **SSH config host** dropdown lists every `Host` your `~/.ssh/config`
+defines, with the user, host name and port each one resolves to. Picking one
+stores the alias and not the values it resolves to, so a later edit to your SSH
+config applies to the next connection without touching the profile. While an
+alias is selected the **Host**, **Port** and **Username** fields show nothing
+and are disabled — the alias is the target — and a key path left empty takes
+the `IdentityFile` that host names, falling back to your SSH agent or default
+keys when it names none. `Include`, `Match` and the `%h`, `%r` and `%d` tokens
+inside an `IdentityFile` resolve the way OpenSSH resolves them.
+
+A host whose config needs `ProxyJump` or `ProxyCommand` is listed and marked:
+DBFlux cannot reach it, and connecting fails with that reason instead of
+dialing the bastion directly. Host keys keep being verified against DBFlux's
+own store in its data directory rather than your `~/.ssh/known_hosts`, so a
+host you have reached from a terminal for years still asks you to confirm its
+key the first time.
+
 ### Where SSH secrets live
 
 Passphrases and passwords are stored in the **OS keyring**, never in the
