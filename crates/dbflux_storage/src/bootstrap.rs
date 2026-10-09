@@ -52,6 +52,24 @@ pub struct StorageRuntime {
     /// Manages filesystem artifact paths (scratch/shadow files).
     /// Content stays on disk; metadata about paths lives in dbflux.db.
     artifacts: ArtifactStore,
+    /// The temporary directory [`StorageRuntime::in_memory`] created, removed
+    /// when the runtime drops. Without it every test runtime leaves a migrated
+    /// database behind in the temp dir, which on a RAM-backed `/tmp` fills
+    /// memory after a few full test runs.
+    owned_temp_dir: Option<PathBuf>,
+}
+
+impl Drop for StorageRuntime {
+    fn drop(&mut self) {
+        if let Some(temp_dir) = self.owned_temp_dir.take()
+            && let Err(error) = std::fs::remove_dir_all(&temp_dir)
+        {
+            log::warn!(
+                "Could not remove test storage directory {}: {error}",
+                temp_dir.display()
+            );
+        }
+    }
 }
 
 /// The directory name for one test runtime.
@@ -63,10 +81,53 @@ pub struct StorageRuntime {
 /// test binaries run at once.
 fn unique_test_runtime_dir_name() -> String {
     format!(
-        "dbflux_storage_test_{}_{}",
+        "{TEST_RUNTIME_DIR_PREFIX}{}_{}",
         std::process::id(),
         uuid::Uuid::new_v4()
     )
+}
+
+const TEST_RUNTIME_DIR_PREFIX: &str = "dbflux_storage_test_";
+
+/// A test runtime directory this old belongs to a test process that has
+/// finished: each test runs in its own short-lived process.
+const STALE_TEST_RUNTIME_AGE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Removes test runtime directories that finished test processes left behind.
+///
+/// A runtime held by a GPUI entity is never dropped, because the test harness
+/// does not tear its app down before the process exits, so `Drop` alone
+/// cannot clean up after it. Sweeping once per process keeps the temp dir
+/// bounded.
+// ponytail: age-based sweep; a test runtime alive for more than five minutes
+// would lose its directory, switch to a per-process lock file if that happens.
+fn sweep_stale_test_runtime_dirs(temp_root: &Path, max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(temp_root) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let is_test_runtime = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(TEST_RUNTIME_DIR_PREFIX));
+        let is_stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > max_age);
+
+        if is_test_runtime
+            && is_stale
+            && let Err(error) = std::fs::remove_dir_all(entry.path())
+        {
+            log::debug!(
+                "Could not remove stale test storage directory {}: {error}",
+                entry.path().display()
+            );
+        }
+    }
 }
 
 impl StorageRuntime {
@@ -114,6 +175,7 @@ impl StorageRuntime {
             dbflux_db_path,
             dbflux_db,
             artifacts,
+            owned_temp_dir: None,
         })
     }
 
@@ -121,9 +183,14 @@ impl StorageRuntime {
     ///
     /// Useful for tests. The directory is created under `std::env::temp_dir()`
     /// with a name no other call can repeat, so each runtime owns its own SQLite
-    /// file.
+    /// file, and is removed when the runtime drops.
     #[allow(clippy::result_large_err)]
     pub fn in_memory() -> Result<Self, StorageError> {
+        static SWEEP: std::sync::Once = std::sync::Once::new();
+        SWEEP.call_once(|| {
+            sweep_stale_test_runtime_dirs(&std::env::temp_dir(), STALE_TEST_RUNTIME_AGE);
+        });
+
         let temp_dir = std::env::temp_dir().join(unique_test_runtime_dir_name());
 
         // `create_dir`, not `create_dir_all`: a directory that already exists
@@ -138,7 +205,21 @@ impl StorageRuntime {
 
         let dbflux_db_path = temp_dir.join("dbflux.db");
 
-        Self::for_path(dbflux_db_path)
+        match Self::for_path(dbflux_db_path) {
+            Ok(mut runtime) => {
+                runtime.owned_temp_dir = Some(temp_dir);
+                Ok(runtime)
+            }
+            Err(error) => {
+                if let Err(cleanup_error) = std::fs::remove_dir_all(&temp_dir) {
+                    log::warn!(
+                        "Could not remove test storage directory {}: {cleanup_error}",
+                        temp_dir.display()
+                    );
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Returns the path to the unified database.
@@ -470,6 +551,40 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "001_initial migration should be recorded");
+    }
+
+    #[test]
+    fn in_memory_runtime_removes_its_directory_on_drop() {
+        let runtime = StorageRuntime::in_memory().expect("test runtime");
+        let directory = runtime
+            .dbflux_db_path()
+            .parent()
+            .expect("runtime directory")
+            .to_path_buf();
+        assert!(directory.exists());
+
+        drop(runtime);
+
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn sweep_removes_only_stale_test_runtime_directories() {
+        let root = std::env::temp_dir().join(format!("dbflux_sweep_root_{}", uuid::Uuid::new_v4()));
+        let runtime_dir = root.join(format!("{TEST_RUNTIME_DIR_PREFIX}1_a"));
+        let other_dir = root.join("unrelated");
+        std::fs::create_dir_all(&runtime_dir).expect("runtime dir");
+        std::fs::create_dir_all(&other_dir).expect("other dir");
+
+        sweep_stale_test_runtime_dirs(&root, STALE_TEST_RUNTIME_AGE);
+        assert!(runtime_dir.exists(), "a fresh directory is kept");
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sweep_stale_test_runtime_dirs(&root, std::time::Duration::from_millis(10));
+        assert!(!runtime_dir.exists(), "a stale directory is removed");
+        assert!(other_dir.exists(), "other directories are never touched");
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
