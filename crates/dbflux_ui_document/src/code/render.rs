@@ -241,13 +241,13 @@ impl CodeDocument {
             (
                 "show-results",
                 dbflux_i18n::t!("document.code.toolbar.show_results"),
-                AppIcon::PanelBottomOpen,
+                self.results_position.show_icon(),
             )
         } else {
             (
                 "hide-results",
                 dbflux_i18n::t!("document.code.toolbar.hide_results"),
-                AppIcon::PanelBottomClose,
+                self.results_position.hide_icon(),
             )
         };
         actions.push(
@@ -258,6 +258,17 @@ impl CodeDocument {
                 ContextId::Editor,
             )
             .icon(hide_icon),
+        );
+
+        let (position_label, position_icon) = self.results_position.toggle_label_and_icon();
+        actions.push(
+            PaneAction::command(
+                "results-position",
+                position_label,
+                Command::ToggleResultsPosition,
+                ContextId::Editor,
+            )
+            .icon(position_icon),
         );
 
         actions
@@ -794,11 +805,27 @@ impl CodeDocument {
     fn render_results_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_maximized = self.results_maximized;
+        let (_, position_icon) = self.results_position.toggle_label_and_icon();
 
         div()
             .flex()
             .items_center()
             .gap_1()
+            .child(
+                div()
+                    .id("toggle-results-position")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_6()
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_results_position(cx);
+                    }))
+                    .child(Icon::new(position_icon).size(ui(14.0)).muted()),
+            )
             .child(
                 div()
                     .id("toggle-maximize-results")
@@ -835,7 +862,11 @@ impl CodeDocument {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.hide_results(cx);
                     }))
-                    .child(Icon::new(AppIcon::PanelBottomClose).size(ui(14.0)).muted()),
+                    .child(
+                        Icon::new(self.results_position.hide_icon())
+                            .size(ui(14.0))
+                            .muted(),
+                    ),
             )
     }
 
@@ -870,7 +901,11 @@ impl CodeDocument {
                         this.layout = SqlQueryLayout::Split;
                         cx.notify();
                     }))
-                    .child(Icon::new(AppIcon::PanelBottomOpen).size(ui(14.0)).muted()),
+                    .child(
+                        Icon::new(self.results_position.show_icon())
+                            .size(ui(14.0))
+                            .muted(),
+                    ),
             )
     }
 
@@ -1213,6 +1248,28 @@ impl Render for CodeDocument {
                     .min_h_0()
                     .overflow_hidden()
                     .child(match self.layout {
+                        SqlQueryLayout::Split
+                            if self.results_position == ResultsPosition::Right =>
+                        {
+                            h_resizable(SharedString::from(format!(
+                                "sql-split-right-{}",
+                                self.id.0
+                            )))
+                            .child(
+                                resizable_panel()
+                                    .size(px(200.0))
+                                    .size_range(px(200.0)..px(10_000.0))
+                                    .child(editor_view),
+                            )
+                            .child(
+                                resizable_panel()
+                                    .size(px(200.0))
+                                    .size_range(px(200.0)..px(10_000.0))
+                                    .child(results_view),
+                            )
+                            .into_any_element()
+                        }
+
                         SqlQueryLayout::Split => {
                             v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
                                 .child(

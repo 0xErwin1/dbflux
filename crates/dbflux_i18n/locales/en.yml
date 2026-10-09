@@ -1223,6 +1223,8 @@ document:
       restore_results: "Restore results"
       hide_results: "Hide results"
       show_results: "Show results"
+      results_right: "Show results on the right"
+      results_bottom: "Show results below"
     vim:
       normal: "NORMAL"
       insert: "INSERT"
@@ -3646,6 +3648,8 @@ palette:
       name: Toggle editor panel
     toggle_results:
       name: Toggle results panel
+    toggle_results_position:
+      name: "Move results beside or below the editor"
     toggle_tasks:
       name: Toggle tasks panel
     clear_finished_tasks:
@@ -4032,6 +4036,7 @@ settings:
       create_folder: Create folder
       toggle_editor: Toggle editor panel
       toggle_results: Toggle results panel
+      toggle_results_position: "Move results beside or below the editor"
       toggle_tasks: Toggle tasks panel
       cancel_task: Cancel task
       clear_finished_tasks: Clear finished tasks

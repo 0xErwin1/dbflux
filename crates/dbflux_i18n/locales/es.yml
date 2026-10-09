@@ -1223,6 +1223,8 @@ document:
       restore_results: "Restaurar resultados"
       hide_results: "Ocultar resultados"
       show_results: "Mostrar resultados"
+      results_right: "Mostrar los resultados a la derecha"
+      results_bottom: "Mostrar los resultados debajo"
     vim:
       normal: "NORMAL"
       insert: "INSERTAR"
@@ -3646,6 +3648,8 @@ palette:
       name: Mostrar u ocultar panel del editor
     toggle_results:
       name: Mostrar u ocultar panel de resultados
+    toggle_results_position:
+      name: "Mover los resultados junto al editor o debajo"
     toggle_tasks:
       name: Mostrar u ocultar panel de tareas
     clear_finished_tasks:
@@ -4032,6 +4036,7 @@ settings:
       create_folder: Crear carpeta
       toggle_editor: Mostrar u ocultar panel del editor
       toggle_results: Mostrar u ocultar panel de resultados
+      toggle_results_position: "Mover los resultados junto al editor o debajo"
       toggle_tasks: Mostrar u ocultar panel de tareas
       cancel_task: Cancelar tarea
       clear_finished_tasks: Borrar tareas terminadas

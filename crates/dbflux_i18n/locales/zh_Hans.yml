@@ -1223,6 +1223,8 @@ document:
       restore_results: "还原结果"
       hide_results: "隐藏结果"
       show_results: "显示结果"
+      results_right: "在右侧显示结果"
+      results_bottom: "在下方显示结果"
     vim:
       normal: "普通"
       insert: "插入"
@@ -3646,6 +3648,8 @@ palette:
       name: 切换编辑器面板
     toggle_results:
       name: 切换结果面板
+    toggle_results_position:
+      name: "将结果移到编辑器旁边或下方"
     toggle_tasks:
       name: 切换任务面板
     clear_finished_tasks:
@@ -4032,6 +4036,7 @@ settings:
       create_folder: 新建文件夹
       toggle_editor: 切换编辑器面板
       toggle_results: 切换结果面板
+      toggle_results_position: "将结果移到编辑器旁边或下方"
       toggle_tasks: 切换任务面板
       cancel_task: 取消任务
       clear_finished_tasks: 清除已完成任务

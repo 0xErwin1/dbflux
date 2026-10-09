@@ -56,6 +56,12 @@ impl Workspace {
                 });
                 Some(true)
             }
+            Command::ToggleResultsPosition => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ToggleResultsPosition, window, cx);
+                });
+                Some(true)
+            }
 
             Command::CancelQuery => {
                 // Route to active document
