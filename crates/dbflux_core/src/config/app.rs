@@ -615,7 +615,7 @@ impl SyntaxColorOverrides {
 /// Parses `#RRGGBB` (the `#` is optional) into its 24-bit value.
 pub fn parse_hex_color(text: &str) -> Option<u32> {
     let digits = text.trim().strip_prefix('#').unwrap_or(text.trim());
-    if digits.len() != 6 {
+    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     u32::from_str_radix(digits, 16).ok()
@@ -938,6 +938,15 @@ mod tests {
     // =========================================================================
     // GeneralSettings: key-value preview size limit
     // =========================================================================
+
+    #[test]
+    fn parse_hex_color_rejects_non_hex_digits() {
+        assert_eq!(parse_hex_color("#12ab3F"), Some(0x12ab3f));
+        assert_eq!(parse_hex_color("12ab3F"), Some(0x12ab3f));
+        assert_eq!(parse_hex_color("+12345"), None);
+        assert_eq!(parse_hex_color("#-12345"), None);
+        assert_eq!(parse_hex_color("#12345"), None);
+    }
 
     #[test]
     fn key_value_size_limit_defaults_to_ten_mib() {
