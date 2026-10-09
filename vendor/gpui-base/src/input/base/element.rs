@@ -2528,24 +2528,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
                 let height = line_height * lines.len() as f32;
 
-                // A row of the statement under the cursor takes the statement
-                // fill (the cursor row a stronger one) instead of the plain
-                // active-line colour.
-                if let Some(gutter) = prepaint
-                    .statement_gutter
-                    .as_ref()
-                    .filter(|gutter| gutter.is_active_row(buffer_line))
-                {
-                    let row_fill = if is_active {
-                        gutter.style.cursor_line_fill
-                    } else {
-                        gutter.style.statement_fill
-                    };
-                    window.paint_quad(fill(
-                        Bounds::new(p, size(bounds.size.width, height)),
-                        row_fill,
-                    ));
-                } else if is_active {
+                // The statement under the cursor is marked in the gutter only,
+                // so the text being edited stays on the editor background.
+                if is_active {
                     if let Some(bg_color) = active_line_color {
                         window.paint_quad(fill(
                             Bounds::new(p, size(bounds.size.width, height)),
