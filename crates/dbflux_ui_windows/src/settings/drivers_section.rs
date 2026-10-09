@@ -562,9 +562,21 @@ impl FormSection for DriversSection {
             vec![DriverEditorField::Save],
         ];
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`rows` is the six-row `vec!` literal built directly \
+                      above, so rows 0 and 1 always exist; the retain filters \
+                      keep each row's first field"
+        )]
         if !self.drv_override_refresh_policy {
             rows[0].retain(|f| *f != DriverEditorField::RefreshPolicy);
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`rows` is the six-row `vec!` literal built directly \
+                      above, so rows 0 and 1 always exist; the retain filters \
+                      keep each row's first field"
+        )]
         if !self.drv_override_refresh_interval {
             rows[1].retain(|f| *f != DriverEditorField::RefreshInterval);
         }

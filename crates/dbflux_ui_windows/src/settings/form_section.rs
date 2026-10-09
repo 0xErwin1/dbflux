@@ -5,7 +5,7 @@ use gpui::{Context, Entity, EventEmitter, KeyDownEvent, Subscription, Window};
 
 use super::section_trait::SectionFocusEvent;
 
-pub trait FormSection: Sized + 'static {
+pub(crate) trait FormSection: Sized + 'static {
     type Focus: Copy + PartialEq + std::fmt::Debug;
     type FormField: Copy + PartialEq + std::fmt::Debug;
 
@@ -33,6 +33,16 @@ pub trait FormSection: Sized + 'static {
     fn focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>);
     fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>);
 
+    /// `FormGridNav`'s grid contract: indices returned by the in-crate
+    /// `position()` scan are in bounds of the same `rows` value, and the
+    /// in-crate `form_rows()` implementations supply only non-empty rows.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the row index is guarded by `row_idx + 1 < rows.len()` above; \
+                  every `form_rows()` implementor returns only non-empty rows \
+                  (rows are `vec!` literals or `map(|f| vec![f])`), and the \
+                  `drivers_section` retain filter keeps the row's first field"
+    )]
     fn move_down(&mut self) {
         let rows = self.form_rows();
         let current = self.form_field();
@@ -49,6 +59,12 @@ pub trait FormSection: Sized + 'static {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the row index is guarded by `row_idx > 0` above; every \
+                  `form_rows()` implementor returns only non-empty rows, so \
+                  the clamped column stays in bounds of `prev_row`"
+    )]
     fn move_up(&mut self) {
         let rows = self.form_rows();
         let current = self.form_field();
@@ -65,6 +81,11 @@ pub trait FormSection: Sized + 'static {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`col_idx` comes from `position()` over the same `rows` \
+                  value, and the `col_idx > 0` check guards the subtraction"
+    )]
     fn move_left(&mut self) {
         let rows = self.form_rows();
         let current = self.form_field();
@@ -79,6 +100,12 @@ pub trait FormSection: Sized + 'static {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`col_idx` comes from `position()` over the same `rows` \
+                  value, and `col_idx + 1 < row.len()` guards the successor \
+                  index"
+    )]
     fn move_right(&mut self) {
         let rows = self.form_rows();
         let current = self.form_field();
@@ -222,7 +249,10 @@ pub trait FormSection: Sized + 'static {
     }
 }
 
-pub fn create_blur_subscription<S>(cx: &mut Context<S>, input: &Entity<InputState>) -> Subscription
+pub(crate) fn create_blur_subscription<S>(
+    cx: &mut Context<S>,
+    input: &Entity<InputState>,
+) -> Subscription
 where
     S: FormSection + EventEmitter<SectionFocusEvent>,
 {

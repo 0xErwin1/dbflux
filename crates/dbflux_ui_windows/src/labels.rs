@@ -947,6 +947,17 @@ pub(crate) fn keybinding_category_name(category: &str) -> String {
 }
 
 #[allow(dead_code)]
+/// Slug of a keybinding category used in settings copy.
+///
+/// The categories are an exhaustive closed set (checked by the
+/// translation-coverage tests below); an unknown category is a programming
+/// error that must fail loudly rather than render a wrong label.
+#[expect(
+    clippy::panic,
+    reason = "the known category names are an exhaustive closed set covered \
+              by the exhaustive translation-coverage tests; an unknown \
+              category is a programming error and must panic loudly"
+)]
 fn keybinding_category_slug(category: &str) -> &'static str {
     match category {
         "Global" => "global",

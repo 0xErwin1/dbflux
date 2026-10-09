@@ -10,7 +10,7 @@ use dbflux_core::ConnectionMcpPolicyBinding;
 /// Only reachable through the MCP tab's "allow this client" checkbox, which
 /// only exists when the `mcp` feature is enabled.
 #[cfg(feature = "mcp")]
-pub fn set_binding_presence(
+pub(crate) fn set_binding_presence(
     bindings: &mut Vec<ConnectionMcpPolicyBinding>,
     actor_id: &str,
     present: bool,
@@ -30,7 +30,7 @@ pub fn set_binding_presence(
 
 /// Writes deduped role/policy ids into the binding for `actor_id`. No-op
 /// when that actor has no binding in `bindings`.
-pub fn apply_selection(
+pub(crate) fn apply_selection(
     bindings: &mut [ConnectionMcpPolicyBinding],
     actor_id: &str,
     role_ids: Vec<String>,
@@ -47,7 +47,10 @@ pub fn apply_selection(
 
 /// Merges a primary dropdown selection with a multi-select's extra values
 /// into one deduped list, primary first. An empty primary is skipped.
-pub fn merge_primary_and_extras(primary: Option<String>, extras: Vec<String>) -> Vec<String> {
+pub(crate) fn merge_primary_and_extras(
+    primary: Option<String>,
+    extras: Vec<String>,
+) -> Vec<String> {
     let mut merged = Vec::new();
 
     if let Some(primary) = primary
@@ -74,7 +77,7 @@ fn dedup_preserve_order(values: Vec<String>) -> Vec<String> {
 /// Only reachable from the MCP tab's trusted-client list, which only exists
 /// when the `mcp` feature is enabled.
 #[cfg(feature = "mcp")]
-pub fn orphan_binding_count(
+pub(crate) fn orphan_binding_count(
     bindings: &[ConnectionMcpPolicyBinding],
     known_actor_ids: &[String],
 ) -> usize {
@@ -97,7 +100,7 @@ mod mcp_feature {
     /// approval: some policy asks for them and no policy allows them, since
     /// the most permissive decision wins.
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
-    pub struct EffectivePermissions {
+    pub(crate) struct EffectivePermissions {
         pub tools: Vec<String>,
         pub classes: Vec<String>,
         pub approval_classes: Vec<String>,
@@ -105,7 +108,7 @@ mod mcp_feature {
 
     /// Filters `clients` by a case-insensitive substring match on name or id.
     /// An empty query returns every client.
-    pub fn filter_clients<'a>(
+    pub(crate) fn filter_clients<'a>(
         clients: &'a [TrustedClientDto],
         query: &str,
     ) -> Vec<&'a TrustedClientDto> {
@@ -127,7 +130,7 @@ mod mcp_feature {
     /// Computes the sorted, deduped union of tools and classes that
     /// `binding` grants, resolving its direct policies plus the policies of
     /// every assigned role. Unknown role/policy ids are skipped.
-    pub fn effective_permissions(
+    pub(crate) fn effective_permissions(
         binding: &ConnectionMcpPolicyBinding,
         roles: &[PolicyRoleDto],
         policies: &[ToolPolicyDto],
@@ -168,7 +171,7 @@ mod mcp_feature {
 }
 
 #[cfg(feature = "mcp")]
-pub use mcp_feature::{effective_permissions, filter_clients};
+pub(crate) use mcp_feature::{effective_permissions, filter_clients};
 
 #[cfg(test)]
 mod tests {

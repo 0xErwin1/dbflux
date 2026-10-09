@@ -1040,6 +1040,12 @@ impl ConnectionManagerWindow {
     /// host-owned secret input (`secret_field`) is placed at that position
     /// instead and taken out of the option. When the form declares no
     /// `password` field, `secret_field` is left for the caller to place.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the loop bounds `i` by `fields.len()`, and every `i + n` or \
+                  `i - 1` index is guarded by an explicit `i + n < fields.len()` \
+                  or `i > 0` check in the same condition"
+    )]
     pub(super) fn render_form_tab(
         &mut self,
         tab: &FormTab,
