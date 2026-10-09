@@ -1958,6 +1958,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "toggle_results_position",
+                dbflux_i18n::t!("palette.command.toggle_results_position.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "toggle_tasks",
                 dbflux_i18n::t!("palette.command.toggle_tasks.name"),
                 dbflux_i18n::t!("palette.category.view"),

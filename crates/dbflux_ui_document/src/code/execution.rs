@@ -1811,6 +1811,14 @@ impl CodeDocument {
         cx.notify();
     }
 
+    /// Moves the results between below and beside the editor, and keeps the
+    /// choice for the query tabs opened after it.
+    pub fn toggle_results_position(&mut self, cx: &mut Context<Self>) {
+        self.results_position = self.results_position.toggled();
+        self.results_position.save(self.app_state.read(cx));
+        cx.notify();
+    }
+
     /// Restores the split when maximized results hide the editor, so moving
     /// the keyboard to the query text never focuses an input that is not shown.
     pub(super) fn reveal_editor(&mut self, cx: &mut Context<Self>) {
@@ -3685,6 +3693,7 @@ mod result_tab_keyboard_tests {
                 ("close-result-tab", Some(Command::CloseResultTab)),
                 ("maximize-results", Some(Command::ToggleResults)),
                 ("hide-results", Some(Command::ToggleEditor)),
+                ("results-position", Some(Command::ToggleResultsPosition)),
             ]
         );
 

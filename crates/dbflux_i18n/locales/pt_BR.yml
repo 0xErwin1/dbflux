@@ -1223,6 +1223,8 @@ document:
       restore_results: "Restaurar resultados"
       hide_results: "Ocultar resultados"
       show_results: "Mostrar resultados"
+      results_right: "Mostrar os resultados à direita"
+      results_bottom: "Mostrar os resultados abaixo"
     vim:
       normal: "NORMAL"
       insert: "INSERT"
@@ -3646,6 +3648,8 @@ palette:
       name: Alternar painel do editor
     toggle_results:
       name: Alternar painel de resultados
+    toggle_results_position:
+      name: "Mover os resultados para o lado ou para baixo do editor"
     toggle_tasks:
       name: Alternar painel de tarefas
     clear_finished_tasks:
@@ -4032,6 +4036,7 @@ settings:
       create_folder: Criar pasta
       toggle_editor: Alternar painel do editor
       toggle_results: Alternar painel de resultados
+      toggle_results_position: "Mover os resultados para o lado ou para baixo do editor"
       toggle_tasks: Alternar painel de tarefas
       cancel_task: Cancelar tarefa
       clear_finished_tasks: Limpar tarefas concluídas

@@ -12,6 +12,18 @@ automatically from the database category:
 Event-stream-style containers open as event streams when the driver declares that
 presentation.
 
+## Results beside the editor
+
+In a query tab the results sit below the editor. On a wide screen, move them to
+the right of the editor with the panel button in the results header, the
+**Show results on the right** entry of the pane actions, or **Move results
+beside or below the editor** in the command palette. The same control moves
+them back below. Drag the divider to resize the two sides. New query tabs open
+with the position you chose last.
+
+In either position, `Ctrl+j` moves the keyboard from the editor to the results
+and `Ctrl+k` moves it back.
+
 ## Navigating the data grid
 
 When the results panel has focus:

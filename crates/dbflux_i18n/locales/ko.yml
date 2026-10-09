@@ -1223,6 +1223,8 @@ document:
       restore_results: "결과 복원"
       hide_results: "결과 숨기기"
       show_results: "결과 표시"
+      results_right: "결과를 오른쪽에 표시"
+      results_bottom: "결과를 아래에 표시"
     vim:
       normal: "노멀"
       insert: "삽입"
@@ -3646,6 +3648,8 @@ palette:
       name: 편집기 패널 전환
     toggle_results:
       name: 결과 패널 전환
+    toggle_results_position:
+      name: "결과를 편집기 옆 또는 아래로 이동"
     toggle_tasks:
       name: 작업 패널 전환
     clear_finished_tasks:
@@ -4032,6 +4036,7 @@ settings:
       create_folder: 폴더 만들기
       toggle_editor: 편집기 패널 전환
       toggle_results: 결과 패널 전환
+      toggle_results_position: "결과를 편집기 옆 또는 아래로 이동"
       toggle_tasks: 작업 패널 전환
       cancel_task: 작업 취소
       clear_finished_tasks: 완료된 작업 지우기
