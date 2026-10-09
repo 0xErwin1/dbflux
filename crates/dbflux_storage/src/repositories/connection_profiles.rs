@@ -118,7 +118,8 @@ impl ConnectionProfileRepository {
                        save_password, kind, access_kind, access_provider,
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
-                       created_at, updated_at, environment
+                       created_at, updated_at, environment, navigator_view,
+                       show_all_databases
                 FROM cfg_connection_profiles
                 ORDER BY name ASC
                 "#,
@@ -148,6 +149,8 @@ impl ConnectionProfileRepository {
                     created_at: row.get(14)?,
                     updated_at: row.get(15)?,
                     environment: row.get(16)?,
+                    navigator_view: row.get(17)?,
+                    show_all_databases: row.get::<_, i32>(18)? != 0,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -184,7 +187,8 @@ impl ConnectionProfileRepository {
                        save_password, kind, access_kind, access_provider,
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
-                       created_at, updated_at, environment
+                       created_at, updated_at, environment, navigator_view,
+                       show_all_databases
                 FROM cfg_connection_profiles
                 WHERE id = ?1
                 "#,
@@ -213,6 +217,8 @@ impl ConnectionProfileRepository {
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
                 environment: row.get(16)?,
+                navigator_view: row.get(17)?,
+                show_all_databases: row.get::<_, i32>(18)? != 0,
             })
         });
 
@@ -235,10 +241,10 @@ impl ConnectionProfileRepository {
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
-                    ssh_tunnel_profile_id, environment,
+                    ssh_tunnel_profile_id, environment, navigator_view, show_all_databases,
                     created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                     datetime('now'), datetime('now')
                 )
                 "#,
@@ -258,6 +264,8 @@ impl ConnectionProfileRepository {
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.environment,
+                    profile.navigator_view,
+                    profile.show_all_databases as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -290,6 +298,8 @@ impl ConnectionProfileRepository {
                     proxy_profile_id = ?13,
                     ssh_tunnel_profile_id = ?14,
                     environment = ?15,
+                    navigator_view = ?16,
+                    show_all_databases = ?17,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -309,6 +319,8 @@ impl ConnectionProfileRepository {
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.environment,
+                    profile.navigator_view,
+                    profile.show_all_databases as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -334,10 +346,10 @@ impl ConnectionProfileRepository {
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
-                    ssh_tunnel_profile_id, environment,
+                    ssh_tunnel_profile_id, environment, navigator_view, show_all_databases,
                     created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                     datetime('now'), datetime('now')
                 )
                 ON CONFLICT(id) DO UPDATE SET
@@ -355,6 +367,8 @@ impl ConnectionProfileRepository {
                     proxy_profile_id = excluded.proxy_profile_id,
                     ssh_tunnel_profile_id = excluded.ssh_tunnel_profile_id,
                     environment = excluded.environment,
+                    navigator_view = excluded.navigator_view,
+                    show_all_databases = excluded.show_all_databases,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -373,6 +387,8 @@ impl ConnectionProfileRepository {
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.environment,
+                    profile.navigator_view,
+                    profile.show_all_databases as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -435,6 +451,10 @@ pub struct ConnectionProfileDto {
     /// Deployment environment identifier (`development`, `staging`,
     /// `production`), `None` when the user set none.
     pub environment: Option<String>,
+    /// Sidebar layout of the connection: `advanced` or `simple`.
+    pub navigator_view: String,
+    /// Whether the sidebar lists every database on the server.
+    pub show_all_databases: bool,
 }
 
 impl ConnectionProfileDto {
@@ -458,6 +478,8 @@ impl ConnectionProfileDto {
             created_at: String::new(),
             updated_at: String::new(),
             environment: None,
+            navigator_view: "advanced".to_string(),
+            show_all_databases: true,
         }
     }
 }

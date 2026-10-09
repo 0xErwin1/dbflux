@@ -338,6 +338,12 @@ pub(crate) fn instance_metrics_folder_label() -> String {
     dbflux_i18n::t!("sidebar.tree.folder.instance_metrics")
 }
 
+/// Translated label for the folder that holds the instance views in the
+/// Simple navigator view.
+pub(crate) fn instance_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.instance")
+}
+
 /// Translated label for the Instance Inspectors sidebar folder.
 pub(crate) fn instance_inspectors_folder_label() -> String {
     dbflux_i18n::t!("sidebar.tree.folder.instance_inspectors")

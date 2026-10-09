@@ -2640,8 +2640,11 @@ impl ConnectionManagerWindow {
                     }
                 }
             }
-            MainExtraStop::SslMode => {
+            MainExtraStop::SslMode | MainExtraStop::NavigatorView => {
                 self.step_main_extra_choice(index, true);
+            }
+            MainExtraStop::ShowAllDatabases => {
+                self.form.show_all_databases = !self.form.show_all_databases;
             }
             MainExtraStop::SslCert(slot) => {
                 let current = self.ssl_cert_input(slot).read(cx).value().to_string();
@@ -2700,7 +2703,16 @@ impl ConnectionManagerWindow {
                 }
                 true
             }
-            MainExtraStop::SslCert(_) => false,
+            MainExtraStop::SslCert(_) | MainExtraStop::ShowAllDatabases => false,
+            MainExtraStop::NavigatorView => {
+                use dbflux_core::NavigatorView::{Advanced, Compact, Simple};
+                self.form.navigator_view = match (self.form.navigator_view, forward) {
+                    (Advanced, true) | (Simple, false) => Compact,
+                    (Compact, true) | (Advanced, false) => Simple,
+                    (Simple, true) | (Compact, false) => Advanced,
+                };
+                true
+            }
         }
     }
 
@@ -2723,6 +2735,17 @@ impl ConnectionManagerWindow {
                 .filter(|section| !section.fields.is_empty())
                 .position(|section| section.fields.iter().any(|f| f.id == field.id))
                 .map_or(0, |section| section + 1),
+            Some(MainExtraStop::ShowAllDatabases) => main_tab
+                .sections
+                .iter()
+                .filter(|section| !section.fields.is_empty())
+                .position(|section| section.fields.iter().any(|f| f.id == "database"))
+                .map_or(0, |section| section + 1),
+            // The navigator section follows the transport section, when
+            // the driver has one.
+            Some(MainExtraStop::NavigatorView) => {
+                main_tab.sections.len() + 2 + usize::from(driver.metadata().ssl_modes.is_some())
+            }
             Some(_) => main_tab.sections.len() + 2,
             None => 0,
         }

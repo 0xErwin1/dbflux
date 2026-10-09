@@ -115,7 +115,8 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::DependentsFolder
         | SchemaNodeKind::DependentItem
         | SchemaNodeKind::Bucket
-        | SchemaNodeKind::BucketsFolder => false,
+        | SchemaNodeKind::BucketsFolder
+        | SchemaNodeKind::InstanceFolder => false,
     }
 }
 
@@ -2415,7 +2416,7 @@ mod menu_availability_tests {
     use uuid::Uuid;
 
     /// Every `SchemaNodeKind`, in declaration order.
-    const ALL_KINDS: [SchemaNodeKind; 64] = [
+    const ALL_KINDS: [SchemaNodeKind; 65] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2480,6 +2481,7 @@ mod menu_availability_tests {
         SchemaNodeKind::InstanceInspectorsFolder,
         SchemaNodeKind::InstanceInspectorLeaf,
         SchemaNodeKind::InstanceOverviewLeaf,
+        SchemaNodeKind::InstanceFolder,
     ];
 
     /// Kinds whose rows open a context menu.

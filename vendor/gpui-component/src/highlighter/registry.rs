@@ -121,6 +121,8 @@ pub struct SyntaxColors {
     pub emphasis_strong: Option<ThemeStyle>,
     #[serde(rename = "enum")]
     pub enum_: Option<ThemeStyle>,
+    /// A column name (SQL).
+    pub field: Option<ThemeStyle>,
     pub function: Option<ThemeStyle>,
     pub hint: Option<ThemeStyle>,
     pub keyword: Option<ThemeStyle>,
@@ -129,6 +131,8 @@ pub struct SyntaxColors {
     pub link_text: Option<ThemeStyle>,
     #[serde(rename = "link_uri")]
     pub link_uri: Option<ThemeStyle>,
+    /// A schema or database qualifier (SQL).
+    pub namespace: Option<ThemeStyle>,
     pub number: Option<ThemeStyle>,
     pub operator: Option<ThemeStyle>,
     pub predictive: Option<ThemeStyle>,
@@ -163,7 +167,16 @@ pub struct SyntaxColors {
     pub title: Option<ThemeStyle>,
     #[serde(rename = "type")]
     pub type_: Option<ThemeStyle>,
+    /// A table alias used as a column qualifier (SQL `t` in `t.id`).
+    #[serde(rename = "type.alias")]
+    pub type_alias: Option<ThemeStyle>,
     pub variable: Option<ThemeStyle>,
+    /// A table alias where it is declared (SQL `t` in `FROM users t`).
+    #[serde(rename = "variable.alias")]
+    pub variable_alias: Option<ThemeStyle>,
+    /// A column alias (SQL `total` in `count(*) AS total`).
+    #[serde(rename = "variable.column_alias")]
+    pub variable_column_alias: Option<ThemeStyle>,
     #[serde(rename = "variable.special")]
     pub variable_special: Option<ThemeStyle>,
     pub variant: Option<ThemeStyle>,
@@ -252,12 +265,14 @@ impl SyntaxColors {
             "emphasis" => self.emphasis,
             "emphasis.strong" => self.emphasis_strong,
             "enum" => self.enum_,
+            "field" => self.field,
             "function" => self.function,
             "hint" => self.hint,
             "keyword" => self.keyword,
             "label" => self.label,
             "link_text" => self.link_text,
             "link_uri" => self.link_uri,
+            "namespace" => self.namespace,
             "number" => self.number,
             "operator" => self.operator,
             "predictive" => self.predictive,
@@ -280,7 +295,10 @@ impl SyntaxColors {
             "text.literal" => self.text_literal,
             "title" => self.title,
             "type" => self.type_,
+            "type.alias" => self.type_alias,
             "variable" => self.variable,
+            "variable.alias" => self.variable_alias,
+            "variable.column_alias" => self.variable_column_alias,
             "variable.special" => self.variable_special,
             "variant" => self.variant,
             _ => None,

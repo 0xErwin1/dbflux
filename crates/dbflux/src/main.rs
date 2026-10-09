@@ -111,6 +111,13 @@ extern "C" fn handle_shutdown_signal(_signum: std::ffi::c_int) {
 /// blocking syscalls elsewhere in the process (IPC accept/read, driver I/O)
 /// fail with `EINTR` on every delivery.
 #[cfg(unix)]
+#[expect(
+    unsafe_code,
+    reason = "libc signal FFI uses an all-zero-valid C `sigaction` value, \
+              initializes its mask through a valid pointer, and passes a valid \
+              action plus the permitted null old-action pointer; only \
+              `sigaction` failures are checked by the existing code"
+)]
 fn install_shutdown_signal_handlers() {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handle_shutdown_signal as *const () as usize;
@@ -257,6 +264,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the guard above requires `args[1]` to exist, so \
+                      `args.len() >= 2` and the `[2..]` slice is in range"
+        )]
         let exit_code = run_mcp_command(&args[2..]);
         std::process::exit(exit_code);
     }
@@ -332,6 +344,17 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
     }
 }
 
+/// Runs the GPUI application: tracing, IPC listener, main window, shutdown
+/// wiring. Process-global state lives in the module-level `Mutex<Option<_>>`
+/// holders.
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "startup preserves the existing fail-fast behavior for poisoned \
+              process-global locks and failure to open the main window; bridge \
+              initialization runs under its guard, so panic-freedom is an \
+              assumption, not a mutex guarantee"
+)]
 fn run_gui() {
     let fmt_writer = if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
         FmtWriter::NonBlockingFile(path)
@@ -868,6 +891,13 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         });
     });
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "preserve the existing panic-on-poison shutdown policy; the \
+                  if-let guard remains held through bridge shutdown and \
+                  diagnostics, so this is not a guarantee that the critical \
+                  section cannot unwind"
+    )]
     if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().take() {
         match handle.shutdown() {
             Ok(()) => {}
