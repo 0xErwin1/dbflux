@@ -126,6 +126,14 @@ pub struct DataTableState {
     /// so the request is raised here and consumed by `DataTable::render`.
     pending_refocus: bool,
 
+    /// The row count `DataTableEvent::ReachedEnd` was last emitted for.
+    reached_end_rows: Option<usize>,
+
+    /// The row count of the previous `report_reached_end` call. The scroll
+    /// offset is laid out for that count, so it is not trusted while the
+    /// count has just changed.
+    reached_end_checked_rows: usize,
+
     /// Buffer for tracking local edits before committing.
     edit_buffer: EditBuffer,
 
@@ -200,6 +208,8 @@ impl DataTableState {
             enum_dropdown: None,
             _editing_subs: Vec::new(),
             pending_refocus: false,
+            reached_end_rows: None,
+            reached_end_checked_rows: 0,
             edit_buffer,
             pk_columns: Vec::new(),
             fk_columns: HashSet::new(),
@@ -1486,6 +1496,37 @@ impl DataTableState {
         std::mem::take(&mut self.pending_refocus)
     }
 
+    /// Emits `DataTableEvent::ReachedEnd` the first time the last row is in
+    /// view at the current row count. Called by `DataTable::render`, after a
+    /// scroll or cursor move has re-rendered the table.
+    pub fn report_reached_end(&mut self, cx: &mut Context<Self>) {
+        let row_count = self.row_count();
+        let scroll_laid_out = self.reached_end_checked_rows == row_count;
+        self.reached_end_checked_rows = row_count;
+
+        if row_count == 0 || self.reached_end_rows == Some(row_count) {
+            return;
+        }
+
+        let cursor_on_last_row = self
+            .selection
+            .active
+            .is_some_and(|cell| cell.row + 1 == row_count);
+        let scrolled_to_end =
+            scroll_laid_out && self.vertical_scroll_handle.is_scrolled_to_end() == Some(true);
+
+        if cursor_on_last_row || scrolled_to_end {
+            self.reached_end_rows = Some(row_count);
+            cx.emit(DataTableEvent::ReachedEnd);
+        }
+    }
+
+    /// Lets `report_reached_end` emit again at the current row count, for a
+    /// host whose response to the last one failed.
+    pub fn forget_reached_end(&mut self) {
+        self.reached_end_rows = None;
+    }
+
     /// Cancel editing without applying changes.
     #[allow(dead_code)]
     pub fn cancel_editing(&mut self, cx: &mut Context<Self>) {
@@ -1772,6 +1813,49 @@ mod tests {
             },
         ];
         std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    /// Reaching the last row is reported once per row count, and again after
+    /// the host forgets it.
+    #[gpui::test]
+    fn reached_end_is_reported_once_until_forgotten(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(two_row_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let reports = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = window.update(|_, app| {
+            let reports = reports.clone();
+            app.subscribe(&state, move |_, event: &super::DataTableEvent, _| {
+                if matches!(event, super::DataTableEvent::ReachedEnd) {
+                    reports.set(reports.get() + 1);
+                }
+            })
+        });
+
+        let report = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, app| state.update(app, |s, cx| s.report_reached_end(cx)));
+        };
+
+        window.update(|_, app| state.update(app, |s, cx| s.select_cell(CellCoord::new(0, 0), cx)));
+        report(window);
+        assert_eq!(reports.get(), 0, "the first row is not the end");
+
+        window.update(|_, app| state.update(app, |s, cx| s.select_cell(CellCoord::new(1, 0), cx)));
+        report(window);
+        report(window);
+        assert_eq!(reports.get(), 1, "the end is reported once per row count");
+
+        window.update(|_, app| state.update(app, |s, _| s.forget_reached_end()));
+        report(window);
+        assert_eq!(reports.get(), 2, "a forgotten end is reported again");
     }
 
     /// Negative: start_editing on a column in readonly_columns returns false.

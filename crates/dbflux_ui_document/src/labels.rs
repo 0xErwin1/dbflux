@@ -176,6 +176,10 @@ pub(crate) fn load_all_rows_label() -> String {
     dbflux_i18n::t!("document.data.grid.status.limited_rows.load_all")
 }
 
+pub(crate) fn loading_next_rows_label() -> String {
+    dbflux_i18n::t!("document.data.grid.status.limited_rows.loading_next")
+}
+
 /// Label for the status bar's pending-change pill, with the count
 /// interpolated. Distinct from [`pending_edits_summary`], which breaks the
 /// count down by insert/update/delete for the tab tooltip.

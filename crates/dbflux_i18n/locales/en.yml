@@ -1357,6 +1357,7 @@ document:
       copy_error: Copy error
       result_tab_title: "Result %{index}"
       count_rows_failed: Could not count the rows of the query
+      next_rows_failed: "Could not load more rows of the query"
       error:
         select_source: Select at least one source
         start_time_required: Start time is required
@@ -1668,6 +1669,7 @@ document:
           of_total: "%{loaded}/%{total} rows loaded"
           count: Count rows
           load_all: Load all rows
+          loading_next: "Loading more rows…"
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"

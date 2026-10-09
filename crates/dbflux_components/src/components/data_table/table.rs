@@ -177,6 +177,8 @@ impl gpui::Render for DataTable {
 
         self.state
             .update(cx, |state, cx| state.sync_grid_text_metrics(cx));
+        self.state
+            .update(cx, |state, cx| state.report_reached_end(cx));
 
         let state = self.state.read(cx);
         let theme = cx.theme();

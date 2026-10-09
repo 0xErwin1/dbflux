@@ -1357,6 +1357,7 @@ document:
       copy_error: Copiar erro
       result_tab_title: "Resultado %{index}"
       count_rows_failed: Não foi possível contar as linhas da consulta
+      next_rows_failed: "Não foi possível carregar mais linhas da consulta"
       error:
         select_source: Selecione pelo menos uma origem
         start_time_required: O horário inicial é obrigatório
@@ -1668,6 +1669,7 @@ document:
           of_total: "%{loaded}/%{total} linhas carregadas"
           count: Contar linhas
           load_all: Carregar todas as linhas
+          loading_next: "Carregando mais linhas…"
         pending_changes:
           one: "%{count} alteração pendente"
           many: "%{count} alterações pendentes"

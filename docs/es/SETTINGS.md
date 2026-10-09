@@ -149,8 +149,12 @@ filas**, que ejecuta la sentencia dentro de `SELECT COUNT(*)` sin traer sus
 filas y muestra "10,000/52,310 filas cargadas" (solo conexiones SQL), y
 **Cargar todas las filas**, que vuelve a ejecutar la sentencia sin el límite en
 la misma pestaña de resultados. Ambas están también en el menú de la tabla
-(`m`). En un script con varias sentencias, el límite es un único presupuesto
-compartido por todos sus resultados, y todas las sentencias se ejecutan igual.
+(`m`). Al desplazarse hasta la última fila cargada, o mover el cursor sobre
+ella, se traen las siguientes filas de esa sentencia, tantas como el límite, y
+se añaden al final; esto se repite hasta que la sentencia no tiene más filas.
+Mientras una columna está ordenada en el grid, no se traen más filas. En un
+script con varias sentencias, el límite es un único presupuesto compartido por
+todos sus resultados, y todas las sentencias se ejecutan igual.
 
 Los drivers que no pueden aplicar un límite de filas rechazan la query antes de
 ejecutarla en lugar de ignorar el límite. Por eso las queries del editor fallan

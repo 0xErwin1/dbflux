@@ -1357,6 +1357,7 @@ document:
       copy_error: 复制错误
       result_tab_title: "结果 %{index}"
       count_rows_failed: 无法统计查询的行数
+      next_rows_failed: "无法加载查询的更多行"
       error:
         select_source: 请至少选择一个来源
         start_time_required: 需要开始时间
@@ -1668,6 +1669,7 @@ document:
           of_total: "已加载 %{loaded}/%{total} 行"
           count: 统计行数
           load_all: 加载全部行
+          loading_next: "正在加载更多行…"
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"

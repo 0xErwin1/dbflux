@@ -3601,6 +3601,9 @@ impl DataGridPanel {
                     self.row_count_footer(row_count)
                 },
             ))
+            .when(self.limited_rows.loading_next, |d| {
+                d.child(Text::caption(crate::labels::loading_next_rows_label()))
+            })
             .when(self.offers_count_rows(), |d| {
                 d.child(
                     Button::new("footer-count-rows", crate::labels::count_rows_label())

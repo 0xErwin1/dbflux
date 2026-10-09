@@ -1755,6 +1755,9 @@ impl CodeDocument {
                     this.pending.load_all_rows = Some(grid.entity_id());
                     cx.notify();
                 }
+                DataGridEvent::NextRowsRequested => {
+                    this.fetch_next_rows(grid, cx);
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
@@ -1810,6 +1813,7 @@ impl CodeDocument {
         LimitedRowActions {
             count: reads && *language == QueryLanguage::Sql,
             load_all: reads,
+            next_rows: reads,
         }
     }
 
@@ -1857,6 +1861,60 @@ impl CodeDocument {
                                 dbflux_i18n::t!("document.code.execution.count_rows_failed"),
                             )
                             .with_cause(error),
+                            cx,
+                        );
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Fetches the next editor-row-limit rows of the query behind a result tab
+    /// and appends them, on the session the query ran on.
+    ///
+    /// ponytail: runs the query again with a limit one page higher and keeps
+    /// the rows past the loaded ones, so every page re-reads the earlier ones.
+    /// Drivers have no shared offset; move to cursor or `OFFSET` paging if
+    /// deep scrolling gets slow.
+    fn fetch_next_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let query = grid.read(cx).result_query().map(str::to_string);
+        let (Some(query), Some(context)) = (query, self.execution_session_context.as_ref()) else {
+            grid.update(cx, |grid, cx| grid.next_rows_failed(cx));
+            return;
+        };
+
+        let page = self.app_state.read(cx).general_settings().editor_row_limit;
+        let limit = grid.read(cx).loaded_row_count().saturating_add(page);
+        let root = context.root.clone();
+        let database = context.database.clone();
+        let request = query_request_for_execution(
+            query,
+            database.clone(),
+            &self.source.exec_ctx,
+            self.effective_language().clone(),
+            limit,
+        );
+        let session = self.execution_session.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { session.execute(root, database, &request).result });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| match result {
+                    Ok(result) => grid.append_next_rows(result, cx),
+                    Err(error) => {
+                        grid.next_rows_failed(cx);
+                        dbflux_ui_base::user_error::report_error(
+                            dbflux_ui_base::user_error::UserFacingError::new(
+                                dbflux_ui_base::user_error::ErrorKind::Driver,
+                                dbflux_i18n::t!("document.code.execution.next_rows_failed"),
+                            )
+                            .with_cause(error.to_string()),
                             cx,
                         );
                     }
