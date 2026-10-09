@@ -446,6 +446,12 @@ mod tests {
         }
 
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             Ok(self
                 .values
                 .lock()
@@ -455,17 +461,36 @@ mod tests {
         }
 
         fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), dbflux_core::DbError> {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             self.writes
                 .lock()
                 .expect("test store write log lock poisoned")
                 .push(secret_ref.to_string());
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             match *self
                 .outcome
                 .lock()
                 .expect("test store outcome lock poisoned")
             {
                 PasswordWriteOutcome::Success => {
+                    #[expect(
+                        clippy::unwrap_in_result,
+                        reason = "test fixture keeps the crate's existing \
+                                  panic-on-poisoned-mutex policy: poisoning would \
+                                  itself mean the test harness panicked \
+                                  mid-critical-section, so panicking is intended"
+                    )]
                     self.values
                         .lock()
                         .expect("test store value lock poisoned")
@@ -476,6 +501,13 @@ mod tests {
                     std::io::Error::other("test keyring pre-write failure"),
                 )),
                 PasswordWriteOutcome::WriteThenFail => {
+                    #[expect(
+                        clippy::unwrap_in_result,
+                        reason = "test fixture keeps the crate's existing \
+                                  panic-on-poisoned-mutex policy: poisoning would \
+                                  itself mean the test harness panicked \
+                                  mid-critical-section, so panicking is intended"
+                    )]
                     self.values
                         .lock()
                         .expect("test store value lock poisoned")
@@ -488,6 +520,12 @@ mod tests {
         }
 
         fn delete(&self, secret_ref: &str) -> Result<(), dbflux_core::DbError> {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             self.values
                 .lock()
                 .expect("test store value lock poisoned")

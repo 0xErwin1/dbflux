@@ -1128,6 +1128,15 @@ pub(crate) mod object_tree_adapter_tests {
             dbflux_core::FormValues::new()
         }
 
+        // The `unwrap_in_result` site in this method is a bare assignment
+        // expression, which the compiler rejects as an `#[expect]` target (E0658),
+        // so the expect is attached to this method instead.
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                      policy: poisoning would itself mean the test harness panicked \
+                      mid-critical-section, so panicking is the intended failure mode"
+        )]
         fn connect_with_secrets(
             &self,
             _: &dbflux_core::ConnectionProfile,
@@ -1295,6 +1304,12 @@ pub(crate) mod object_tree_adapter_tests {
                     "fake view refresh failure".into(),
                 ));
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             Ok(self
                 .primary_snapshot
                 .lock()
@@ -1328,6 +1343,12 @@ pub(crate) mod object_tree_adapter_tests {
                     dbflux_core::FormattedError::new("listing failed"),
                 ));
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             Ok(self.databases.lock().expect("fake databases").clone())
         }
 
@@ -1335,11 +1356,23 @@ pub(crate) mod object_tree_adapter_tests {
             &self,
             database: &str,
         ) -> Result<dbflux_core::DbSchemaInfo, dbflux_core::DbError> {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             self.schema_calls
                 .lock()
                 .expect("fake schema calls")
                 .push(database.to_string());
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             let mut failures = self.schema_failures.lock().expect("failures");
             if let Some(remaining) = failures.get_mut(database)
                 && *remaining > 0
@@ -1353,6 +1386,12 @@ pub(crate) mod object_tree_adapter_tests {
             }
             drop(failures);
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             self.schemas
                 .lock()
                 .expect("fake schemas")

@@ -40,3 +40,6 @@ default = []
 mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp"]
 lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
+
+[lints]
+workspace = true

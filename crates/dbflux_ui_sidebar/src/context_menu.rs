@@ -263,6 +263,16 @@ impl Sidebar {
     }
 
     fn previous_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
+        // Menu navigation preserves selected_index <= items.len(), including
+        // zero for an empty submenu. Hover updates validate the index against
+        // the relevant items, and going back restores a saved selection with
+        // its parent items. This relies on that state invariant rather than a
+        // local bounds check.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`current_index` is maintained `<= items.len()` by the menu \
+                      state invariants described above"
+        )]
         items[..current_index]
             .iter()
             .rposition(ContextMenuItem::is_selectable)
@@ -2104,6 +2114,11 @@ impl Sidebar {
                 return;
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the `index >= menu.items.len()` early return above bounds \
+                          this access"
+            )]
             if !menu.items[index].is_selectable() {
                 return;
             }

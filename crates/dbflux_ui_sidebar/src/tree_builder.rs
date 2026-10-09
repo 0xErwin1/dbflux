@@ -791,6 +791,13 @@ impl Sidebar {
                     && strategy != SchemaLoadingStrategy::LazyPerDatabase
                     && projected.children.len() == 1;
                 if implicit_flat {
+                    // `implicit_flat` requires `projected.children.len() == 1`, so
+                    // `children[0]` exists.
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "`implicit_flat` requires `projected.children.len() \
+                                  == 1`"
+                    )]
                     if let dbflux_ui_base::object_tree::ObjectTreeKey::Database { database, .. } =
                         &projected.children[0].key
                         && let Some(projection) =
@@ -2281,6 +2288,14 @@ fn build_projected_relational_children(
     } else {
         database
     };
+    // `nodes.len() == 1` is evaluated earlier in the same `&&` chain, so `nodes[0]`
+    // exists; the same bound covers the `&nodes[0].children` access in the
+    // `flatten` branch below.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`flatten` requires `nodes.len() == 1`, evaluated earlier in the \
+                  same `&&` chain"
+    )]
     let flatten = flatten_database_schema
         && nodes.len() == 1
         && matches!(&nodes[0].key, ObjectTreeKey::Schema { schema, .. } if schema == database);
@@ -2298,6 +2313,10 @@ fn build_projected_relational_children(
         );
     }
     if flatten {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`flatten` requires `nodes.len() == 1`, so this index exists"
+        )]
         return content(
             &nodes[0].children,
             projection,

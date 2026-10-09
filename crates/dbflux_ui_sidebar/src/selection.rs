@@ -333,6 +333,13 @@ impl Sidebar {
         let start = anchor_index.min(target_index);
         let end = anchor_index.max(target_index);
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`target_index` is a `position()` result in `visible_ids`, and \
+                      `anchor_index` is either a `position()` there or falls back \
+                      to `target_index`, so `start..=end` stays within \
+                      `visible_ids.len()`"
+        )]
         let selection: HashSet<String> = visible_ids[start..=end]
             .iter()
             .filter(|id| Self::is_selectable_item(id))
@@ -669,6 +676,11 @@ impl Sidebar {
                 return ConnectionKeyboardMovePlan::None;
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the `next_position >= siblings.len()` early return above \
+                          bounds this access"
+            )]
             let next_sibling = siblings[next_position];
             if next_sibling.kind == dbflux_core::ConnectionTreeNodeKind::Folder
                 && !next_sibling.collapsed
@@ -713,6 +725,12 @@ impl Sidebar {
                 None => return ConnectionKeyboardMovePlan::None,
             };
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "`parent_position` is a `position()` result over \
+                          `parent_siblings`, and the `parent_position > 0` arm keeps \
+                          `parent_position - 1` below `parent_siblings.len()`"
+            )]
             let after_id = if parent_position > 0 {
                 Some(parent_siblings[parent_position - 1].id)
             } else {
@@ -832,7 +850,21 @@ impl Sidebar {
             current_pos + 1
         };
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`new_pos` is `current_pos - 1` only after `current_pos == 0` \
+                      returns, or `current_pos + 1` only after \
+                      `current_pos >= siblings.len() - 1` returns; `siblings` is \
+                      non-empty because `current_pos` came from a successful \
+                      `position()`, so `new_pos < siblings.len()`"
+        )]
         let swap_with = siblings[new_pos].id;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "same `new_pos` bound as the `swap_with` access above: \
+                      `current_pos` came from a successful `position()` and both \
+                      decrement and increment arms return early out of range"
+        )]
         let swap_sort_index = siblings[new_pos].sort_index;
         let node_sort_index = node.sort_index;
 
