@@ -377,16 +377,16 @@ pub struct GutterStatementStyle {
     pub active_line_number: Hsla,
     /// Bar beside the lines of the statement under the cursor.
     pub bar: Hsla,
-    /// Row fill of the statement under the cursor.
+    /// Gutter fill beside the statement under the cursor.
     pub statement_fill: Hsla,
-    /// Row fill of the cursor line inside that statement.
+    /// Gutter fill beside the cursor line inside that statement.
     pub cursor_line_fill: Hsla,
 }
 
 /// Statement decorations for a code editor's gutter: a run marker on the
 /// first line of every statement, and the statement under the cursor
-/// highlighted with a bar in the gutter, a fill across its lines and strong
-/// line numbers.
+/// highlighted in the gutter with a bar, a fill and strong line numbers. The
+/// text area keeps the editor background.
 ///
 /// The ranges are byte ranges into the buffer in buffer order; the owner
 /// replaces them after every edit. Clicking a marker calls `on_run` with that
