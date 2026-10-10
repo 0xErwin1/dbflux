@@ -106,6 +106,14 @@ pub enum VimCommand {
     /// Visual `p` (`true`, the replaced text goes to the clipboard) or `P`
     /// (`false`, the clipboard is kept): replaces the selection.
     VisualPut(bool),
+    /// `Ctrl+R`.
+    Redo,
+    /// `Ctrl+D`: half a screen down.
+    HalfPageDown,
+    /// `Ctrl+U`: half a screen up.
+    HalfPageUp,
+    /// `.`: repeats the last change.
+    RepeatChange,
 }
 
 /// The object of `iw`, `a"`, `i(` and the like.
@@ -276,6 +284,7 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 }
                 "/" if !visual => Some(VimCommand::OpenSearch),
                 "s" if !visual => Some(VimCommand::Substitute),
+                "." if !visual => Some(VimCommand::RepeatChange),
                 "p" if mode != VimMode::VisualBlock && visual => Some(VimCommand::VisualPut(true)),
                 "f" => Some(VimCommand::PendingFind(FindKind {
                     forward: true,
@@ -315,6 +324,21 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 _ => None,
             }
         }
+    }
+}
+
+/// Maps a key pressed with Control alone to its command in `mode`. Every
+/// other Control key is an application shortcut and passes through.
+pub fn control_command(mode: VimMode, key: &str) -> Option<VimCommand> {
+    if mode.accepts_text() {
+        return None;
+    }
+
+    match key {
+        "r" if mode == VimMode::Normal => Some(VimCommand::Redo),
+        "d" => Some(VimCommand::HalfPageDown),
+        "u" => Some(VimCommand::HalfPageUp),
+        _ => None,
     }
 }
 

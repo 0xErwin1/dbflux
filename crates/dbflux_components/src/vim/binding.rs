@@ -133,6 +133,41 @@ fn typed_char(keystroke: &gpui::Keystroke) -> Option<char> {
     })
 }
 
+/// `keys` with their leading count replaced by `count`. Without a new count
+/// the keys keep their own.
+fn with_count(mut keys: Vec<gpui::Keystroke>, count: Option<usize>) -> Vec<gpui::Keystroke> {
+    let Some(count) = count else {
+        return keys;
+    };
+    let is_digit = |keystroke: &gpui::Keystroke| {
+        !keystroke.modifiers.modified()
+            && keystroke.key.len() == 1
+            && keystroke
+                .key
+                .chars()
+                .all(|character| character.is_ascii_digit())
+    };
+
+    if keys
+        .first()
+        .is_some_and(|keystroke| is_digit(keystroke) && keystroke.key != "0")
+    {
+        let digits = keys
+            .iter()
+            .take_while(|keystroke| is_digit(keystroke))
+            .count();
+        keys.drain(..digits);
+    }
+
+    let prefix: Vec<gpui::Keystroke> = count
+        .to_string()
+        .chars()
+        .filter_map(|digit| gpui::Keystroke::parse(&digit.to_string()).ok())
+        .collect();
+    keys.splice(0..0, prefix);
+    keys
+}
+
 /// Which history action a Normal-mode undo shortcut runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HistoryStep {
@@ -170,6 +205,14 @@ pub struct VimBinding {
     last_find: Option<(FindKind, char)>,
     /// `i` (`false`) or `a` (`true`) of a text object, waiting for the object.
     pending_text_object: Option<bool>,
+    /// Keys of the Normal-mode command being typed, and the text before it,
+    /// to tell whether it changed anything.
+    recording: Vec<gpui::Keystroke>,
+    recording_text: Option<Rope>,
+    insert_recording: Option<InsertRecording>,
+    last_change: Option<RepeatableChange>,
+    /// Set while `.` feeds a recorded command back, so it is not recorded again.
+    replaying: bool,
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
@@ -189,6 +232,28 @@ pub struct VimBinding {
     _focus_out: Subscription,
     _input_changes: Subscription,
     _setting: Option<Subscription>,
+}
+
+/// A change `.` can repeat.
+#[derive(Clone)]
+enum RepeatableChange {
+    /// The Normal-mode keys of the command, then the text typed when the
+    /// command entered Insert mode.
+    Keys {
+        keys: Vec<gpui::Keystroke>,
+        inserted: String,
+    },
+    /// `r`, which takes its character as typed text rather than as a key.
+    ReplaceOnce { count: usize, text: ReplaceOnceText },
+}
+
+/// A command that entered Insert mode, waiting for Insert to end so the text
+/// typed there joins it.
+struct InsertRecording {
+    keys: Vec<gpui::Keystroke>,
+    /// The cursor and the buffer length when Insert started.
+    start: usize,
+    len: usize,
 }
 
 struct YankedText {
@@ -262,6 +327,11 @@ impl VimBinding {
             pending_find: None,
             last_find: None,
             pending_text_object: None,
+            recording: Vec::new(),
+            recording_text: None,
+            insert_recording: None,
+            last_change: None,
+            replaying: false,
             marks: Default::default(),
             pending_operator: None,
             change_group: None,
@@ -837,6 +907,10 @@ impl VimBinding {
         self.pending_find = None;
         self.last_find = None;
         self.pending_text_object = None;
+        self.recording.clear();
+        self.recording_text = None;
+        self.insert_recording = None;
+        self.last_change = None;
         self.marks = Default::default();
         self.pending_operator = None;
         self.change_group = None;
@@ -903,10 +977,168 @@ impl VimBinding {
             .update(cx, |state, cx| state.set_cursor_shape(shape, cx));
     }
 
-    /// Handles a key before the editor and the workspace keymap see it.
+    /// Handles a key before the editor and the workspace keymap see it, and
+    /// records the Normal-mode commands that change the text for `.`.
     ///
     /// Returns true when the key was consumed and must not propagate.
     fn handle_vim_key_down<H: VimHost>(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) -> bool {
+        if self.replaying || self.mode != VimMode::Normal || !self.vim_owns_keys(window, cx) {
+            return self.handle_command_key(event, window, cx);
+        }
+
+        if self.is_repeat_key(&event.keystroke) {
+            self.repeat_last_change(window, cx);
+            return true;
+        }
+
+        if self.recording.is_empty() {
+            self.recording_text = Some(self.input.read(cx).text().clone());
+        }
+        self.recording.push(event.keystroke.clone());
+
+        let consumed = self.handle_command_key(event, window, cx);
+        if consumed && self.awaits_more_keys() {
+            return consumed;
+        }
+
+        let keys = std::mem::take(&mut self.recording);
+        let before = self.recording_text.take();
+        if !consumed {
+            return consumed;
+        }
+
+        match self.mode {
+            VimMode::Insert if self.replace_once.is_none() => {
+                let state = self.input.read(cx);
+                self.insert_recording = Some(InsertRecording {
+                    keys,
+                    start: state.cursor(),
+                    len: state.text().len(),
+                });
+            }
+            VimMode::Normal => {
+                let changed = before.is_some_and(|before| before != *self.input.read(cx).text());
+                if changed {
+                    self.last_change = Some(RepeatableChange::Keys {
+                        keys,
+                        inserted: String::new(),
+                    });
+                }
+            }
+            _ => {}
+        }
+        consumed
+    }
+
+    /// Whether the command being typed needs more keys: a count, an operator,
+    /// `g`, a mark, or the character of a find or a text object.
+    fn awaits_more_keys(&self) -> bool {
+        self.count.is_some()
+            || self.pending_g
+            || self.pending_mark.is_some()
+            || self.pending_find.is_some()
+            || self.pending_text_object.is_some()
+            || self.pending_operator.is_some()
+    }
+
+    /// `.` with nothing pending but an optional count.
+    fn is_repeat_key(&self, keystroke: &gpui::Keystroke) -> bool {
+        keystroke.key == "."
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.function
+            && self.replace_once.is_none()
+            && !self.pending_g
+            && self.pending_mark.is_none()
+            && self.pending_find.is_none()
+            && self.pending_text_object.is_none()
+            && self.pending_operator.is_none()
+    }
+
+    /// `.`: feeds the last change's keys back and types its text again, as
+    /// one undo step. A count replaces the change's own count.
+    fn repeat_last_change<H: VimHost>(&mut self, window: &mut Window, cx: &mut Context<H>) {
+        let count = self.count.take();
+        self.recording.clear();
+        self.recording_text = None;
+        self.clear_vim_count_and_notify(cx);
+
+        let Some(change) = self.last_change.clone() else {
+            return;
+        };
+        if self.host_read_only {
+            return;
+        }
+
+        self.replaying = true;
+        match change {
+            RepeatableChange::Keys { keys, inserted } => {
+                for keystroke in with_count(keys, count) {
+                    self.handle_command_key(
+                        &KeyDownEvent {
+                            keystroke,
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+                if self.mode == VimMode::Insert {
+                    if !inserted.is_empty() {
+                        self.input
+                            .update(cx, |state, cx| state.replace(inserted, window, cx));
+                    }
+                    self.leave_insert(window, cx);
+                }
+            }
+            RepeatableChange::ReplaceOnce {
+                count: original,
+                text,
+            } => {
+                self.start_replace_once(count.unwrap_or(original), cx);
+                self.replace_once_directly(text, window, cx);
+            }
+        }
+        self.replaying = false;
+    }
+
+    /// Ends the recording of a command that entered Insert mode, with the
+    /// text typed since. Nothing is recorded when the cursor moved away from
+    /// the typed text, since the text can no longer be told apart.
+    fn finish_insert_recording<H: VimHost>(&mut self, cx: &mut Context<H>) {
+        let Some(recording) = self.insert_recording.take() else {
+            return;
+        };
+        if self.replaying {
+            return;
+        }
+
+        let inserted = {
+            let state = self.input.read(cx);
+            let cursor = state.cursor();
+            state
+                .text()
+                .len()
+                .checked_sub(recording.len)
+                .filter(|inserted| recording.start + inserted == cursor)
+                .map(|_| state.text().slice(recording.start..cursor).to_string())
+        };
+        if let Some(inserted) = inserted {
+            self.last_change = Some(RepeatableChange::Keys {
+                keys: recording.keys,
+                inserted,
+            });
+        }
+    }
+
+    fn handle_command_key<H: VimHost>(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -936,19 +1168,19 @@ impl VimBinding {
                 || modifiers.function,
         };
 
-        let block_key = modifiers.control
+        let control_only = modifiers.control
             && !modifiers.alt
             && !modifiers.platform
             && !modifiers.function
-            && !modifiers.shift
-            && key.key == "v"
-            && !self.mode.accepts_text();
-        let command = if block_key {
+            && !modifiers.shift;
+        let command = if control_only && key.key == "v" && !self.mode.accepts_text() {
             Some(if self.mode == VimMode::VisualBlock {
                 VimCommand::LeaveVisual
             } else {
                 VimCommand::EnterVisualBlock
             })
+        } else if control_only {
+            machine::control_command(self.mode, key.key)
         } else {
             machine::command_for(self.mode, key)
         };
@@ -1248,6 +1480,25 @@ impl VimBinding {
             }
             VimCommand::Substitute | VimCommand::JoinLines | VimCommand::ToggleCase => {}
             VimCommand::VisualPut(swap) => self.visual_put(swap, count, window, cx),
+            VimCommand::Redo if !self.host_read_only => {
+                self.run_history_in_normal_mode(HistoryStep::Redo, count, window, cx)
+            }
+            VimCommand::Redo | VimCommand::RepeatChange => {}
+            VimCommand::HalfPageDown | VimCommand::HalfPageUp => {
+                let half_page = self
+                    .input
+                    .read(cx)
+                    .visible_row_range()
+                    .map(|rows| (rows.len() / 2).max(1));
+                if let Some(lines) = explicit_count.or(half_page) {
+                    let delta = if command == VimCommand::HalfPageDown {
+                        1
+                    } else {
+                        -1
+                    };
+                    self.repeat_vertical(delta, lines, cx);
+                }
+            }
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.input.read(cx);
@@ -1607,6 +1858,7 @@ impl VimBinding {
             // menu opened some other way still closes before the mode changes.
             self.dismiss_editor_menus(cx);
         } else {
+            self.finish_insert_recording(cx);
             self.finish_block_change(window, cx);
             self.close_change_group(cx);
             self.set_vim_mode(machine::mode_after(self.mode, VimCommand::LeaveInsert), cx);
@@ -2381,6 +2633,7 @@ impl VimBinding {
     }
 
     fn close_change_group_on_blur<H: VimHost>(&mut self, cx: &mut Context<H>) {
+        self.insert_recording = None;
         if self.replace_once.is_some() {
             self.cancel_replace_once(cx);
             return;
@@ -2592,6 +2845,12 @@ impl VimBinding {
                 })
         };
 
+        if edit.is_some() && !self.replaying {
+            self.last_change = Some(RepeatableChange::ReplaceOnce {
+                count: pending.count,
+                text,
+            });
+        }
         if let Some((range, replacement)) = edit {
             let cursor = match text {
                 ReplaceOnceText::LineBreak => range.start + replacement.len(),
@@ -2674,6 +2933,12 @@ impl VimBinding {
             self.cancel_replace_once(cx);
             return;
         };
+        if let Some(character) = inserted.chars().next() {
+            self.last_change = Some(RepeatableChange::ReplaceOnce {
+                count: pending.count,
+                text: ReplaceOnceText::Character(character),
+            });
+        }
         let replacement = inserted.repeat(pending.count.saturating_sub(1));
         self.input.update(cx, |state, cx| {
             let text = state.text().to_string();

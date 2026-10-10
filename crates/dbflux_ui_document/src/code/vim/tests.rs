@@ -5123,3 +5123,130 @@ fn visual_put_does_nothing_in_a_read_only_editor_or_with_an_empty_clipboard(
     editor.keys("v p");
     assert_eq!(editor.text(), "ab");
 }
+
+#[gpui::test]
+fn dot_repeats_normal_mode_edits_with_their_count(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdefgh", true);
+    editor.keys("x .");
+    assert_eq!(editor.text(), "cdefgh");
+    editor.keys("3 .");
+    assert_eq!(editor.text(), "fgh", "a count replaces the original count");
+    editor.keys("u");
+    assert_eq!(editor.text(), "cdefgh", "a repeat is one undo step");
+
+    let mut editor = open_editor(cx, "a\nb\nc\nd", true);
+    editor.keys("shift-j j .");
+    assert_eq!(editor.text(), "a b\nc d");
+
+    let mut editor = open_editor(cx, "one\ntwo\nthree", true);
+    editor.keys("d d .");
+    assert_eq!(editor.text(), "three");
+
+    let mut editor = open_editor(cx, "one two three four", true);
+    editor.keys("d w .");
+    assert_eq!(editor.text(), "three four");
+
+    let mut editor = open_editor(cx, "a,b,c,d", true);
+    editor.keys("d f , .");
+    assert_eq!(editor.text(), "c,d", "a find repeats with its character");
+}
+
+#[gpui::test]
+fn dot_repeats_a_change_with_the_text_typed_after_it(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one two three", true);
+    editor.keys("c w");
+    editor.type_text("X");
+    editor.keys("escape w .");
+    assert_eq!(editor.text(), "X X three");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("u");
+    assert_eq!(
+        editor.text(),
+        "X two three",
+        "the repeat undoes as one step"
+    );
+
+    let mut editor = open_editor(cx, "say \"a\" and \"b\"", true);
+    editor.set_cursor(5);
+    editor.keys("c i \"");
+    editor.type_text("hi");
+    editor.keys("escape");
+    editor.set_cursor(13);
+    editor.keys(".");
+    assert_eq!(editor.text(), "say \"hi\" and \"hi\"");
+
+    let mut editor = open_editor(cx, "a\nb", true);
+    editor.keys("shift-a");
+    editor.type_text(";");
+    editor.keys("escape j .");
+    assert_eq!(editor.text(), "a;\nb;");
+
+    let mut editor = open_editor(cx, "x", true);
+    editor.keys("o");
+    editor.type_text("new");
+    editor.keys("escape .");
+    assert_eq!(editor.text(), "x\nnew\nnew");
+}
+
+#[gpui::test]
+fn dot_repeats_replace_and_ignores_commands_that_change_nothing(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcd", true);
+    editor.keys("r z l .");
+    assert_eq!(editor.text(), "zzcd");
+
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys(".");
+    assert_eq!(editor.text(), "abc", "nothing to repeat yet");
+    editor.keys("x y y l .");
+    assert_eq!(editor.text(), "b", "a yank is not a change");
+    editor.keys("u");
+    assert_eq!(editor.text(), "bc");
+    editor.keys(".");
+    assert_eq!(editor.text().len(), 1, "undo is not a change either");
+}
+
+#[gpui::test]
+fn dot_does_nothing_in_a_read_only_editor(cx: &mut TestAppContext) {
+    let mut editor = read_only_editor(cx, "select a");
+    editor.keys("x .");
+    assert_eq!(editor.text(), "select a");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn ctrl_r_redoes_in_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys("x x u u");
+    assert_eq!(editor.text(), "abc");
+    editor.keys("ctrl-r");
+    assert_eq!(editor.text(), "bc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("u u 2 ctrl-r");
+    assert_eq!(editor.text(), "c", "a count redoes that many steps");
+
+    let mut editor = read_only_editor(cx, "select a");
+    editor.keys("ctrl-r");
+    assert_eq!(editor.text(), "select a");
+}
+
+#[gpui::test]
+fn ctrl_d_and_ctrl_u_move_half_a_screen(cx: &mut TestAppContext) {
+    let content: String = (0..200).map(|line| format!("{line:03}\n")).collect();
+    let mut editor = open_editor(cx, &content, true);
+    editor.set_cursor(1);
+
+    editor.keys("ctrl-d");
+    let row = editor.cursor() / 4;
+    assert!(row > 0, "ctrl-d moves down, got row {row}");
+    assert_eq!(editor.cursor() % 4, 1, "the column is kept");
+    editor.keys("ctrl-u");
+    assert_eq!(editor.cursor(), 1);
+
+    editor.keys("5 ctrl-d");
+    assert_eq!(editor.cursor(), 5 * 4 + 1, "a count moves that many lines");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    let mut editor = read_only_editor(cx, "a\nb\nc");
+    editor.keys("2 ctrl-d");
+    assert_eq!(editor.cursor(), 4, "read-only editors still move");
+}
