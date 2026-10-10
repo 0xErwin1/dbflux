@@ -1246,7 +1246,6 @@ impl ConnectionManagerWindow {
     /// Labelled text field used by the Access tab: the label over the
     /// framed input.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn form_field_input(
         &self,
         label: &str,
@@ -1268,7 +1267,7 @@ impl ConnectionManagerWindow {
                 self.cm_control_frame(
                     focused,
                     Some(field),
-                    true,
+                    !disabled,
                     None,
                     true,
                     Input::new(input)
