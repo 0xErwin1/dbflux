@@ -3969,6 +3969,7 @@ mod tests {
                     port: 22,
                     user: "jump".to_string(),
                     auth_method: SshAuthMethod::Password,
+                    ssh_config_host: None,
                 }),
                 ssh_tunnel_profile_id: None,
             },

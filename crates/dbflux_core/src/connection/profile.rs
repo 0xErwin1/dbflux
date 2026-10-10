@@ -246,6 +246,14 @@ pub struct SshTunnelConfig {
     /// Authentication method (private key or password).
     #[serde(default)]
     pub auth_method: SshAuthMethod,
+
+    /// Alias of a host in the user's SSH config that this tunnel references, if any.
+    ///
+    /// When this is `Some`, the alias is the only source of the target: it is resolved at
+    /// connect time and `host`, `port` and `user` are never dialed from (A7). A resolution
+    /// failure is an error, never a fallback to the stored values.
+    #[serde(default)]
+    pub ssh_config_host: Option<String>,
 }
 
 /// Saved SSH tunnel profile for reuse across connections.
@@ -1960,12 +1968,30 @@ mod tests {
     }
 
     #[test]
+    fn ssh_tunnel_config_without_alias_field_deserializes_with_none() {
+        // A tunnel config serialized before migration 044 carries no
+        // `ssh_config_host` field; it must still deserialize.
+        let json = r#"{
+            "host": "bastion.example.com",
+            "port": 22,
+            "user": "deploy",
+            "auth_method": "Password"
+        }"#;
+
+        let config: SshTunnelConfig =
+            serde_json::from_str(json).expect("legacy tunnel config should deserialize");
+
+        assert_eq!(config.ssh_config_host, None);
+    }
+
+    #[test]
     fn assign_ssh_tunnel_updates_and_clears_supported_configs() {
         let inline_tunnel = SshTunnelConfig {
             host: "bastion.example.com".to_string(),
             port: 2222,
             user: "dbflux".to_string(),
             auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
         };
         let tunnel_profile_id = Uuid::from_u128(1);
         let mut configs = [
@@ -1981,7 +2007,7 @@ mod tests {
             config.assign_ssh_tunnel(Some(inline_tunnel.clone()), None);
             assert!(matches!(
                 config.ssh_tunnel(),
-                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password })
+                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password, .. })
                     if host == "bastion.example.com" && *port == 2222 && user == "dbflux"
             ));
             assert_eq!(config.ssh_tunnel_profile_id(), None);
@@ -2003,6 +2029,7 @@ mod tests {
             port: 2222,
             user: "dbflux".to_string(),
             auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
         };
         let tunnel_profile_id = Uuid::from_u128(1);
         let mut configs = [

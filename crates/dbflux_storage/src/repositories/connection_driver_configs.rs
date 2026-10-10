@@ -39,6 +39,10 @@ pub struct ConnectionDriverConfigDto {
     pub ssh_tunnel_key_path: Option<String>,
     pub ssh_tunnel_passphrase_secret_ref: Option<String>,
     pub ssh_tunnel_password_secret_ref: Option<String>,
+    /// Alias of a host in the user's SSH config the inline tunnel references;
+    /// `None` means the manual host, port and user fields are the source.
+    #[serde(default)]
+    pub ssh_config_host: Option<String>,
     // SQLite-specific
     pub sqlite_path: Option<String>,
     pub sqlite_connection_id: Option<String>,
@@ -94,6 +98,7 @@ impl ConnectionDriverConfigDto {
             ssh_tunnel_key_path: None,
             ssh_tunnel_passphrase_secret_ref: None,
             ssh_tunnel_password_secret_ref: None,
+            ssh_config_host: None,
             sqlite_path: None,
             sqlite_connection_id: None,
             mongo_auth_database: None,
@@ -753,6 +758,7 @@ fn str_to_ssh_auth_method(s: &str) -> SshAuthMethod {
 }
 
 fn fill_ssh_tunnel_fields(dto: &mut ConnectionDriverConfigDto, tunnel: &SshTunnelConfig) {
+    dto.ssh_config_host = tunnel.ssh_config_host.clone();
     dto.ssh_tunnel_host = Some(tunnel.host.clone());
     dto.ssh_tunnel_port = Some(tunnel.port as i32);
     dto.ssh_tunnel_user = Some(tunnel.user.clone());
@@ -769,6 +775,7 @@ fn build_ssh_tunnel(dto: &ConnectionDriverConfigDto) -> Option<SshTunnelConfig> 
             port: dto.ssh_tunnel_port? as u16,
             user: dto.ssh_tunnel_user.clone()?,
             auth_method: str_to_ssh_auth_method(&dto.ssh_tunnel_auth_method),
+            ssh_config_host: dto.ssh_config_host.clone(),
         })
     } else {
         None
@@ -813,7 +820,8 @@ impl ConnectionDriverConfigsRepository {
                     external_kind, external_values_json,
                     mssql_instance, mssql_trust_server_certificate,
                     s3_access_key_id, s3_path_style,
-                    redis_topology, redis_sentinel_master_name, redis_additional_nodes
+                    redis_topology, redis_sentinel_master_name, redis_additional_nodes,
+                    ssh_config_host
                 FROM cfg_connection_driver_configs
                 WHERE profile_id = ?1
                 "#,
@@ -865,6 +873,7 @@ impl ConnectionDriverConfigsRepository {
                 redis_topology: row.get(37)?,
                 redis_sentinel_master_name: row.get(38)?,
                 redis_additional_nodes: row.get(39)?,
+                ssh_config_host: row.get(40)?,
             })
         });
 
@@ -896,7 +905,8 @@ impl ConnectionDriverConfigsRepository {
                     external_kind, external_values_json,
                     mssql_instance, mssql_trust_server_certificate,
                     s3_access_key_id, s3_path_style,
-                    redis_topology, redis_sentinel_master_name, redis_additional_nodes
+                    redis_topology, redis_sentinel_master_name, redis_additional_nodes,
+                    ssh_config_host
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -910,7 +920,8 @@ impl ConnectionDriverConfigsRepository {
                     ?32, ?33,
                     ?34, ?35,
                     ?36, ?37,
-                    ?38, ?39, ?40
+                    ?38, ?39, ?40,
+                    ?41
                 )
                 "#,
                 params![
@@ -954,6 +965,7 @@ impl ConnectionDriverConfigsRepository {
                     config.redis_topology,
                     config.redis_sentinel_master_name,
                     config.redis_additional_nodes,
+                    config.ssh_config_host,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -982,7 +994,8 @@ impl ConnectionDriverConfigsRepository {
                     external_kind, external_values_json,
                     mssql_instance, mssql_trust_server_certificate,
                     s3_access_key_id, s3_path_style,
-                    redis_topology, redis_sentinel_master_name, redis_additional_nodes
+                    redis_topology, redis_sentinel_master_name, redis_additional_nodes,
+                    ssh_config_host
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -996,7 +1009,8 @@ impl ConnectionDriverConfigsRepository {
                     ?32, ?33,
                     ?34, ?35,
                     ?36, ?37,
-                    ?38, ?39, ?40
+                    ?38, ?39, ?40,
+                    ?41
                 )
                 ON CONFLICT(profile_id) DO UPDATE SET
                     config_key = excluded.config_key,
@@ -1036,7 +1050,8 @@ impl ConnectionDriverConfigsRepository {
                     s3_path_style = excluded.s3_path_style,
                     redis_topology = excluded.redis_topology,
                     redis_sentinel_master_name = excluded.redis_sentinel_master_name,
-                    redis_additional_nodes = excluded.redis_additional_nodes
+                    redis_additional_nodes = excluded.redis_additional_nodes,
+                    ssh_config_host = excluded.ssh_config_host
                 "#,
                 params![
                     config.id,
@@ -1079,6 +1094,7 @@ impl ConnectionDriverConfigsRepository {
                     config.redis_topology,
                     config.redis_sentinel_master_name,
                     config.redis_additional_nodes,
+                    config.ssh_config_host,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -1120,6 +1136,111 @@ mod tests {
         let repo = ConnectionDriverConfigsRepository::new(runtime.dbflux_db());
 
         (temp_dir, repo)
+    }
+
+    #[test]
+    fn inline_ssh_tunnel_alias_roundtrips_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'PG Aliased', 'postgres', 'Postgres', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
+            host: "db.internal".to_string(),
+            port: 5432,
+            user: "pg".to_string(),
+            database: "app".to_string(),
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: Some(SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::Password,
+                ssh_config_host: Some("web-prod".to_string()),
+            }),
+            ssh_tunnel_profile_id: None,
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::Postgres { ssh_tunnel, .. } => {
+                let tunnel = ssh_tunnel.expect("inline tunnel present");
+                assert_eq!(tunnel.ssh_config_host.as_deref(), Some("web-prod"));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+
+        // A tunnel with no alias round-trips as `None`.
+        let plain_profile_id = uuid::Uuid::new_v4().to_string();
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'PG Plain', 'postgres', 'Postgres', datetime('now'), datetime('now'))
+                "#,
+                params![plain_profile_id],
+            )
+            .expect("insert plain profile");
+
+        let plain_config = DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
+            host: "db.internal".to_string(),
+            port: 5432,
+            user: "pg".to_string(),
+            database: "app".to_string(),
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: Some(SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::Password,
+                ssh_config_host: None,
+            }),
+            ssh_tunnel_profile_id: None,
+        };
+
+        let plain_dto =
+            ConnectionDriverConfigDto::from_db_config(plain_profile_id.clone(), &plain_config);
+        repo.insert(&plain_dto).expect("insert plain config");
+
+        let plain_restored = repo
+            .get_for_profile(&plain_profile_id)
+            .expect("load plain config")
+            .expect("stored plain config");
+
+        match plain_restored.to_db_config().expect("db config") {
+            DbConfig::Postgres { ssh_tunnel, .. } => {
+                let tunnel = ssh_tunnel.expect("plain inline tunnel present");
+                assert_eq!(tunnel.ssh_config_host, None);
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
     }
 
     #[test]

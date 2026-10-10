@@ -136,6 +136,26 @@ es lo que obtienes al elegir **Private Key** y dejar la ruta de la clave vacía.
 
 **Test SSH** verifica el túnel sin guardar la conexión.
 
+### Referenciar un host de tu configuración SSH
+
+El desplegable **SSH config host** lista cada `Host` que define tu
+`~/.ssh/config`, con el usuario, el nombre de host y el puerto a los que
+resuelve cada uno. Al elegir uno se guarda el alias y no los valores a los que
+resuelve, de modo que una edición posterior de tu configuración SSH se aplica
+en la siguiente conexión sin tocar el perfil. Mientras hay un alias
+seleccionado, los campos **Host**, **Port** y **Username** no muestran nada y
+quedan deshabilitados —el alias es el destino—, y una ruta de clave vacía toma
+el `IdentityFile` que ese host indique, o el SSH agent y las claves por defecto
+si no indica ninguna. `Include`, `Match` y los tokens `%h`, `%r` y `%d` dentro
+de un `IdentityFile` se resuelven como los resuelve OpenSSH.
+
+Un host cuya configuración necesite `ProxyJump` o `ProxyCommand` aparece en la
+lista con una marca: DBFlux no puede alcanzarlo, y la conexión falla con ese
+motivo en lugar de conectar directamente al bastión. Las claves de host se
+siguen verificando contra el almacén propio de DBFlux en su directorio de
+datos, no contra tu `~/.ssh/known_hosts`, así que un host al que llevas años
+llegando desde una terminal igual te pide confirmar su clave la primera vez.
+
 ### Dónde viven los secretos SSH
 
 Las passphrases y contraseñas se guardan en el **keyring del sistema

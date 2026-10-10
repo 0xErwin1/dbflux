@@ -1,6 +1,7 @@
 use crate::settings::SettingsSectionId;
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::controls::Dropdown;
 use dbflux_components::controls::DropdownItem;
 use dbflux_core::FormFieldKind;
 use gpui::*;
@@ -403,10 +404,11 @@ impl FormFocus {
                     if state.has_tunnels {
                         SshTunnelSelector
                     } else {
-                        SshHost
+                        SshConfigHost
                     }
                 }
-                SshTunnelSelector | SshTunnelClear => SshHost,
+                SshTunnelSelector | SshTunnelClear => SshConfigHost,
+                SshConfigHost => SshHost,
                 SshHost | SshPort => SshUser,
                 SshUser => SshAuthPrivateKey,
                 SshAuthPrivateKey | SshAuthPassword => {
@@ -472,13 +474,14 @@ impl FormFocus {
                 Name => Save,
                 SshEnabled => Name,
                 SshTunnelSelector | SshTunnelClear => SshEnabled,
-                SshHost | SshPort => {
+                SshConfigHost => {
                     if state.has_tunnels {
                         SshTunnelSelector
                     } else {
                         SshEnabled
                     }
                 }
+                SshHost | SshPort => SshConfigHost,
                 SshUser => SshHost,
                 SshAuthPrivateKey | SshAuthPassword => SshUser,
                 SshKeyPath | SshKeyBrowse => SshAuthPrivateKey,
@@ -1091,7 +1094,14 @@ impl ConnectionManagerWindow {
         }
 
         if self.access.ssh_tunnel_dropdown.read(cx).is_open()
-            && self.handle_dropdown_command(command, cx)
+            && self.handle_dropdown_command(&self.access.ssh_tunnel_dropdown.clone(), command, cx)
+        {
+            return true;
+        }
+
+        let ssh_config_host_dropdown = self.access.ssh_host_picker.read(cx).dropdown().clone();
+        if ssh_config_host_dropdown.read(cx).is_open()
+            && self.handle_dropdown_command(&ssh_config_host_dropdown, command, cx)
         {
             return true;
         }
@@ -1125,40 +1135,45 @@ impl ConnectionManagerWindow {
         }
     }
 
-    fn handle_dropdown_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
+    fn handle_dropdown_command(
+        &mut self,
+        dropdown: &Entity<Dropdown>,
+        command: Command,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match command {
             Command::SelectNext => {
-                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_next_item(cx);
                 });
                 true
             }
             Command::SelectPrev => {
-                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_prev_item(cx);
                 });
                 true
             }
             Command::Execute => {
-                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                dropdown.update(cx, |dropdown, cx| {
                     dropdown.accept_selection(cx);
                 });
                 true
             }
             Command::PageDown => {
-                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_next_page(cx);
                 });
                 true
             }
             Command::PageUp => {
-                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_prev_page(cx);
                 });
                 true
             }
             Command::Cancel => {
-                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                dropdown.update(cx, |dropdown, cx| {
                     dropdown.close(cx);
                 });
                 true
@@ -1827,7 +1842,7 @@ impl ConnectionManagerWindow {
                         AccessMethod => 0,
                         SshEnabled => 1,
                         SshTunnelSelector | SshTunnelClear => 2,
-                        SshEditInSettings => 2 + tunnel_offset,
+                        SshEditInSettings | SshConfigHost => 2 + tunnel_offset,
                         SshHost | SshPort | SshUser => 2 + tunnel_offset,
                         SshAuthPrivateKey | SshAuthPassword => 3 + tunnel_offset,
                         SshKeyPath | SshKeyBrowse | SshPassphrase | SshSaveSecret | SshPassword => {
@@ -2479,6 +2494,11 @@ impl ConnectionManagerWindow {
                 self.clear_ssh_tunnel_selection(window, cx);
             }
 
+            FormFocus::SshConfigHost => {
+                let dropdown = self.access.ssh_host_picker.read(cx).dropdown().clone();
+                dropdown.update(cx, |dropdown, cx| dropdown.open(cx));
+            }
+
             FormFocus::SshAuthPrivateKey => {
                 self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
             }
@@ -3112,7 +3132,35 @@ mod tests {
     #[test]
     fn ssh_enabled_skips_tunnel_selector_when_no_tunnels() {
         let state = ssh_enabled_no_tunnels();
-        assert_eq!(FormFocus::SshEnabled.down_ssh(state), FormFocus::SshHost);
+        assert_eq!(
+            FormFocus::SshEnabled.down_ssh(state),
+            FormFocus::SshConfigHost
+        );
+    }
+
+    #[test]
+    fn ssh_config_host_sits_between_the_tunnel_selector_and_the_manual_fields() {
+        let state = ssh_enabled_no_tunnels();
+        assert_eq!(FormFocus::SshConfigHost.down_ssh(state), FormFocus::SshHost);
+        assert_eq!(FormFocus::SshHost.up_ssh(state), FormFocus::SshConfigHost);
+        assert_eq!(
+            FormFocus::SshConfigHost.up_ssh(state),
+            FormFocus::SshEnabled
+        );
+    }
+
+    #[test]
+    fn ssh_with_tunnels_routes_the_config_host_back_to_the_tunnel_selector() {
+        let mut state = ssh_enabled_no_tunnels();
+        state.has_tunnels = true;
+        assert_eq!(
+            FormFocus::SshConfigHost.up_ssh(state),
+            FormFocus::SshTunnelSelector
+        );
+        assert_eq!(
+            FormFocus::SshTunnelSelector.down_ssh(state),
+            FormFocus::SshConfigHost
+        );
     }
 
     // --- SSH tab: read-only mode (tunnel selected) ---

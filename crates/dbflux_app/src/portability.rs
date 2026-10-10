@@ -830,6 +830,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         );
         s.id = id;
@@ -1232,6 +1233,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         );
         let proxy = ProxyProfile {
@@ -1802,6 +1804,7 @@ mod tests {
                 host: "bastion.example.com".to_string(),
                 port: 22,
                 user: "ec2-user".to_string(),
+                ssh_config_host: None,
                 auth_method: SshAuthMethodKind::Password,
                 key_embedded: false,
                 required_refs: vec![],

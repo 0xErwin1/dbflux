@@ -948,6 +948,7 @@ pub fn save_ssh_tunnels(
             passphrase_secret_ref: None,
             password_secret_ref: None,
             save_secret: tunnel.save_secret,
+            ssh_config_host: tunnel.config.ssh_config_host.clone(),
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1865,6 +1866,7 @@ fn load_ssh_tunnels(
                     port: dto.port as u16,
                     user: dto.user,
                     auth_method,
+                    ssh_config_host: dto.ssh_config_host,
                 };
                 Some(SshTunnelProfile {
                     id,
@@ -3002,6 +3004,7 @@ mod tests {
                 auth_method: SshAuthMethod::PrivateKey {
                     key_path: Some("/tmp/bastion-key".into()),
                 },
+                ssh_config_host: None,
             },
             save_secret: false,
         };

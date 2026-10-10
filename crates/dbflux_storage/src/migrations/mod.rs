@@ -186,6 +186,7 @@ impl MigrationRegistry {
         registry.register(mod_041_general_settings_toast_timeout::MigrationImpl);
         registry.register(mod_042_connection_profile_navigator_view::MigrationImpl);
         registry.register(mod_043_connection_profile_show_all_databases::MigrationImpl);
+        registry.register(mod_044_ssh_tunnel_config_host::MigrationImpl);
         registry
     }
 
@@ -419,6 +420,7 @@ mod mod_040_general_settings_fonts;
 mod mod_041_general_settings_toast_timeout;
 mod mod_042_connection_profile_navigator_view;
 mod mod_043_connection_profile_show_all_databases;
+mod mod_044_ssh_tunnel_config_host;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1132,6 +1134,7 @@ mod tests {
             "041_general_settings_toast_timeout",
             "042_connection_profile_navigator_view",
             "043_connection_profile_show_all_databases",
+            "044_ssh_tunnel_config_host",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();
