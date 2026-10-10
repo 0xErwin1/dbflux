@@ -23,7 +23,7 @@ use ssh2::Session;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// OpenSSH config resolution (feature #837)
+// OpenSSH config resolution
 // ---------------------------------------------------------------------------
 
 pub mod ssh_config;
@@ -295,7 +295,7 @@ pub fn establish_session(
 ) -> Result<Session, DbError> {
     let total_start = std::time::Instant::now();
 
-    // Resolve the SSH config alias first (feature #837): every dial below —
+    // Resolve the SSH config alias first: every dial below —
     // TCP connect, handshake, TOFU host-key step (keyed on the resolved
     // host and port, A1) and authentication — uses the resolved target.
     let resolved = resolve_for_dial(config)?;
@@ -848,7 +848,7 @@ fn run_ssh_tunnel_loop(
 }
 
 // ---------------------------------------------------------------------------
-// Tests — resolve_for_dial (feature #837, T3)
+// Tests — resolve_for_dial (T3)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

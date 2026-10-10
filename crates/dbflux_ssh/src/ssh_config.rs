@@ -1,4 +1,4 @@
-//! OpenSSH config resolution for DBFlux SSH tunnels (feature #837).
+//! OpenSSH config resolution for DBFlux SSH tunnels.
 //!
 //! This module resolves an alias from an OpenSSH `config` file into concrete
 //! connection parameters (`HostName`, `User`, `Port`, `IdentityFile`), following
@@ -9,7 +9,9 @@
 //! Isolation rules (S7/C4):
 //! - the config directory and the home directory are always caller-provided
 //!   arguments; nothing here calls `dirs::home_dir()` or reads `~/.ssh`;
-//! - `Match exec` never spawns a process (the block never applies);
+//! - no `Match` criterion ever spawns a process; a block with a criterion
+//!   the tunnel cannot evaluate (including `exec`) never activates, but a
+//!   `ProxyJump`/`ProxyCommand` inside it still fails resolution closed (S5);
 //! - `Include` is bounded by a recursion-depth cap and a total byte cap;
 //! - the SSH config is only ever read, never written.
 //!
@@ -27,12 +29,17 @@
 //!   its own `Host`/`Match` lines evaluate against the alias, and when the
 //!   included file ends the enclosing file's state is restored. An `Include`
 //!   inside an inactive block is still read, but with OpenSSH's `NEVERMATCH`
-//!   behaviour: no block inside it can ever become active;
+//!   behaviour: no block inside it can ever become active. A proxy visible
+//!   through an unevaluatable enclosing block stays visible at the included
+//!   file's top level, so it still fails resolution closed (S5);
 //! - an `Include` that matched but could not be read is **fatal** for
 //!   `resolve` / `resolve_with_local_user`, like OpenSSH aborting the whole
 //!   file: resolving past an unreadable include could dial directly where the
-//!   unreadable file declared a proxy (S5). `hosts()` never fails; it keeps
-//!   the other aliases and the diagnostic is recorded for the picker;
+//!   unreadable file declared a proxy (S5). The same is true of an `Include`
+//!   glob whose directory cannot be listed (OpenSSH 10.5p1 silently ignores
+//!   it — a deliberate divergence, same fail-closed reasoning); `hosts()`
+//!   never fails; it keeps the other aliases and the diagnostic is recorded
+//!   for the picker;
 //! - the value of `HostName`, `User`, `Port` and `IdentityFile` is the first
 //!   whitespace-delimited token (quotes respected); the rest of the line,
 //!   including trailing comments, is ignored. `ProxyJump` and `ProxyCommand`
@@ -362,15 +369,14 @@ impl SshConfigFile {
         // top-level directives before the first `Host`/`Match` apply to every
         // alias. They cannot make an unknown alias resolvable on their own:
         // `matched` is only set by an actually matching block.
-        let mut active = true;
-        self.resolve_directives(
-            &self.directives,
+        let mut walk = Walk {
             alias,
             local_user,
-            &mut state,
-            &mut active,
-            false,
-        );
+            state: &mut state,
+            active: true,
+            proxy_visible: false,
+        };
+        self.resolve_directives(&self.directives, &mut walk, false);
         state
     }
 
@@ -379,37 +385,47 @@ impl SshConfigFile {
     /// `active` is the block state of the file currently being walked;
     /// `never_match` is OpenSSH's `SSHCONF_NEVERMATCH`: inside an `Include`
     /// reached from an inactive block, no `Host`/`Match` line may activate.
-    fn resolve_directives(
-        &self,
-        directives: &[Directive],
-        alias: &str,
-        local_user: &str,
-        state: &mut Resolution,
-        active: &mut bool,
-        never_match: bool,
-    ) {
+    /// `proxy_visible` marks a position inside a block whose criterion the
+    /// tunnel cannot evaluate: normal keywords stay inactive, but a
+    /// `ProxyJump`/`ProxyCommand` there still fails closed, because OpenSSH
+    /// would apply it if the criterion evaluated true (S5).
+    fn resolve_directives(&self, directives: &[Directive], walk: &mut Walk<'_>, never_match: bool) {
         for directive in directives {
             match directive {
                 Directive::Host { patterns } => {
                     if never_match {
-                        *active = false;
+                        walk.active = false;
+                        walk.proxy_visible = false;
                         continue;
                     }
                     // `Host` patterns and `Match user` are case-sensitive;
                     // `Match host` below stays case-insensitive, like OpenSSH.
-                    *active = host_patterns_match(patterns, alias);
-                    state.matched |= *active;
+                    walk.active = host_patterns_match(patterns, walk.alias);
+                    walk.state.matched |= walk.active;
+                    walk.proxy_visible = false;
                 }
                 Directive::Match { conditions } => {
+                    // A criterion the tunnel cannot evaluate never spawns a
+                    // process (C5) and never activates the block; it keeps the
+                    // block's proxy directives visible (S5, fail closed).
+                    let unevaluatable = conditions
+                        .iter()
+                        .any(|condition| matches!(condition, MatchCondition::Never));
                     if never_match {
-                        *active = false;
+                        walk.active = false;
+                        walk.proxy_visible = unevaluatable;
                         continue;
                     }
                     // `Match host` sees the host name in effect so far, `Match
                     // user` the user in effect or the local-user fallback (A6).
-                    let host_in_effect = state.host_name.as_deref().unwrap_or(alias).to_lowercase();
-                    let user_in_effect = state.user.as_deref().unwrap_or(local_user);
-                    *active = conditions.iter().all(|condition| match condition {
+                    let host_in_effect = walk
+                        .state
+                        .host_name
+                        .as_deref()
+                        .unwrap_or(walk.alias)
+                        .to_lowercase();
+                    let user_in_effect = walk.state.user.as_deref().unwrap_or(walk.local_user);
+                    walk.active = conditions.iter().all(|condition| match condition {
                         MatchCondition::All => true,
                         MatchCondition::Host(patterns) => {
                             pattern_list_matches(patterns, &host_in_effect, true)
@@ -417,41 +433,63 @@ impl SshConfigFile {
                         MatchCondition::User(patterns) => {
                             pattern_list_matches(patterns, user_in_effect, false)
                         }
+                        // Cannot be evaluated: the block never activates.
                         MatchCondition::Never => false,
                     });
-                    state.matched |= *active;
+                    walk.state.matched |= walk.active;
+                    walk.proxy_visible = unevaluatable;
                 }
                 Directive::Keyword(keyword) => {
-                    if !*active {
+                    if !walk.active {
+                        // Normal keywords only apply in an active block. A
+                        // proxy inside a block whose criterion the tunnel
+                        // cannot evaluate must still be seen, so resolution
+                        // fails closed instead of dialling directly (S5).
+                        if !walk.proxy_visible {
+                            continue;
+                        }
+                        match keyword {
+                            KnownKeyword::ProxyJump(value) => {
+                                walk.state
+                                    .mark_unsupported(value, UnsupportedDirective::ProxyJump);
+                            }
+                            KnownKeyword::ProxyCommand(value) => {
+                                walk.state
+                                    .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
                     // First value obtained for a keyword wins (OpenSSH).
                     match keyword {
                         KnownKeyword::HostName(value) => {
-                            if state.host_name.is_none() {
-                                state.host_name = Some(value.clone());
+                            if walk.state.host_name.is_none() {
+                                walk.state.host_name = Some(value.clone());
                             }
                         }
                         KnownKeyword::User(value) => {
-                            if state.user.is_none() {
-                                state.user = Some(value.clone());
+                            if walk.state.user.is_none() {
+                                walk.state.user = Some(value.clone());
                             }
                         }
                         KnownKeyword::Port(value) => {
-                            if state.port.is_none() {
-                                state.port = Some(*value);
+                            if walk.state.port.is_none() {
+                                walk.state.port = Some(*value);
                             }
                         }
                         KnownKeyword::IdentityFile(value) => {
-                            if state.identity_file.is_none() {
-                                state.identity_file = Some(value.clone());
+                            if walk.state.identity_file.is_none() {
+                                walk.state.identity_file = Some(value.clone());
                             }
                         }
                         KnownKeyword::ProxyJump(value) => {
-                            state.mark_unsupported(value, UnsupportedDirective::ProxyJump);
+                            walk.state
+                                .mark_unsupported(value, UnsupportedDirective::ProxyJump);
                         }
                         KnownKeyword::ProxyCommand(value) => {
-                            state.mark_unsupported(value, UnsupportedDirective::ProxyCommand);
+                            walk.state
+                                .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
                         }
                     }
                 }
@@ -459,9 +497,12 @@ impl SshConfigFile {
                     // The included file is its own scope: it inherits the
                     // enclosing block state, and when it ends the enclosing
                     // file's state is restored (OpenSSH's `*activep = oactive`).
-                    let enclosing = *active;
-                    self.resolve_directives(nested, alias, local_user, state, active, !enclosing);
-                    *active = enclosing;
+                    // A proxy visible through an unevaluatable enclosing block
+                    // stays visible at the included file's top level.
+                    let enclosing = (walk.active, walk.proxy_visible);
+                    self.resolve_directives(nested, walk, !enclosing.0);
+                    walk.active = enclosing.0;
+                    walk.proxy_visible = enclosing.1;
                 }
             }
         }
@@ -528,7 +569,9 @@ enum MatchCondition {
     Host(Vec<String>),
     User(Vec<String>),
     /// A condition keyword the tunnel cannot evaluate (including `exec`): the
-    /// whole block never applies and no process is ever spawned (C5).
+    /// block never activates and no process is ever spawned (C5), but a
+    /// `ProxyJump`/`ProxyCommand` inside it still fails resolution closed (S5):
+    /// OpenSSH would apply the block if the criterion evaluated true.
     Never,
 }
 
@@ -540,6 +583,18 @@ struct Resolution {
     port: Option<u16>,
     identity_file: Option<String>,
     unsupported: Option<UnsupportedDirective>,
+}
+
+/// Mutable state carried through one sequential resolution pass.
+struct Walk<'a> {
+    alias: &'a str,
+    local_user: &'a str,
+    state: &'a mut Resolution,
+    /// Block state of the file currently being walked.
+    active: bool,
+    /// Set inside a block whose criterion the tunnel cannot evaluate: normal
+    /// keywords stay inactive, but a proxy there still fails closed (S5).
+    proxy_visible: bool,
 }
 
 impl Resolution {
@@ -681,8 +736,10 @@ impl<'a> Parser<'a> {
                     }
                     None => unsupported = true,
                 },
-                // `exec`, `localuser`, and every other criterion make the block
-                // inactive; no process is ever spawned (C5).
+                // `exec`, `localuser`, and every other criterion the tunnel
+                // cannot evaluate make the block inactive; no process is ever
+                // spawned (C5), but a proxy inside the block still fails
+                // closed (S5).
                 _ => unsupported = true,
             }
         }
@@ -707,81 +764,128 @@ impl<'a> Parser<'a> {
 
     fn include_one(&mut self, raw: &str, number: usize, line: &str) {
         let expanded = expand_tilde(raw, self.home);
-        let pattern_text = expanded.to_string_lossy().into_owned();
         let path = if Path::new(&expanded).is_absolute() {
             expanded
         } else {
             self.config_dir.join(&expanded)
         };
+        let pattern_text = path.to_string_lossy().into_owned();
         let is_glob = pattern_text.contains('*') || pattern_text.contains('?');
-        let candidates = if is_glob {
-            match self.glob_include(&path) {
-                Ok(candidates) => candidates,
-                Err(reason) => {
-                    self.diagnostic(number, line, &reason);
-                    return;
+        if !is_glob {
+            if path.is_file() {
+                self.read_include(path);
+            } else {
+                self.diagnostic(number, line, &format!("include path does not exist: {raw}"));
+            }
+            return;
+        }
+        // The pattern is expanded across every path component, case-sensitively,
+        // the way OpenSSH's glob(3) does — a wildcard may sit in a directory
+        // component, not only in the file name.
+        let mut prefix = PathBuf::new();
+        let mut parts: Vec<String> = Vec::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::Normal(name) => {
+                    parts.push(name.to_string_lossy().into_owned());
+                }
+                other => prefix.push(other.as_os_str()),
+            }
+        }
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        match self.expand_include_pattern(&prefix, &parts, &mut candidates) {
+            Ok(true) => {
+                candidates.sort();
+                for candidate in candidates {
+                    self.read_include(candidate);
                 }
             }
-        } else if path.is_file() {
-            vec![path]
-        } else {
-            self.diagnostic(number, line, &format!("include path does not exist: {raw}"));
-            return;
-        };
-        for candidate in candidates {
-            self.read_include(candidate);
+            // A pattern that simply matches nothing stays a non-fatal
+            // diagnostic, like OpenSSH ignoring GLOB_NOMATCH.
+            Ok(false) => {
+                self.diagnostic(
+                    number,
+                    line,
+                    &format!("include pattern matched no files: {raw}"),
+                );
+            }
+            // A directory on the way could not be listed: fail closed rather
+            // than silently dropping whatever the files behind it declare (S5).
+            Err((path, message)) => self.record_unreadable_include(&path, &message),
         }
     }
 
-    fn glob_include(&mut self, path: &Path) -> Result<Vec<PathBuf>, String> {
-        let Some(parent) = path.parent() else {
-            return Err(format!(
-                "include pattern has no parent directory: {}",
-                path.display()
-            ));
+    /// Expands an `Include` glob pattern component by component,
+    /// case-sensitively. Pushes every matched file onto `matches` and returns
+    /// whether anything matched. `Err` carries the directory that could not be
+    /// listed — fatal for `resolve` (S5), because a silently dropped include
+    /// can drop a proxy directive. A directory that is simply not there
+    /// matches nothing, like OpenSSH's GLOB_NOMATCH.
+    fn expand_include_pattern(
+        &mut self,
+        prefix: &Path,
+        parts: &[String],
+        matches: &mut Vec<PathBuf>,
+    ) -> Result<bool, (PathBuf, String)> {
+        let Some((component, rest)) = parts.split_first() else {
+            return Ok(false);
         };
-        let pattern = match path.file_name() {
-            Some(name) => name.to_string_lossy().to_lowercase(),
-            None => {
-                return Err(format!(
-                    "include pattern has no file name: {}",
-                    path.display()
-                ));
+        if rest.is_empty() {
+            // Final component: only files match.
+            let entries = match fs::read_dir(prefix) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err((prefix.to_path_buf(), error.to_string())),
+            };
+            let mut matched = false;
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        self.diagnostics.push(format!(
+                            "cannot read directory entry for include pattern {}: {error}",
+                            prefix.display()
+                        ));
+                        continue;
+                    }
+                };
+                if !entry.path().is_file() {
+                    continue;
+                }
+                if glob_matches(component, &entry.file_name().to_string_lossy()) {
+                    matches.push(entry.path());
+                    matched = true;
+                }
             }
+            return Ok(matched);
+        }
+        // Intermediate component: only directories continue the walk.
+        let entries = match fs::read_dir(prefix) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err((prefix.to_path_buf(), error.to_string())),
         };
-        let entries = fs::read_dir(parent).map_err(|error| {
-            format!(
-                "cannot list directory for include pattern {}: {error}",
-                path.display()
-            )
-        })?;
-        let mut matches: Vec<PathBuf> = Vec::new();
+        let mut matched = false;
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
-                // An unreadable directory entry is a diagnostic, never a
-                // silent skip: dropping an include file can drop a proxy
-                // directive (S5).
                 Err(error) => {
                     self.diagnostics.push(format!(
                         "cannot read directory entry for include pattern {}: {error}",
-                        path.display()
+                        prefix.display()
                     ));
                     continue;
                 }
             };
-            if !entry.path().is_file() {
+            let path = entry.path();
+            if !path.is_dir() {
                 continue;
             }
-            if glob_matches(
-                &pattern,
-                &entry.file_name().to_string_lossy().to_lowercase(),
-            ) {
-                matches.push(entry.path());
+            if glob_matches(component, &entry.file_name().to_string_lossy()) {
+                matched |= self.expand_include_pattern(&path, rest, matches)?;
             }
         }
-        matches.sort();
-        Ok(matches)
+        Ok(matched)
     }
 
     /// An included file that matched but cannot be read is recorded twice:
@@ -1069,7 +1173,7 @@ pub fn local_user_from_env() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (RED first: bodies above are `todo!()`)
+// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1749,5 +1853,233 @@ mod tests {
             .collect();
         assert!(!aliases.contains(&"secret".to_string()), "got: {aliases:?}");
         assert!(aliases.contains(&"other".to_string()), "got: {aliases:?}");
+    }
+
+    #[test]
+    fn match_with_an_unevaluatable_criterion_still_fails_closed_on_a_proxy() {
+        // Oracle: for all three fixtures `ssh -G -F <config> prod` reports the
+        // proxy (`proxyjump bastion` / `proxycommand ssh -W '%h:%p' bastion`),
+        // so treating the unevaluatable criterion as "does not match" would
+        // dial the host directly instead of through the bastion (S5).
+        for (criterion, directive, proxy) in [
+            ("originalhost prod", "ProxyJump", "ProxyJump bastion"),
+            (
+                "exec true",
+                "ProxyCommand",
+                "ProxyCommand ssh -W '%h:%p' bastion",
+            ),
+            ("final", "ProxyJump", "ProxyJump bastion"),
+        ] {
+            let fixture = Fixture::new();
+            fixture.write(
+                "ssh/config",
+                &format!("Host prod\n  HostName prod.internal\nMatch {criterion}\n  {proxy}\n"),
+            );
+            let config = fixture.load();
+            assert_eq!(
+                config.resolve_with_local_user("prod", "alice", &fixture.home()),
+                Err(SshConfigError::UnsupportedHost {
+                    alias: "prod".to_string(),
+                    directive,
+                }),
+                "criterion {criterion:?} must fail closed on {directive}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_block_that_definitely_does_not_match_does_not_fail_closed() {
+        // Oracle: `ssh -G -F <config> prod` reports `hostname prod.internal`
+        // and no proxy — OpenSSH does not apply the `Match host other` block,
+        // so the resolver must neither apply it nor fail closed on its proxy.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nMatch host other\n  ProxyJump bastion\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "prod.internal");
+        assert_eq!(resolved.port, 22);
+    }
+
+    #[test]
+    fn an_unevaluatable_block_still_does_not_activate_normal_keywords() {
+        // Oracle: `ssh -G -F <config> prod` reports the proxy (exec true), so
+        // resolution must fail closed — and the block's User/Port/IdentityFile
+        // must contribute nothing, as they would only apply with the proxy
+        // honoured, which the tunnel cannot do.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nMatch exec true\n  User other\n  Port 2299\n  IdentityFile /other/key\n  ProxyJump bastion\n",
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+        let hosts = config.hosts(&fixture.home());
+        let prod = hosts.iter().find(|h| h.alias == "prod").unwrap();
+        assert_eq!(prod.user, None);
+        assert_eq!(prod.port, 22);
+        assert_eq!(prod.identity_file, None);
+        assert_eq!(prod.unsupported, Some(UnsupportedDirective::ProxyJump));
+
+        // Without a proxy the same block still contributes nothing and
+        // resolution succeeds with the pre-Match values.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nMatch exec true\n  User other\n  Port 2299\n  IdentityFile /other/key\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "prod.internal");
+        assert_eq!(resolved.user, None);
+        assert_eq!(resolved.port, 22);
+        assert_eq!(resolved.identity_file, None);
+    }
+
+    #[test]
+    fn a_proxy_in_an_unevaluatable_block_reached_through_an_include_fails_closed() {
+        // Oracle: `ssh -G -F <config> prod` reports `proxyjump bastion` — with
+        // the exec condition true, the included file's top-level proxy would
+        // apply, so the include must not swallow it (S5).
+        let fixture = Fixture::new();
+        let include = fixture.dir.path().join("inc.conf");
+        fixture.write("inc.conf", "ProxyJump bastion\n");
+        fixture.write(
+            "ssh/config",
+            &format!(
+                "Host prod\n  HostName prod.internal\nMatch exec true\n  Include {}\n",
+                include.display()
+            ),
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+    }
+
+    #[test]
+    fn include_wildcard_in_a_directory_component_is_expanded() {
+        // Oracle, with the proxy: `ssh -G -F <config> prod` reports
+        // `proxyjump bastion`, so the expanded include must fail resolution
+        // closed. Oracle without the proxy: `user incuser`, `port 2299` and
+        // `hostname frominclude.example.com`, so the included values apply.
+        let fixture = Fixture::new();
+        let base = fixture.dir.path().join("includes");
+        fixture.write("includes/conf.d/one/config", "ProxyJump bastion\n");
+        fixture.write("includes/conf.d/two/config", "User two\n");
+        fixture.write(
+            "ssh/config",
+            &format!(
+                "Host prod\n  HostName prod.internal\nInclude {}/conf.d/*/config\n",
+                base.display()
+            ),
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+
+        let fixture = Fixture::new();
+        let base = fixture.dir.path().join("includes");
+        fixture.write("includes/conf.d/one/config", "User incuser\nPort 2299\n");
+        fixture.write(
+            "includes/conf.d/two/config",
+            "HostName frominclude.example.com\n",
+        );
+        fixture.write(
+            "ssh/config",
+            &format!("Host prod\n  Include {}/conf.d/*/config\n", base.display()),
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "frominclude.example.com");
+        assert_eq!(resolved.user.as_deref(), Some("incuser"));
+        assert_eq!(resolved.port, 2299);
+    }
+
+    #[test]
+    fn include_globs_are_case_sensitive() {
+        // Oracle: with `A.CONF` and `a.conf` present, `ssh -G -F <config>
+        // prod` reports `user lower` — OpenSSH's case-sensitive glob(3) does
+        // not match `A.CONF` with `*.conf`, so only `a.conf` contributes.
+        // Sorted expansion puts `A.CONF` first, so a case-insensitive matcher
+        // would wrongly win with `user upper`.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nInclude conf.d/*.conf\n",
+        );
+        fixture.write("ssh/conf.d/A.CONF", "User upper\n");
+        fixture.write("ssh/conf.d/a.conf", "User lower\n");
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.user.as_deref(), Some("lower"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_unexpandable_include_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nInclude conf.d/*/config\n",
+        );
+        fixture.write("ssh/conf.d/one/config", "ProxyJump bastion\n");
+        let conf_d = fixture.dir.path().join("ssh/conf.d");
+        fs::set_permissions(&conf_d, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Running as root defeats chmod 000; skip with a note rather than
+        // reporting a false pass. (OpenSSH itself ignores the unreadable
+        // directory here — DBFlux deliberately fails closed instead, like it
+        // already does for a matched-but-unreadable include file.)
+        if fs::read_dir(&conf_d).is_ok() {
+            fs::set_permissions(&conf_d, fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!(
+                "skipping unexpandable-include assertion: running as root, chmod 000 did not deny the read"
+            );
+            return;
+        }
+
+        let config = fixture.load();
+        let error = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .expect_err("an include whose directory cannot be listed must fail resolution");
+        match error {
+            SshConfigError::Read { path, .. } => assert_eq!(path, conf_d),
+            other => panic!("expected SshConfigError::Read, got: {other:?}"),
+        }
+        assert!(
+            config.diagnostics().iter().any(|d| d.contains("conf.d")),
+            "the unreadable directory must still be reported for the picker: {:?}",
+            config.diagnostics()
+        );
+
+        // Restore access so the temp directory can be cleaned up.
+        fs::set_permissions(&conf_d, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
