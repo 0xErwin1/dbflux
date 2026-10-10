@@ -4892,3 +4892,121 @@ fn text_objects_in_a_read_only_editor_only_yank(cx: &mut TestAppContext) {
     editor.keys("y i '");
     assert_eq!(editor.clipboard_text().as_deref(), Some("name"));
 }
+
+#[gpui::test]
+fn shift_d_and_shift_c_act_to_the_line_end(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc def\nnext\nlast", true);
+    editor.set_cursor(4);
+    editor.keys("shift-d");
+    assert_eq!(editor.text(), "abc \nnext\nlast");
+    assert_eq!(editor.cursor(), 3);
+    assert_eq!(editor.clipboard_text().as_deref(), Some("def"));
+    editor.keys("u");
+
+    editor.set_cursor(4);
+    editor.keys("2 shift-d");
+    assert_eq!(editor.text(), "abc \nlast", "a count reaches later lines");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc def\nnext\nlast");
+
+    editor.set_cursor(4);
+    editor.keys("shift-c");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.type_text("X");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "abc X\nnext\nlast");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc def\nnext\nlast");
+}
+
+#[gpui::test]
+fn s_substitutes_characters_and_shift_s_the_line(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.set_cursor(1);
+    editor.keys("s");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "ac");
+    editor.type_text("XY");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "aXYc");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc");
+
+    let mut editor = open_editor(cx, "abcd", true);
+    editor.keys("3 s");
+    assert_eq!(editor.text(), "d");
+    editor.keys("escape");
+
+    let mut editor = open_editor(cx, "a\n\nb", true);
+    editor.set_cursor(2);
+    editor.keys("s");
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Insert),
+        "s on an empty line inserts"
+    );
+    assert_eq!(editor.text(), "a\n\nb");
+    editor.keys("escape");
+
+    let mut editor = open_editor(cx, "  one\ntwo", true);
+    editor.set_cursor(3);
+    editor.keys("shift-s");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.type_text("X");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "X\ntwo");
+    editor.keys("u");
+    assert_eq!(editor.text(), "  one\ntwo");
+}
+
+#[gpui::test]
+fn shift_j_joins_lines_with_one_space(cx: &mut TestAppContext) {
+    let cases = [
+        ("a\n  b\nc", 0, "shift-j", "a b\nc", 1),
+        ("a\n  b\nc", 0, "3 shift-j", "a b c", 3),
+        ("a \nb", 0, "shift-j", "a b", 1),
+        ("a\n)", 0, "shift-j", "a)", 1),
+        ("a\n\nb", 0, "shift-j", "a\nb", 0),
+        ("a\r\nb", 0, "shift-j", "a b", 1),
+        ("\nb", 0, "shift-j", "b", 0),
+        ("only", 2, "shift-j", "only", 2),
+    ];
+    for (content, cursor, keys, expected, expected_cursor) in cases {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{content:?} {keys}");
+        assert_eq!(editor.cursor(), expected_cursor, "{content:?} {keys}");
+        editor.keys("u");
+        assert_eq!(
+            editor.text(),
+            content,
+            "one undo step for {content:?} {keys}"
+        );
+    }
+}
+
+#[gpui::test]
+fn tilde_toggles_case_and_moves_right(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "aBc é", true);
+    editor.keys("~");
+    assert_eq!(editor.text(), "ABc é");
+    assert_eq!(editor.cursor(), 1);
+    editor.keys("2 ~");
+    assert_eq!(editor.text(), "AbC é");
+    assert_eq!(editor.cursor(), 3);
+    editor.keys("9 ~");
+    assert_eq!(editor.text(), "AbC É", "a count stops at the line end");
+    assert_eq!(editor.cursor(), 4);
+    editor.keys("u");
+    assert_eq!(editor.text(), "AbC é");
+}
+
+#[gpui::test]
+fn line_shortcuts_do_nothing_in_a_read_only_editor(cx: &mut TestAppContext) {
+    let mut editor = read_only_editor(cx, "select a\nfrom t");
+    editor.set_cursor(2);
+    editor.keys("shift-d shift-c s shift-s shift-j ~");
+    assert_eq!(editor.text(), "select a\nfrom t");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}

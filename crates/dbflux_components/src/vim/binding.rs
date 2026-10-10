@@ -1213,6 +1213,40 @@ impl VimBinding {
             | VimCommand::RepeatFind(_)
             | VimCommand::MatchPair
             | VimCommand::PendingTextObject(_) => {}
+            VimCommand::DeleteToEnd | VimCommand::ChangeToEnd => {
+                let operator = if command == VimCommand::DeleteToEnd {
+                    'd'
+                } else {
+                    'c'
+                };
+                self.pending_operator = Some((operator, None));
+                self.count = explicit_count;
+                self.run_line_motion(LineMotion::LineEnd, window, cx);
+            }
+            VimCommand::Substitute if !self.host_read_only => {
+                let range = {
+                    let state = self.input.read(cx);
+                    let cursor = state.cursor();
+                    machine::change_horizontal_right_range(state.text(), cursor, count)
+                        .unwrap_or(cursor..cursor)
+                };
+                self.apply_change(range, None, false, window, cx);
+            }
+            VimCommand::SubstituteLine => self.apply_line_operator('c', count, window, cx),
+            VimCommand::JoinLines | VimCommand::ToggleCase if !self.host_read_only => {
+                let replacement = {
+                    let state = self.input.read(cx);
+                    if command == VimCommand::JoinLines {
+                        machine::join_lines(state.text(), state.cursor(), count)
+                    } else {
+                        machine::toggle_case(state.text(), state.cursor(), count)
+                    }
+                };
+                if let Some(replacement) = replacement {
+                    self.apply_replacement(replacement, window, cx);
+                }
+            }
+            VimCommand::Substitute | VimCommand::JoinLines | VimCommand::ToggleCase => {}
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.input.read(cx);
@@ -2145,6 +2179,23 @@ impl VimBinding {
             });
         }
         self.set_vim_mode(VimMode::Insert, cx);
+    }
+
+    /// Replaces one range as one undo step and leaves the cursor on a
+    /// character at the replacement's cursor.
+    fn apply_replacement<H: VimHost>(
+        &mut self,
+        replacement: machine::Replacement,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        self.vertical_goal = None;
+        self.input.update(cx, |state, cx| {
+            state.set_selected_range(replacement.range, cx);
+            state.replace(replacement.text, window, cx);
+            state.set_selected_range(replacement.cursor..replacement.cursor, cx);
+        });
+        self.clamp_cursor_for_normal(cx);
     }
 
     /// Writes yanked or deleted text to the system clipboard and remembers

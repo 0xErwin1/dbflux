@@ -91,6 +91,18 @@ pub enum VimCommand {
     MatchPair,
     /// `i` (`false`) or `a` (`true`) in Visual mode, waiting for the object.
     PendingTextObject(bool),
+    /// `D`: `d$`.
+    DeleteToEnd,
+    /// `C`: `c$`.
+    ChangeToEnd,
+    /// `s`: changes the characters under the cursor.
+    Substitute,
+    /// `S`: `cc`.
+    SubstituteLine,
+    /// `J`: joins lines with one space.
+    JoinLines,
+    /// `~`: switches the case of the characters under the cursor.
+    ToggleCase,
 }
 
 /// The object of `iw`, `a"`, `i(` and the like.
@@ -218,12 +230,17 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 "$" => return Some(VimCommand::LineEnd),
                 "^" => return Some(VimCommand::FirstNonBlank),
                 "%" => return Some(VimCommand::MatchPair),
+                "~" if !visual => return Some(VimCommand::ToggleCase),
                 ";" => return Some(VimCommand::RepeatFind(false)),
                 "," => return Some(VimCommand::RepeatFind(true)),
                 _ => {}
             }
             if key.shift {
                 return match key.key {
+                    "d" if !visual => Some(VimCommand::DeleteToEnd),
+                    "c" if !visual => Some(VimCommand::ChangeToEnd),
+                    "s" if !visual => Some(VimCommand::SubstituteLine),
+                    "j" if !visual => Some(VimCommand::JoinLines),
                     "f" => Some(VimCommand::PendingFind(FindKind {
                         forward: false,
                         till: false,
@@ -252,6 +269,7 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                     Some(VimCommand::PendingMark(key.key.chars().next()?))
                 }
                 "/" if !visual => Some(VimCommand::OpenSearch),
+                "s" if !visual => Some(VimCommand::Substitute),
                 "f" => Some(VimCommand::PendingFind(FindKind {
                     forward: true,
                     till: false,
@@ -847,6 +865,94 @@ fn pair_object_range(
     } else {
         Some((inner_start..end, false))
     }
+}
+
+/// An edit of one range, and where the cursor goes after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replacement {
+    pub range: Range<usize>,
+    pub text: String,
+    pub cursor: usize,
+}
+
+/// `J`: joins the cursor's line with the next `count - 1` lines (at least
+/// one). Each joined line loses its leading spaces and gets one space before
+/// it, except when it is empty or starts with `)`, or when the text before it
+/// is empty or ends with a space. The cursor goes to the last join. `None`
+/// on the last line.
+pub fn join_lines(text: &Rope, offset: usize, count: usize) -> Option<Replacement> {
+    let row = text.offset_to_point(offset).row;
+    let last_row = row
+        .saturating_add(count.max(2) - 1)
+        .min(text.lines_len().saturating_sub(1));
+    if last_row == row {
+        return None;
+    }
+
+    let first = Line::at_row(text, row);
+    let start = first.start + first.content.len();
+    let mut joined = String::new();
+    let mut previous = first.content.clone();
+    let mut cursor = start;
+
+    for next_row in row + 1..=last_row {
+        let line = Line::at_row(text, next_row);
+        let trimmed = line.content.trim_start_matches([' ', '\t']);
+        let ends_with_space = previous.ends_with([' ', '\t']);
+        let separator = if trimmed.is_empty()
+            || trimmed.starts_with(')')
+            || previous.is_empty()
+            || ends_with_space
+        {
+            ""
+        } else {
+            " "
+        };
+
+        let join_point = start + joined.len();
+        cursor = if ends_with_space {
+            join_point.saturating_sub(1)
+        } else {
+            join_point
+        };
+        joined.push_str(separator);
+        joined.push_str(trimmed);
+        if !trimmed.is_empty() {
+            previous = trimmed.to_string();
+        }
+    }
+
+    let last = Line::at_row(text, last_row);
+    Some(Replacement {
+        range: start..last.start + last.content.len(),
+        text: joined,
+        cursor,
+    })
+}
+
+/// `~`: the next `count` characters of the line with their case switched,
+/// and the cursor after them. `None` on an empty line.
+pub fn toggle_case(text: &Rope, offset: usize, count: usize) -> Option<Replacement> {
+    let range = counted_character_range(text, offset, count.max(1))?;
+    let original = text.slice(range.clone()).to_string();
+    let toggled: String = original
+        .chars()
+        .flat_map(|character| {
+            if character.is_lowercase() {
+                character.to_uppercase().collect::<Vec<_>>()
+            } else if character.is_uppercase() {
+                character.to_lowercase().collect::<Vec<_>>()
+            } else {
+                vec![character]
+            }
+        })
+        .collect();
+
+    Some(Replacement {
+        cursor: range.start + toggled.len(),
+        range,
+        text: toggled,
+    })
 }
 
 /// Keys that edit or move the cursor through editor actions instead of
@@ -1810,8 +1916,17 @@ mod tests {
 
     #[test]
     fn shifted_keys_are_not_their_lowercase_commands() {
-        for name in ["h", "j", "k", "l", "x", "u", "enter", "tab"] {
+        for name in ["h", "k", "l", "x", "u", "enter", "tab"] {
             assert_eq!(command_for(VimMode::Normal, shifted(name)), None, "{name}");
+        }
+        for (name, command) in [
+            ("d", VimCommand::DeleteToEnd),
+            ("c", VimCommand::ChangeToEnd),
+            ("s", VimCommand::SubstituteLine),
+            ("j", VimCommand::JoinLines),
+        ] {
+            assert_eq!(command_for(VimMode::Normal, shifted(name)), Some(command));
+            assert_eq!(command_for(VimMode::Visual, shifted(name)), None, "{name}");
         }
     }
 
