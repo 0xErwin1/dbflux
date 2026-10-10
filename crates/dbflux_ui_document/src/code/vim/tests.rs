@@ -4466,3 +4466,248 @@ fn ctrl_shift_v_inserts_the_clipboard_in_insert_and_replace_mode(cx: &mut TestAp
     assert_eq!(editor.text(), "XYab");
     assert_eq!(editor.mode(), Some(VimMode::Replace));
 }
+
+#[gpui::test]
+fn line_end_first_nonblank_and_line_start_motions(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "  abc def\nxy", true);
+    editor.set_cursor(4);
+
+    editor.keys("$");
+    assert_eq!(editor.cursor(), 8, "$ lands on the last character");
+    editor.keys("^");
+    assert_eq!(
+        editor.cursor(),
+        2,
+        "^ lands on the first non-blank character"
+    );
+    editor.keys("0");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("2 $");
+    assert_eq!(
+        editor.cursor(),
+        11,
+        "a count moves to the end of a later line"
+    );
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn operators_take_line_end_first_nonblank_and_line_start(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "  abc def\nnext", true);
+    editor.set_cursor(6);
+    editor.keys("d $");
+    assert_eq!(editor.text(), "  abc \nnext");
+    assert_eq!(editor.cursor(), 5, "the cursor stays on a character");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("def"));
+    editor.keys("u");
+    assert_eq!(editor.text(), "  abc def\nnext");
+
+    editor.set_cursor(6);
+    editor.keys("d ^");
+    assert_eq!(editor.text(), "  def\nnext");
+    editor.keys("u");
+
+    editor.set_cursor(6);
+    editor.keys("d 0");
+    assert_eq!(
+        editor.text(),
+        "def\nnext",
+        "0 after an operator is a motion"
+    );
+    editor.keys("u");
+
+    editor.set_cursor(6);
+    editor.keys("y $");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("def"));
+    assert_eq!(editor.text(), "  abc def\nnext");
+    assert_eq!(editor.cursor(), 6);
+}
+
+#[gpui::test]
+fn change_to_line_end_enters_insert_and_undoes_as_one_edit(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("alpha beta{separator}next");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(6);
+        editor.keys("c $");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.text(), format!("alpha {separator}next"));
+        editor.type_text("X");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("alpha X{separator}next"));
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+
+    let mut editor = open_editor(cx, "a\n\nb", true);
+    editor.set_cursor(2);
+    editor.keys("c $");
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Insert),
+        "an empty line still changes"
+    );
+    editor.type_text("X");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "a\nX\nb");
+}
+
+#[gpui::test]
+fn find_and_till_move_on_the_line_and_repeat(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "a,b,c,d\nx,y", true);
+    editor.keys("f ,");
+    assert_eq!(editor.cursor(), 1);
+    editor.keys(";");
+    assert_eq!(editor.cursor(), 3);
+    editor.keys(",");
+    assert_eq!(editor.cursor(), 1, ", repeats in the other direction");
+    editor.keys("2 ;");
+    assert_eq!(editor.cursor(), 5);
+    editor.keys("; ");
+    assert_eq!(editor.cursor(), 5, "a find never leaves the line");
+
+    editor.keys("shift-f a");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("t ,");
+    assert_eq!(editor.cursor(), 0, "t stops before an adjacent target");
+    editor.keys(";");
+    assert_eq!(editor.cursor(), 2, "; after t skips the adjacent target");
+
+    editor.set_cursor(6);
+    editor.keys("shift-t ,");
+    assert_eq!(editor.cursor(), 6, "T stops after an adjacent target");
+    editor.keys(";");
+    assert_eq!(editor.cursor(), 4);
+
+    editor.set_cursor(0);
+    editor.keys("4 f ,");
+    assert_eq!(
+        editor.cursor(),
+        0,
+        "a count past the last target does not move"
+    );
+    editor.keys("f z x");
+    assert_eq!(
+        editor.text(),
+        ",b,c,d\nx,y",
+        "a missed find consumes its character and x then deletes"
+    );
+}
+
+#[gpui::test]
+fn operators_take_find_and_till(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc,def,ghi", true);
+    editor.keys("d t ,");
+    assert_eq!(editor.text(), ",def,ghi");
+    editor.keys("u");
+    editor.set_cursor(0);
+    editor.keys("d f ,");
+    assert_eq!(editor.text(), "def,ghi", "f is inclusive");
+    editor.keys("u");
+    editor.set_cursor(0);
+    editor.keys("d 2 f ,");
+    assert_eq!(editor.text(), "ghi");
+    editor.keys("u");
+
+    editor.set_cursor(10);
+    editor.keys("d shift-f ,");
+    assert_eq!(editor.text(), "abc,defi", "F excludes the cursor character");
+    editor.keys("u");
+    editor.set_cursor(10);
+    editor.keys("d shift-t ,");
+    assert_eq!(editor.text(), "abc,def,i");
+    editor.keys("u");
+
+    editor.set_cursor(0);
+    editor.keys("c t ,");
+    editor.type_text("X");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "X,def,ghi");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc,def,ghi");
+
+    editor.set_cursor(0);
+    editor.keys("d f z");
+    assert_eq!(
+        editor.text(),
+        "abc,def,ghi",
+        "a missed find changes nothing"
+    );
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("d f escape x");
+    assert_eq!(
+        editor.text(),
+        "bc,def,ghi",
+        "escape cancels the pending find"
+    );
+}
+
+#[gpui::test]
+fn find_takes_quotes_and_symbols_as_targets(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "say \"hi\" $1 % ok", true);
+    editor.keys("f \"");
+    assert_eq!(editor.cursor(), 4);
+    editor.keys("f $");
+    assert_eq!(editor.cursor(), 9);
+    editor.keys("f %");
+    assert_eq!(editor.cursor(), 12);
+    editor.keys("f space");
+    assert_eq!(editor.cursor(), 13);
+}
+
+#[gpui::test]
+fn percent_jumps_between_matching_brackets(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "f(a[b]c)\n{\n  x\n}", true);
+    editor.keys("%");
+    assert_eq!(
+        editor.cursor(),
+        7,
+        "from before a bracket, % uses the next one"
+    );
+    editor.keys("%");
+    assert_eq!(editor.cursor(), 1);
+    editor.set_cursor(3);
+    editor.keys("%");
+    assert_eq!(editor.cursor(), 5);
+
+    editor.set_cursor(9);
+    editor.keys("%");
+    assert_eq!(editor.cursor(), 15, "brackets match across lines");
+
+    editor.set_cursor(1);
+    editor.keys("d %");
+    assert_eq!(editor.text(), "f\n{\n  x\n}", "% is inclusive");
+
+    let mut editor = open_editor(cx, "no brackets", true);
+    editor.set_cursor(3);
+    editor.keys("%");
+    assert_eq!(editor.cursor(), 3);
+}
+
+#[gpui::test]
+fn visual_mode_extends_with_line_motions(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc def\nnext", true);
+    editor.set_cursor(4);
+    editor.keys("v $ d");
+    assert_eq!(editor.text(), "abc \nnext");
+    editor.keys("u");
+
+    editor.set_cursor(0);
+    editor.keys("v f e d");
+    assert_eq!(editor.text(), "f\nnext");
+}
+
+#[gpui::test]
+fn line_motions_work_in_a_read_only_editor_without_editing(cx: &mut TestAppContext) {
+    let mut editor = read_only_editor(cx, "select a, b");
+    editor.keys("$");
+    assert_eq!(editor.cursor(), 10);
+    editor.keys("0 f ,");
+    assert_eq!(editor.cursor(), 8);
+    editor.keys("d $ c $");
+    assert_eq!(editor.text(), "select a, b");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("y $");
+    assert_eq!(editor.clipboard_text().as_deref(), Some(", b"));
+}

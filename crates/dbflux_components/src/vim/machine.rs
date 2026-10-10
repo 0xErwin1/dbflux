@@ -79,6 +79,61 @@ pub enum VimCommand {
     OpenLineAbove,
     PutAfter,
     PutBefore,
+    /// `$`: the last character of the line.
+    LineEnd,
+    /// `^`: the first non-blank character of the line.
+    FirstNonBlank,
+    /// `f`, `t`, `F` or `T`, waiting for the character to find.
+    PendingFind(FindKind),
+    /// `;` (`false`) or `,` (`true`, the opposite direction): repeats the last find.
+    RepeatFind(bool),
+    /// `%`: the bracket matching the one under or after the cursor.
+    MatchPair,
+}
+
+/// Direction of a character find, and whether it stops next to the character
+/// (`t` / `T`) instead of on it (`f` / `F`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FindKind {
+    pub forward: bool,
+    pub till: bool,
+}
+
+impl FindKind {
+    /// The same find in the other direction, for `,`.
+    pub fn reversed(self) -> Self {
+        Self {
+            forward: !self.forward,
+            ..self
+        }
+    }
+
+    /// The key that starts this find.
+    pub fn key(self) -> char {
+        match (self.forward, self.till) {
+            (true, false) => 'f',
+            (true, true) => 't',
+            (false, false) => 'F',
+            (false, true) => 'T',
+        }
+    }
+}
+
+/// A motion with a target of its own on the buffer, usable alone or after an
+/// operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineMotion {
+    LineStart,
+    FirstNonBlank,
+    LineEnd,
+    /// `repeat` is set for `;` and `,`: a till then skips a target right next
+    /// to the cursor, so repeating it moves on.
+    Find {
+        kind: FindKind,
+        target: char,
+        repeat: bool,
+    },
+    MatchPair,
 }
 
 /// The parts of a keystroke the machine needs.
@@ -132,8 +187,24 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                     VimCommand::EnterVisualLine
                 });
             }
+            match key.key {
+                "$" => return Some(VimCommand::LineEnd),
+                "^" => return Some(VimCommand::FirstNonBlank),
+                "%" => return Some(VimCommand::MatchPair),
+                ";" => return Some(VimCommand::RepeatFind(false)),
+                "," => return Some(VimCommand::RepeatFind(true)),
+                _ => {}
+            }
             if key.shift {
                 return match key.key {
+                    "f" => Some(VimCommand::PendingFind(FindKind {
+                        forward: false,
+                        till: false,
+                    })),
+                    "t" => Some(VimCommand::PendingFind(FindKind {
+                        forward: false,
+                        till: true,
+                    })),
                     "a" if !visual => Some(VimCommand::AppendLine),
                     "i" if !visual => Some(VimCommand::InsertLine),
                     "r" if !visual => Some(VimCommand::EnterReplace),
@@ -154,6 +225,14 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                     Some(VimCommand::PendingMark(key.key.chars().next()?))
                 }
                 "/" if !visual => Some(VimCommand::OpenSearch),
+                "f" => Some(VimCommand::PendingFind(FindKind {
+                    forward: true,
+                    till: false,
+                })),
+                "t" => Some(VimCommand::PendingFind(FindKind {
+                    forward: true,
+                    till: true,
+                })),
                 "n" if !visual => Some(VimCommand::RepeatSearch(false)),
                 "h" => Some(VimCommand::MoveLeft),
                 "l" => Some(VimCommand::MoveRight),
@@ -319,6 +398,165 @@ pub fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
 pub fn line_end(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     line.start + line.content.len()
+}
+
+/// Where `motion` puts the cursor, `count` times where a count applies, or
+/// `None` when it finds no target.
+pub fn line_motion_target(
+    text: &Rope,
+    offset: usize,
+    motion: LineMotion,
+    count: usize,
+) -> Option<usize> {
+    match motion {
+        LineMotion::LineStart => Some(line_start(text, offset)),
+        LineMotion::FirstNonBlank => Some(line_first_nonblank(text, offset)),
+        LineMotion::LineEnd => {
+            let end = line_end_offset(text, offset, count);
+            Some(clamp_to_character(text, end))
+        }
+        LineMotion::Find {
+            kind,
+            target,
+            repeat,
+        } => find_target(text, offset, kind, target, count, repeat),
+        LineMotion::MatchPair => matching_pair(text, offset),
+    }
+}
+
+/// The range an operator acts on for `motion`: `f`, `t`, `$` and `%` include
+/// their destination, the backward motions exclude the cursor character.
+/// `None` when the motion finds no target; an empty range when it does but
+/// covers nothing (`$` on an empty line).
+pub fn line_motion_operator_range(
+    text: &Rope,
+    offset: usize,
+    motion: LineMotion,
+    count: usize,
+) -> Option<Range<usize>> {
+    match motion {
+        LineMotion::LineEnd => {
+            let end = line_end_offset(text, offset, count);
+            Some(offset..end.max(offset))
+        }
+        LineMotion::Find { kind, .. } if !kind.forward => {
+            let target = line_motion_target(text, offset, motion, count)?;
+            Some(target..offset.max(target))
+        }
+        LineMotion::Find { .. } | LineMotion::MatchPair => {
+            let target = line_motion_target(text, offset, motion, count)?;
+            let start = offset.min(target);
+            let last = offset.max(target);
+            let width = counted_character_range(text, last, 1).map_or(0, |range| range.len());
+            Some(start..last + width)
+        }
+        LineMotion::LineStart | LineMotion::FirstNonBlank => {
+            let target = line_motion_target(text, offset, motion, count)?;
+            Some(offset.min(target)..offset.max(target))
+        }
+    }
+}
+
+/// End of the content of the line `count - 1` lines below the cursor's,
+/// clamped to the last line.
+fn line_end_offset(text: &Rope, offset: usize, count: usize) -> usize {
+    let row = text
+        .offset_to_point(offset)
+        .row
+        .saturating_add(count.max(1) - 1)
+        .min(text.lines_len().saturating_sub(1));
+    let line = Line::at_row(text, row);
+    line.start + line.content.len()
+}
+
+/// The `count`-th `target` on the cursor's line in `kind`'s direction, or the
+/// character next to it for a till. Never leaves the line.
+fn find_target(
+    text: &Rope,
+    offset: usize,
+    kind: FindKind,
+    target: char,
+    count: usize,
+    repeat: bool,
+) -> Option<usize> {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset);
+    let chars: Vec<(usize, char)> = line.content.char_indices().collect();
+    let index = chars.iter().position(|(at, _)| *at == column)?;
+    let skip = usize::from(kind.till && repeat);
+    let count = count.max(1);
+
+    let target_index = if kind.forward {
+        let start = index.saturating_add(1).saturating_add(skip);
+        let found = chars
+            .iter()
+            .enumerate()
+            .skip(start)
+            .filter(|(_, (_, character))| *character == target)
+            .nth(count - 1)?
+            .0;
+        if kind.till { found - 1 } else { found }
+    } else {
+        let end = index.saturating_sub(skip);
+        let found = chars
+            .iter()
+            .enumerate()
+            .take(end)
+            .rev()
+            .filter(|(_, (_, character))| *character == target)
+            .nth(count - 1)?
+            .0;
+        if kind.till { found + 1 } else { found }
+    };
+
+    chars.get(target_index).map(|(at, _)| line.start + at)
+}
+
+/// The bracket matching the first `()[]{}` bracket at or after the cursor on
+/// its line, counting nesting and crossing lines.
+pub fn matching_pair(text: &Rope, offset: usize) -> Option<usize> {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset);
+    let (relative, bracket) = line.content[column..]
+        .char_indices()
+        .find(|(_, character)| matches!(character, '(' | ')' | '[' | ']' | '{' | '}'))?;
+    let at = line.start + column + relative;
+
+    let (open, close, forward) = match bracket {
+        '(' => ('(', ')', true),
+        ')' => ('(', ')', false),
+        '[' => ('[', ']', true),
+        ']' => ('[', ']', false),
+        '{' => ('{', '}', true),
+        _ => ('{', '}', false),
+    };
+
+    let content = text.to_string();
+    let mut depth = 0usize;
+    if forward {
+        for (position, character) in content.get(at..)?.char_indices() {
+            if character == open {
+                depth += 1;
+            } else if character == close {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(at + position);
+                }
+            }
+        }
+    } else {
+        for (position, character) in content.get(..=at)?.char_indices().rev() {
+            if character == close {
+                depth += 1;
+            } else if character == open {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(position);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Keys that edit or move the cursor through editor actions instead of
@@ -1168,6 +1406,89 @@ mod tests {
         assert_eq!(
             put(&text, 0, "x", false, true, usize::MAX).map(|insertion| insertion.text.len()),
             Some(MAX_PUT_COUNT)
+        );
+    }
+
+    #[test]
+    fn line_motion_symbols_bind_with_or_without_shift() {
+        for mode in [
+            VimMode::Normal,
+            VimMode::Visual,
+            VimMode::VisualLine,
+            VimMode::VisualBlock,
+        ] {
+            for (name, command) in [
+                ("$", VimCommand::LineEnd),
+                ("^", VimCommand::FirstNonBlank),
+                ("%", VimCommand::MatchPair),
+                (";", VimCommand::RepeatFind(false)),
+                (",", VimCommand::RepeatFind(true)),
+            ] {
+                assert_eq!(
+                    command_for(mode, key(name)),
+                    Some(command),
+                    "{mode:?} {name}"
+                );
+                assert_eq!(
+                    command_for(mode, shifted(name)),
+                    Some(command),
+                    "{mode:?} shift-{name}"
+                );
+                assert_eq!(command_for(mode, with_command_modifier(name)), None);
+            }
+        }
+        assert_eq!(
+            command_for(VimMode::Normal, shifted("t")),
+            Some(VimCommand::PendingFind(FindKind {
+                forward: false,
+                till: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn find_targets_stay_on_the_line_and_on_characters() {
+        let text = Rope::from("é,中,x\n,");
+        let forward = FindKind {
+            forward: true,
+            till: false,
+        };
+        let comma = |offset, kind, count, repeat| {
+            line_motion_target(
+                &text,
+                offset,
+                LineMotion::Find {
+                    kind,
+                    target: ',',
+                    repeat,
+                },
+                count,
+            )
+        };
+
+        assert_eq!(comma(0, forward, 1, false), Some(2));
+        assert_eq!(comma(0, forward, 2, false), Some(6));
+        assert_eq!(comma(0, forward, 3, false), None, "never the next line");
+        let till = FindKind {
+            forward: true,
+            till: true,
+        };
+        assert_eq!(comma(0, till, 1, false), Some(0));
+        assert_eq!(comma(0, till, 1, true), Some(3));
+        assert_eq!(comma(7, forward.reversed(), 1, false), Some(6));
+        assert_eq!(
+            line_motion_operator_range(
+                &text,
+                0,
+                LineMotion::Find {
+                    kind: forward,
+                    target: ',',
+                    repeat: false,
+                },
+                1,
+            ),
+            Some(0..3),
+            "an inclusive find covers its target"
         );
     }
 

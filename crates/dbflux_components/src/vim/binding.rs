@@ -21,7 +21,7 @@
 //! [`VimBinding::editor`] builds the editor element with the lock applied,
 //! because the element re-applies its read-only flag to the state every frame.
 
-use super::machine::{self, VimCommand, VimKey};
+use super::machine::{self, FindKind, LineMotion, VimCommand, VimKey};
 use super::{LeaderCommand, VimMode, VimSettingGlobal, vim_enabled, vim_mode_label};
 use crate::actions::{RunCommand, last_keystroke};
 use crate::controls::{Rope, RopeExt};
@@ -104,6 +104,35 @@ fn is_clipboard_put_key(keystroke: &gpui::Keystroke) -> bool {
         && keystroke.key.eq_ignore_ascii_case("v")
 }
 
+/// The character a key types, for the target of `f`, `t`, `F` and `T`.
+/// `None` for keys that type nothing, such as Escape or Enter.
+fn typed_char(keystroke: &gpui::Keystroke) -> Option<char> {
+    match keystroke.key.as_str() {
+        "space" => return Some(' '),
+        "tab" => return Some('\t'),
+        _ => {}
+    }
+
+    let single = |text: &str| {
+        let mut characters = text.chars();
+        match (characters.next(), characters.next()) {
+            (Some(character), None) => Some(character),
+            _ => None,
+        }
+    };
+
+    if let Some(character) = keystroke.key_char.as_deref().and_then(single) {
+        return Some(character);
+    }
+
+    let character = single(&keystroke.key)?;
+    Some(if keystroke.modifiers.shift {
+        character.to_ascii_uppercase()
+    } else {
+        character
+    })
+}
+
 /// Which history action a Normal-mode undo shortcut runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HistoryStep {
@@ -135,6 +164,10 @@ pub struct VimBinding {
     pending_keys: String,
     pending_g: bool,
     pending_mark: Option<char>,
+    /// `f`, `t`, `F` or `T` waiting for its character.
+    pending_find: Option<FindKind>,
+    /// The last character find, repeated by `;` and `,`.
+    last_find: Option<(FindKind, char)>,
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
@@ -224,6 +257,8 @@ impl VimBinding {
             pending_keys: String::new(),
             pending_g: false,
             pending_mark: None,
+            pending_find: None,
+            last_find: None,
             marks: Default::default(),
             pending_operator: None,
             change_group: None,
@@ -364,10 +399,12 @@ impl VimBinding {
     }
 
     /// Whether the leader key starts a sequence in this editor: Vim mode is on
-    /// in Normal or a Visual mode, and the find panel is closed, because its
-    /// fields take every key as typed text.
+    /// in Normal or a Visual mode, no command waits for a character such as the
+    /// target of `f`, and the find panel is closed, because its fields take
+    /// every key as typed text.
     pub fn leader_active(&self, cx: &App) -> bool {
         self.mode().is_some_and(|mode| !mode.accepts_text())
+            && self.pending_find.is_none()
             && !self.input.read(cx).search_session().open
     }
 
@@ -793,6 +830,8 @@ impl VimBinding {
         self.pending_keys.clear();
         self.pending_g = false;
         self.pending_mark = None;
+        self.pending_find = None;
+        self.last_find = None;
         self.marks = Default::default();
         self.pending_operator = None;
         self.change_group = None;
@@ -908,6 +947,30 @@ impl VimBinding {
         } else {
             machine::command_for(self.mode, key)
         };
+        if let Some(kind) = self.pending_find.take() {
+            let target = if key.command_modifier {
+                None
+            } else {
+                typed_char(&event.keystroke)
+            };
+            self.pending_keys.clear();
+            cx.notify();
+            let Some(target) = target else {
+                self.clear_vim_count_and_notify(cx);
+                return !key.command_modifier;
+            };
+            self.last_find = Some((kind, target));
+            self.run_line_motion(
+                LineMotion::Find {
+                    kind,
+                    target,
+                    repeat: false,
+                },
+                window,
+                cx,
+            );
+            return true;
+        }
         if let Some(prefix) = self.pending_mark.take() {
             self.pending_keys.clear();
             cx.notify();
@@ -994,7 +1057,7 @@ impl VimBinding {
         }
 
         if let VimCommand::Digit(digit) = command
-            && (digit != 0 || self.count.is_some() || self.pending_operator.is_some())
+            && (digit != 0 || self.count.is_some())
         {
             self.push_pending_key(char::from(b'0' + digit), cx);
             self.count = Some(
@@ -1003,6 +1066,18 @@ impl VimBinding {
                     .saturating_mul(10)
                     .saturating_add(digit as usize),
             );
+            return true;
+        }
+        if let VimCommand::PendingFind(kind) = command {
+            self.pending_find = Some(kind);
+            self.push_pending_key(kind.key(), cx);
+            return true;
+        }
+        if let Some(motion) = self.line_motion_for(command) {
+            match motion {
+                Some(motion) => self.run_line_motion(motion, window, cx),
+                None => self.clear_vim_count_and_notify(cx),
+            }
             return true;
         }
         if let Some((operator, prefix)) = self.pending_operator.take() {
@@ -1099,7 +1174,14 @@ impl VimBinding {
         let count = explicit_count.unwrap_or(1);
         match command {
             VimCommand::Digit(0) => self.move_cursor_with(machine::line_start, cx),
-            VimCommand::Digit(_) | VimCommand::PendingG | VimCommand::PendingMark(_) => {}
+            VimCommand::Digit(_)
+            | VimCommand::PendingG
+            | VimCommand::PendingMark(_)
+            | VimCommand::PendingFind(_)
+            | VimCommand::LineEnd
+            | VimCommand::FirstNonBlank
+            | VimCommand::RepeatFind(_)
+            | VimCommand::MatchPair => {}
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.input.read(cx);
@@ -1228,6 +1310,62 @@ impl VimBinding {
         self.clamp_cursor_for_normal(cx);
     }
 
+    /// The line motion `command` stands for. `Some(None)` is a line motion
+    /// without a target, such as `;` before any find.
+    fn line_motion_for(&self, command: VimCommand) -> Option<Option<LineMotion>> {
+        let motion = match command {
+            VimCommand::Digit(0) => LineMotion::LineStart,
+            VimCommand::LineEnd => LineMotion::LineEnd,
+            VimCommand::FirstNonBlank => LineMotion::FirstNonBlank,
+            VimCommand::MatchPair => LineMotion::MatchPair,
+            VimCommand::RepeatFind(reverse) => {
+                return Some(self.last_find.map(|(kind, target)| LineMotion::Find {
+                    kind: if reverse { kind.reversed() } else { kind },
+                    target,
+                    repeat: true,
+                }));
+            }
+            _ => return None,
+        };
+        Some(Some(motion))
+    }
+
+    /// Moves the cursor by `motion`, or applies the pending operator to the
+    /// range it covers. The count is the operator's prefix times the count
+    /// typed before the motion. A motion without a target does nothing.
+    fn run_line_motion<H: VimHost>(
+        &mut self,
+        motion: LineMotion,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        let inner = self.count.take();
+        if let Some((operator, prefix)) = self.pending_operator.take() {
+            let count = prefix.unwrap_or(1).saturating_mul(inner.unwrap_or(1));
+            self.clear_vim_count_and_notify(cx);
+            let range = {
+                let state = self.input.read(cx);
+                machine::line_motion_operator_range(state.text(), state.cursor(), motion, count)
+            };
+            if let Some(range) = range {
+                self.apply_motion_operator(operator, range, false, window, cx);
+            }
+            return;
+        }
+
+        self.clear_vim_count_and_notify(cx);
+        let target = machine::line_motion_target(
+            self.input.read(cx).text(),
+            self.motion_cursor(cx),
+            motion,
+            inner.unwrap_or(1),
+        );
+        if let Some(target) = target {
+            self.vertical_goal = None;
+            self.set_editor_cursor(target, cx);
+        }
+    }
+
     fn apply_absolute_operator<H: VimHost>(
         &mut self,
         operator: char,
@@ -1253,6 +1391,7 @@ impl VimBinding {
         self.count = None;
         self.pending_g = false;
         self.pending_mark = None;
+        self.pending_find = None;
         self.pending_operator = None;
         self.pending_keys.clear();
     }
@@ -1778,6 +1917,9 @@ impl VimBinding {
             .map(str::to_owned)
         };
         let Some(selected) = selected else { return };
+        if selected.is_empty() && !linewise && operator != 'c' {
+            return;
+        }
         if operator == 'c' {
             let delete_range = if linewise {
                 machine::change_line_range(self.input.read(cx).text(), range)
