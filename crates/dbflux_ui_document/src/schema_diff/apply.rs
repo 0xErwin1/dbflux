@@ -1268,6 +1268,10 @@ mod tests {
             dbflux_core::CodeGenCapabilities::ADD_COLUMN
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn generate_add_column(
             &self,
             request: &AddColumnRequest,
@@ -1305,6 +1309,10 @@ mod tests {
     }
 
     impl dbflux_core::TableAlterPlanner for FakeTableAlterPlanner {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn prepare(
             &self,
             request: &dbflux_core::TableAlterRequest,
@@ -1331,6 +1339,10 @@ mod tests {
             &self.preview
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn execute(self: Box<Self>) -> Result<dbflux_core::TableAlterOutcome, DbError> {
             self.calls
                 .lock()
@@ -1434,6 +1446,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.calls.lock().unwrap().push(req.sql.clone());
 
@@ -1482,6 +1498,10 @@ mod tests {
             self.transactional_ddl
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn generate_code_with_creation_metadata(
             &self,
             generator_id: &str,
@@ -1495,6 +1515,10 @@ mod tests {
             self.generate_code(generator_id, table)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn generate_code(
             &self,
             generator_id: &str,
@@ -1538,6 +1562,10 @@ mod tests {
     }
 
     impl EventSink for FakeEventSink {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
             self.records.lock().unwrap().push(event.clone());
             Ok(event)

@@ -16,7 +16,7 @@ use crate::query_builder::panel::QueryBuilderPanel;
 /// - A chunk-size input (greyed out unless ChunkedTransaction is selected)
 /// - A lock-timeout input (greyed out for DirectAutocommit)
 /// - The row-count state label
-pub fn render_execution(
+pub(crate) fn render_execution(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

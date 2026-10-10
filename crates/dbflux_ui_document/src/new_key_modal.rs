@@ -20,7 +20,7 @@ use gpui_component::{ActiveTheme, Sizable};
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-pub struct NewKeyCreatedEvent {
+pub(crate) struct NewKeyCreatedEvent {
     pub key_name: String,
     pub key_type: NewKeyType,
     pub ttl: Option<u64>,
@@ -28,7 +28,7 @@ pub struct NewKeyCreatedEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NewKeyType {
+pub(crate) enum NewKeyType {
     String,
     Hash,
     List,
@@ -39,7 +39,7 @@ pub enum NewKeyType {
 }
 
 impl NewKeyType {
-    pub fn all() -> &'static [NewKeyType] {
+    pub(crate) fn all() -> &'static [NewKeyType] {
         &[
             Self::String,
             Self::Hash,
@@ -51,7 +51,7 @@ impl NewKeyType {
         ]
     }
 
-    pub fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         match self {
             Self::String => dbflux_i18n::t!("document.key_value.new_key.type.string"),
             Self::Hash => dbflux_i18n::t!("document.key_value.new_key.type.hash"),
@@ -65,7 +65,7 @@ impl NewKeyType {
 }
 
 #[derive(Clone, Debug)]
-pub enum NewKeyValue {
+pub(crate) enum NewKeyValue {
     Simple(String),
     HashFields(Vec<(String, String)>),
     ListMembers(Vec<String>),
@@ -81,7 +81,7 @@ pub enum NewKeyValue {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
-pub enum ModalFocus {
+pub(crate) enum ModalFocus {
     KeyType,
     TTL,
     KeyName,
@@ -124,7 +124,7 @@ struct ValueRow {
 // NewKeyModal
 // ---------------------------------------------------------------------------
 
-pub struct NewKeyModal {
+pub(crate) struct NewKeyModal {
     visible: bool,
     focus_handle: FocusHandle,
 
@@ -145,7 +145,7 @@ pub struct NewKeyModal {
 }
 
 impl NewKeyModal {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let items: Vec<DropdownItem> = NewKeyType::all()
             .iter()
             .map(|t| DropdownItem::new(t.label()))
@@ -182,6 +182,11 @@ impl NewKeyModal {
             &key_type_dropdown,
             |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
                 let types = NewKeyType::all();
+                // event.index < types.len() is checked by the enclosing if.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "event.index < types.len() is checked by the enclosing if"
+                )]
                 if event.index < types.len() {
                     this.selected_type = types[event.index];
                     this.value_rows.clear();
@@ -215,11 +220,11 @@ impl NewKeyModal {
         }
     }
 
-    pub fn is_visible(&self) -> bool {
+    pub(crate) fn is_visible(&self) -> bool {
         self.visible
     }
 
-    pub fn active_context(&self) -> ContextId {
+    pub(crate) fn active_context(&self) -> ContextId {
         match self.edit_state {
             FormEditState::Navigating => ContextId::FormNavigation,
             FormEditState::Editing => ContextId::TextInput,
@@ -227,7 +232,7 @@ impl NewKeyModal {
         }
     }
 
-    pub fn dispatch_command(
+    pub(crate) fn dispatch_command(
         &mut self,
         cmd: Command,
         window: &mut Window,
@@ -276,7 +281,7 @@ impl NewKeyModal {
         }
     }
 
-    pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = true;
         self.error_message = None;
         self.value_rows.clear();
@@ -297,7 +302,7 @@ impl NewKeyModal {
         cx.notify();
     }
 
-    pub fn close(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.error_message = None;
         cx.notify();
@@ -840,6 +845,12 @@ impl Render for NewKeyModal {
         if needs_rows {
             let mut rows_container = div().flex().flex_col().gap(Spacing::SM);
 
+            // row_count is value_rows.len() captured above, so index is a
+            // valid row index.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "row_count = self.value_rows.len() is captured above and index ranges over 0..row_count"
+            )]
             for index in 0..row_count {
                 let row = &self.value_rows[index];
 

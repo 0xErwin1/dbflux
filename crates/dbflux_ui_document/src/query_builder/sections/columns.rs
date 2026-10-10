@@ -46,7 +46,7 @@ fn column_chip(
 /// source-table column with its own checkbox. A free-text "alias.column" +
 /// Add row remains below for columns from joined tables that are not in the
 /// source's column list.
-pub fn render_columns(
+pub(crate) fn render_columns(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

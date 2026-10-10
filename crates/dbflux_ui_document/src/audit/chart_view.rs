@@ -83,7 +83,7 @@ impl AuditChartState {
 /// One bar of the timeline strip: every event in the bucket, and how many of
 /// them were errors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TimelineBucket {
+pub(crate) struct TimelineBucket {
     pub start_ms: i64,
     pub total: i64,
     pub errors: i64,
@@ -92,7 +92,7 @@ pub struct TimelineBucket {
 /// The event timeline drawn above the audit table (P1Audit): event and error
 /// counts per time bucket for the current filters.
 #[derive(Default)]
-pub struct AuditTimeline {
+pub(crate) struct AuditTimeline {
     /// Incremented before each aggregate; stale completions are dropped.
     pub load_id: u64,
     pub bucket_ms: i64,

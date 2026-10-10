@@ -21,7 +21,7 @@ use gpui_component::input::EditorState;
 ///
 /// The root container exposes the same controls so the user can add predicates
 /// to the top-level when no filter exists yet.
-pub fn render_filters(
+pub(crate) fn render_filters(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
@@ -32,7 +32,7 @@ pub fn render_filters(
 ///
 /// Routes all mutations through `add_predicate_for`, `remove_filter_node_for`,
 /// etc., so the same predicate-tree UI serves both sections.
-pub fn render_filters_for_target(
+pub(crate) fn render_filters_for_target(
     panel: &mut QueryBuilderPanel,
     target: FilterTarget,
     cx: &mut Context<QueryBuilderPanel>,

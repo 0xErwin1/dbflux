@@ -682,6 +682,10 @@ impl CodeDocument {
 
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        #[expect(
+            clippy::expect_used,
+            reason = "the render path guards this call with has_live_output, computed as live_output.is_some(), in the same render pass"
+        )]
         let live_output = self
             .execution
             .live_output

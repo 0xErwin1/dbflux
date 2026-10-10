@@ -1292,6 +1292,12 @@ impl QueryCompletionProvider {
             return items;
         }
 
+        // Command mode returned above when tokens is empty, so this branch
+        // only runs with at least one token.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "command_mode is false here, which requires tokens to be non-empty; the empty case returned earlier"
+        )]
         let command = tokens[0].to_uppercase();
         let argument_index = if ends_with_space {
             tokens.len().saturating_sub(1)
@@ -1440,6 +1446,10 @@ impl CompletionProvider for QueryCompletionProvider {
             return false;
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the len() != 1 early return above leaves new_text with exactly one byte"
+        )]
         let ch = new_text.as_bytes()[0] as char;
         if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$' {
             return true;
@@ -1919,6 +1929,12 @@ fn scan_redis_token_start(source: &str, end: usize) -> usize {
 
     while start > 0 {
         let idx = start - 1;
+        // `end` is a byte offset into `source` (the editor cursor at the call
+        // site), so start never exceeds bytes.len() and idx stays in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "start begins at end, a byte offset within source, and only decreases; idx = start - 1 is below bytes.len()"
+        )]
         if bytes[idx].is_ascii_whitespace() {
             break;
         }
@@ -2046,6 +2062,10 @@ fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
 
     let mut idx = 0;
     while idx < tokens.len() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "loop condition holds idx < tokens.len() at this point"
+        )]
         let token_upper = tokens[idx].to_uppercase();
         if !keywords.contains(&token_upper.as_str()) {
             idx += 1;

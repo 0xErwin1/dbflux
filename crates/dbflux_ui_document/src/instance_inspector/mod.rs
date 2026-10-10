@@ -596,6 +596,10 @@ impl Render for InspectorPanel {
         // InputState / TimeRangePanel internals), so they cannot be created
         // outside render().
         if self.data_grid.is_none() && self.pending_grid_result.is_some() {
+            #[expect(
+                clippy::unwrap_used,
+                reason = "take() returns Some because pending_grid_result.is_some() was checked two lines above"
+            )]
             let result = self.pending_grid_result.take().unwrap();
             let profile_id = self.profile_id;
             let app_state = self.app_state.clone();

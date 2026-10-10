@@ -15,6 +15,6 @@ use gpui::Entity;
 /// `AuditDocument` self-renders; `LogStreamView` exists as the named
 /// view-layer boundary and can absorb view-only state in future arcs.
 #[allow(dead_code)]
-pub struct LogStreamView {
+pub(crate) struct LogStreamView {
     pub(super) document: Entity<AuditDocument>,
 }

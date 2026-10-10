@@ -35,7 +35,7 @@ const VALUE_PREVIEW_CHARS: usize = 120;
 
 /// A staged, uncommitted grid edit of one field of the shown document.
 #[derive(Debug, Clone, PartialEq)]
-pub enum PendingFieldEdit {
+pub(crate) enum PendingFieldEdit {
     /// The field takes this value on commit.
     Set(Value),
     /// The field is removed on commit.
@@ -43,11 +43,11 @@ pub enum PendingFieldEdit {
 }
 
 /// Staged edits of the shown document, by field path.
-pub type PendingFieldEdits = Vec<(Vec<String>, PendingFieldEdit)>;
+pub(crate) type PendingFieldEdits = Vec<(Vec<String>, PendingFieldEdit)>;
 
 /// The document the inspector shows, captured from the loaded page.
 #[derive(Debug, Clone)]
-pub struct DocumentInspectorSnapshot {
+pub(crate) struct DocumentInspectorSnapshot {
     /// Index of the document in the page.
     pub document_index: usize,
     pub document: Value,
@@ -83,14 +83,14 @@ pub(crate) struct DocumentRow {
 
 /// Requests from the panel's buttons; the owning grid carries them out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DocumentInspectorEvent {
+pub(crate) enum DocumentInspectorEvent {
     /// The close button: dismiss the panel.
     Close,
     /// The expand button: open the document in the JSON editor.
     Expand,
 }
 
-pub struct DocumentInspectorContent {
+pub(crate) struct DocumentInspectorContent {
     snapshot: DocumentInspectorSnapshot,
     /// Paths whose expansion differs from the default (top level expanded,
     /// deeper levels collapsed). Kept across documents, so the same fields
@@ -105,7 +105,7 @@ pub struct DocumentInspectorContent {
 impl EventEmitter<DocumentInspectorEvent> for DocumentInspectorContent {}
 
 impl DocumentInspectorContent {
-    pub fn new(snapshot: DocumentInspectorSnapshot, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(snapshot: DocumentInspectorSnapshot, cx: &mut Context<Self>) -> Self {
         let toggled = HashSet::new();
         let rows = Rc::new(document_rows(
             &snapshot.document,
@@ -126,20 +126,20 @@ impl DocumentInspectorContent {
     }
 
     /// Show another document, keeping the expanded fields.
-    pub fn open(&mut self, snapshot: DocumentInspectorSnapshot, cx: &mut Context<Self>) {
+    pub(crate) fn open(&mut self, snapshot: DocumentInspectorSnapshot, cx: &mut Context<Self>) {
         self.size_label = document_size_label(&snapshot.document);
         self.snapshot = snapshot;
         self.rebuild_rows();
         cx.notify();
     }
 
-    pub fn document_index(&self) -> usize {
+    pub(crate) fn document_index(&self) -> usize {
         self.snapshot.document_index
     }
 
     /// Replaces the staged edits shown for the current document, when they
     /// changed.
-    pub fn set_pending(&mut self, pending: PendingFieldEdits, cx: &mut Context<Self>) {
+    pub(crate) fn set_pending(&mut self, pending: PendingFieldEdits, cx: &mut Context<Self>) {
         if self.snapshot.pending == pending {
             return;
         }
@@ -155,7 +155,7 @@ impl DocumentInspectorContent {
     }
 
     /// Expand a collapsed object or array row, or collapse an expanded one.
-    pub fn toggle(&mut self, path: &[String], cx: &mut Context<Self>) {
+    pub(crate) fn toggle(&mut self, path: &[String], cx: &mut Context<Self>) {
         if !self.toggled.remove(path) {
             self.toggled.insert(path.to_vec());
         }

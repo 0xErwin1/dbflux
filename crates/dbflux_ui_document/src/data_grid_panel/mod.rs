@@ -8,10 +8,10 @@ mod navigation;
 mod query;
 mod render;
 mod result_search;
-pub mod row_inspector;
+pub(crate) mod row_inspector;
 pub(crate) mod side_island;
 mod utils;
-pub mod value_panel;
+pub(crate) mod value_panel;
 
 use super::query_builder::completion::{
     CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
@@ -282,7 +282,7 @@ enum ToolbarFocus {
 }
 
 impl ToolbarFocus {
-    pub fn left(self) -> Self {
+    pub(crate) fn left(self) -> Self {
         match self {
             ToolbarFocus::Filter => ToolbarFocus::Filter,
             ToolbarFocus::Limit => ToolbarFocus::Filter,
@@ -290,7 +290,7 @@ impl ToolbarFocus {
         }
     }
 
-    pub fn right(self) -> Self {
+    pub(crate) fn right(self) -> Self {
         match self {
             ToolbarFocus::Filter => ToolbarFocus::Limit,
             ToolbarFocus::Limit => ToolbarFocus::Refresh,
@@ -1827,6 +1827,12 @@ impl DataGridPanel {
     }
 
     /// Toggle between available view modes for the current data source.
+    // next_idx is a modular step over available, whose length is > 1 after
+    // the early return.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next_idx = (current_idx + 1) % available.len() and available.len() > 1 after the early return"
+    )]
     pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
         if self.is_document_collection(cx) {
             self.cycle_document_view(cx);
@@ -1998,6 +2004,12 @@ impl DataGridPanel {
     /// Shows the view after the current one among those the result offers
     /// (`Command::CycleResultView`), wrapping. Returns false when the result
     /// has a single view.
+    // modes.len() >= 2 after the early return and next is either 0 or a
+    // modular step over modes.len().
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "modes.len() >= 2 after the early return and next is 0 or a modular step over modes.len()"
+    )]
     pub(super) fn cycle_result_view(
         &mut self,
         window: &mut Window,
@@ -2175,6 +2187,12 @@ impl DataGridPanel {
         }
 
         // Build JSON from rows
+        // row.len() == 1 is checked right before the [0] index in the
+        // single-value branch.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "row[0] is reached only in the branch guarded by row.len() == 1"
+        )]
         let json_rows: Vec<serde_json::Value> = self
             .result
             .rows
@@ -2201,6 +2219,10 @@ impl DataGridPanel {
             .collect();
 
         if json_rows.len() == 1 {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "json_rows.len() == 1 is checked by the enclosing if"
+            )]
             serde_json::to_string_pretty(&json_rows[0]).unwrap_or_default()
         } else {
             serde_json::to_string_pretty(&json_rows).unwrap_or_default()
@@ -3288,6 +3310,15 @@ impl DataGridPanel {
                     node_id,
                     node_value,
                 } => {
+                    // node_id is the tree cursor, built by NodeId::root(),
+                    // child() and parent(), which all keep the leading
+                    // document segment, so [1..] is in range. The event's
+                    // doc_index comes from doc_index().unwrap_or(0) and does
+                    // not prove it.
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "node_id is the tree cursor, built by NodeId::root()/child()/parent(), which all keep the leading document segment, so [1..] is in range; the event's doc_index comes from doc_index().unwrap_or(0) and does not prove it"
+                    )]
                     let field_path: Vec<String> = node_id.path[1..].to_vec();
 
                     this.context_menu = Some(TableContextMenu {
@@ -4594,6 +4625,12 @@ impl DataGridPanel {
     /// `created_by.ema`, or `name = 'x' AND created_by.`. Returns `None`
     /// when there is no dot-qualified identifier at the current cursor
     /// position (end of string for autocomplete typing).
+    // bytes[i - 1] and bytes[start - 1] are each guarded by i > 0 / start > 0
+    // in their loop or condition; the bound is not re-checked per access.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "five reads: bytes[i - 1] twice in the first while (i > 0 &&) and once behind the i == 0 || short-circuit, bytes[start - 1] twice in the second while (start > 0 &&); i and start begin at or below bytes.len() and only decrease"
+    )]
     fn extract_filter_qualifier(text: &str) -> Option<String> {
         let bytes = text.as_bytes();
         let mut i = bytes.len();
@@ -5612,6 +5649,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: no test path in this suite calls the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!()
         }
@@ -7016,6 +7057,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: no test path in this suite calls the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("StubBuilderConnection::dialect not needed for this test")
         }
@@ -7841,6 +7886,10 @@ mod tests {
                 SchemaLoadingStrategy::SingleDatabase
             }
 
+            #[expect(
+                clippy::unimplemented,
+                reason = "test-only stub connection: no test path in this suite calls the dialect"
+            )]
             fn dialect(&self) -> &dyn SqlDialect {
                 unimplemented!("StubSqlConnection2::dialect not needed")
             }
@@ -10315,6 +10364,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: raw browse does not call the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("StubBrowseConnection::dialect is not reached by a raw browse")
         }
@@ -12156,6 +12209,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: no test path in this suite calls the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("StubTimeSeriesConnection::dialect not needed for this test")
         }

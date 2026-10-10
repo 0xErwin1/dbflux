@@ -15,6 +15,12 @@ use dbflux_core::{FilterNode, JoinFilterNode, JoinPredicate};
 
 /// Inserts `node` as the last child of the group reached by walking `path`
 /// from `root`. No-op if `path` does not resolve to a `Group`.
+// The path[0] accesses only run on the non-empty branch; [1..] is then in
+// range.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "path[0] is reached only on the !path.is_empty() branch, which also makes [1..] a valid range"
+)]
 pub(crate) fn insert_filter_at_path(root: &mut FilterNode, path: &[usize], node: FilterNode) {
     if path.is_empty() {
         if let FilterNode::Group { children, .. } = root {
@@ -29,6 +35,17 @@ pub(crate) fn insert_filter_at_path(root: &mut FilterNode, path: &[usize], node:
 
 /// Removes the child at the position addressed by `path` from its parent
 /// group. No-op when `path` is empty or out of range.
+//
+// The doc comment's empty-path claim holds only because both panel callers
+// (remove_filter_node and remove_filter_node_for in panel/filters.rs) handle
+// empty paths themselves before calling; this function does not re-check, so
+// a direct call with an empty path would panic at path[0]. In the
+// len() == 1 branch the single element exists; the else branch then runs on
+// multi-element paths from those callers.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "path[0] exists in the len() == 1 branch; the else branch needs a non-empty path, which the external callers (remove_filter_node and remove_filter_node_for) ensure by handling path.is_empty() first and this function's own recursive call guarantees by passing a slice of a path of length two or more; this function does not check it itself"
+)]
 pub(crate) fn remove_filter_at_path(root: &mut FilterNode, path: &[usize]) {
     if path.len() == 1 {
         if let FilterNode::Group { children, .. } = root
@@ -45,6 +62,12 @@ pub(crate) fn remove_filter_at_path(root: &mut FilterNode, path: &[usize]) {
 
 /// Returns a mutable reference to the node addressed by `path`, or `None` if
 /// the path is invalid (descends through a non-group or off the end).
+// The path[0] access only runs when path is non-empty (the empty case
+// returns Some(root) above), which also makes [1..] a valid range.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the empty path returns early, so path[0] exists and [1..] is a valid range"
+)]
 pub(crate) fn filter_node_at_path_mut<'a>(
     root: &'a mut FilterNode,
     path: &[usize],

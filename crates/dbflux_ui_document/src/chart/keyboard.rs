@@ -130,6 +130,10 @@ impl ChartShell {
         ChartKeyOutcome::Handled
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is rem_euclid over the non-empty CHART_KINDS const array"
+    )]
     fn step_chart_kind(&mut self, delta: isize, cx: &mut Context<Self>) -> ChartKeyOutcome {
         let current = CHART_KINDS
             .iter()
@@ -151,6 +155,10 @@ impl ChartShell {
         ChartKeyOutcome::Handled
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is rem_euclid over the four-entry AXIS_PILLS const array"
+    )]
     fn axis_picker_command(
         &mut self,
         pill: AxisPill,
@@ -500,6 +508,10 @@ impl ChartShell {
 
     /// Moves the metric picker's dimension filter `delta` rows through its
     /// list (aggregate all, then each loaded combination), wrapping.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is rem_euclid over rows.len(); rows is built in this function and always contains the AggregateAll entry"
+    )]
     fn step_metric_dimension(&mut self, delta: isize, cx: &mut Context<Self>) {
         let Some(picker) = self.metric_picker.as_mut() else {
             return;

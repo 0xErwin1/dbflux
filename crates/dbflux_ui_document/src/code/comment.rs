@@ -212,6 +212,13 @@ fn line_edits(region: &str, region_start: usize) -> Vec<LineEdit> {
 }
 
 /// Shift the caret by the edit that lands at or before it on its own line.
+// `index` comes from `position` over `lines`, and `deltas` is built by the only
+// caller (`toggle_line_comments`) with one entry per `LineEdit` in `lines`, so
+// both indexings stay inside their slices. The bounds are not re-checked here.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "index is a position() over lines and deltas has one entry per lines element"
+)]
 fn remap_caret(caret: usize, lines: &[LineEdit], deltas: &[usize], uncomment: bool) -> usize {
     let Some(index) = lines
         .iter()

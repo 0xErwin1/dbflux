@@ -5,6 +5,12 @@ impl QueryBuilderPanel {
     ///
     /// Call after any operation that adds or removes join rows so the InputState
     /// count matches the row count.
+    // The six join_rows[i] accesses sit in the loop running to
+    // self.join_rows.len().
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the six join_rows[i] accesses sit in the loop running start..join_rows.len()"
+    )]
     pub fn rebuild_join_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target_len = self.join_rows.len();
         let current_len = self.join_input_states.len();
@@ -330,6 +336,12 @@ impl QueryBuilderPanel {
     /// Removes the node at `path` from join `join_idx`. Root is never removed
     /// (the join still owns a Conditions root); call `remove_join` to drop the
     /// whole row.
+    // path is non-empty after the early return, so [..len - 1] and [len - 1]
+    // are both in range.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "path.is_empty() returns early, so path[..path.len() - 1] and path[path.len() - 1] are in range"
+    )]
     pub fn remove_join_node(&mut self, join_idx: usize, path: Vec<usize>, cx: &mut Context<Self>) {
         if path.is_empty() {
             return;
@@ -550,6 +562,11 @@ impl QueryBuilderPanel {
     /// HashMaps. The sweep flag is set unconditionally so the next render
     /// drops any stale entries regardless of the variant transition.
     pub fn update_join(&mut self, index: usize, row: JoinRow, cx: &mut Context<Self>) {
+        // index < self.join_rows.len() is checked by the enclosing if.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "index < self.join_rows.len() is checked by the enclosing if"
+        )]
         if index < self.join_rows.len() {
             self.join_rows[index] = row;
             self.pending_join_condition_sweep = true;

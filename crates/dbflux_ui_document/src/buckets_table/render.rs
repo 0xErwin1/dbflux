@@ -34,6 +34,10 @@ const UNKNOWN: &str = "—";
 
 /// Formats a byte count with a binary-prefix unit, one decimal place above
 /// the kibibyte boundary.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "unit starts at 0 and the loop guard stops it before UNITS.len()"
+)]
 pub(crate) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
 

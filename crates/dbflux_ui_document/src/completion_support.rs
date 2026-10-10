@@ -104,6 +104,12 @@ pub(crate) fn scan_identifier_start(source: &str, end: usize) -> usize {
 
     while start > 0 {
         let idx = start - 1;
+        // `end` is a byte offset into `source` (the editor cursor at call
+        // sites), so start never exceeds bytes.len() and idx stays in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "start begins at end, a byte offset within source, and only decreases; idx = start - 1 is below bytes.len()"
+        )]
         if !is_identifier_byte(bytes[idx]) {
             break;
         }

@@ -131,6 +131,13 @@ fn formula_edit(formula: &str, syntax: FormulaSyntax) -> Result<CellEdit, InputR
 /// bracketed reference and outside a string literal: one to three letters
 /// and digits, each optionally after `$`, as a whole token that is not a
 /// function name (one followed by `(`).
+// characters[index] is guarded by the loop condition, characters[index - 1]
+// by the index == 0 || short-circuit, and characters[index..end] is in range
+// because token_end returns at least index and at most characters.len().
+#[expect(
+    clippy::indexing_slicing,
+    reason = "characters[index] is guarded by the loop condition, characters[index - 1] by the index == 0 short-circuit, and characters[index..end] holds because token_end returns index..=characters.len()"
+)]
 fn has_a1_reference(formula: &str) -> bool {
     let characters: Vec<char> = formula.chars().collect();
     let is_word = |character: char| character.is_alphanumeric() || matches!(character, '_' | '.');
@@ -180,6 +187,11 @@ fn has_a1_reference(formula: &str) -> bool {
 }
 
 /// The index past the token starting at `start`: word characters and `$`.
+// characters[end] is guarded by the loop condition.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "characters[end] is guarded by the loop condition end < characters.len()"
+)]
 fn token_end(characters: &[char], start: usize, is_word: impl Fn(char) -> bool) -> usize {
     let mut end = start;
 

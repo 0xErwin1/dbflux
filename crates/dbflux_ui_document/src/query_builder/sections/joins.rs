@@ -17,7 +17,7 @@ use gpui_component::input::EditorState;
 /// or shows raw FK / free-text when the row is in a non-structured mode.
 ///
 /// A banner appears when FK metadata is unavailable.
-pub fn render_joins(
+pub(crate) fn render_joins(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

@@ -70,7 +70,7 @@ mod file_ops;
 mod file_persistence;
 mod focus;
 mod live_output;
-pub mod pane;
+pub(crate) mod pane;
 mod render;
 mod statements;
 mod vim;
@@ -79,7 +79,7 @@ use code_actions::SqlCodeActionProvider;
 pub(crate) use completion::QueryCompletionProvider;
 pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
-pub use vim::VimMode;
+pub(crate) use vim::VimMode;
 
 pub(crate) use execution::evaluate_dangerous_with_effective_settings;
 
@@ -99,7 +99,7 @@ pub(super) struct ResultTab {
 
 /// Internal layout of the document.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum SqlQueryLayout {
+pub(crate) enum SqlQueryLayout {
     #[default]
     Split,
     EditorOnly,
@@ -109,7 +109,7 @@ pub enum SqlQueryLayout {
 /// Where the results sit in the split: below the editor, or beside it on
 /// the right for wide screens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ResultsPosition {
+pub(crate) enum ResultsPosition {
     #[default]
     Bottom,
     Right,
@@ -190,7 +190,7 @@ impl ResultsPosition {
 
 /// Where focus is within the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum SqlQueryFocus {
+pub(crate) enum SqlQueryFocus {
     #[default]
     Editor,
     Results,
@@ -638,7 +638,7 @@ struct PendingDriftQuery {
 
 /// Record of a query execution.
 #[derive(Clone)]
-pub struct ExecutionRecord {
+pub(crate) struct ExecutionRecord {
     pub id: Uuid,
     pub started_at: Instant,
     pub finished_at: Option<Instant>,

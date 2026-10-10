@@ -494,6 +494,14 @@ impl super::KeyValueDocument {
                 true
             }
             Command::MenuSelect => {
+                // selected_index starts at 0 when the menu opens and MenuUp /
+                // MenuDown keep it modulo menu.items.len(); items are not
+                // mutated while the menu is open. This dispatch does not
+                // re-check the invariant.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "selected_index starts at 0 on open and the MenuUp/MenuDown arms keep it modulo menu.items.len(), which this dispatch does not re-check"
+                )]
                 if let Some(menu) = self.context_menu.take() {
                     let action = menu.items[menu.selected_index].action;
                     let target = menu.target;

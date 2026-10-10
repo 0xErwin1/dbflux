@@ -6,7 +6,7 @@ use dbflux_core::{CollectionSchemaSample, DocumentFieldType, NULL_TYPE_NAME};
 
 /// One sampled field path.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CatalogField {
+pub(crate) struct CatalogField {
     /// Dotted path, relative to the catalog's scope.
     pub path: String,
     /// Last segment of the path.
@@ -22,14 +22,14 @@ pub struct CatalogField {
 /// Sampled fields in tree order: every nested path right after its parent,
 /// siblings in the order the sample first met them.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct FieldCatalog {
+pub(crate) struct FieldCatalog {
     fields: Vec<CatalogField>,
 }
 
 impl FieldCatalog {
     /// Reads `sample`, mapping its native type names through `field_type`.
     /// Types the builder has no operators for are left out.
-    pub fn new(
+    pub(crate) fn new(
         sample: &CollectionSchemaSample,
         field_type: impl Fn(&str) -> Option<DocumentFieldType>,
     ) -> Self {
@@ -113,7 +113,7 @@ impl FieldCatalog {
 
     /// A flat catalog of computed output fields, such as the group keys and
     /// accumulators after a group stage: every one present in every row.
-    pub fn from_outputs(outputs: Vec<(String, Vec<DocumentFieldType>)>) -> Self {
+    pub(crate) fn from_outputs(outputs: Vec<(String, Vec<DocumentFieldType>)>) -> Self {
         let fields = outputs
             .into_iter()
             .map(|(path, types)| CatalogField {
@@ -130,7 +130,7 @@ impl FieldCatalog {
 
     /// The fields sampled with a number type, flattened to the top level:
     /// what a `$sum` or `$avg` can read.
-    pub fn numeric(&self) -> FieldCatalog {
+    pub(crate) fn numeric(&self) -> FieldCatalog {
         let fields = self
             .fields
             .iter()
@@ -152,33 +152,33 @@ impl FieldCatalog {
         Self { fields }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }
 
     #[cfg(test)]
-    pub fn fields(&self) -> &[CatalogField] {
+    pub(crate) fn fields(&self) -> &[CatalogField] {
         &self.fields
     }
 
-    pub fn field(&self, path: &str) -> Option<&CatalogField> {
+    pub(crate) fn field(&self, path: &str) -> Option<&CatalogField> {
         self.fields.iter().find(|field| field.path == path)
     }
 
     /// Types sampled for `path`; empty for a path the sample never saw.
-    pub fn types(&self, path: &str) -> Vec<DocumentFieldType> {
+    pub(crate) fn types(&self, path: &str) -> Vec<DocumentFieldType> {
         self.field(path)
             .map(|field| field.types.clone())
             .unwrap_or_default()
     }
 
-    pub fn is_sampled(&self, path: &str) -> bool {
+    pub(crate) fn is_sampled(&self, path: &str) -> bool {
         self.field(path).is_some()
     }
 
     /// Fields whose path contains `query`, ignoring case; every field for an
     /// empty query.
-    pub fn search(&self, query: &str) -> Vec<&CatalogField> {
+    pub(crate) fn search(&self, query: &str) -> Vec<&CatalogField> {
         let query = query.trim().to_lowercase();
 
         self.fields
@@ -189,7 +189,7 @@ impl FieldCatalog {
 
     /// The fields below `prefix`, with paths relative to it: what an
     /// `$elemMatch` on the array at `prefix` can test.
-    pub fn scoped(&self, prefix: &str) -> FieldCatalog {
+    pub(crate) fn scoped(&self, prefix: &str) -> FieldCatalog {
         if prefix.is_empty() {
             return self.clone();
         }

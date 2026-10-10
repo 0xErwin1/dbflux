@@ -183,7 +183,7 @@ pub enum FilterTarget {
 
 /// A single group-by entry as tracked by the builder panel.
 #[derive(Debug, Clone)]
-pub struct GroupByRow {
+pub(crate) struct GroupByRow {
     pub source_alias: String,
     pub column: String,
 }
@@ -199,7 +199,7 @@ impl GroupByRow {
 
 /// A single aggregate row as tracked by the builder panel.
 #[derive(Debug, Clone)]
-pub struct AggregateRow {
+pub(crate) struct AggregateRow {
     pub function: AggFn,
     pub source_alias: String,
     pub column: String,
