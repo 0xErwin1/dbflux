@@ -384,7 +384,8 @@ impl SshConfigFile {
     ///
     /// `active` is the block state of the file currently being walked;
     /// `never_match` is OpenSSH's `SSHCONF_NEVERMATCH`: inside an `Include`
-    /// reached from an inactive block, no `Host`/`Match` line may activate.
+    /// reached from a block that definitely cannot apply, no `Host`/`Match`
+    /// line may activate.
     /// `proxy_visible` marks a position inside a block that could still
     /// apply but whose criterion the tunnel cannot evaluate: normal
     /// keywords stay inactive, but a `ProxyJump`/`ProxyCommand` there still
@@ -400,10 +401,18 @@ impl SshConfigFile {
                     // The included file is its own scope: it inherits the
                     // enclosing block state, and when it ends the enclosing
                     // file's state is restored (OpenSSH's `*activep = oactive`).
-                    // A proxy visible through an unevaluatable enclosing block
-                    // stays visible at the included file's top level.
+                    // What the include passes down is whether the enclosing
+                    // block *definitely cannot apply*, not whether it activated
+                    // normal keywords: a block that may still apply — an
+                    // unevaluatable `Match` whose evaluable conditions are true
+                    // — passes that ambiguity down, so the included file's own
+                    // blocks are still evaluated and a `ProxyJump` inside an
+                    // included `Host`/`Match` block is seen (S5). A block that
+                    // definitely cannot apply keeps SSHCONF_NEVERMATCH: nothing
+                    // inside it can activate.
                     let enclosing = (walk.active, walk.proxy_visible);
-                    self.resolve_directives(nested, walk, !enclosing.0);
+                    let definitely_cannot_apply = !walk.active && !walk.proxy_visible;
+                    self.resolve_directives(nested, walk, definitely_cannot_apply);
                     walk.active = enclosing.0;
                     walk.proxy_visible = enclosing.1;
                 }
@@ -2019,6 +2028,37 @@ mod tests {
         let fixture = Fixture::new();
         let include = fixture.dir.path().join("inc.conf");
         fixture.write("inc.conf", "ProxyJump bastion\n");
+        fixture.write(
+            "ssh/config",
+            &format!(
+                "Host prod\n  HostName prod.internal\nMatch exec true\n  Include {}\n",
+                include.display()
+            ),
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+    }
+
+    #[test]
+    fn a_proxy_in_an_included_host_block_reached_from_a_may_apply_match_fails_closed() {
+        // Oracle: `ssh -G -F <config> prod` reports `proxyjump bastion` — with
+        // the exec condition true, OpenSSH activates the `Match` block, reads
+        // the include normally and the included `Host prod` block applies its
+        // proxy. The resolver cannot evaluate `exec`, so the block only *may*
+        // apply: that ambiguity must be passed down, the included file's own
+        // blocks still evaluated, and the proxy seen (S5). The oracle does not
+        // apply to the `exec false` variant: OpenSSH deactivates the block and
+        // dials directly, while the resolver — which never evaluates a command
+        // (C5) — still fails closed, the deliberate over-fail direction.
+        let fixture = Fixture::new();
+        let include = fixture.dir.path().join("inc.conf");
+        fixture.write("inc.conf", "Host prod\n  ProxyJump bastion\n");
         fixture.write(
             "ssh/config",
             &format!(
