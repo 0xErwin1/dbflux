@@ -139,9 +139,12 @@ For a single statement that only reads, the footer then offers **Count rows**,
 which runs the statement inside `SELECT COUNT(*)` without fetching its rows and
 shows "10,000/52,310 rows loaded" (SQL connections only), and **Load all
 rows**, which runs the statement again without the limit in the same result
-tab. Both are also in the table menu (`m`). In a script with several statements
-the limit is one budget shared by all of its result sets, and every statement
-still runs.
+tab. Both are also in the table menu (`m`). Scrolling to the last loaded row,
+or moving the cursor onto it, fetches the next rows of that statement, as many
+as the limit, and appends them; this repeats until the statement has no more
+rows. While a column is sorted in the grid, the next rows are not fetched. In a
+script with several statements the limit is one budget shared by all of its
+result sets, and every statement still runs.
 
 Drivers that cannot enforce a row limit refuse the query before running it
 rather than ignore the cap. Editor queries therefore fail with an "Operation
