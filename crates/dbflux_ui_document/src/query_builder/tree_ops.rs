@@ -15,8 +15,6 @@ use dbflux_core::{FilterNode, JoinFilterNode, JoinPredicate};
 
 /// Inserts `node` as the last child of the group reached by walking `path`
 /// from `root`. No-op if `path` does not resolve to a `Group`.
-// The path[0] accesses only run on the non-empty branch; [1..] is then in
-// range.
 #[expect(
     clippy::indexing_slicing,
     reason = "path[0] is reached only on the !path.is_empty() branch, which also makes [1..] a valid range"
@@ -62,8 +60,6 @@ pub(crate) fn remove_filter_at_path(root: &mut FilterNode, path: &[usize]) {
 
 /// Returns a mutable reference to the node addressed by `path`, or `None` if
 /// the path is invalid (descends through a non-group or off the end).
-// The path[0] access only runs when path is non-empty (the empty case
-// returns Some(root) above), which also makes [1..] a valid range.
 #[expect(
     clippy::indexing_slicing,
     reason = "the empty path returns early, so path[0] exists and [1..] is a valid range"

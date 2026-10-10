@@ -17,9 +17,6 @@ fn style(color: Hsla) -> HighlightStyle {
 
 /// Highlight runs for JSON text: object keys in the type color, string
 /// values in the string color, numbers and literals in the number color.
-// The six bytes[index] reads sit in a loop or guard holding
-// index < bytes.len(); the slices bytes[index..] and text[start..index] are
-// in range because index is clamped to bytes.len() and start <= index.
 #[expect(
     clippy::indexing_slicing,
     reason = "the six bytes[index] reads are guarded by index < bytes.len() in their loop or condition, and the [index..] / [start..index] slices hold because index is clamped to bytes.len() with start <= index"

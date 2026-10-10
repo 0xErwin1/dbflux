@@ -299,11 +299,14 @@ impl DataGridPanel {
         self.result.rows = sorted_rows;
 
         // Update original_row_order to map new order -> original.
-        // original_row_order has one entry per row and indices is a
-        // permutation of the same range, so orig[i] stays in bounds.
+        // orig[i] indexes original_row_order, which apply_local_sort builds in
+        // step with result.rows. set_result replaces the rows without
+        // resetting that order, so a refresh returning a different number of
+        // rows can leave it stale and a later sort can index past its end and
+        // panic here; that gap is pre-existing and is not re-checked here.
         #[expect(
             clippy::indexing_slicing,
-            reason = "orig was collected over 0..result.rows.len() and indices is a permutation of the same range"
+            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; set_result replaces the rows without resetting it, so a refresh returning a different number of rows can still panic here (pre-existing, not re-checked)"
         )]
         if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();

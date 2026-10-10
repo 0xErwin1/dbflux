@@ -330,8 +330,6 @@ impl SchemaVizContextMenuState {
             .map(|(actions, _)| SchemaVizMenuAction::to_menu_items(actions))
     }
 
-    // selected_index is kept within 0..count by the modular updates below
-    // and count > 0 after the early return.
     #[expect(
         clippy::indexing_slicing,
         reason = "selected_index is assigned only values in 0..count below (decrement or count - 1) and count > 0 after the early return"
@@ -357,8 +355,6 @@ impl SchemaVizContextMenuState {
         false
     }
 
-    // selected_index is kept within 0..count by the modular updates below
-    // and count > 0 after the early return.
     #[expect(
         clippy::indexing_slicing,
         reason = "selected_index is assigned only values in 0..count below (increment or 0) and count > 0 after the early return"
@@ -2603,8 +2599,6 @@ impl SchemaVizDocument {
     }
 
     fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        // index >= menu.actions.len() returns early, keeping both
-        // menu.actions[index] accesses in bounds.
         #[expect(
             clippy::indexing_slicing,
             reason = "index >= menu.actions.len() returns early, so both menu.actions[index] accesses are in bounds"

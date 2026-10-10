@@ -431,8 +431,6 @@ impl TabManager {
     /// `CloseNow`. A caller that removes a tab here directly still drops pending
     /// edits exactly as before, which is why every close route above this crate
     /// goes through the funnel and never calls this itself.
-    // idx comes from index_of() over self.documents, so both documents[idx]
-    // accesses are valid.
     #[expect(
         clippy::indexing_slicing,
         reason = "idx comes from index_of() over self.documents, so it is a valid index"
@@ -540,8 +538,6 @@ impl TabManager {
     }
 
     /// Navigates to the next tab in VISUAL order (Ctrl+PgDn).
-    // documents.len() > 1 after the early return and next is a modular step
-    // over it.
     #[expect(
         clippy::indexing_slicing,
         reason = "documents.len() > 1 after the early return and next is a modular step over it"
@@ -559,10 +555,6 @@ impl TabManager {
     }
 
     /// Navigates to the previous tab in VISUAL order (Ctrl+PgUp).
-    // documents.len() > 1 after the early return and prev is either
-    // documents.len() - 1 or active - 1; active comes from active_index,
-    // which the manager keeps below documents.len() (an invariant this
-    // method does not re-check).
     #[expect(
         clippy::indexing_slicing,
         reason = "documents.len() > 1 after the early return and prev is documents.len() - 1 or active - 1, with active_index kept below documents.len() by the manager (not re-checked here)"
@@ -632,8 +624,6 @@ impl TabManager {
     ///
     /// An unknown target selects nothing, which closes nothing — the same answer
     /// the positional fallback a caller might write by hand would produce.
-    // idx comes from position() over all_ids, so idx <= all_ids.len() and
-    // both slice ranges below are valid.
     #[expect(
         clippy::indexing_slicing,
         reason = "idx comes from position() over all_ids, so [..idx] and [(idx + 1)..] are valid ranges"
@@ -664,8 +654,6 @@ impl TabManager {
         if n == 0 || n > self.documents.len() {
             return;
         }
-        // n >= 1 and n <= documents.len() is enforced by the guard above, so
-        // n - 1 is a valid index.
         #[expect(
             clippy::indexing_slicing,
             reason = "the guard above requires 1 <= n <= documents.len(), so n - 1 is a valid index"

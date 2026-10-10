@@ -957,8 +957,6 @@ impl DataGridPanel {
     /// Alt+L / Alt+H: the next or previous view of the collection
     /// (Documents, Schema, Aggregate), wrapping. Returns false when the
     /// connection offers a single view.
-    // tabs.len() >= 2 after the early return and next is a modular step over
-    // tabs.len(), so it is a valid tab index.
     #[expect(
         clippy::indexing_slicing,
         reason = "tabs.len() >= 2 after the early return and next is a modular step over tabs.len()"

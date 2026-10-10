@@ -188,7 +188,6 @@ impl TabBar {
 }
 
 /// Returns the next non-separator index after `current`, or `current` if at the end.
-// idx is guarded by idx < items.len() in the loop condition.
 #[expect(
     clippy::indexing_slicing,
     reason = "items[idx] is reached only while the loop condition holds idx < items.len()"
