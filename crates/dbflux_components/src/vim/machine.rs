@@ -103,6 +103,9 @@ pub enum VimCommand {
     JoinLines,
     /// `~`: switches the case of the characters under the cursor.
     ToggleCase,
+    /// Visual `p` (`true`, the replaced text goes to the clipboard) or `P`
+    /// (`false`, the clipboard is kept): replaces the selection.
+    VisualPut(bool),
 }
 
 /// The object of `iw`, `a"`, `i(` and the like.
@@ -241,6 +244,9 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                     "c" if !visual => Some(VimCommand::ChangeToEnd),
                     "s" if !visual => Some(VimCommand::SubstituteLine),
                     "j" if !visual => Some(VimCommand::JoinLines),
+                    "p" if mode != VimMode::VisualBlock && visual => {
+                        Some(VimCommand::VisualPut(false))
+                    }
                     "f" => Some(VimCommand::PendingFind(FindKind {
                         forward: false,
                         till: false,
@@ -270,6 +276,7 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 }
                 "/" if !visual => Some(VimCommand::OpenSearch),
                 "s" if !visual => Some(VimCommand::Substitute),
+                "p" if mode != VimMode::VisualBlock && visual => Some(VimCommand::VisualPut(true)),
                 "f" => Some(VimCommand::PendingFind(FindKind {
                     forward: true,
                     till: false,
@@ -873,6 +880,84 @@ pub struct Replacement {
     pub range: Range<usize>,
     pub text: String,
     pub cursor: usize,
+}
+
+/// Visual `p` / `P`: replaces `selection` (whole lines when
+/// `selection_linewise`) with `register`, `count` times. Whole lines over
+/// characters go on lines of their own, characters over whole lines keep the
+/// last line break, and whole lines put over the unterminated last line add
+/// no line break after it. The cursor goes to the first non-blank character
+/// of put lines, or to the last put character.
+pub fn visual_put(
+    text: &Rope,
+    selection: Range<usize>,
+    selection_linewise: bool,
+    register: &str,
+    register_linewise: bool,
+    count: usize,
+) -> Replacement {
+    let count = count.clamp(1, MAX_PUT_COUNT);
+    let line = Line::containing(text, selection.start);
+    let terminator = line_terminator(text, &line);
+    let content = text.to_string();
+    let selected = content.get(selection.clone()).unwrap_or_default();
+    let selected_terminator = if selected.ends_with("\r\n") {
+        2
+    } else {
+        usize::from(selected.ends_with('\n'))
+    };
+
+    if !register_linewise {
+        let range = if selection_linewise {
+            selection.start..selection.end - selected_terminator
+        } else {
+            selection
+        };
+        let inserted = register.repeat(count);
+        let last_width = inserted.chars().next_back().map_or(0, char::len_utf8);
+        return Replacement {
+            cursor: range.start + inserted.len() - last_width,
+            range,
+            text: inserted,
+        };
+    }
+
+    let body = if register.ends_with('\n') {
+        register.to_string()
+    } else {
+        format!("{register}{terminator}")
+    }
+    .repeat(count);
+    let first_nonblank = body
+        .split('\n')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('\r')
+        .char_indices()
+        .find(|(_, character)| !character.is_whitespace())
+        .map_or(0, |(column, _)| column);
+
+    let (inserted, first_line) = if !selection_linewise {
+        (
+            format!("{terminator}{body}"),
+            selection.start + terminator.len(),
+        )
+    } else if selected_terminator == 0 {
+        let trimmed = body
+            .strip_suffix("\r\n")
+            .or_else(|| body.strip_suffix('\n'))
+            .unwrap_or(&body)
+            .to_string();
+        (trimmed, selection.start)
+    } else {
+        (body, selection.start)
+    };
+
+    Replacement {
+        cursor: first_line + first_nonblank,
+        range: selection,
+        text: inserted,
+    }
 }
 
 /// `J`: joins the cursor's line with the next `count - 1` lines (at least
@@ -1682,16 +1767,32 @@ mod tests {
                 Some(shifted_command)
             );
 
-            for mode in [
-                VimMode::Visual,
-                VimMode::VisualLine,
-                VimMode::VisualBlock,
-                VimMode::Insert,
-                VimMode::Replace,
-            ] {
+            let modes: &[VimMode] = if name == "p" {
+                &[VimMode::VisualBlock, VimMode::Insert, VimMode::Replace]
+            } else {
+                &[
+                    VimMode::Visual,
+                    VimMode::VisualLine,
+                    VimMode::VisualBlock,
+                    VimMode::Insert,
+                    VimMode::Replace,
+                ]
+            };
+            for mode in modes.iter().copied() {
                 assert_eq!(command_for(mode, key(name)), None, "{mode:?} {name}");
                 assert_eq!(command_for(mode, shifted(name)), None, "{mode:?} {name}");
             }
+        }
+
+        for mode in [VimMode::Visual, VimMode::VisualLine] {
+            assert_eq!(
+                command_for(mode, key("p")),
+                Some(VimCommand::VisualPut(true))
+            );
+            assert_eq!(
+                command_for(mode, shifted("p")),
+                Some(VimCommand::VisualPut(false))
+            );
         }
 
         for command in [VimCommand::OpenLineBelow, VimCommand::OpenLineAbove] {

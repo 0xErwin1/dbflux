@@ -1247,6 +1247,7 @@ impl VimBinding {
                 }
             }
             VimCommand::Substitute | VimCommand::JoinLines | VimCommand::ToggleCase => {}
+            VimCommand::VisualPut(swap) => self.visual_put(swap, count, window, cx),
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.input.read(cx);
@@ -2179,6 +2180,69 @@ impl VimBinding {
             });
         }
         self.set_vim_mode(VimMode::Insert, cx);
+    }
+
+    /// Visual `p` / `P`: replaces the selection with the clipboard as one
+    /// undo step and returns to Normal mode. `p` (`swap`) then puts the
+    /// replaced text on the clipboard. A read-only editor or an empty
+    /// clipboard keeps the selection.
+    fn visual_put<H: VimHost>(
+        &mut self,
+        swap: bool,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        if self.host_read_only {
+            return;
+        }
+        let Some(clipboard) = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+
+        let linewise = self.mode == VimMode::VisualLine;
+        let register_linewise = machine::put_is_linewise(
+            &clipboard,
+            self.last_yank
+                .as_ref()
+                .map(|yank| (yank.text.as_str(), yank.linewise)),
+        );
+        let (replacement, replaced) = {
+            let state = self.input.read(cx);
+            let selection = state.selected_range();
+            let content = state.text().to_string();
+            let replaced = if linewise {
+                machine::line_yank_text(&content, selection.clone())
+            } else {
+                content.get(selection.clone())
+            }
+            .unwrap_or_default()
+            .to_string();
+            (
+                machine::visual_put(
+                    state.text(),
+                    selection,
+                    linewise,
+                    &clipboard,
+                    register_linewise,
+                    count,
+                ),
+                replaced,
+            )
+        };
+
+        self.visual_anchor = None;
+        self.visual_cursor = None;
+        self.set_vim_mode(VimMode::Normal, cx);
+        self.apply_replacement(replacement, window, cx);
+        if swap && !replaced.is_empty() {
+            self.write_yank(replaced, linewise, cx);
+        }
+        self.schedule_editor_refocus(window, cx);
     }
 
     /// Replaces one range as one undo step and leaves the cursor on a

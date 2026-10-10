@@ -5010,3 +5010,116 @@ fn line_shortcuts_do_nothing_in_a_read_only_editor(cx: &mut TestAppContext) {
     assert_eq!(editor.text(), "select a\nfrom t");
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 }
+
+fn set_clipboard(editor: &mut Fixture<'_>, text: &str) {
+    editor
+        .window
+        .write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+}
+
+#[gpui::test]
+fn visual_put_replaces_the_selection_and_yanks_it(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one two three", true);
+    set_clipboard(&mut editor, "XY");
+    editor.set_cursor(4);
+    editor.keys("v e p");
+    assert_eq!(editor.text(), "one XY three");
+    assert_eq!(editor.cursor(), 5, "on the last put character");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(
+        editor.clipboard_text().as_deref(),
+        Some("two"),
+        "p puts the replaced text on the clipboard"
+    );
+    editor.keys("u");
+    assert_eq!(editor.text(), "one two three", "one undo step");
+
+    set_clipboard(&mut editor, "XY");
+    editor.set_cursor(4);
+    editor.keys("v e shift-p");
+    assert_eq!(editor.text(), "one XY three");
+    assert_eq!(
+        editor.clipboard_text().as_deref(),
+        Some("XY"),
+        "P keeps the clipboard"
+    );
+}
+
+#[gpui::test]
+fn visual_put_swaps_two_words(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "left right", true);
+    editor.keys("y i w w v i w p");
+    assert_eq!(editor.text(), "left left");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("right"));
+    editor.keys("0 v i w p");
+    assert_eq!(editor.text(), "right left");
+}
+
+#[gpui::test]
+fn visual_put_matches_line_and_character_kinds(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "a\nb\nc", true);
+    editor.keys("y y j shift-v p");
+    assert_eq!(editor.text(), "a\na\nc", "whole lines over whole lines");
+    assert_eq!(editor.cursor(), 2);
+    assert_eq!(editor.clipboard_text().as_deref(), Some("b\n"));
+
+    let mut editor = open_editor(cx, "a\nb\nc", true);
+    set_clipboard(&mut editor, "X");
+    editor.set_cursor(2);
+    editor.keys("shift-v p");
+    assert_eq!(
+        editor.text(),
+        "a\nX\nc",
+        "characters over whole lines keep the line"
+    );
+
+    let mut editor = open_editor(cx, "abcd", true);
+    set_clipboard(&mut editor, "X\n");
+    editor.set_cursor(1);
+    editor.keys("v l p");
+    assert_eq!(
+        editor.text(),
+        "a\nX\nd",
+        "whole lines over characters split the line"
+    );
+    assert_eq!(editor.cursor(), 2);
+
+    for separator in ["\n", "\r\n"] {
+        let content = format!("a{separator}b");
+        let mut editor = open_editor(cx, &content, true);
+        set_clipboard(&mut editor, "X\n");
+        editor.set_cursor(1 + separator.len());
+        editor.keys("shift-v p");
+        assert_eq!(
+            editor.text(),
+            format!("a{separator}X"),
+            "the last line gains no line break"
+        );
+    }
+}
+
+#[gpui::test]
+fn visual_put_takes_a_count(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab", true);
+    set_clipboard(&mut editor, "x");
+    editor.keys("v 3 p");
+    assert_eq!(editor.text(), "xxxb");
+    editor.keys("u");
+    assert_eq!(editor.text(), "ab");
+}
+
+#[gpui::test]
+fn visual_put_does_nothing_in_a_read_only_editor_or_with_an_empty_clipboard(
+    cx: &mut TestAppContext,
+) {
+    let mut editor = read_only_editor(cx, "select a");
+    set_clipboard(&mut editor, "X");
+    editor.keys("v e p");
+    assert_eq!(editor.text(), "select a");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("X"));
+
+    let mut editor = open_editor(cx, "ab", true);
+    set_clipboard(&mut editor, "");
+    editor.keys("v p");
+    assert_eq!(editor.text(), "ab");
+}
