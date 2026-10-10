@@ -101,6 +101,74 @@ impl DataGridPanel {
         cx.notify();
     }
 
+    /// Fetches the next rows when the last loaded one comes into view.
+    ///
+    /// ponytail: skipped while an in-memory sort is active, because appended
+    /// rows would land unsorted below sorted ones; re-sort after appending if
+    /// that matters.
+    fn request_next_rows(&mut self, cx: &mut Context<Self>) {
+        if self.result.rows_truncated()
+            && self.limited_rows.actions.next_rows
+            && !self.limited_rows.loading_next
+            && self.grid_table.local_sort_state.is_none()
+        {
+            self.limited_rows.loading_next = true;
+            cx.emit(DataGridEvent::NextRowsRequested);
+            cx.notify();
+        }
+    }
+
+    /// Number of rows the query result holds, before any result search hides
+    /// some of them.
+    pub(crate) fn loaded_row_count(&self) -> usize {
+        match &self.source {
+            DataSource::QueryResult { result, .. } => result.rows.len(),
+            _ => self.result.rows.len(),
+        }
+    }
+
+    /// Appends the rows of `rerun` past the ones already loaded. `rerun` is the
+    /// same query run again with a higher row limit, so its first rows are the
+    /// ones the grid holds. Column widths, scroll position and the cursor stay.
+    pub(crate) fn append_next_rows(&mut self, rerun: QueryResult, cx: &mut Context<Self>) {
+        self.limited_rows.loading_next = false;
+
+        let DataSource::QueryResult { result, .. } = &mut self.source else {
+            cx.notify();
+            return;
+        };
+
+        // Columns or rows that changed between the two runs mean the rerun's
+        // rows past the loaded count are not the next ones; show it whole.
+        let same_columns = rerun.columns.len() == result.columns.len()
+            && rerun
+                .columns
+                .iter()
+                .zip(&result.columns)
+                .all(|(new, old)| new.name == old.name && new.type_name == old.type_name);
+        let loaded = result.rows.len();
+        let combined = if same_columns && rerun.rows.get(..loaded) == Some(result.rows.as_slice()) {
+            let mut combined = (**result).clone();
+            let truncated = rerun.rows_truncated();
+            combined.rows.extend(rerun.rows.into_iter().skip(loaded));
+            combined.set_rows_truncated(truncated);
+            combined
+        } else {
+            rerun
+        };
+        *result = Arc::new(combined.clone());
+
+        self.grid_table.reload = TableReload::Preserve;
+        self.set_result(combined, cx);
+    }
+
+    /// The host could not fetch the next rows; scrolling away from the last
+    /// row and back to it tries again.
+    pub(crate) fn next_rows_failed(&mut self, cx: &mut Context<Self>) {
+        self.limited_rows.loading_next = false;
+        cx.notify();
+    }
+
     /// Identifies the current query result, for a host to check that an
     /// asynchronous answer still belongs to it.
     pub(crate) fn result_generation(&self) -> u64 {
@@ -513,6 +581,9 @@ impl DataGridPanel {
                             dirty_rows.clone(),
                             cx,
                         );
+                    }
+                    DataTableEvent::ReachedEnd => {
+                        this.request_next_rows(cx);
                     }
                 }
             });
