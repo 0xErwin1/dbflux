@@ -89,6 +89,33 @@ pub enum VimCommand {
     RepeatFind(bool),
     /// `%`: the bracket matching the one under or after the cursor.
     MatchPair,
+    /// `i` (`false`) or `a` (`true`) in Visual mode, waiting for the object.
+    PendingTextObject(bool),
+}
+
+/// The object of `iw`, `a"`, `i(` and the like.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextObject {
+    Word { big: bool },
+    Quote(char),
+    Pair { open: char, close: char },
+}
+
+impl TextObject {
+    /// The object a key names after `i` or `a`.
+    pub fn from_char(character: char) -> Option<Self> {
+        let pair = |open, close| Some(Self::Pair { open, close });
+        match character {
+            'w' => Some(Self::Word { big: false }),
+            'W' => Some(Self::Word { big: true }),
+            '"' | '\'' | '`' => Some(Self::Quote(character)),
+            '(' | ')' | 'b' => pair('(', ')'),
+            '[' | ']' => pair('[', ']'),
+            '{' | '}' | 'B' => pair('{', '}'),
+            '<' | '>' => pair('<', '>'),
+            _ => None,
+        }
+    }
 }
 
 /// Direction of a character find, and whether it stops next to the character
@@ -247,6 +274,8 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 digit if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() => {
                     Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
                 }
+                "i" if visual => Some(VimCommand::PendingTextObject(false)),
+                "a" if visual => Some(VimCommand::PendingTextObject(true)),
                 "x" | "d" if visual => Some(VimCommand::VisualDelete),
                 "c" if visual => Some(VimCommand::VisualChange),
                 "y" if visual => Some(VimCommand::VisualYank),
@@ -557,6 +586,267 @@ pub fn matching_pair(text: &Rope, offset: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// The range of a text object at the cursor, and whether it is whole lines.
+/// `around` selects the `a` form. `count` extends a word object over more
+/// words, and picks an outer pair of brackets. `None` when there is no object.
+pub fn text_object_range(
+    text: &Rope,
+    offset: usize,
+    object: TextObject,
+    around: bool,
+    count: usize,
+) -> Option<(Range<usize>, bool)> {
+    let count = count.max(1);
+    match object {
+        TextObject::Word { big } => {
+            word_object_range(text, offset, big, around, count).map(|range| (range, false))
+        }
+        TextObject::Quote(quote) => {
+            quote_object_range(text, offset, quote, around).map(|range| (range, false))
+        }
+        TextObject::Pair { open, close } => {
+            pair_object_range(text, offset, open, close, around, count)
+        }
+    }
+}
+
+/// Runs of characters of one class on the cursor's line, as character index
+/// ranges, and the index of the run under the cursor.
+fn word_runs(
+    line: &Line,
+    offset: usize,
+    big: bool,
+) -> Option<(Vec<(usize, usize, WordClass)>, usize)> {
+    let characters: Vec<char> = line.content.chars().collect();
+    if characters.is_empty() {
+        return None;
+    }
+
+    let cursor = line.char_count_before(line.column_of(offset).min(line.last_column()));
+    let mut runs: Vec<(usize, usize, WordClass)> = Vec::new();
+    for (index, character) in characters.iter().enumerate() {
+        let class = word_class(*character, big);
+        match runs.last_mut() {
+            Some(run) if run.2 == class => run.1 = index + 1,
+            _ => runs.push((index, index + 1, class)),
+        }
+    }
+
+    let current = runs
+        .iter()
+        .position(|run| run.0 <= cursor && cursor < run.1)?;
+    Some((runs, current))
+}
+
+/// `iw` / `aw` on the cursor's line. `iw` counts a run of spaces as a word;
+/// `aw` adds the spaces after each word, or before the first one when the
+/// last word has none after it.
+fn word_object_range(
+    text: &Rope,
+    offset: usize,
+    big: bool,
+    around: bool,
+    count: usize,
+) -> Option<Range<usize>> {
+    let line = Line::containing(text, offset);
+    let (runs, current) = word_runs(&line, offset, big)?;
+    let last_run = runs.len() - 1;
+
+    let is_space = |index: usize| runs.get(index).is_some_and(|run| run.2 == WordClass::Space);
+
+    let (first, last) = if !around {
+        (current, current.saturating_add(count - 1).min(last_run))
+    } else {
+        // Each count takes one run and, after it, a run of the other kind:
+        // the spaces after a word, or the word after spaces.
+        let mut last = current;
+        let mut index = current;
+        for _ in 0..count {
+            if index > last_run {
+                break;
+            }
+            last = index;
+            if index < last_run && is_space(index + 1) != is_space(index) {
+                last = index + 1;
+            }
+            index = last + 1;
+        }
+
+        let first = if !is_space(current) && !is_space(last) && current > 0 && is_space(current - 1)
+        {
+            current - 1
+        } else {
+            current
+        };
+        (first, last)
+    };
+
+    let start_char = runs.get(first)?.0;
+    let end_char = runs.get(last)?.1;
+    let byte = |index: usize| {
+        line.content
+            .char_indices()
+            .nth(index)
+            .map_or(line.content.len(), |(at, _)| at)
+    };
+    Some(line.start + byte(start_char)..line.start + byte(end_char))
+}
+
+/// `i"` / `a"` and the other quotes, on the cursor's line only. On a quote,
+/// the quotes are paired from the line start; elsewhere the nearest quotes
+/// before and after the cursor are used, or, with none before, the first two
+/// after it. A quote after a backslash does not count. `a"` adds the spaces
+/// after the closing quote, or before the opening one when there are none.
+fn quote_object_range(
+    text: &Rope,
+    offset: usize,
+    quote: char,
+    around: bool,
+) -> Option<Range<usize>> {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset);
+    let mut quotes = Vec::new();
+    let mut escaped = false;
+    for (at, character) in line.content.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            quotes.push(at);
+        }
+    }
+
+    let (open, close) = if let Some(index) = quotes.iter().position(|at| *at == column) {
+        if index % 2 == 0 {
+            (column, *quotes.get(index + 1)?)
+        } else {
+            (*quotes.get(index - 1)?, column)
+        }
+    } else {
+        let before = quotes.iter().rev().find(|at| **at < column).copied();
+        let mut after = quotes.iter().filter(|at| **at > column).copied();
+        match before {
+            Some(before) => (before, after.next()?),
+            None => (after.next()?, after.next()?),
+        }
+    };
+
+    if !around {
+        return Some(line.start + open + quote.len_utf8()..line.start + close);
+    }
+
+    let end = close + quote.len_utf8();
+    let trailing = line.content[end..]
+        .chars()
+        .take_while(|character| matches!(character, ' ' | '\t'))
+        .count();
+    let (start, end) = if trailing > 0 {
+        (open, end + trailing)
+    } else {
+        let leading = line.content[..open]
+            .chars()
+            .rev()
+            .take_while(|character| matches!(character, ' ' | '\t'))
+            .count();
+        (open - leading, end)
+    };
+    Some(line.start + start..line.start + end)
+}
+
+/// `i(` / `a(` and the other brackets: the `count`-th pair around the cursor,
+/// across lines. A cursor on a bracket belongs to that bracket's pair. When
+/// the inside starts with a line break and the closing bracket has only
+/// spaces before it on its line, `i(` covers the whole lines between the
+/// brackets.
+fn pair_object_range(
+    text: &Rope,
+    offset: usize,
+    open: char,
+    close: char,
+    around: bool,
+    count: usize,
+) -> Option<(Range<usize>, bool)> {
+    let content = text.to_string();
+    let offset = offset.min(content.len());
+
+    let mut remaining = count;
+    let mut depth = 0usize;
+    let mut start = None;
+    let upto = content
+        .get(offset..)
+        .and_then(|rest| rest.chars().next())
+        .map_or(offset, |character| offset + character.len_utf8());
+    for (at, character) in content.get(..upto)?.char_indices().rev() {
+        if character == close && at != offset {
+            depth += 1;
+        } else if character == open {
+            if depth == 0 {
+                remaining -= 1;
+                if remaining == 0 {
+                    start = Some(at);
+                    break;
+                }
+            } else {
+                depth -= 1;
+            }
+        }
+    }
+    let start = start?;
+
+    let mut depth = 0usize;
+    let mut end = None;
+    for (at, character) in content.get(start..)?.char_indices() {
+        if character == open {
+            depth += 1;
+        } else if character == close {
+            depth -= 1;
+            if depth == 0 {
+                end = Some(start + at);
+                break;
+            }
+        }
+    }
+    let end = end?;
+
+    if around {
+        return Some((start..end + close.len_utf8(), false));
+    }
+
+    let inner_start = start + open.len_utf8();
+    let after_open = content.get(inner_start..end).unwrap_or_default();
+    let line_break = if after_open.starts_with("\r\n") {
+        2
+    } else if after_open.starts_with('\n') {
+        1
+    } else {
+        0
+    };
+    if line_break == 0 {
+        return Some((inner_start..end, false));
+    }
+
+    let inner_start = inner_start + line_break;
+    let close_line_start = content
+        .get(..end)
+        .and_then(|before| before.rfind('\n'))
+        .map_or(0, |at| at + 1);
+    let blank_before_close = content.get(close_line_start..end).is_some_and(|before| {
+        before
+            .chars()
+            .all(|character| matches!(character, ' ' | '\t'))
+    });
+    if blank_before_close && close_line_start > inner_start {
+        Some((inner_start..close_line_start, true))
+    } else if blank_before_close {
+        Some((inner_start..inner_start, false))
+    } else {
+        Some((inner_start..end, false))
+    }
 }
 
 /// Keys that edit or move the cursor through editor actions instead of
@@ -1444,6 +1734,32 @@ mod tests {
                 till: true,
             }))
         );
+    }
+
+    #[test]
+    fn visual_i_and_a_wait_for_a_text_object() {
+        for mode in [VimMode::Visual, VimMode::VisualLine, VimMode::VisualBlock] {
+            assert_eq!(
+                command_for(mode, key("i")),
+                Some(VimCommand::PendingTextObject(false))
+            );
+            assert_eq!(
+                command_for(mode, key("a")),
+                Some(VimCommand::PendingTextObject(true))
+            );
+        }
+        assert_eq!(
+            command_for(VimMode::Normal, key("i")),
+            Some(VimCommand::EnterInsert)
+        );
+        assert_eq!(
+            TextObject::from_char('b'),
+            Some(TextObject::Pair {
+                open: '(',
+                close: ')'
+            })
+        );
+        assert_eq!(TextObject::from_char('z'), None);
     }
 
     #[test]

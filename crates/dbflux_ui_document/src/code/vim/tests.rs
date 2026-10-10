@@ -4711,3 +4711,184 @@ fn line_motions_work_in_a_read_only_editor_without_editing(cx: &mut TestAppConte
     editor.keys("y $");
     assert_eq!(editor.clipboard_text().as_deref(), Some(", b"));
 }
+
+#[gpui::test]
+fn change_inner_word_replaces_the_word_under_the_cursor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta gamma", true);
+    editor.set_cursor(7);
+    editor.keys("c i w");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "alpha  gamma");
+    assert_eq!(editor.cursor(), 6);
+    editor.type_text("X");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "alpha X gamma");
+    editor.keys("u");
+    assert_eq!(editor.text(), "alpha beta gamma", "one undo step");
+}
+
+#[gpui::test]
+fn word_objects_cover_words_spaces_and_counts(cx: &mut TestAppContext) {
+    let cases = [
+        ("a   b", 2, "d i w", "ab"),
+        ("one two three", 5, "d a w", "one three"),
+        ("one two", 5, "d a w", "one"),
+        ("one two three", 0, "d 2 a w", "three"),
+        ("one two three", 0, "2 d a w", "three"),
+        ("one two three", 0, "d 3 i w", " three"),
+        ("foo-bar baz", 1, "d i shift-w", " baz"),
+        ("foo-bar baz", 1, "d i w", "-bar baz"),
+        ("é中 x", 0, "d i w", " x"),
+    ];
+    for (content, cursor, keys, expected) in cases {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{content:?} {keys}");
+        assert_eq!(editor.mode(), Some(VimMode::Normal), "{content:?} {keys}");
+    }
+}
+
+#[gpui::test]
+fn yank_inner_word_copies_it_and_moves_to_its_start(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta", true);
+    editor.set_cursor(8);
+    editor.keys("y i w");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("beta"));
+    assert_eq!(editor.cursor(), 6);
+    assert_eq!(editor.text(), "alpha beta");
+}
+
+#[gpui::test]
+fn quote_objects_change_inside_or_around_the_quotes(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "say \"hello world\" ok", true);
+    editor.set_cursor(11);
+    editor.keys("c i \"");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "say \"\" ok");
+    editor.type_text("X");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "say \"X\" ok");
+    editor.keys("u");
+    assert_eq!(editor.text(), "say \"hello world\" ok");
+
+    let cases = [
+        ("say \"hello\" ok", 0, "d i \"", "say \"\" ok"),
+        ("say \"hello\" ok", 6, "d a \"", "say ok"),
+        ("x = \"end\"", 6, "d a \"", "x ="),
+        ("\"a\\\"b\" c", 2, "d i \"", "\"\" c"),
+        ("it's 'q' x", 6, "d i '", "it's '' x"),
+        ("run `ls` now", 5, "d i `", "run `` now"),
+        ("no quotes", 2, "d i \"", "no quotes"),
+        ("\"a\"\nb", 4, "d i \"", "\"a\"\nb"),
+    ];
+    for (content, cursor, keys, expected) in cases {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{content:?} {keys}");
+    }
+}
+
+#[gpui::test]
+fn bracket_objects_find_the_enclosing_pair(cx: &mut TestAppContext) {
+    let cases = [
+        ("f(a, (b), c)", 7, "d i (", "f(a, (), c)"),
+        ("f(a, (b), c)", 7, "d i )", "f(a, (), c)"),
+        ("f(a, (b), c)", 7, "d i b", "f(a, (), c)"),
+        ("f(a, (b), c)", 7, "d 2 i (", "f()"),
+        ("f(a, (b), c)", 7, "2 d i (", "f()"),
+        ("f(a, (b), c)", 2, "d a (", "f"),
+        ("f(a, (b), c)", 1, "d i (", "f()"),
+        ("f(a, (b), c)", 11, "d i (", "f()"),
+        ("x[1][2]", 5, "d i [", "x[1][]"),
+        ("x[1][2]", 5, "d a ]", "x[1]"),
+        ("{ a { b } c }", 6, "d a {", "{ a  c }"),
+        ("{ a { b } c }", 2, "d i shift-b", "{}"),
+        ("Vec<Option<u8>>", 12, "d i <", "Vec<Option<>>"),
+        ("Vec<Option<u8>>", 12, "d a >", "Vec<Option>"),
+        ("no brackets", 3, "d i (", "no brackets"),
+    ];
+    for (content, cursor, keys, expected) in cases {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{content:?} {keys}");
+    }
+}
+
+#[gpui::test]
+fn bracket_objects_over_whole_lines_act_linewise(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("fn {{{separator}    a;{separator}    b;{separator}}}");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(8 + separator.len());
+        editor.keys("d i {");
+        assert_eq!(editor.text(), format!("fn {{{separator}}}"));
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+
+        editor.set_cursor(8 + separator.len());
+        editor.keys("c i {");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.text(), format!("fn {{{separator}{separator}}}"));
+        editor.type_text("x");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("fn {{{separator}x{separator}}}"));
+    }
+
+    let mut editor = open_editor(cx, "f(a,\n  b)", true);
+    editor.set_cursor(2);
+    editor.keys("d i (");
+    assert_eq!(
+        editor.text(),
+        "f()",
+        "a block that ends mid-line stays characterwise"
+    );
+}
+
+#[gpui::test]
+fn visual_mode_selects_text_objects(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "call(one two)", true);
+    editor.set_cursor(9);
+    editor.keys("v i w y");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("two"));
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.set_cursor(9);
+    editor.keys("v i ( d");
+    assert_eq!(editor.text(), "call()");
+    editor.keys("u");
+
+    editor.set_cursor(9);
+    editor.keys("v a ( y");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("(one two)"));
+}
+
+#[gpui::test]
+fn unknown_or_missing_text_objects_change_nothing(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys("d i z");
+    assert_eq!(editor.text(), "abc");
+    editor.keys("x");
+    assert_eq!(
+        editor.text(),
+        "bc",
+        "the pending object does not swallow later keys"
+    );
+    editor.keys("c i (");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("d i escape x");
+    assert_eq!(editor.text(), "c");
+}
+
+#[gpui::test]
+fn text_objects_in_a_read_only_editor_only_yank(cx: &mut TestAppContext) {
+    let mut editor = read_only_editor(cx, "select 'name' from t");
+    editor.set_cursor(9);
+    editor.keys("d i ' c i '");
+    assert_eq!(editor.text(), "select 'name' from t");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("y i '");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("name"));
+}

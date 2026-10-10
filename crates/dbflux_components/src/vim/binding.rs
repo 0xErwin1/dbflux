@@ -21,7 +21,7 @@
 //! [`VimBinding::editor`] builds the editor element with the lock applied,
 //! because the element re-applies its read-only flag to the state every frame.
 
-use super::machine::{self, FindKind, LineMotion, VimCommand, VimKey};
+use super::machine::{self, FindKind, LineMotion, TextObject, VimCommand, VimKey};
 use super::{LeaderCommand, VimMode, VimSettingGlobal, vim_enabled, vim_mode_label};
 use crate::actions::{RunCommand, last_keystroke};
 use crate::controls::{Rope, RopeExt};
@@ -168,6 +168,8 @@ pub struct VimBinding {
     pending_find: Option<FindKind>,
     /// The last character find, repeated by `;` and `,`.
     last_find: Option<(FindKind, char)>,
+    /// `i` (`false`) or `a` (`true`) of a text object, waiting for the object.
+    pending_text_object: Option<bool>,
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
@@ -259,6 +261,7 @@ impl VimBinding {
             pending_mark: None,
             pending_find: None,
             last_find: None,
+            pending_text_object: None,
             marks: Default::default(),
             pending_operator: None,
             change_group: None,
@@ -405,6 +408,7 @@ impl VimBinding {
     pub fn leader_active(&self, cx: &App) -> bool {
         self.mode().is_some_and(|mode| !mode.accepts_text())
             && self.pending_find.is_none()
+            && self.pending_text_object.is_none()
             && !self.input.read(cx).search_session().open
     }
 
@@ -832,6 +836,7 @@ impl VimBinding {
         self.pending_mark = None;
         self.pending_find = None;
         self.last_find = None;
+        self.pending_text_object = None;
         self.marks = Default::default();
         self.pending_operator = None;
         self.change_group = None;
@@ -971,6 +976,20 @@ impl VimBinding {
             );
             return true;
         }
+        if let Some(around) = self.pending_text_object.take() {
+            let object = if key.command_modifier {
+                None
+            } else {
+                typed_char(&event.keystroke).and_then(TextObject::from_char)
+            };
+            self.pending_keys.clear();
+            cx.notify();
+            match object {
+                Some(object) => self.apply_text_object(object, around, window, cx),
+                None => self.clear_vim_count_and_notify(cx),
+            }
+            return !key.command_modifier;
+        }
         if let Some(prefix) = self.pending_mark.take() {
             self.pending_keys.clear();
             cx.notify();
@@ -1066,6 +1085,17 @@ impl VimBinding {
                     .saturating_mul(10)
                     .saturating_add(digit as usize),
             );
+            return true;
+        }
+        let text_object = match command {
+            VimCommand::PendingTextObject(around) => Some(around),
+            VimCommand::EnterInsert if self.pending_operator.is_some() => Some(false),
+            VimCommand::Append if self.pending_operator.is_some() => Some(true),
+            _ => None,
+        };
+        if let Some(around) = text_object {
+            self.pending_text_object = Some(around);
+            self.push_pending_key(if around { 'a' } else { 'i' }, cx);
             return true;
         }
         if let VimCommand::PendingFind(kind) = command {
@@ -1181,7 +1211,8 @@ impl VimBinding {
             | VimCommand::LineEnd
             | VimCommand::FirstNonBlank
             | VimCommand::RepeatFind(_)
-            | VimCommand::MatchPair => {}
+            | VimCommand::MatchPair
+            | VimCommand::PendingTextObject(_) => {}
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.input.read(cx);
@@ -1366,6 +1397,74 @@ impl VimBinding {
         }
     }
 
+    /// Applies the pending operator to a text object, or in a Visual mode
+    /// selects it. The count is the operator's prefix times the count typed
+    /// before `i` / `a`. A yank leaves the cursor at the start of the object.
+    fn apply_text_object<H: VimHost>(
+        &mut self,
+        object: TextObject,
+        around: bool,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        let inner = self.count.take();
+        if let Some((operator, prefix)) = self.pending_operator.take() {
+            let count = prefix.unwrap_or(1).saturating_mul(inner.unwrap_or(1));
+            self.clear_vim_count_and_notify(cx);
+            let found = {
+                let state = self.input.read(cx);
+                machine::text_object_range(state.text(), state.cursor(), object, around, count)
+            };
+            let Some((range, linewise)) = found else {
+                return;
+            };
+            let start = range.start;
+            self.apply_motion_operator(operator, range, linewise, window, cx);
+            if operator == 'y' {
+                self.vertical_goal = None;
+                self.set_editor_cursor(start, cx);
+            }
+            return;
+        }
+
+        self.clear_vim_count_and_notify(cx);
+        if !matches!(self.mode, VimMode::Visual | VimMode::VisualLine) {
+            return;
+        }
+        let selection = {
+            let state = self.input.read(cx);
+            let text = state.text();
+            machine::text_object_range(
+                text,
+                self.motion_cursor(cx),
+                object,
+                around,
+                inner.unwrap_or(1),
+            )
+            .and_then(|(range, linewise)| {
+                let content = text.to_string();
+                let selected = content.get(range.clone())?;
+                let selected = if linewise {
+                    selected
+                        .strip_suffix("\r\n")
+                        .or_else(|| selected.strip_suffix('\n'))
+                        .unwrap_or(selected)
+                } else {
+                    selected
+                };
+                let last = selected.chars().next_back()?;
+                Some((range.start, range.start + selected.len() - last.len_utf8()))
+            })
+        };
+        let Some((start, last)) = selection else {
+            return;
+        };
+        self.visual_anchor = Some(start);
+        self.visual_cursor = Some(last);
+        self.vertical_goal = None;
+        self.update_visual_selection(cx);
+    }
+
     fn apply_absolute_operator<H: VimHost>(
         &mut self,
         operator: char,
@@ -1392,6 +1491,7 @@ impl VimBinding {
         self.pending_g = false;
         self.pending_mark = None;
         self.pending_find = None;
+        self.pending_text_object = None;
         self.pending_operator = None;
         self.pending_keys.clear();
     }
