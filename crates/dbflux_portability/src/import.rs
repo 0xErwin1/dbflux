@@ -1436,6 +1436,11 @@ encryption = "none"
 
         let import_plan = plan(&parsed, &dest);
         assert_eq!(import_plan.conflicts.len(), 1);
+        assert_eq!(
+            import_plan.conflicts.first().expect("conflict").existing_id,
+            dest_ssh_id,
+            "the conflict must name the destination tunnel, not a different one"
+        );
 
         let mut choices = ResolutionChoices::default();
         choices
@@ -1447,7 +1452,6 @@ encryption = "none"
             actions.ssh_tunnels.is_empty(),
             "Reuse must bind to the destination tunnel, not create a new one"
         );
-        let _ = dest_ssh_id;
     }
 
     #[test]
