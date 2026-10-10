@@ -646,6 +646,13 @@ pub(super) mod tests {
                 return Err(dbflux_core::DbError::query_failed("NoSuchBucket"));
             }
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: retains the existing \
+                          panic-on-poisoned-mutex policy in this \
+                          `Result`-returning fake-store method; the fixture \
+                          does not convert poisoned locks into returned errors"
+            )]
             self.objects
                 .lock()
                 .expect("the object map")
@@ -682,6 +689,13 @@ pub(super) mod tests {
             key: &str,
         ) -> Result<dbflux_core::ObjectMetadata, dbflux_core::DbError> {
             let bytes = self.bytes(bucket, key)?;
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: retains the existing \
+                          panic-on-poisoned-mutex policy in this \
+                          `Result`-returning fake-store method; the fixture \
+                          does not convert poisoned locks into returned errors"
+            )]
             let reported_size = *self.reported_size.lock().expect("the reported size");
 
             Ok(dbflux_core::ObjectMetadata {
@@ -742,6 +756,13 @@ pub(super) mod tests {
             let bytes = std::fs::read(source_path)
                 .map_err(|error| dbflux_core::DbError::query_failed(error.to_string()))?;
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: retains the existing \
+                          panic-on-poisoned-mutex policy in this \
+                          `Result`-returning fake-store method; the fixture \
+                          does not convert poisoned locks into returned errors"
+            )]
             self.objects
                 .lock()
                 .expect("the object map")

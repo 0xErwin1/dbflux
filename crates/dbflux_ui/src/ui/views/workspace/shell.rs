@@ -11,12 +11,12 @@ use dbflux_ui_base::platform;
 
 /// Identifiers of the rail entries, passed back by the rail on click.
 pub(super) mod rail_ids {
-    pub const CONNECTIONS: &str = "connections";
-    pub const SCRIPTS: &str = "scripts";
-    pub const DASHBOARDS: &str = "dashboards";
-    pub const APPROVALS: &str = "approvals";
-    pub const AUDIT: &str = "audit";
-    pub const SETTINGS: &str = "settings";
+    pub(crate) const CONNECTIONS: &str = "connections";
+    pub(crate) const SCRIPTS: &str = "scripts";
+    pub(crate) const DASHBOARDS: &str = "dashboards";
+    pub(crate) const APPROVALS: &str = "approvals";
+    pub(crate) const AUDIT: &str = "audit";
+    pub(crate) const SETTINGS: &str = "settings";
 }
 
 /// What the rail reflects: which sidebar view is on screen (`None` while the
@@ -177,7 +177,7 @@ pub(super) enum RecentAge {
 impl RecentAge {
     /// Age of a file opened at `opened_at`, both in Unix seconds. A time in
     /// the future (clock change) counts as just now.
-    pub fn between(now: i64, opened_at: i64) -> Self {
+    pub(crate) fn between(now: i64, opened_at: i64) -> Self {
         let elapsed = now.saturating_sub(opened_at).max(0);
 
         match elapsed {
@@ -189,7 +189,7 @@ impl RecentAge {
         }
     }
 
-    pub fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         match self {
             Self::JustNow => dbflux_i18n::t!("workspace.recent.just_now"),
             Self::Minutes(count) => dbflux_i18n::t!("workspace.recent.minutes_ago", count = count),
