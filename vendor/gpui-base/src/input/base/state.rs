@@ -1503,15 +1503,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
         self.undo_manager.break_transaction_coalescing();
-        self.select_all_cursors_to(
-            |s, sel| {
-                let offset = s
-                    .start_of_line_at(sel.cursor_offset(), s.line_end_affinity_for(sel))
-                    .saturating_sub(1);
-                s.previous_boundary(offset)
-            },
-            cx,
-        );
+        self.select_all_cursors_with_anchor(|s, sel| s.select_vertical_target(sel, -1), cx);
     }
 
     pub(super) fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
@@ -1519,16 +1511,30 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
         self.undo_manager.break_transaction_coalescing();
-        let len = self.text.len();
-        self.select_all_cursors_to(
-            |s, sel| {
-                let offset = (s.end_of_line_at(sel.cursor_offset(), s.line_end_affinity_for(sel))
-                    + 1)
-                .min(len);
-                s.next_boundary(offset)
-            },
-            cx,
-        );
+        self.select_all_cursors_with_anchor(|s, sel| s.select_vertical_target(sel, 1), cx);
+    }
+
+    /// Where a vertical selection extension lands: the remembered column on the
+    /// next row, or the start/end of the text when there is no row to move to.
+    fn select_vertical_target(
+        &self,
+        sel: &CursorSelection,
+        move_lines: isize,
+    ) -> (usize, Option<(Pixels, usize)>) {
+        let cursor = sel.cursor_offset();
+        let anchor = sel
+            .column_anchor
+            .or_else(|| self.preferred_column_for(cursor));
+        let (target, _) =
+            self.vertical_target(cursor, anchor, self.line_end_affinity_for(sel), move_lines);
+        let target = if move_lines < 0 && target >= cursor {
+            0
+        } else if move_lines > 0 && target <= cursor {
+            self.text.len()
+        } else {
+            target
+        };
+        (target, anchor)
     }
 
     pub(super) fn on_action_select_all(
@@ -3385,6 +3391,17 @@ impl<M: InputModeKind> InputBaseState<M> {
         f: impl Fn(&Self, &CursorSelection) -> usize,
         cx: &mut Context<Self>,
     ) {
+        self.select_all_cursors_with_anchor(|s, sel| (f(s, sel), None), cx);
+    }
+
+    /// Like [`Self::select_all_cursors_to`], but `f` may also return the column
+    /// anchor to keep. `None` re-anchors the cursor at its new position, which is
+    /// what every horizontal extension wants; vertical ones keep the old column.
+    fn select_all_cursors_with_anchor(
+        &mut self,
+        f: impl Fn(&Self, &CursorSelection) -> (usize, Option<(Pixels, usize)>),
+        cx: &mut Context<Self>,
+    ) {
         self.visual_caret = None;
         self.pause_blink_cursor(cx);
         self.undo_manager.break_transaction_coalescing();
@@ -3394,9 +3411,11 @@ impl<M: InputModeKind> InputBaseState<M> {
             .selections
             .iter()
             .map(|sel| {
-                let offset = self.cursor_boundary(f(self, sel), Bias::Left);
+                let (offset, anchor) = f(self, sel);
+                let offset = self.cursor_boundary(offset, Bias::Left);
                 let mut new_sel = *sel;
                 Self::extend_selection(&mut new_sel, offset, None);
+                new_sel.column_anchor = anchor.or_else(|| self.preferred_column_for(offset));
                 new_sel
             })
             .collect();
@@ -8058,6 +8077,36 @@ mod tests {
                 }
             });
         });
+    }
+
+    #[gpui::test]
+    fn test_select_up_down_keeps_column(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "abcd\nx\nab|cd");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        let selection = |cx: &mut VisualTestContext| {
+            view.input.read_with(cx, |state, _| {
+                let sel = state.active_selection();
+                (sel.start..sel.end, sel.cursor_offset())
+            })
+        };
+        cx.simulate_keystrokes("shift-up");
+        assert_eq!(selection(&mut cx), (6..9, 6));
+        cx.simulate_keystrokes("shift-up");
+        assert_eq!(selection(&mut cx), (2..9, 2));
+        cx.simulate_keystrokes("shift-up");
+        assert_eq!(selection(&mut cx), (0..9, 0));
+        cx.simulate_keystrokes("shift-down");
+        assert_eq!(selection(&mut cx), (6..9, 6));
+        cx.simulate_keystrokes("shift-down");
+        assert_eq!(selection(&mut cx), (9..9, 9));
+        cx.simulate_keystrokes("shift-down");
+        assert_eq!(selection(&mut cx), (9..12, 12));
+        cx.simulate_keystrokes("shift-down");
+        assert_eq!(selection(&mut cx), (9..12, 12));
     }
 
     #[gpui::test]
