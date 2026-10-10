@@ -573,14 +573,20 @@ pub fn word_under_cursor(text: &Rope, offset: usize) -> Option<Range<usize>> {
 /// Whether `range` is a whole word: no letter, digit or `_` right before or
 /// after it.
 pub fn is_whole_word(text: &Rope, range: Range<usize>) -> bool {
-    let content = text.to_string();
     let keyword = |character: char| character.is_alphanumeric() || character == '_';
-    let before = content
-        .get(..range.start)
+
+    let start_line = Line::containing(text, range.start);
+    let before = start_line
+        .content
+        .get(..range.start.saturating_sub(start_line.start))
         .and_then(|before| before.chars().next_back());
-    let after = content
-        .get(range.end..)
+
+    let end_line = Line::containing(text, range.end);
+    let after = end_line
+        .content
+        .get(range.end.saturating_sub(end_line.start)..)
         .and_then(|after| after.chars().next());
+
     !before.is_some_and(keyword) && !after.is_some_and(keyword)
 }
 

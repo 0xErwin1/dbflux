@@ -159,6 +159,22 @@ fn with_count(mut keys: Vec<gpui::Keystroke>, count: Option<usize>) -> Vec<gpui:
         keys.drain(..digits);
     }
 
+    let operator_first = keys.first().is_some_and(|keystroke| {
+        !keystroke.modifiers.modified() && matches!(keystroke.key.as_str(), "d" | "c" | "y")
+    });
+    if operator_first
+        && keys
+            .get(1)
+            .is_some_and(|keystroke| is_digit(keystroke) && keystroke.key != "0")
+    {
+        let digits = keys
+            .iter()
+            .skip(1)
+            .take_while(|keystroke| is_digit(keystroke))
+            .count();
+        keys.drain(1..1 + digits);
+    }
+
     let prefix: Vec<gpui::Keystroke> = count
         .to_string()
         .chars()
@@ -1005,7 +1021,8 @@ impl VimBinding {
             return true;
         }
 
-        if self.recording.is_empty() {
+        if !self.awaits_more_keys() {
+            self.recording.clear();
             self.recording_text = Some(self.input.read(cx).text().clone());
         }
         self.recording.push(event.keystroke.clone());
@@ -1119,8 +1136,10 @@ impl VimBinding {
     }
 
     /// Ends the recording of a command that entered Insert mode, with the
-    /// text typed since. Nothing is recorded when the cursor moved away from
-    /// the typed text, since the text can no longer be told apart.
+    /// text typed since. When the cursor moved away from the typed text, the
+    /// text can no longer be told apart, so `.` has nothing to repeat: the
+    /// command already changed the text, and an older change must not stand
+    /// in for it.
     fn finish_insert_recording<H: VimHost>(&mut self, cx: &mut Context<H>) {
         let Some(recording) = self.insert_recording.take() else {
             return;
@@ -1139,12 +1158,10 @@ impl VimBinding {
                 .filter(|inserted| recording.start + inserted == cursor)
                 .map(|_| state.text().slice(recording.start..cursor).to_string())
         };
-        if let Some(inserted) = inserted {
-            self.last_change = Some(RepeatableChange::Keys {
-                keys: recording.keys,
-                inserted,
-            });
-        }
+        self.last_change = inserted.map(|inserted| RepeatableChange::Keys {
+            keys: recording.keys,
+            inserted,
+        });
     }
 
     fn handle_command_key<H: VimHost>(
@@ -2692,7 +2709,9 @@ impl VimBinding {
     }
 
     fn close_change_group_on_blur<H: VimHost>(&mut self, cx: &mut Context<H>) {
-        self.insert_recording = None;
+        if self.insert_recording.take().is_some() {
+            self.last_change = None;
+        }
         if self.replace_once.is_some() {
             self.cancel_replace_once(cx);
             return;

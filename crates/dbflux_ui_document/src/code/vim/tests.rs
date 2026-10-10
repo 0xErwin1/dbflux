@@ -5206,6 +5206,67 @@ fn dot_repeats_replace_and_ignores_commands_that_change_nothing(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn a_count_on_dot_replaces_a_count_typed_after_the_operator(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "a b c d e f g h", true);
+    editor.keys("d 2 w");
+    assert_eq!(editor.text(), "c d e f g h");
+    editor.keys("3 .");
+    assert_eq!(editor.text(), "f g h");
+
+    let mut editor = open_editor(cx, "abc def", true);
+    editor.set_cursor(2);
+    editor.keys("d 0");
+    assert_eq!(editor.text(), "c def");
+    editor.keys("w .");
+    assert_eq!(editor.text(), "def", "d0 keeps its 0 motion when repeated");
+}
+
+#[gpui::test]
+fn dot_ignores_a_count_abandoned_before_the_change(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdefgh", true);
+    editor.keys("3");
+    editor.focus_other_input();
+    editor.focus_document(&editor.document.clone());
+    editor.keys("x");
+    assert_eq!(editor.text(), "bcdefgh");
+    editor.keys(".");
+    assert_eq!(editor.text(), "cdefgh");
+}
+
+#[gpui::test]
+fn dot_forgets_an_insert_session_it_cannot_record(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc one two", true);
+    editor.keys("x w c w");
+    editor.type_text("foo");
+    editor.keys("left escape");
+    assert_eq!(editor.text(), "bc foo two");
+    editor.keys("0 .");
+    assert_eq!(
+        editor.text(),
+        "bc foo two",
+        "the cursor left the typed text, so there is nothing to repeat"
+    );
+
+    let mut editor = open_editor(cx, "abc one two", true);
+    editor.window.update(|window, _cx| window.activate_window());
+    editor.keys("x w c w");
+    editor.type_text("foo");
+    editor.focus_other_input();
+    editor
+        .window
+        .update(|window, cx| window.simulate_next_frame(cx));
+    editor.window.run_until_parked();
+    assert_eq!(editor.mode(), Some(VimMode::Normal), "blur ends Insert");
+    editor.focus_document(&editor.document.clone());
+    editor.keys("0 .");
+    assert_eq!(
+        editor.text(),
+        "bc foo two",
+        "leaving the editor ends the recording"
+    );
+}
+
+#[gpui::test]
 fn dot_does_nothing_in_a_read_only_editor(cx: &mut TestAppContext) {
     let mut editor = read_only_editor(cx, "select a");
     editor.keys("x .");
