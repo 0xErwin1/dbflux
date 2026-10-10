@@ -3805,6 +3805,12 @@ settings:
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
+    table_alias_completion:
+      label: "补全表名时添加别名"
+      hint: "在 FROM 或 JOIN 之后接受表名时，会一并插入由其首字母组成的别名：access_control 变为 access_control ac。"
+    table_alias_use_as:
+      label: "使用 AS 书写别名"
+      hint: "插入 access_control AS ac，而不是 access_control ac。"
     vim_leader:
       label: "Leader 键"
       hint: "在普通模式和可视模式下开始 Vim Leader 序列，例如先按 Leader 再按 a 打开面板操作。保存后应用于已打开的编辑器。"

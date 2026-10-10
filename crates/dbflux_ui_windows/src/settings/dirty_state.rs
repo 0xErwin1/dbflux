@@ -26,6 +26,8 @@ impl SettingsWindow {
             || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
             || self.gen_settings.vim_mode != saved.vim_mode
             || self.gen_settings.vim_leader != saved.vim_leader
+            || self.gen_settings.table_alias_completion != saved.table_alias_completion
+            || self.gen_settings.table_alias_use_as != saved.table_alias_use_as
         {
             return true;
         }

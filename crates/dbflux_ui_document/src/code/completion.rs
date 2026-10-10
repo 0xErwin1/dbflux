@@ -366,7 +366,27 @@ impl QueryCompletionProvider {
             .as_ref()
             .and_then(|engine| engine.analyze(source, cursor));
 
-        sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref())
+        let mut items =
+            sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref());
+
+        let app_state = self.app_state.read(cx);
+        let mutation_target_alias = self
+            .connection_id
+            .and_then(|connection_id| app_state.connections().get(&connection_id))
+            .map_or(dbflux_core::MutationTargetAlias::Unsupported, |connected| {
+                connected.connection.dialect().mutation_target_alias()
+            });
+
+        append_table_aliases(
+            &mut items,
+            &metadata,
+            source,
+            cursor,
+            app_state.general_settings(),
+            mutation_target_alias,
+        );
+
+        items
     }
 
     /// Background-fetches column details for tables referenced by the statement
@@ -2081,6 +2101,164 @@ fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
     aliases
 }
 
+/// Appends a generated alias to every table/view/CTE item when the reference
+/// being completed follows `FROM` or `JOIN` and no alias follows the cursor:
+/// accepting `access_control` inserts `access_control ac`. The target of
+/// `UPDATE` and `DELETE FROM` is aliased only as the connection's dialect
+/// allows, and `INSERT INTO` is left bare. As in DBeaver, an alias that names
+/// a known table or view is treated as taken, so `t2` is aliased `t3`, not
+/// `t2`.
+fn append_table_aliases(
+    items: &mut [CompletionItem],
+    metadata: &SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+    settings: &dbflux_core::GeneralSettings,
+    mutation_target_alias: dbflux_core::MutationTargetAlias,
+) {
+    if !settings.table_alias_completion {
+        return;
+    }
+
+    let mut reference_start = scan_identifier_start(source, cursor);
+    if reference_start > 0 && source.as_bytes()[reference_start - 1] == b'.' {
+        reference_start = scan_identifier_start(source, reference_start - 1);
+    }
+
+    let use_as = match table_reference_position(&source[..reference_start]) {
+        Some(TableReferencePosition::Relation) => settings.table_alias_use_as,
+        Some(TableReferencePosition::MutationTarget) => match mutation_target_alias {
+            dbflux_core::MutationTargetAlias::Unsupported => return,
+            dbflux_core::MutationTargetAlias::Accepted => settings.table_alias_use_as,
+            dbflux_core::MutationTargetAlias::RequiresAs => true,
+        },
+        None => return,
+    };
+
+    if alias_follows(&source[cursor..]) {
+        return;
+    }
+
+    let statement = &source[dbflux_core::QueryLanguage::Sql.statement_bounds_at(source, cursor)];
+    let mut taken = HashSet::new();
+    for (alias, table) in extract_sql_aliases(statement) {
+        taken.insert(alias);
+        taken.insert(table);
+    }
+    for relation in metadata
+        .table_names_iter()
+        .chain(metadata.view_names_iter())
+        .chain(metadata.unqualified_relations.iter().map(String::as_str))
+    {
+        let bare = relation.rsplit('.').next().unwrap_or(relation);
+        taken.insert(normalize_identifier(bare));
+    }
+
+    let separator = if use_as { " AS " } else { " " };
+
+    for item in items
+        .iter_mut()
+        .filter(|item| item.kind == Some(CompletionItemKind::STRUCT))
+    {
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit.as_mut() else {
+            continue;
+        };
+        let alias = table_alias(&item.label, &taken);
+        edit.new_text = format!("{}{separator}{alias}", edit.new_text);
+    }
+}
+
+enum TableReferencePosition {
+    /// After `FROM` or `JOIN`.
+    Relation,
+    /// The target of `UPDATE` or `DELETE FROM`.
+    MutationTarget,
+}
+
+fn table_reference_position(before_reference: &str) -> Option<TableReferencePosition> {
+    let mut words = before_reference
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .filter(|word| !word.is_empty())
+        .rev()
+        .map(str::to_uppercase);
+
+    match (words.next().as_deref(), words.next().as_deref()) {
+        (Some("JOIN"), _) => Some(TableReferencePosition::Relation),
+        (Some("FROM"), Some("DELETE")) => Some(TableReferencePosition::MutationTarget),
+        (Some("FROM"), _) => Some(TableReferencePosition::Relation),
+        // `DO UPDATE`, `KEY UPDATE` and `FOR UPDATE` are not followed by a table.
+        (Some("UPDATE"), Some("DO" | "KEY" | "FOR")) => None,
+        (Some("UPDATE"), _) => Some(TableReferencePosition::MutationTarget),
+        _ => None,
+    }
+}
+
+/// Whether the text after the cursor already gives the table an alias (or
+/// the cursor sits inside a word, where an appended alias would split it).
+fn alias_follows(after_cursor: &str) -> bool {
+    if after_cursor
+        .bytes()
+        .next()
+        .is_some_and(|byte| is_identifier_byte(byte) || byte == b'.')
+    {
+        return true;
+    }
+
+    let next_word: String = after_cursor
+        .trim_start()
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+        .collect();
+
+    if next_word.is_empty() {
+        return false;
+    }
+
+    next_word.eq_ignore_ascii_case("AS") || !is_sql_keyword(&next_word)
+}
+
+fn is_sql_keyword(word: &str) -> bool {
+    sql_keyword_candidates()
+        .binary_search(&word.to_uppercase().as_str())
+        .is_ok()
+}
+
+/// The initials of the table name's word parts (`access_control` → `ac`,
+/// `orderItems` → `oi`), numbered (`ac2`) when the alias is already used in
+/// the statement or is a keyword. Schema qualifiers are ignored.
+fn table_alias(label: &str, taken: &HashSet<String>) -> String {
+    let table = label.rsplit('.').next().unwrap_or(label).trim_matches('"');
+
+    let mut initials = String::new();
+    let mut previous: Option<char> = None;
+    for ch in table.chars() {
+        let starts_part = match previous {
+            None => true,
+            Some(previous) => {
+                !(previous.is_alphanumeric()) || (previous.is_lowercase() && ch.is_uppercase())
+            }
+        };
+        if starts_part && ch.is_alphabetic() {
+            initials.extend(ch.to_lowercase());
+        }
+        previous = Some(ch);
+    }
+
+    if initials.is_empty() {
+        initials.push('t');
+    }
+
+    let is_free = |alias: &str| !taken.contains(alias) && !is_sql_keyword(alias);
+    if is_free(&initials) {
+        return initials;
+    }
+
+    (2..)
+        .map(|number| format!("{initials}{number}"))
+        .find(|alias| is_free(alias))
+        .unwrap_or(initials)
+}
+
 /// Returns true when `argument_index` is a key-name position for the given Redis command.
 fn is_redis_key_argument(command: &str, argument_index: usize) -> bool {
     match command {
@@ -2117,14 +2295,15 @@ fn is_sql_table_context(sql_before_cursor: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompletionItem, KnownTableListing, SqlCompletionMetadata, build_sql_completion_metadata,
-        known_relational_tables, should_use_sql_completion, sql_completion_items_with_context,
-        tables_needing_details,
+        CompletionItem, KnownTableListing, SqlCompletionMetadata, append_table_aliases,
+        build_sql_completion_metadata, known_relational_tables, should_use_sql_completion,
+        sql_completion_items_with_context, tables_needing_details,
     };
     use crate::completion_support::normalize_identifier;
     use dbflux_core::{
         CollectionInfo, ColumnInfo, DatabaseCategory, DatabaseInfo, DbSchemaInfo, DocumentSchema,
-        FieldInfo, QueryLanguage, QueryTableRef, RelationalSchema, SchemaSnapshot, TableInfo,
+        FieldInfo, MutationTargetAlias, QueryLanguage, QueryTableRef, RelationalSchema,
+        SchemaSnapshot, TableInfo,
     };
 
     /// The heuristic-only path (no cursor analysis): the exact pre-context
@@ -2865,6 +3044,200 @@ mod tests {
             sort_text_of(&items, "t1") < sort_text_of(&items, "SELECT"),
             "tables rank above keywords in FROM position"
         );
+    }
+
+    fn alias_settings(enabled: bool, use_as: bool) -> dbflux_core::GeneralSettings {
+        dbflux_core::GeneralSettings {
+            table_alias_completion: enabled,
+            table_alias_use_as: use_as,
+            ..Default::default()
+        }
+    }
+
+    fn insert_text_of(items: &[CompletionItem], label: &str) -> String {
+        let item = items
+            .iter()
+            .find(|item| item.label == label)
+            .unwrap_or_else(|| panic!("{label} offered"));
+        match &item.text_edit {
+            Some(lsp_types::CompletionTextEdit::Edit(edit)) => edit.new_text.clone(),
+            other => panic!("unexpected text edit {other:?}"),
+        }
+    }
+
+    fn aliased_items(
+        metadata: &SqlCompletionMetadata,
+        source: &str,
+        settings: &dbflux_core::GeneralSettings,
+        mutation_target_alias: MutationTargetAlias,
+    ) -> Vec<CompletionItem> {
+        let mut items = analyzed_items(metadata, source);
+        append_table_aliases(
+            &mut items,
+            metadata,
+            source,
+            source.len(),
+            settings,
+            mutation_target_alias,
+        );
+        items
+    }
+
+    fn aliased_insert_text(
+        source: &str,
+        label: &str,
+        use_as: bool,
+        mutation_target_alias: MutationTargetAlias,
+    ) -> String {
+        let items = aliased_items(
+            &context_metadata(),
+            source,
+            &alias_settings(true, use_as),
+            mutation_target_alias,
+        );
+        insert_text_of(&items, label)
+    }
+
+    fn assert_no_alias(
+        source: &str,
+        settings: &dbflux_core::GeneralSettings,
+        mutation_target_alias: MutationTargetAlias,
+    ) {
+        let metadata = context_metadata();
+        let before: Vec<_> = analyzed_items(&metadata, source)
+            .into_iter()
+            .map(|item| item.text_edit)
+            .collect();
+        let after: Vec<_> = aliased_items(&metadata, source, settings, mutation_target_alias)
+            .into_iter()
+            .map(|item| item.text_edit)
+            .collect();
+        assert_eq!(before, after, "no alias for {source:?}");
+    }
+
+    #[test]
+    fn table_completion_after_from_and_join_appends_an_alias() {
+        let unsupported = MutationTargetAlias::Unsupported;
+        assert_eq!(
+            aliased_insert_text("SELECT * FROM ", "t1", false, unsupported),
+            "t1 t"
+        );
+        assert_eq!(
+            aliased_insert_text("SELECT * FROM t", "t1", true, unsupported),
+            "t1 AS t"
+        );
+        assert_eq!(
+            aliased_insert_text("SELECT * FROM t1 t JOIN ", "t2", false, unsupported),
+            "t2 t3",
+            "an alias used in the statement or naming a known table is numbered"
+        );
+    }
+
+    #[test]
+    fn table_completion_stays_bare_where_an_alias_does_not_belong() {
+        let settings = alias_settings(true, false);
+        for source in ["INSERT INTO ", "SELECT * FROM t1 WHERE c1 = 1"] {
+            assert_no_alias(source, &settings, MutationTargetAlias::Accepted);
+        }
+    }
+
+    #[test]
+    fn table_completion_stays_bare_when_the_setting_is_off() {
+        let settings = alias_settings(false, true);
+        for source in ["SELECT * FROM ", "SELECT * FROM t1 t JOIN ", "UPDATE "] {
+            assert_no_alias(source, &settings, MutationTargetAlias::Accepted);
+        }
+    }
+
+    #[test]
+    fn mutation_target_alias_follows_the_dialect() {
+        let settings = alias_settings(true, false);
+        for source in ["UPDATE ", "DELETE FROM "] {
+            assert_no_alias(source, &settings, MutationTargetAlias::Unsupported);
+            assert_eq!(
+                aliased_insert_text(source, "t1", false, MutationTargetAlias::Accepted),
+                "t1 t"
+            );
+            assert_eq!(
+                aliased_insert_text(source, "t1", true, MutationTargetAlias::Accepted),
+                "t1 AS t"
+            );
+            assert_eq!(
+                aliased_insert_text(source, "t1", false, MutationTargetAlias::RequiresAs),
+                "t1 AS t",
+                "a dialect that needs AS gets it whatever the setting"
+            );
+        }
+
+        assert!(
+            super::table_reference_position("INSERT INTO t1 VALUES (1) ON CONFLICT DO UPDATE ")
+                .is_none()
+        );
+        assert!(super::table_reference_position("SELECT * FROM t1 FOR UPDATE ").is_none());
+    }
+
+    #[test]
+    fn schema_qualified_table_is_aliased_by_its_table_name() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&TableInfo {
+            name: "order_items".to_string(),
+            schema: Some("raw".to_string()),
+            columns: None,
+            ..t1_table()
+        });
+        let settings = alias_settings(true, false);
+
+        let source = "SELECT * FROM raw.";
+        let items = aliased_items(
+            &metadata,
+            source,
+            &settings,
+            MutationTargetAlias::Unsupported,
+        );
+        assert_eq!(insert_text_of(&items, "order_items"), "order_items oi");
+
+        let source = "SELECT * FROM raword";
+        let items = aliased_items(
+            &metadata,
+            source,
+            &settings,
+            MutationTargetAlias::Unsupported,
+        );
+        assert_eq!(
+            insert_text_of(&items, "raw.order_items"),
+            "raw.order_items oi"
+        );
+    }
+
+    #[test]
+    fn no_alias_when_one_already_follows_the_cursor() {
+        assert!(super::alias_follows(" ac WHERE x = 1"));
+        assert!(super::alias_follows(" AS ac"));
+        assert!(super::alias_follows("_suffix"));
+        assert!(!super::alias_follows(" WHERE x = 1"));
+        assert!(!super::alias_follows("\n"));
+        assert!(!super::alias_follows(""));
+    }
+
+    #[test]
+    fn alias_is_built_from_name_initials() {
+        let taken = std::collections::HashSet::new();
+        assert_eq!(super::table_alias("access_control", &taken), "ac");
+        assert_eq!(super::table_alias("users", &taken), "u");
+        assert_eq!(super::table_alias("public.order_items", &taken), "oi");
+        assert_eq!(super::table_alias("orderItems", &taken), "oi");
+        assert_eq!(super::table_alias("\"Order Items\"", &taken), "oi");
+        assert_eq!(super::table_alias("_2024", &taken), "t");
+
+        let taken = std::collections::HashSet::from(["ac".to_string(), "ac2".to_string()]);
+        assert_eq!(super::table_alias("access_control", &taken), "ac3");
+    }
+
+    #[test]
+    fn alias_skips_reserved_words() {
+        let taken = std::collections::HashSet::new();
+        assert_eq!(super::table_alias("order_records", &taken), "or2");
+        assert_eq!(super::table_alias("audit_sessions", &taken), "as2");
     }
 
     #[test]

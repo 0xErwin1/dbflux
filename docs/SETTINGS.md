@@ -77,6 +77,8 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Vim mode in editors** | Off | Modal editing in every multi-line editor (code editor, object editor, JSON dialogs, value panel, collection JSON view and pipeline; motions only in read-only viewers): Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See [Vim mode](KEYBOARD.md#vim-mode-opt-in) in the keyboard reference. |
 | **Leader key** | Space | The key that starts Vim's leader sequences in Normal and Visual modes, such as the leader then `a` for the pane actions: Space, comma or backslash. Applies to open editors when you save, and leader bindings you changed in **Keybindings** follow it. |
+| **Add an alias to table completions** | On | Accepting a table, view or CTE from SQL completion after `FROM` or `JOIN` inserts it with an alias built from the initials of its name: `access_control` becomes `access_control ac`, `public.order_items` becomes `public.order_items oi`. An alias already used in the statement, a reserved word or the name of a known table gets a number (`ac2`). No alias is added when one already follows the cursor, or after `INSERT INTO`. The target of `UPDATE` and `DELETE FROM` is aliased only on databases that accept it there: PostgreSQL and DuckDB, and SQLite and Turso with `AS`. |
+| **Write the alias with AS** | Off | Inserts `access_control AS ac` instead of `access_control ac`. |
 
 ### Startup & session
 

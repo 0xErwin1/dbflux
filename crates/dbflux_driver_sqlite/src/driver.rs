@@ -215,6 +215,10 @@ impl SqlDialect for SqliteDialect {
         PlaceholderStyle::QuestionMark
     }
 
+    fn mutation_target_alias(&self) -> dbflux_core::MutationTargetAlias {
+        dbflux_core::MutationTargetAlias::RequiresAs
+    }
+
     fn build_upsert_statement(
         &self,
         schema: Option<&str>,
