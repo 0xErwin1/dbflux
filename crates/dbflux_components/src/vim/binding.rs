@@ -213,6 +213,11 @@ pub struct VimBinding {
     last_change: Option<RepeatableChange>,
     /// Set while `.` feeds a recorded command back, so it is not recorded again.
     replaying: bool,
+    /// The last search went backward (`?`, `#`), so `n` goes backward too.
+    search_backward: bool,
+    /// The last search was `*` or `#`, so `n` / `N` skip matches inside
+    /// longer words.
+    search_whole_word: bool,
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
@@ -332,6 +337,8 @@ impl VimBinding {
             insert_recording: None,
             last_change: None,
             replaying: false,
+            search_backward: false,
+            search_whole_word: false,
             marks: Default::default(),
             pending_operator: None,
             change_group: None,
@@ -911,6 +918,8 @@ impl VimBinding {
         self.recording_text = None;
         self.insert_recording = None;
         self.last_change = None;
+        self.search_backward = false;
+        self.search_whole_word = false;
         self.marks = Default::default();
         self.pending_operator = None;
         self.change_group = None;
@@ -1444,6 +1453,8 @@ impl VimBinding {
             | VimCommand::FirstNonBlank
             | VimCommand::RepeatFind(_)
             | VimCommand::MatchPair
+            | VimCommand::ParagraphForward
+            | VimCommand::ParagraphBackward
             | VimCommand::PendingTextObject(_) => {}
             VimCommand::DeleteToEnd | VimCommand::ChangeToEnd => {
                 let operator = if command == VimCommand::DeleteToEnd {
@@ -1582,11 +1593,17 @@ impl VimBinding {
             VimCommand::Undo if !self.host_read_only => {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
             }
-            VimCommand::OpenSearch => {
-                self.input
-                    .update(cx, |state, cx| state.open_search(false, cx));
+            VimCommand::OpenSearch | VimCommand::OpenSearchBackward => {
+                let backward = command == VimCommand::OpenSearchBackward;
+                self.search_backward = backward;
+                self.search_whole_word = false;
+                self.input.update(cx, |state, cx| {
+                    state.set_search_reversed(backward);
+                    state.open_search(false, cx);
+                });
             }
             VimCommand::RepeatSearch(reverse) => self.repeat_native_search(reverse, count, cx),
+            VimCommand::SearchWord(backward) => self.search_word(backward, count, cx),
             VimCommand::OpenLineBelow | VimCommand::OpenLineAbove => {
                 self.open_line(command == VimCommand::OpenLineBelow, window, cx);
             }
@@ -1602,29 +1619,69 @@ impl VimBinding {
 
     /// Repeats the find panel's query from the cursor, `count` times, moving
     /// the cursor onto the match and making it the panel's current match.
+    /// `reverse` is `N`: the opposite direction of the last search. After `*`
+    /// or `#` only whole-word matches count; when there is none the cursor
+    /// stays.
     fn repeat_native_search<H: VimHost>(
         &mut self,
-        backward: bool,
+        reverse: bool,
         count: usize,
         cx: &mut Context<H>,
     ) {
         self.vertical_goal = None;
+        let backward = reverse != self.search_backward;
+        let whole_word = self.search_whole_word;
 
         self.input.update(cx, |state, cx| {
+            let origin = state.cursor();
             for _ in 0..count.min(10_000) {
-                let reached = if backward {
-                    state.previous_search_match(cx)
-                } else {
-                    state.next_search_match(cx)
-                };
-
-                if reached.is_none() {
-                    break;
+                let mut first_seen = None;
+                loop {
+                    let reached = if backward {
+                        state.previous_search_match(cx)
+                    } else {
+                        state.next_search_match(cx)
+                    };
+                    let Some(range) = reached else {
+                        return;
+                    };
+                    if !whole_word || machine::is_whole_word(state.text(), range.clone()) {
+                        break;
+                    }
+                    if first_seen == Some(range.start) {
+                        state.set_selected_range(origin..origin, cx);
+                        return;
+                    }
+                    first_seen.get_or_insert(range.start);
                 }
             }
         });
 
         self.clamp_cursor_for_normal(cx);
+    }
+
+    /// `*` / `#`: searches the word under the cursor, or the first one after
+    /// it on the line, as a whole word from the start of that word. The find
+    /// panel's case setting applies.
+    fn search_word<H: VimHost>(&mut self, backward: bool, count: usize, cx: &mut Context<H>) {
+        let word = {
+            let state = self.input.read(cx);
+            machine::word_under_cursor(state.text(), state.cursor())
+                .map(|range| (range.start, state.text().slice(range).to_string()))
+        };
+        let Some((start, word)) = word else {
+            return;
+        };
+
+        self.search_backward = backward;
+        self.search_whole_word = true;
+        self.input.update(cx, |state, cx| {
+            let case_insensitive = state.search_session().case_insensitive;
+            state.set_search_reversed(backward);
+            state.set_selected_range(start..start, cx);
+            state.set_search_query(word, case_insensitive, cx);
+        });
+        self.repeat_native_search(false, count, cx);
     }
 
     /// The line motion `command` stands for. `Some(None)` is a line motion
@@ -1635,6 +1692,8 @@ impl VimBinding {
             VimCommand::LineEnd => LineMotion::LineEnd,
             VimCommand::FirstNonBlank => LineMotion::FirstNonBlank,
             VimCommand::MatchPair => LineMotion::MatchPair,
+            VimCommand::ParagraphForward => LineMotion::Paragraph(true),
+            VimCommand::ParagraphBackward => LineMotion::Paragraph(false),
             VimCommand::RepeatFind(reverse) => {
                 return Some(self.last_find.map(|(kind, target)| LineMotion::Find {
                     kind: if reverse { kind.reversed() } else { kind },

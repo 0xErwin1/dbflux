@@ -2942,7 +2942,7 @@ fn normal_mode_inserts_no_text_for_unbound_keys(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abc", true);
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 
-    editor.keys("b c d 1 2 9 0 ; , . ? space shift-z");
+    editor.keys("b c d 1 2 9 0 ; , . space shift-z");
     editor.type_text("é中🎉ñ");
 
     assert_eq!(editor.text(), "abc");
@@ -5249,4 +5249,95 @@ fn ctrl_d_and_ctrl_u_move_half_a_screen(cx: &mut TestAppContext) {
     let mut editor = read_only_editor(cx, "a\nb\nc");
     editor.keys("2 ctrl-d");
     assert_eq!(editor.cursor(), 4, "read-only editors still move");
+}
+
+#[gpui::test]
+fn braces_move_between_paragraphs(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "a\nb\n\nc\nd\n\ne", true);
+    editor.keys("}");
+    assert_eq!(editor.cursor(), 4, "the blank line after the paragraph");
+    editor.keys("}");
+    assert_eq!(editor.cursor(), 9);
+    editor.keys("}");
+    assert_eq!(
+        editor.cursor(),
+        10,
+        "the last character when no blank line follows"
+    );
+    editor.keys("{");
+    assert_eq!(editor.cursor(), 9);
+    editor.keys("2 {");
+    assert_eq!(
+        editor.cursor(),
+        0,
+        "the first line when no blank line precedes"
+    );
+
+    editor.keys("d }");
+    assert_eq!(editor.text(), "\nc\nd\n\ne");
+    editor.keys("u");
+    editor.set_cursor(10);
+    editor.keys("d }");
+    assert_eq!(
+        editor.text(),
+        "a\nb\n\nc\nd\n\n",
+        "the last paragraph goes to the end"
+    );
+    editor.keys("u");
+
+    editor.set_cursor(7);
+    editor.keys("d {");
+    assert_eq!(editor.text(), "a\nb\nd\n\ne");
+}
+
+#[gpui::test]
+fn star_and_hash_search_the_whole_word_under_the_cursor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "foo bar foobar foo", true);
+    editor.keys("*");
+    assert_eq!(editor.cursor(), 15, "foobar is not a whole-word match");
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 0, "n wraps around");
+    editor.keys("shift-n");
+    assert_eq!(editor.cursor(), 15);
+    editor.keys("#");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 15, "after # n keeps searching backward");
+
+    editor.set_cursor(1);
+    editor.keys("*");
+    assert_eq!(editor.cursor(), 15, "from inside the word");
+    editor.set_cursor(3);
+    editor.keys("*");
+    assert_eq!(
+        editor.cursor(),
+        4,
+        "the word after the cursor, wrapping onto itself"
+    );
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.text(), "foo bar foobar foo");
+}
+
+#[gpui::test]
+fn question_mark_searches_backward(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab x ab x ab", true);
+    editor.set_cursor(5);
+    editor.keys("?");
+    assert!(editor.native_search_open());
+    editor.type_text("ab");
+    editor.keys("enter");
+    assert_eq!(editor.cursor(), 0, "Enter goes to the previous match");
+    editor.keys("shift-enter");
+    assert_eq!(editor.cursor(), 5, "Shift+Enter goes to the next one");
+    editor.keys("escape");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("shift-n");
+    assert_eq!(editor.cursor(), 5);
+
+    editor.keys("/ enter");
+    assert_eq!(editor.cursor(), 10, "/ searches forward again");
+    editor.keys("escape n");
+    assert_eq!(editor.cursor(), 0);
 }

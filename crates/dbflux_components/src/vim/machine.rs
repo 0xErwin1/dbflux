@@ -114,6 +114,15 @@ pub enum VimCommand {
     HalfPageUp,
     /// `.`: repeats the last change.
     RepeatChange,
+    /// `*` (`false`) or `#` (`true`, backward): searches the word under the
+    /// cursor as a whole word.
+    SearchWord(bool),
+    /// `?`: opens the find panel searching backward.
+    OpenSearchBackward,
+    /// `}`: the next blank line.
+    ParagraphForward,
+    /// `{`: the previous blank line.
+    ParagraphBackward,
 }
 
 /// The object of `iw`, `a"`, `i(` and the like.
@@ -184,6 +193,9 @@ pub enum LineMotion {
         repeat: bool,
     },
     MatchPair,
+    /// `}` (`true`) or `{`: the next or previous blank line, or the buffer's
+    /// end or start when there is none.
+    Paragraph(bool),
 }
 
 /// The parts of a keystroke the machine needs.
@@ -242,6 +254,11 @@ pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
                 "^" => return Some(VimCommand::FirstNonBlank),
                 "%" => return Some(VimCommand::MatchPair),
                 "~" if !visual => return Some(VimCommand::ToggleCase),
+                "*" if !visual => return Some(VimCommand::SearchWord(false)),
+                "#" if !visual => return Some(VimCommand::SearchWord(true)),
+                "?" if !visual => return Some(VimCommand::OpenSearchBackward),
+                "}" => return Some(VimCommand::ParagraphForward),
+                "{" => return Some(VimCommand::ParagraphBackward),
                 ";" => return Some(VimCommand::RepeatFind(false)),
                 "," => return Some(VimCommand::RepeatFind(true)),
                 _ => {}
@@ -499,7 +516,72 @@ pub fn line_motion_target(
             repeat,
         } => find_target(text, offset, kind, target, count, repeat),
         LineMotion::MatchPair => matching_pair(text, offset),
+        LineMotion::Paragraph(forward) => Some(match paragraph_row(text, offset, forward, count) {
+            Some(row) => text.line_start_offset(row),
+            None if forward => clamp_to_character(text, text.len()),
+            None => 0,
+        }),
     }
+}
+
+/// The blank line `count` paragraphs away, or `None` when the buffer ends
+/// first. A blank line is an empty one; a line of spaces is part of its
+/// paragraph, as in Vim.
+fn paragraph_row(text: &Rope, offset: usize, forward: bool, count: usize) -> Option<usize> {
+    let last = text.lines_len().saturating_sub(1);
+    let blank = |row: usize| Line::at_row(text, row).content.is_empty();
+    let step = |row: usize| {
+        if forward {
+            (row < last).then_some(row + 1)
+        } else {
+            row.checked_sub(1)
+        }
+    };
+    let mut row = text.offset_to_point(offset).row;
+
+    for _ in 0..count.max(1) {
+        // From a blank line, the blank lines next to it are skipped first.
+        while blank(row) {
+            row = step(row)?;
+        }
+        while !blank(row) {
+            row = step(row)?;
+        }
+    }
+    Some(row)
+}
+
+/// The word under the cursor, or the first one after it on the line, for
+/// `*` and `#`.
+pub fn word_under_cursor(text: &Rope, offset: usize) -> Option<Range<usize>> {
+    let line = Line::containing(text, offset);
+    let (runs, current) = word_runs(&line, offset, false)?;
+    let (start, end, _) = runs
+        .iter()
+        .skip(current)
+        .find(|run| run.2 == WordClass::Keyword)
+        .copied()?;
+    let byte = |index: usize| {
+        line.content
+            .char_indices()
+            .nth(index)
+            .map_or(line.content.len(), |(at, _)| at)
+    };
+    Some(line.start + byte(start)..line.start + byte(end))
+}
+
+/// Whether `range` is a whole word: no letter, digit or `_` right before or
+/// after it.
+pub fn is_whole_word(text: &Rope, range: Range<usize>) -> bool {
+    let content = text.to_string();
+    let keyword = |character: char| character.is_alphanumeric() || character == '_';
+    let before = content
+        .get(..range.start)
+        .and_then(|before| before.chars().next_back());
+    let after = content
+        .get(range.end..)
+        .and_then(|after| after.chars().next());
+    !before.is_some_and(keyword) && !after.is_some_and(keyword)
 }
 
 /// The range an operator acts on for `motion`: `f`, `t`, `$` and `%` include
@@ -528,7 +610,10 @@ pub fn line_motion_operator_range(
             let width = counted_character_range(text, last, 1).map_or(0, |range| range.len());
             Some(start..last + width)
         }
-        LineMotion::LineStart | LineMotion::FirstNonBlank => {
+        LineMotion::Paragraph(true) if paragraph_row(text, offset, true, count).is_none() => {
+            Some(offset..text.len())
+        }
+        LineMotion::LineStart | LineMotion::FirstNonBlank | LineMotion::Paragraph(_) => {
             let target = line_motion_target(text, offset, motion, count)?;
             Some(offset.min(target)..offset.max(target))
         }
@@ -1965,6 +2050,19 @@ mod tests {
                 till: true,
             }))
         );
+    }
+
+    #[test]
+    fn paragraph_motions_stop_on_empty_lines() {
+        let text = Rope::from("a\nb\n\nc\nd\n\ne");
+        let forward = |offset| line_motion_target(&text, offset, LineMotion::Paragraph(true), 1);
+        let backward = |offset| line_motion_target(&text, offset, LineMotion::Paragraph(false), 1);
+        assert_eq!(forward(0), Some(4));
+        assert_eq!(forward(4), Some(9));
+        assert_eq!(forward(9), Some(10));
+        assert_eq!(backward(10), Some(9));
+        assert_eq!(backward(9), Some(4));
+        assert_eq!(backward(4), Some(0));
     }
 
     #[test]
