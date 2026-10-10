@@ -212,7 +212,7 @@ pub use query::relational_filter::{
     RelationalFilterError, ResolveError as RelationalResolveError, parse_and_resolve,
 };
 
-pub use query::relational_filter::count::count_query_from_spec;
+pub use query::relational_filter::count::{count_query_from_spec, count_query_from_sql};
 
 /// Build a parameterized SELECT from a `VisualQuerySpec` using the given dialect.
 ///

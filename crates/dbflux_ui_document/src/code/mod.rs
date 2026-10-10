@@ -94,6 +94,9 @@ pub(super) struct ResultTab {
     title: String,
     grid: Entity<DataGridPanel>,
     result_panel: Entity<ResultPanel>,
+    /// Where the tab's result came from, so its footer actions run the
+    /// query there even after the document moved on.
+    origin: Option<ResultOrigin>,
     _subscription: Subscription,
 }
 
@@ -463,6 +466,24 @@ pub(super) struct Execution {
     /// Byte offset in the buffer where the text of the latest run starts,
     /// used to name the statement lines behind each result.
     pub(super) query_origin: Option<usize>,
+    /// A result tab's Load all rows request. The next execution takes it, and
+    /// drops the row limit and replaces that tab only when it runs the same
+    /// query.
+    pub(super) load_all_rows: Option<LoadAllRows>,
+}
+
+pub(super) struct LoadAllRows {
+    pub(super) query: String,
+    pub(super) grid: gpui::EntityId,
+    pub(super) origin: ResultOrigin,
+}
+
+/// The connection, database and execution context a query result came from.
+#[derive(Clone)]
+pub(super) struct ResultOrigin {
+    connection_id: Uuid,
+    context: ExecutionSessionContext,
+    exec_ctx: ExecutionContext,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -485,6 +506,8 @@ pub(super) struct PendingActions {
     result: Option<PendingQueryResult>,
     set_query: Option<HistoryQuerySelected>,
     auto_refresh: bool,
+    /// A result tab asked to load every row of its query.
+    load_all_rows: Option<gpui::EntityId>,
     history_focus_restore: bool,
     drift_query: Option<PendingDriftQuery>,
     source_input_values: Option<(String, String)>,
@@ -498,9 +521,16 @@ pub(super) struct PendingActions {
     error: Option<String>,
 }
 
+#[derive(Clone)]
 struct ExecutionSessionContext {
     root: Arc<dyn dbflux_core::Connection>,
     database: Option<String>,
+}
+
+impl ExecutionSessionContext {
+    fn same_as(&self, other: &Self) -> bool {
+        self.database == other.database && Arc::ptr_eq(&self.root, &other.root)
+    }
 }
 
 pub struct CodeDocument {
@@ -585,6 +615,10 @@ struct PendingQueryResult {
     is_script: bool,
     /// The read-only enforcement the execution requested.
     read_only: ReadOnlyEnforcement,
+    /// The result tab a Load all rows run replaces, whichever tab is active.
+    result_grid: Option<gpui::EntityId>,
+    /// Where the query ran; `None` for a script.
+    origin: Option<ResultOrigin>,
 }
 
 pub(super) struct ActiveQueryTask {
@@ -1147,6 +1181,7 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
                 query_origin: None,
+                load_all_rows: None,
             },
             execution_session: ExecutionSessionBinding::new(),
             execution_session_context: None,
@@ -1497,27 +1532,29 @@ impl CodeDocument {
             return;
         };
 
-        let current = self.connection_id.and_then(|connection_id| {
-            let app_state = self.app_state.read(cx);
-            let connected = app_state.connections().get(&connection_id)?;
-            let database = self
-                .source
-                .exec_ctx
-                .database
-                .clone()
-                .or_else(|| connected.active_database.clone());
-            connected
-                .resolve_connection_for_execution(database.as_deref())
-                .ok()
-                .map(|root| (root, database))
-        });
-        let unchanged = current.is_some_and(|(root, database)| {
-            database == bound.database && Arc::ptr_eq(&bound.root, &root)
-        });
+        let unchanged = self
+            .current_execution_context(cx)
+            .is_some_and(|current| current.same_as(bound));
 
         if !unchanged {
             self.invalidate_execution_session(cx);
         }
+    }
+
+    /// The connection and database the next query would run on.
+    fn current_execution_context(&self, cx: &App) -> Option<ExecutionSessionContext> {
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&self.connection_id?)?;
+        let database = self
+            .source
+            .exec_ctx
+            .database
+            .clone()
+            .or_else(|| connected.active_database.clone());
+        connected
+            .resolve_connection_for_execution(database.as_deref())
+            .ok()
+            .map(|root| ExecutionSessionContext { root, database })
     }
 
     /// Invalidates before detached background cleanup; no document entity is retained.

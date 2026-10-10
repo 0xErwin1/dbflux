@@ -112,6 +112,8 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("open-builder-btn", KeyboardPath::Menu("open-builder")),
         ("builder-notice-edit", KeyboardPath::Menu("open-builder")),
         ("builder-notice-reset", KeyboardPath::Menu("reset-builder")),
+        ("footer-count-rows", KeyboardPath::Menu("count-rows")),
+        ("footer-load-all-rows", KeyboardPath::Menu("load-all-rows")),
         ("toggle-maximize", KeyboardPath::Menu("maximize")),
         ("hide-panel", KeyboardPath::Menu("hide")),
         ("undo-btn", KeyboardPath::Command(Command::Undo)),
