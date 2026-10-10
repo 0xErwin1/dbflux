@@ -21,7 +21,7 @@
 //! [`VimBinding::editor`] builds the editor element with the lock applied,
 //! because the element re-applies its read-only flag to the state every frame.
 
-use super::machine::{self, VimCommand, VimKey};
+use super::machine::{self, FindKind, LineMotion, TextObject, VimCommand, VimKey};
 use super::{LeaderCommand, VimMode, VimSettingGlobal, vim_enabled, vim_mode_label};
 use crate::actions::{RunCommand, last_keystroke};
 use crate::controls::{Rope, RopeExt};
@@ -104,6 +104,86 @@ fn is_clipboard_put_key(keystroke: &gpui::Keystroke) -> bool {
         && keystroke.key.eq_ignore_ascii_case("v")
 }
 
+/// The character a key types, for the target of `f`, `t`, `F` and `T`.
+/// `None` for keys that type nothing, such as Escape or Enter.
+fn typed_char(keystroke: &gpui::Keystroke) -> Option<char> {
+    match keystroke.key.as_str() {
+        "space" => return Some(' '),
+        "tab" => return Some('\t'),
+        _ => {}
+    }
+
+    let single = |text: &str| {
+        let mut characters = text.chars();
+        match (characters.next(), characters.next()) {
+            (Some(character), None) => Some(character),
+            _ => None,
+        }
+    };
+
+    if let Some(character) = keystroke.key_char.as_deref().and_then(single) {
+        return Some(character);
+    }
+
+    let character = single(&keystroke.key)?;
+    Some(if keystroke.modifiers.shift {
+        character.to_ascii_uppercase()
+    } else {
+        character
+    })
+}
+
+/// `keys` with their leading count replaced by `count`. Without a new count
+/// the keys keep their own.
+fn with_count(mut keys: Vec<gpui::Keystroke>, count: Option<usize>) -> Vec<gpui::Keystroke> {
+    let Some(count) = count else {
+        return keys;
+    };
+    let is_digit = |keystroke: &gpui::Keystroke| {
+        !keystroke.modifiers.modified()
+            && keystroke.key.len() == 1
+            && keystroke
+                .key
+                .chars()
+                .all(|character| character.is_ascii_digit())
+    };
+
+    if keys
+        .first()
+        .is_some_and(|keystroke| is_digit(keystroke) && keystroke.key != "0")
+    {
+        let digits = keys
+            .iter()
+            .take_while(|keystroke| is_digit(keystroke))
+            .count();
+        keys.drain(..digits);
+    }
+
+    let operator_first = keys.first().is_some_and(|keystroke| {
+        !keystroke.modifiers.modified() && matches!(keystroke.key.as_str(), "d" | "c" | "y")
+    });
+    if operator_first
+        && keys
+            .get(1)
+            .is_some_and(|keystroke| is_digit(keystroke) && keystroke.key != "0")
+    {
+        let digits = keys
+            .iter()
+            .skip(1)
+            .take_while(|keystroke| is_digit(keystroke))
+            .count();
+        keys.drain(1..1 + digits);
+    }
+
+    let prefix: Vec<gpui::Keystroke> = count
+        .to_string()
+        .chars()
+        .filter_map(|digit| gpui::Keystroke::parse(&digit.to_string()).ok())
+        .collect();
+    keys.splice(0..0, prefix);
+    keys
+}
+
 /// Which history action a Normal-mode undo shortcut runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HistoryStep {
@@ -135,6 +215,25 @@ pub struct VimBinding {
     pending_keys: String,
     pending_g: bool,
     pending_mark: Option<char>,
+    /// `f`, `t`, `F` or `T` waiting for its character.
+    pending_find: Option<FindKind>,
+    /// The last character find, repeated by `;` and `,`.
+    last_find: Option<(FindKind, char)>,
+    /// `i` (`false`) or `a` (`true`) of a text object, waiting for the object.
+    pending_text_object: Option<bool>,
+    /// Keys of the Normal-mode command being typed, and the text before it,
+    /// to tell whether it changed anything.
+    recording: Vec<gpui::Keystroke>,
+    recording_text: Option<Rope>,
+    insert_recording: Option<InsertRecording>,
+    last_change: Option<RepeatableChange>,
+    /// Set while `.` feeds a recorded command back, so it is not recorded again.
+    replaying: bool,
+    /// The last search went backward (`?`, `#`), so `n` goes backward too.
+    search_backward: bool,
+    /// The last search was `*` or `#`, so `n` / `N` skip matches inside
+    /// longer words.
+    search_whole_word: bool,
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
@@ -154,6 +253,28 @@ pub struct VimBinding {
     _focus_out: Subscription,
     _input_changes: Subscription,
     _setting: Option<Subscription>,
+}
+
+/// A change `.` can repeat.
+#[derive(Clone)]
+enum RepeatableChange {
+    /// The Normal-mode keys of the command, then the text typed when the
+    /// command entered Insert mode.
+    Keys {
+        keys: Vec<gpui::Keystroke>,
+        inserted: String,
+    },
+    /// `r`, which takes its character as typed text rather than as a key.
+    ReplaceOnce { count: usize, text: ReplaceOnceText },
+}
+
+/// A command that entered Insert mode, waiting for Insert to end so the text
+/// typed there joins it.
+struct InsertRecording {
+    keys: Vec<gpui::Keystroke>,
+    /// The cursor and the buffer length when Insert started.
+    start: usize,
+    len: usize,
 }
 
 struct YankedText {
@@ -224,6 +345,16 @@ impl VimBinding {
             pending_keys: String::new(),
             pending_g: false,
             pending_mark: None,
+            pending_find: None,
+            last_find: None,
+            pending_text_object: None,
+            recording: Vec::new(),
+            recording_text: None,
+            insert_recording: None,
+            last_change: None,
+            replaying: false,
+            search_backward: false,
+            search_whole_word: false,
             marks: Default::default(),
             pending_operator: None,
             change_group: None,
@@ -364,10 +495,13 @@ impl VimBinding {
     }
 
     /// Whether the leader key starts a sequence in this editor: Vim mode is on
-    /// in Normal or a Visual mode, and the find panel is closed, because its
-    /// fields take every key as typed text.
+    /// in Normal or a Visual mode, no command waits for a character such as the
+    /// target of `f`, and the find panel is closed, because its fields take
+    /// every key as typed text.
     pub fn leader_active(&self, cx: &App) -> bool {
         self.mode().is_some_and(|mode| !mode.accepts_text())
+            && self.pending_find.is_none()
+            && self.pending_text_object.is_none()
             && !self.input.read(cx).search_session().open
     }
 
@@ -793,6 +927,15 @@ impl VimBinding {
         self.pending_keys.clear();
         self.pending_g = false;
         self.pending_mark = None;
+        self.pending_find = None;
+        self.last_find = None;
+        self.pending_text_object = None;
+        self.recording.clear();
+        self.recording_text = None;
+        self.insert_recording = None;
+        self.last_change = None;
+        self.search_backward = false;
+        self.search_whole_word = false;
         self.marks = Default::default();
         self.pending_operator = None;
         self.change_group = None;
@@ -859,10 +1002,169 @@ impl VimBinding {
             .update(cx, |state, cx| state.set_cursor_shape(shape, cx));
     }
 
-    /// Handles a key before the editor and the workspace keymap see it.
+    /// Handles a key before the editor and the workspace keymap see it, and
+    /// records the Normal-mode commands that change the text for `.`.
     ///
     /// Returns true when the key was consumed and must not propagate.
     fn handle_vim_key_down<H: VimHost>(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) -> bool {
+        if self.replaying || self.mode != VimMode::Normal || !self.vim_owns_keys(window, cx) {
+            return self.handle_command_key(event, window, cx);
+        }
+
+        if self.is_repeat_key(&event.keystroke) {
+            self.repeat_last_change(window, cx);
+            return true;
+        }
+
+        if !self.awaits_more_keys() {
+            self.recording.clear();
+            self.recording_text = Some(self.input.read(cx).text().clone());
+        }
+        self.recording.push(event.keystroke.clone());
+
+        let consumed = self.handle_command_key(event, window, cx);
+        if consumed && self.awaits_more_keys() {
+            return consumed;
+        }
+
+        let keys = std::mem::take(&mut self.recording);
+        let before = self.recording_text.take();
+        if !consumed {
+            return consumed;
+        }
+
+        match self.mode {
+            VimMode::Insert if self.replace_once.is_none() => {
+                let state = self.input.read(cx);
+                self.insert_recording = Some(InsertRecording {
+                    keys,
+                    start: state.cursor(),
+                    len: state.text().len(),
+                });
+            }
+            VimMode::Normal => {
+                let changed = before.is_some_and(|before| before != *self.input.read(cx).text());
+                if changed {
+                    self.last_change = Some(RepeatableChange::Keys {
+                        keys,
+                        inserted: String::new(),
+                    });
+                }
+            }
+            _ => {}
+        }
+        consumed
+    }
+
+    /// Whether the command being typed needs more keys: a count, an operator,
+    /// `g`, a mark, or the character of a find or a text object.
+    fn awaits_more_keys(&self) -> bool {
+        self.count.is_some()
+            || self.pending_g
+            || self.pending_mark.is_some()
+            || self.pending_find.is_some()
+            || self.pending_text_object.is_some()
+            || self.pending_operator.is_some()
+    }
+
+    /// `.` with nothing pending but an optional count.
+    fn is_repeat_key(&self, keystroke: &gpui::Keystroke) -> bool {
+        keystroke.key == "."
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.function
+            && self.replace_once.is_none()
+            && !self.pending_g
+            && self.pending_mark.is_none()
+            && self.pending_find.is_none()
+            && self.pending_text_object.is_none()
+            && self.pending_operator.is_none()
+    }
+
+    /// `.`: feeds the last change's keys back and types its text again, as
+    /// one undo step. A count replaces the change's own count.
+    fn repeat_last_change<H: VimHost>(&mut self, window: &mut Window, cx: &mut Context<H>) {
+        let count = self.count.take();
+        self.recording.clear();
+        self.recording_text = None;
+        self.clear_vim_count_and_notify(cx);
+
+        let Some(change) = self.last_change.clone() else {
+            return;
+        };
+        if self.host_read_only {
+            return;
+        }
+
+        self.replaying = true;
+        match change {
+            RepeatableChange::Keys { keys, inserted } => {
+                for keystroke in with_count(keys, count) {
+                    self.handle_command_key(
+                        &KeyDownEvent {
+                            keystroke,
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+                if self.mode == VimMode::Insert {
+                    if !inserted.is_empty() {
+                        self.input
+                            .update(cx, |state, cx| state.replace(inserted, window, cx));
+                    }
+                    self.leave_insert(window, cx);
+                }
+            }
+            RepeatableChange::ReplaceOnce {
+                count: original,
+                text,
+            } => {
+                self.start_replace_once(count.unwrap_or(original), cx);
+                self.replace_once_directly(text, window, cx);
+            }
+        }
+        self.replaying = false;
+    }
+
+    /// Ends the recording of a command that entered Insert mode, with the
+    /// text typed since. When the cursor moved away from the typed text, the
+    /// text can no longer be told apart, so `.` has nothing to repeat: the
+    /// command already changed the text, and an older change must not stand
+    /// in for it.
+    fn finish_insert_recording<H: VimHost>(&mut self, cx: &mut Context<H>) {
+        let Some(recording) = self.insert_recording.take() else {
+            return;
+        };
+        if self.replaying {
+            return;
+        }
+
+        let inserted = {
+            let state = self.input.read(cx);
+            let cursor = state.cursor();
+            state
+                .text()
+                .len()
+                .checked_sub(recording.len)
+                .filter(|inserted| recording.start + inserted == cursor)
+                .map(|_| state.text().slice(recording.start..cursor).to_string())
+        };
+        self.last_change = inserted.map(|inserted| RepeatableChange::Keys {
+            keys: recording.keys,
+            inserted,
+        });
+    }
+
+    fn handle_command_key<H: VimHost>(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -892,22 +1194,60 @@ impl VimBinding {
                 || modifiers.function,
         };
 
-        let block_key = modifiers.control
+        let control_only = modifiers.control
             && !modifiers.alt
             && !modifiers.platform
             && !modifiers.function
-            && !modifiers.shift
-            && key.key == "v"
-            && !self.mode.accepts_text();
-        let command = if block_key {
+            && !modifiers.shift;
+        let command = if control_only && key.key == "v" && !self.mode.accepts_text() {
             Some(if self.mode == VimMode::VisualBlock {
                 VimCommand::LeaveVisual
             } else {
                 VimCommand::EnterVisualBlock
             })
+        } else if control_only {
+            machine::control_command(self.mode, key.key)
         } else {
             machine::command_for(self.mode, key)
         };
+        if let Some(kind) = self.pending_find.take() {
+            let target = if key.command_modifier {
+                None
+            } else {
+                typed_char(&event.keystroke)
+            };
+            self.pending_keys.clear();
+            cx.notify();
+            let Some(target) = target else {
+                self.clear_vim_count_and_notify(cx);
+                return !key.command_modifier;
+            };
+            self.last_find = Some((kind, target));
+            self.run_line_motion(
+                LineMotion::Find {
+                    kind,
+                    target,
+                    repeat: false,
+                },
+                window,
+                cx,
+            );
+            return true;
+        }
+        if let Some(around) = self.pending_text_object.take() {
+            let object = if key.command_modifier {
+                None
+            } else {
+                typed_char(&event.keystroke).and_then(TextObject::from_char)
+            };
+            self.pending_keys.clear();
+            cx.notify();
+            match object {
+                Some(object) => self.apply_text_object(object, around, window, cx),
+                None => self.clear_vim_count_and_notify(cx),
+            }
+            return !key.command_modifier;
+        }
         if let Some(prefix) = self.pending_mark.take() {
             self.pending_keys.clear();
             cx.notify();
@@ -994,7 +1334,7 @@ impl VimBinding {
         }
 
         if let VimCommand::Digit(digit) = command
-            && (digit != 0 || self.count.is_some() || self.pending_operator.is_some())
+            && (digit != 0 || self.count.is_some())
         {
             self.push_pending_key(char::from(b'0' + digit), cx);
             self.count = Some(
@@ -1003,6 +1343,29 @@ impl VimBinding {
                     .saturating_mul(10)
                     .saturating_add(digit as usize),
             );
+            return true;
+        }
+        let text_object = match command {
+            VimCommand::PendingTextObject(around) => Some(around),
+            VimCommand::EnterInsert if self.pending_operator.is_some() => Some(false),
+            VimCommand::Append if self.pending_operator.is_some() => Some(true),
+            _ => None,
+        };
+        if let Some(around) = text_object {
+            self.pending_text_object = Some(around);
+            self.push_pending_key(if around { 'a' } else { 'i' }, cx);
+            return true;
+        }
+        if let VimCommand::PendingFind(kind) = command {
+            self.pending_find = Some(kind);
+            self.push_pending_key(kind.key(), cx);
+            return true;
+        }
+        if let Some(motion) = self.line_motion_for(command) {
+            match motion {
+                Some(motion) => self.run_line_motion(motion, window, cx),
+                None => self.clear_vim_count_and_notify(cx),
+            }
             return true;
         }
         if let Some((operator, prefix)) = self.pending_operator.take() {
@@ -1099,7 +1462,71 @@ impl VimBinding {
         let count = explicit_count.unwrap_or(1);
         match command {
             VimCommand::Digit(0) => self.move_cursor_with(machine::line_start, cx),
-            VimCommand::Digit(_) | VimCommand::PendingG | VimCommand::PendingMark(_) => {}
+            VimCommand::Digit(_)
+            | VimCommand::PendingG
+            | VimCommand::PendingMark(_)
+            | VimCommand::PendingFind(_)
+            | VimCommand::LineEnd
+            | VimCommand::FirstNonBlank
+            | VimCommand::RepeatFind(_)
+            | VimCommand::MatchPair
+            | VimCommand::ParagraphForward
+            | VimCommand::ParagraphBackward
+            | VimCommand::PendingTextObject(_) => {}
+            VimCommand::DeleteToEnd | VimCommand::ChangeToEnd => {
+                let operator = if command == VimCommand::DeleteToEnd {
+                    'd'
+                } else {
+                    'c'
+                };
+                self.pending_operator = Some((operator, None));
+                self.count = explicit_count;
+                self.run_line_motion(LineMotion::LineEnd, window, cx);
+            }
+            VimCommand::Substitute if !self.host_read_only => {
+                let range = {
+                    let state = self.input.read(cx);
+                    let cursor = state.cursor();
+                    machine::change_horizontal_right_range(state.text(), cursor, count)
+                        .unwrap_or(cursor..cursor)
+                };
+                self.apply_change(range, None, false, window, cx);
+            }
+            VimCommand::SubstituteLine => self.apply_line_operator('c', count, window, cx),
+            VimCommand::JoinLines | VimCommand::ToggleCase if !self.host_read_only => {
+                let replacement = {
+                    let state = self.input.read(cx);
+                    if command == VimCommand::JoinLines {
+                        machine::join_lines(state.text(), state.cursor(), count)
+                    } else {
+                        machine::toggle_case(state.text(), state.cursor(), count)
+                    }
+                };
+                if let Some(replacement) = replacement {
+                    self.apply_replacement(replacement, window, cx);
+                }
+            }
+            VimCommand::Substitute | VimCommand::JoinLines | VimCommand::ToggleCase => {}
+            VimCommand::VisualPut(swap) => self.visual_put(swap, count, window, cx),
+            VimCommand::Redo if !self.host_read_only => {
+                self.run_history_in_normal_mode(HistoryStep::Redo, count, window, cx)
+            }
+            VimCommand::Redo | VimCommand::RepeatChange => {}
+            VimCommand::HalfPageDown | VimCommand::HalfPageUp => {
+                let half_page = self
+                    .input
+                    .read(cx)
+                    .visible_row_range()
+                    .map(|rows| (rows.len() / 2).max(1));
+                if let Some(lines) = explicit_count.or(half_page) {
+                    let delta = if command == VimCommand::HalfPageDown {
+                        1
+                    } else {
+                        -1
+                    };
+                    self.repeat_vertical(delta, lines, cx);
+                }
+            }
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.input.read(cx);
@@ -1183,11 +1610,17 @@ impl VimBinding {
             VimCommand::Undo if !self.host_read_only => {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
             }
-            VimCommand::OpenSearch => {
-                self.input
-                    .update(cx, |state, cx| state.open_search(false, cx));
+            VimCommand::OpenSearch | VimCommand::OpenSearchBackward => {
+                let backward = command == VimCommand::OpenSearchBackward;
+                self.search_backward = backward;
+                self.search_whole_word = false;
+                self.input.update(cx, |state, cx| {
+                    state.set_search_reversed(backward);
+                    state.open_search(false, cx);
+                });
             }
             VimCommand::RepeatSearch(reverse) => self.repeat_native_search(reverse, count, cx),
+            VimCommand::SearchWord(backward) => self.search_word(backward, count, cx),
             VimCommand::OpenLineBelow | VimCommand::OpenLineAbove => {
                 self.open_line(command == VimCommand::OpenLineBelow, window, cx);
             }
@@ -1203,29 +1636,195 @@ impl VimBinding {
 
     /// Repeats the find panel's query from the cursor, `count` times, moving
     /// the cursor onto the match and making it the panel's current match.
+    /// `reverse` is `N`: the opposite direction of the last search. After `*`
+    /// or `#` only whole-word matches count; when there is none the cursor
+    /// stays.
     fn repeat_native_search<H: VimHost>(
         &mut self,
-        backward: bool,
+        reverse: bool,
         count: usize,
         cx: &mut Context<H>,
     ) {
         self.vertical_goal = None;
+        let backward = reverse != self.search_backward;
+        let whole_word = self.search_whole_word;
 
         self.input.update(cx, |state, cx| {
+            let origin = state.cursor();
             for _ in 0..count.min(10_000) {
-                let reached = if backward {
-                    state.previous_search_match(cx)
-                } else {
-                    state.next_search_match(cx)
-                };
-
-                if reached.is_none() {
-                    break;
+                let mut first_seen = None;
+                loop {
+                    let reached = if backward {
+                        state.previous_search_match(cx)
+                    } else {
+                        state.next_search_match(cx)
+                    };
+                    let Some(range) = reached else {
+                        return;
+                    };
+                    if !whole_word || machine::is_whole_word(state.text(), range.clone()) {
+                        break;
+                    }
+                    if first_seen == Some(range.start) {
+                        state.set_selected_range(origin..origin, cx);
+                        return;
+                    }
+                    first_seen.get_or_insert(range.start);
                 }
             }
         });
 
         self.clamp_cursor_for_normal(cx);
+    }
+
+    /// `*` / `#`: searches the word under the cursor, or the first one after
+    /// it on the line, as a whole word from the start of that word. The find
+    /// panel's case setting applies.
+    fn search_word<H: VimHost>(&mut self, backward: bool, count: usize, cx: &mut Context<H>) {
+        let word = {
+            let state = self.input.read(cx);
+            machine::word_under_cursor(state.text(), state.cursor())
+                .map(|range| (range.start, state.text().slice(range).to_string()))
+        };
+        let Some((start, word)) = word else {
+            return;
+        };
+
+        self.search_backward = backward;
+        self.search_whole_word = true;
+        self.input.update(cx, |state, cx| {
+            let case_insensitive = state.search_session().case_insensitive;
+            state.set_search_reversed(backward);
+            state.set_selected_range(start..start, cx);
+            state.set_search_query(word, case_insensitive, cx);
+        });
+        self.repeat_native_search(false, count, cx);
+    }
+
+    /// The line motion `command` stands for. `Some(None)` is a line motion
+    /// without a target, such as `;` before any find.
+    fn line_motion_for(&self, command: VimCommand) -> Option<Option<LineMotion>> {
+        let motion = match command {
+            VimCommand::Digit(0) => LineMotion::LineStart,
+            VimCommand::LineEnd => LineMotion::LineEnd,
+            VimCommand::FirstNonBlank => LineMotion::FirstNonBlank,
+            VimCommand::MatchPair => LineMotion::MatchPair,
+            VimCommand::ParagraphForward => LineMotion::Paragraph(true),
+            VimCommand::ParagraphBackward => LineMotion::Paragraph(false),
+            VimCommand::RepeatFind(reverse) => {
+                return Some(self.last_find.map(|(kind, target)| LineMotion::Find {
+                    kind: if reverse { kind.reversed() } else { kind },
+                    target,
+                    repeat: true,
+                }));
+            }
+            _ => return None,
+        };
+        Some(Some(motion))
+    }
+
+    /// Moves the cursor by `motion`, or applies the pending operator to the
+    /// range it covers. The count is the operator's prefix times the count
+    /// typed before the motion. A motion without a target does nothing.
+    fn run_line_motion<H: VimHost>(
+        &mut self,
+        motion: LineMotion,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        let inner = self.count.take();
+        if let Some((operator, prefix)) = self.pending_operator.take() {
+            let count = prefix.unwrap_or(1).saturating_mul(inner.unwrap_or(1));
+            self.clear_vim_count_and_notify(cx);
+            let range = {
+                let state = self.input.read(cx);
+                machine::line_motion_operator_range(state.text(), state.cursor(), motion, count)
+            };
+            if let Some(range) = range {
+                self.apply_motion_operator(operator, range, false, window, cx);
+            }
+            return;
+        }
+
+        self.clear_vim_count_and_notify(cx);
+        let target = machine::line_motion_target(
+            self.input.read(cx).text(),
+            self.motion_cursor(cx),
+            motion,
+            inner.unwrap_or(1),
+        );
+        if let Some(target) = target {
+            self.vertical_goal = None;
+            self.set_editor_cursor(target, cx);
+        }
+    }
+
+    /// Applies the pending operator to a text object, or in a Visual mode
+    /// selects it. The count is the operator's prefix times the count typed
+    /// before `i` / `a`. A yank leaves the cursor at the start of the object.
+    fn apply_text_object<H: VimHost>(
+        &mut self,
+        object: TextObject,
+        around: bool,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        let inner = self.count.take();
+        if let Some((operator, prefix)) = self.pending_operator.take() {
+            let count = prefix.unwrap_or(1).saturating_mul(inner.unwrap_or(1));
+            self.clear_vim_count_and_notify(cx);
+            let found = {
+                let state = self.input.read(cx);
+                machine::text_object_range(state.text(), state.cursor(), object, around, count)
+            };
+            let Some((range, linewise)) = found else {
+                return;
+            };
+            let start = range.start;
+            self.apply_motion_operator(operator, range, linewise, window, cx);
+            if operator == 'y' {
+                self.vertical_goal = None;
+                self.set_editor_cursor(start, cx);
+            }
+            return;
+        }
+
+        self.clear_vim_count_and_notify(cx);
+        if !matches!(self.mode, VimMode::Visual | VimMode::VisualLine) {
+            return;
+        }
+        let selection = {
+            let state = self.input.read(cx);
+            let text = state.text();
+            machine::text_object_range(
+                text,
+                self.motion_cursor(cx),
+                object,
+                around,
+                inner.unwrap_or(1),
+            )
+            .and_then(|(range, linewise)| {
+                let content = text.to_string();
+                let selected = content.get(range.clone())?;
+                let selected = if linewise {
+                    selected
+                        .strip_suffix("\r\n")
+                        .or_else(|| selected.strip_suffix('\n'))
+                        .unwrap_or(selected)
+                } else {
+                    selected
+                };
+                let last = selected.chars().next_back()?;
+                Some((range.start, range.start + selected.len() - last.len_utf8()))
+            })
+        };
+        let Some((start, last)) = selection else {
+            return;
+        };
+        self.visual_anchor = Some(start);
+        self.visual_cursor = Some(last);
+        self.vertical_goal = None;
+        self.update_visual_selection(cx);
     }
 
     fn apply_absolute_operator<H: VimHost>(
@@ -1253,6 +1852,8 @@ impl VimBinding {
         self.count = None;
         self.pending_g = false;
         self.pending_mark = None;
+        self.pending_find = None;
+        self.pending_text_object = None;
         self.pending_operator = None;
         self.pending_keys.clear();
     }
@@ -1333,6 +1934,7 @@ impl VimBinding {
             // menu opened some other way still closes before the mode changes.
             self.dismiss_editor_menus(cx);
         } else {
+            self.finish_insert_recording(cx);
             self.finish_block_change(window, cx);
             self.close_change_group(cx);
             self.set_vim_mode(machine::mode_after(self.mode, VimCommand::LeaveInsert), cx);
@@ -1778,6 +2380,9 @@ impl VimBinding {
             .map(str::to_owned)
         };
         let Some(selected) = selected else { return };
+        if selected.is_empty() && !linewise && operator != 'c' {
+            return;
+        }
         if operator == 'c' {
             let delete_range = if linewise {
                 machine::change_line_range(self.input.read(cx).text(), range)
@@ -1905,6 +2510,86 @@ impl VimBinding {
         self.set_vim_mode(VimMode::Insert, cx);
     }
 
+    /// Visual `p` / `P`: replaces the selection with the clipboard as one
+    /// undo step and returns to Normal mode. `p` (`swap`) then puts the
+    /// replaced text on the clipboard. A read-only editor or an empty
+    /// clipboard keeps the selection.
+    fn visual_put<H: VimHost>(
+        &mut self,
+        swap: bool,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        if self.host_read_only {
+            return;
+        }
+        let Some(clipboard) = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+
+        let linewise = self.mode == VimMode::VisualLine;
+        let register_linewise = machine::put_is_linewise(
+            &clipboard,
+            self.last_yank
+                .as_ref()
+                .map(|yank| (yank.text.as_str(), yank.linewise)),
+        );
+        let (replacement, replaced) = {
+            let state = self.input.read(cx);
+            let selection = state.selected_range();
+            let content = state.text().to_string();
+            let replaced = if linewise {
+                machine::line_yank_text(&content, selection.clone())
+            } else {
+                content.get(selection.clone())
+            }
+            .unwrap_or_default()
+            .to_string();
+            (
+                machine::visual_put(
+                    state.text(),
+                    selection,
+                    linewise,
+                    &clipboard,
+                    register_linewise,
+                    count,
+                ),
+                replaced,
+            )
+        };
+
+        self.visual_anchor = None;
+        self.visual_cursor = None;
+        self.set_vim_mode(VimMode::Normal, cx);
+        self.apply_replacement(replacement, window, cx);
+        if swap && !replaced.is_empty() {
+            self.write_yank(replaced, linewise, cx);
+        }
+        self.schedule_editor_refocus(window, cx);
+    }
+
+    /// Replaces one range as one undo step and leaves the cursor on a
+    /// character at the replacement's cursor.
+    fn apply_replacement<H: VimHost>(
+        &mut self,
+        replacement: machine::Replacement,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        self.vertical_goal = None;
+        self.input.update(cx, |state, cx| {
+            state.set_selected_range(replacement.range, cx);
+            state.replace(replacement.text, window, cx);
+            state.set_selected_range(replacement.cursor..replacement.cursor, cx);
+        });
+        self.clamp_cursor_for_normal(cx);
+    }
+
     /// Writes yanked or deleted text to the system clipboard and remembers
     /// whether it was whole lines, for `p`.
     fn write_yank<H: VimHost>(&mut self, text: String, linewise: bool, cx: &mut Context<H>) {
@@ -2024,6 +2709,9 @@ impl VimBinding {
     }
 
     fn close_change_group_on_blur<H: VimHost>(&mut self, cx: &mut Context<H>) {
+        if self.insert_recording.take().is_some() {
+            self.last_change = None;
+        }
         if self.replace_once.is_some() {
             self.cancel_replace_once(cx);
             return;
@@ -2235,6 +2923,12 @@ impl VimBinding {
                 })
         };
 
+        if edit.is_some() && !self.replaying {
+            self.last_change = Some(RepeatableChange::ReplaceOnce {
+                count: pending.count,
+                text,
+            });
+        }
         if let Some((range, replacement)) = edit {
             let cursor = match text {
                 ReplaceOnceText::LineBreak => range.start + replacement.len(),
@@ -2317,6 +3011,12 @@ impl VimBinding {
             self.cancel_replace_once(cx);
             return;
         };
+        if let Some(character) = inserted.chars().next() {
+            self.last_change = Some(RepeatableChange::ReplaceOnce {
+                count: pending.count,
+                text: ReplaceOnceText::Character(character),
+            });
+        }
         let replacement = inserted.repeat(pending.count.saturating_sub(1));
         self.input.update(cx, |state, cx| {
             let text = state.text().to_string();

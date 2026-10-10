@@ -148,6 +148,18 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.search_moves_cursor = enabled;
     }
 
+    /// Whether the search panel's Enter goes to the previous match and
+    /// Shift+Enter to the next one, for a search started backward. Off by
+    /// default.
+    pub fn set_search_reversed(&mut self, reversed: bool) {
+        self.search_reversed = reversed;
+    }
+
+    /// See [`InputBaseState::set_search_reversed`].
+    pub fn search_reversed(&self) -> bool {
+        self.search_reversed
+    }
+
     pub fn set_search_query(
         &mut self,
         query: impl Into<String>,
