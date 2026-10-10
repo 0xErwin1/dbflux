@@ -86,6 +86,7 @@ embedded_icons! {
     Tag => "icons/ui/tag.svg",
     Activity => "icons/ui/activity.svg",
     FileDown => "icons/ui/file-down.svg",
+    FileScan => "icons/ui/file-scan.svg",
     SquareFunction => "icons/ui/square-function.svg",
     ArrowUpDown => "icons/ui/arrow-up-down.svg",
     Plug => "icons/ui/plug.svg",
