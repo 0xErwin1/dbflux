@@ -1542,6 +1542,13 @@ mod tests {
 
     /// The value of the open font search field, read from the window's
     /// accessibility tree; `None` while no select is open.
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test helper: retains the existing panic-on-poisoned-lock policy \
+                  and the existing hard failure when the window rendered no \
+                  frame; the `Option` return is the `find_map` miss, meaning the \
+                  search input is absent from the accessibility tree"
+    )]
     fn font_search_value(window: &mut gpui::VisualTestContext) -> Option<String> {
         let capture = Arc::new(FrameCapture::default());
         window.update(|window, _| {

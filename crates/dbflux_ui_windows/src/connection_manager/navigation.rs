@@ -1934,6 +1934,13 @@ impl ConnectionManagerWindow {
     }
 
     /// The MCP tab stop after (or before) the cursor, wrapping at either end.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`mcp_stops()` always contains Name, McpEnabled, \
+                  TestConnection and Save, so `count` is non-zero; `next` is the \
+                  modulo-wrapped successor or predecessor of a `position()` hit, \
+                  or 0 when the stop is absent, all below `stops.len()`"
+    )]
     fn step_mcp_stop(&self, forward: bool, cx: &App) -> FormFocus {
         let stops = self.mcp_stops(cx);
         let count = stops.len();
@@ -2381,6 +2388,13 @@ impl ConnectionManagerWindow {
                 self.browse_ssh_key(window, cx);
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "`ENVIRONMENT_CHIPS` is a four-element array and \
+                          `environment_cursor_index()` is either the wrapped \
+                          `step_environment_chip` result or a `position()` hit \
+                          over the same array, both below its length"
+            )]
             FormFocus::Environment => {
                 self.form.environment = ENVIRONMENT_CHIPS[self.environment_cursor_index()];
                 self.form.environment_cursor = None;
