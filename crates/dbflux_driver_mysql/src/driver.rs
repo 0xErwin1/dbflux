@@ -1445,7 +1445,7 @@ impl MysqlDriver {
         let total_start = Instant::now();
 
         // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials (#837).
+        // config reports the target it actually dials.
         let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
 
         log::info!(
