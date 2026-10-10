@@ -139,6 +139,7 @@ pub enum Icon {
     S3,
     Clickhouse,
     Turso,
+    Duckdb,
 
     // Time-series brands
     Influxdb,

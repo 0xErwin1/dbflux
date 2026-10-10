@@ -1,4 +1,5 @@
 use crate::settings::layout;
+use crate::ssh_host_picker::SshPickerStatus;
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Checkbox;
 use dbflux_components::controls::DropdownItem;
@@ -824,6 +825,48 @@ impl ConnectionManagerWindow {
             let ssh_port_label = dbflux_i18n::t!("ssh.port");
             let ssh_username_label = dbflux_i18n::t!("ssh.username");
 
+            // While an alias is active the manual host/port/user inputs are
+            // cleared and disabled (A7): the alias is the only source of the
+            // target, and clearing the picker restores the typed values.
+            let alias_active = self
+                .access
+                .ssh_host_picker
+                .read(cx)
+                .selected_alias()
+                .is_some();
+            let picker_focused = show_focus && focus == FormFocus::SshConfigHost;
+            self.access
+                .ssh_host_picker
+                .read(cx)
+                .dropdown()
+                .clone()
+                .update(cx, |dropdown, cx| {
+                    let focus_color = if picker_focused {
+                        Some(ring_color)
+                    } else {
+                        None
+                    };
+                    dropdown.set_focus_ring(focus_color, cx);
+                });
+            let (picker_dropdown, picker_statuses) = {
+                let picker = self.access.ssh_host_picker.read(cx);
+                (picker.dropdown().clone(), picker.statuses())
+            };
+            let mut picker_column = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(Label::new(dbflux_i18n::t!("ssh.config_host.label")))
+                .child(layout::cursor_ring(picker_focused, picker_dropdown, cx));
+            for status in picker_statuses {
+                let text = match &status {
+                    SshPickerStatus::Resolved(text) => Text::caption(text.clone()),
+                    SshPickerStatus::Warning(text) => Text::caption(text.clone()).warning(),
+                    SshPickerStatus::Error(text) => Text::caption(text.clone()).danger(),
+                };
+                picker_column = picker_column.child(text);
+            }
+
             let server_section = self
                 .render_section(
                     &ssh_server_title,
@@ -831,6 +874,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_3()
+                        .child(picker_column)
                         .child(
                             div()
                                 .id(2usize)
@@ -844,6 +888,7 @@ impl ConnectionManagerWindow {
                                     show_focus && focus == FormFocus::SshHost,
                                     ring_color,
                                     FormFocus::SshHost,
+                                    alias_active,
                                     cx,
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
@@ -854,6 +899,7 @@ impl ConnectionManagerWindow {
                                     show_focus && focus == FormFocus::SshPort,
                                     ring_color,
                                     FormFocus::SshPort,
+                                    alias_active,
                                     cx,
                                 ))),
                         )
@@ -865,6 +911,7 @@ impl ConnectionManagerWindow {
                             show_focus && focus == FormFocus::SshUser,
                             ring_color,
                             FormFocus::SshUser,
+                            alias_active,
                             cx,
                         ))),
                     &theme,

@@ -433,6 +433,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) searchable: bool,
     /// See [`InputBaseState::set_search_moves_cursor`].
     pub(super) search_moves_cursor: bool,
+    /// See [`InputBaseState::set_search_reversed`].
+    pub(super) search_reversed: bool,
     pub(super) replaceable: bool,
     pub(super) soft_wrap: bool,
     pub(super) wrapping_indent: WrappingIndent,
@@ -777,6 +779,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             search_activation_revision: 0,
             searchable: false,
             search_moves_cursor: false,
+            search_reversed: false,
             replaceable: true,
             soft_wrap: true,
             wrapping_indent: WrappingIndent::default(),

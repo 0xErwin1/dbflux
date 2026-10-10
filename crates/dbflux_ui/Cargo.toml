@@ -61,3 +61,6 @@ arrow-schema.workspace = true
 # dbflux_ssh is used only via the vendored-openssl feature passthrough
 # (no direct source usage needed — the dep only forwards the feature).
 ignored = ["dbflux_ssh"]
+
+[lints]
+workspace = true

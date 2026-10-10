@@ -16,7 +16,7 @@
 
 ## 选择驱动
 
-连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、Microsoft SQL Server、Amazon Redshift、ClickHouse、TursoDB、MongoDB、DynamoDB、Redis、InfluxDB、CloudWatch Logs 和 Amazon S3。选择器按类别对驱动分组：关系型、文档、键值、时间序列和日志、对象存储。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
+连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、Microsoft SQL Server、Amazon Redshift、ClickHouse、TursoDB、DuckDB、MongoDB、DynamoDB、Redis、InfluxDB、CloudWatch Logs 和 Amazon S3。选择器按类别对驱动分组：关系型、文档、键值、时间序列和日志、对象存储。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
 
 使用 `/` 筛选驱动列表，`j`/`k`（或方向键）移动，`Enter` 确认选择。
 
@@ -89,6 +89,12 @@ SSH 隧道有两种用法：
 没有单独的「SSH agent」选项——选择**私钥**并将私钥路径留空，就是基于 agent 的认证方式。
 
 **测试 SSH 连接**可在不保存连接的情况下验证隧道是否可用。
+
+### 引用 SSH 配置中的主机
+
+**SSH 配置主机**下拉框会列出 `~/.ssh/config` 中定义的每个 `Host`，并显示各自解析出的用户名、主机名和端口。选择后保存的是别名而不是解析结果，因此之后修改 SSH 配置会在下一次连接时生效，无需改动该配置。选中别名期间，**主机**、**端口**和**用户名**字段不再显示任何内容并被禁用——别名就是目标；密钥路径留空时会采用该主机指定的 `IdentityFile`，若未指定则回退到 SSH agent 或默认密钥。`Include`、`Match` 以及 `IdentityFile` 中的 `%h`、`%r`、`%d` 标记都按 OpenSSH 的方式解析。
+
+配置中需要 `ProxyJump` 或 `ProxyCommand` 的主机会被列出并标记：DBFlux 无法连接它，连接会带着该原因失败，而不会直接连接跳板机。主机密钥仍按 DBFlux 数据目录中的自有存储校验，而不是你的 `~/.ssh/known_hosts`，因此即使你多年来一直从终端访问某台主机，首次连接时仍会要求确认其密钥。
 
 ### SSH 密钥保存在哪里
 

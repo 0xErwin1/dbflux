@@ -829,10 +829,6 @@ impl ConnectionManager {
         self.active_connection_id.is_some()
     }
 
-    pub fn has_connections(&self) -> bool {
-        !self.connections.is_empty()
-    }
-
     #[allow(dead_code)]
     pub fn connection_display_name(&self) -> Option<&str> {
         self.active_connection().map(|c| c.profile.name.as_str())
@@ -3973,6 +3969,7 @@ mod tests {
                     port: 22,
                     user: "jump".to_string(),
                     auth_method: SshAuthMethod::Password,
+                    ssh_config_host: None,
                 }),
                 ssh_tunnel_profile_id: None,
             },

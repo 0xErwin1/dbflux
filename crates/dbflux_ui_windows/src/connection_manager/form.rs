@@ -116,14 +116,17 @@ impl ConnectionManagerWindow {
         }
 
         if self.access.ssh_enabled && form.supports_ssh() {
+            // While an SSH config alias is active the empty host and user
+            // are correct: the alias is the only source of the target (A7).
+            let ssh_alias_active = self.ssh_config_alias(cx).is_some();
             let ssh_host = self.access.input_ssh_host.read(cx).value().to_string();
-            if ssh_host.trim().is_empty() {
+            if !ssh_alias_active && ssh_host.trim().is_empty() {
                 self.validation_errors
                     .push(dbflux_i18n::t!("form.validation.ssh_host_required"));
             }
 
             let ssh_user = self.access.input_ssh_user.read(cx).value().to_string();
-            if ssh_user.trim().is_empty() {
+            if !ssh_alias_active && ssh_user.trim().is_empty() {
                 self.validation_errors
                     .push(dbflux_i18n::t!("form.validation.ssh_user_required"));
             }
@@ -273,13 +276,15 @@ impl ConnectionManagerWindow {
         let port_str = self.access.input_ssh_port.read(cx).value().to_string();
         let user = self.access.input_ssh_user.read(cx).value().to_string();
         let key_path_str = self.access.input_ssh_key_path.read(cx).value().to_string();
+        let ssh_config_host = self.ssh_config_alias(cx);
 
-        Some(ssh_shared::build_ssh_config(
+        Some(ssh_shared::build_ssh_config_with_alias(
             &host,
             &port_str,
             &user,
             self.access.ssh_auth_method,
             &key_path_str,
+            ssh_config_host.as_deref(),
         ))
     }
 
@@ -2261,9 +2266,9 @@ mod tests {
     /// previous field, Ctrl+L and Ctrl+H for the next or previous tab.
     #[::core::prelude::v1::test]
     fn arrows_and_tab_chords_move_on_from_the_form_and_its_fields() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         cx.simulate_keystrokes(window.into(), "down");
@@ -2328,9 +2333,9 @@ mod tests {
     /// mode is a stop whose choice Left and Right change.
     #[::core::prelude::v1::test]
     fn the_form_ring_reaches_the_ssl_mode() {
+        let mut cx = TestAppContext::single();
         use super::super::MainExtraStop;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         let ssl_stop = window
@@ -2387,10 +2392,10 @@ mod tests {
     /// the dropdown keys drive it.
     #[::core::prelude::v1::test]
     fn the_form_ring_reaches_the_auth_profile_picker() {
+        let mut cx = TestAppContext::single();
         use super::super::MainExtraStop;
         use dbflux_core::FormFieldKind;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         let picker_stop = window
@@ -2451,9 +2456,9 @@ mod tests {
     /// connection and Save: Right reaches it and Enter copies the error.
     #[::core::prelude::v1::test]
     fn the_failed_test_copy_button_is_on_the_test_row() {
+        let mut cx = TestAppContext::single();
         use super::super::TestStatus;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         window
@@ -2492,9 +2497,9 @@ mod tests {
     /// gives it back to the form.
     #[::core::prelude::v1::test]
     fn the_settings_ring_opens_the_hook_dropdowns() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         window
@@ -2543,10 +2548,10 @@ mod tests {
     #[cfg(feature = "mcp")]
     #[::core::prelude::v1::test]
     fn the_mcp_tab_is_driven_by_the_form_ring() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
         use dbflux_mcp::TrustedClientDto;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form_with(&mut cx, |state| {
             state
                 .upsert_mcp_trusted_client(TrustedClientDto {
@@ -2627,9 +2632,9 @@ mod tests {
     /// Page Down moves an open dropdown's highlight a page at a time.
     #[::core::prelude::v1::test]
     fn page_down_moves_an_open_dropdown() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         window
@@ -2769,9 +2774,9 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn form_inputs_expose_stable_ids_and_their_field_labels() {
+        let mut cx = TestAppContext::single();
         const PASSWORD: &str = "cm-automation-secret";
 
-        let mut cx = TestAppContext::single();
         let (window, frame) = render_postgres_form(PASSWORD, &mut cx);
 
         let text_inputs: HashMap<String, Option<String>> = frame
@@ -3089,6 +3094,471 @@ mod tests {
         assert_eq!(
             bindings.post_disconnect,
             hook_ids(&ids, &["alpha", "gamma"])
+        );
+    }
+}
+/// Tests of the SSH config host picker on the Access tab (#837, T5). A
+/// separate module with explicit imports: combining `use super::*` with
+/// `#[gpui::test]` sends the gpui_macros expansion into unbounded recursion
+/// (see `keyboard_coverage_tests` in `connection_manager/mod.rs`).
+#[cfg(test)]
+mod ssh_config_host_tests {
+    use crate::connection_manager::{AccessTabMode, ConnectionManagerWindow};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, WindowHandle, WindowOptions};
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    // --- SSH config host picker on the Access tab (#837, T5) ---
+
+    /// A throwaway fixture directory with a writable `config` file. Never
+    /// the real home directory (S7).
+    struct SshConfigFixture(std::path::PathBuf);
+
+    impl SshConfigFixture {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "dbflux-cm-ssh-config-{name}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).expect("create fixture dir");
+            Self(dir)
+        }
+
+        fn write_config(&self, text: &str) {
+            std::fs::write(self.0.join("config"), text).expect("write fixture config");
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        /// A home directory inside the fixture, so `~` expansion never
+        /// reaches the real home (S7).
+        fn home(&self) -> std::path::PathBuf {
+            self.0.join("home")
+        }
+    }
+
+    impl Drop for SshConfigFixture {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_dir_all(&self.0) {
+                eprintln!("fixture cleanup failed: {error}");
+            }
+        }
+    }
+
+    fn ssh_config_fixture(name: &str) -> SshConfigFixture {
+        let fixture = SshConfigFixture::new(name);
+        fixture.write_config(
+            "Host alpha\n  HostName alpha.example.com\n  User deploy\n  Port 2222\n\nHost beta\n  HostName 10.0.0.5\n\nHost *\n  Compression yes\n",
+        );
+        fixture
+    }
+
+    fn open_ssh_form_window(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager.access.ssh_enabled = true;
+                manager.access.access_tab_mode = AccessTabMode::Ssh;
+            })
+            .expect("ssh inline form initializes");
+        window
+    }
+
+    fn inject_fixture_hosts(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        fixture: &SshConfigFixture,
+        cx: &mut TestAppContext,
+    ) {
+        window
+            .update(cx, |manager, _window, cx| {
+                let snapshot =
+                    crate::ssh_host_picker::load_ssh_hosts(fixture.path(), &fixture.home());
+                manager
+                    .access
+                    .ssh_host_picker
+                    .update(cx, |picker, cx| picker.apply_snapshot(snapshot, cx));
+            })
+            .expect("fixture hosts load into the picker");
+    }
+
+    /// The Access tab picker lists the fixture hosts, and selecting one
+    /// makes the built SSH config reference the alias with empty host, empty
+    /// user and port 22 (A7).
+    #[gpui::test]
+    fn the_access_tab_picker_lists_fixture_hosts_and_the_alias_reaches_the_built_config(
+        cx: &mut TestAppContext,
+    ) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("lists-and-builds");
+        let window = open_ssh_form_window(app_state, cx);
+
+        inject_fixture_hosts(&window, &fixture, cx);
+
+        let aliases = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .access
+                    .ssh_host_picker
+                    .read(cx)
+                    .snapshot()
+                    .hosts
+                    .iter()
+                    .map(|host| host.alias.clone())
+                    .collect::<Vec<_>>()
+            })
+            .expect("read the picker snapshot");
+        assert_eq!(
+            aliases,
+            vec!["alpha".to_string(), "beta".to_string()],
+            "the picker lists the fixture hosts in file order; `Host *` is not pickable (A5)"
+        );
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx)
+            })
+            .expect("select the first fixture host");
+
+        let config = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .build_ssh_config(cx)
+                    .expect("the inline SSH config builds")
+            })
+            .expect("read the built config");
+        assert_eq!(config.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(config.host, "", "the alias is the only target (A7)");
+        assert_eq!(config.user, "");
+        assert_eq!(config.port, 22);
+    }
+
+    /// With an alias active the empty host and user are correct, so the
+    /// required-field validation must not fire; without the alias the same
+    /// empty form still reports both.
+    #[gpui::test]
+    fn with_an_alias_validation_does_not_demand_host_or_user(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("validation");
+        let window = open_ssh_form_window(app_state, cx);
+
+        let (ok, host_error, user_error) = window
+            .update(cx, |manager, _window, cx| {
+                let ok = manager.validate_form(false, cx);
+                let host_error = dbflux_i18n::t!("form.validation.ssh_host_required");
+                let user_error = dbflux_i18n::t!("form.validation.ssh_user_required");
+                (
+                    ok,
+                    manager.validation_errors.contains(&host_error),
+                    manager.validation_errors.contains(&user_error),
+                )
+            })
+            .expect("validate the manual form");
+        assert!(!ok, "an empty manual SSH form is invalid");
+        assert!(host_error, "the missing host is reported");
+        assert!(user_error, "the missing user is reported");
+
+        inject_fixture_hosts(&window, &fixture, cx);
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx)
+            })
+            .expect("select the first fixture host");
+
+        let (ok, host_error, user_error) = window
+            .update(cx, |manager, _window, cx| {
+                let ok = manager.validate_form(false, cx);
+                let host_error = dbflux_i18n::t!("form.validation.ssh_host_required");
+                let user_error = dbflux_i18n::t!("form.validation.ssh_user_required");
+                (
+                    ok,
+                    manager.validation_errors.contains(&host_error),
+                    manager.validation_errors.contains(&user_error),
+                )
+            })
+            .expect("validate the aliased form");
+        assert!(ok, "an aliased form needs no manual host or user");
+        assert!(!host_error, "the alias supplies the host");
+        assert!(!user_error, "the alias supplies the user");
+    }
+
+    /// Clearing the alias (back to the manual entry) restores exactly the
+    /// manual target that was typed before the alias was picked.
+    #[gpui::test]
+    fn clearing_the_alias_restores_the_manual_target_in_the_built_config(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("clearing");
+        let window = open_ssh_form_window(app_state, cx);
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.access.input_ssh_host.update(cx, |state, cx| {
+                    state.set_value("manual.example.com", window, cx)
+                });
+                manager
+                    .access
+                    .input_ssh_port
+                    .update(cx, |state, cx| state.set_value("2200", window, cx));
+                manager
+                    .access
+                    .input_ssh_user
+                    .update(cx, |state, cx| state.set_value("manualuser", window, cx));
+            })
+            .expect("type the manual target");
+
+        inject_fixture_hosts(&window, &fixture, cx);
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx)
+            })
+            .expect("select the alias");
+
+        let aliased = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .build_ssh_config(cx)
+                    .expect("the aliased config builds")
+            })
+            .expect("read the built config");
+        assert_eq!(aliased.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(aliased.host, "");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(0, window, cx)
+            })
+            .expect("clear back to the manual entry");
+
+        let manual = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .build_ssh_config(cx)
+                    .expect("the manual config builds")
+            })
+            .expect("read the built config");
+        assert_eq!(manual.ssh_config_host, None);
+        assert_eq!(manual.host, "manual.example.com");
+        assert_eq!(manual.user, "manualuser");
+        assert_eq!(manual.port, 2200);
+    }
+
+    /// "Save as tunnel" from an aliased inline config promotes the alias —
+    /// not the resolved values — into the saved profile (S2).
+    #[gpui::test]
+    fn save_as_tunnel_from_an_aliased_inline_config_carries_the_alias(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("save-as-tunnel");
+        let window = open_ssh_form_window(app_state.clone(), cx);
+        inject_fixture_hosts(&window, &fixture, cx);
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx);
+                manager.save_current_ssh_as_tunnel(cx);
+            })
+            .expect("save the aliased inline config as a tunnel");
+
+        let saved = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .ssh_tunnels()
+                .last()
+                .cloned()
+                .expect("the tunnel profile is saved")
+        });
+        assert_eq!(saved.config.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(saved.config.host, "", "no resolved value is copied (S2)");
+        assert_eq!(saved.config.user, "");
+        assert_eq!(saved.config.port, 22);
+        assert_eq!(saved.name, "alpha", "the profile is named after the alias");
+    }
+
+    /// The saved-tunnel selector keeps its previous behaviour: applying a
+    /// manual tunnel fills the inline fields exactly and they validate, and
+    /// clearing the selection resets the form (PRESERVE).
+    #[gpui::test]
+    fn applying_a_saved_manual_tunnel_still_fills_the_inline_fields_and_validates(
+        cx: &mut TestAppContext,
+    ) {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_ssh_form_window(app_state, cx);
+
+        let tunnel = SshTunnelProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "manual tunnel".to_string(),
+            config: SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 2222,
+                user: "deploy".to_string(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
+            },
+            save_secret: false,
+        };
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_tunnel(&tunnel, None, window, cx);
+            })
+            .expect("apply the saved manual tunnel");
+
+        let (host, port, user, ok) = window
+            .update(cx, |manager, _window, cx| {
+                let host = manager.access.input_ssh_host.read(cx).value().to_string();
+                let port = manager.access.input_ssh_port.read(cx).value().to_string();
+                let user = manager.access.input_ssh_user.read(cx).value().to_string();
+                let ok = manager.validate_form(false, cx);
+                (host, port, user, ok)
+            })
+            .expect("read the applied tunnel");
+        assert_eq!(host, "bastion.example.com");
+        assert_eq!(port, "2222");
+        assert_eq!(user, "deploy");
+        assert!(ok, "the applied manual tunnel validates");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.clear_ssh_tunnel_selection(window, cx);
+            })
+            .expect("clear the tunnel selection");
+
+        let (host, port, user, alias) = window
+            .update(cx, |manager, _window, cx| {
+                let host = manager.access.input_ssh_host.read(cx).value().to_string();
+                let port = manager.access.input_ssh_port.read(cx).value().to_string();
+                let user = manager.access.input_ssh_user.read(cx).value().to_string();
+                let alias = manager
+                    .access
+                    .ssh_host_picker
+                    .read(cx)
+                    .selected_alias()
+                    .map(str::to_string);
+                (host, port, user, alias)
+            })
+            .expect("read the cleared selection");
+        assert_eq!(host, "");
+        assert_eq!(port, "22");
+        assert_eq!(user, "");
+        assert_eq!(alias, None, "clearing leaves no stale alias");
+    }
+
+    /// Rehydration of a saved inline profile that references an alias: the
+    /// picker shows the alias, the manual inputs stay as stored — empty —
+    /// and building the config again reproduces the stored one exactly (A7,
+    /// S2). The connection manager keeps no dirty flag, so "not changed"
+    /// means the rebuilt config equals the stored one.
+    #[gpui::test]
+    fn a_freshly_opened_aliased_profile_rehydrates_to_the_stored_config(cx: &mut TestAppContext) {
+        use dbflux_core::{ConnectionProfile, DbConfig};
+
+        let mut stored_tunnel = crate::ssh_shared::build_ssh_config_with_alias(
+            "ignored",
+            "2200",
+            "ignored",
+            crate::ssh_shared::SshAuthSelection::PrivateKey,
+            "",
+            Some("alpha"),
+        );
+        stored_tunnel.auth_method = dbflux_core::SshAuthMethod::PrivateKey { key_path: None };
+
+        let profile = ConnectionProfile::new(
+            "aliased inline",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "db.internal".into(),
+                port: 5432,
+                user: "app".into(),
+                database: "appdb".into(),
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: Some(stored_tunnel.clone()),
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        let (alias, host, user, port, rebuilt) = window
+            .update(cx, |manager, _window, cx| {
+                let alias = manager.ssh_config_alias(cx);
+                let host = manager.access.input_ssh_host.read(cx).value().to_string();
+                let user = manager.access.input_ssh_user.read(cx).value().to_string();
+                let port = manager.access.input_ssh_port.read(cx).value().to_string();
+                let rebuilt = manager.build_ssh_config(cx);
+                (alias, host, user, port, rebuilt)
+            })
+            .expect("read the rehydrated form");
+
+        assert_eq!(
+            alias.as_deref(),
+            Some("alpha"),
+            "the picker shows the alias"
+        );
+        assert_eq!(host, "", "the manual inputs stay as stored (A7)");
+        assert_eq!(user, "");
+        assert_eq!(port, "22");
+        let rebuilt = rebuilt.expect("the rehydrated form rebuilds the config");
+        assert_eq!(rebuilt.ssh_config_host, stored_tunnel.ssh_config_host);
+        assert_eq!(rebuilt.host, stored_tunnel.host);
+        assert_eq!(rebuilt.user, stored_tunnel.user);
+        assert_eq!(rebuilt.port, stored_tunnel.port);
+        assert_eq!(
+            rebuilt.auth_method, stored_tunnel.auth_method,
+            "the rebuilt config equals the stored one: nothing reads as changed"
         );
     }
 }

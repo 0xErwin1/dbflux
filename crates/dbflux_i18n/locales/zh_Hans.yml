@@ -5057,6 +5057,14 @@ ssh:
   private_key_with_path: "私钥（%{path}）"
   private_key_hint: 留空以使用 SSH agent 或默认密钥（~/.ssh/id_rsa）
   auth_label: 认证
+  config_host:
+    label: SSH 配置主机
+    manual_entry: "手动（不使用 SSH 配置项）"
+    resolved: "已解析目标：%{target}"
+    unsupported: "使用了 %{directive}：隧道无法连接"
+    alias_missing: "在 ~/.ssh/config 中找不到该别名"
+    load_error: "无法读取 ~/.ssh/config：%{error}"
+    diagnostic: "~/.ssh/config：%{diagnostic}"
 sso_wizard:
   title: AWS SSO 向导
   step:

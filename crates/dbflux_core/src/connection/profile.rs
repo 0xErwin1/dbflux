@@ -27,6 +27,7 @@ pub enum DbKind {
     S3,
     ClickHouse,
     Turso,
+    DuckDB,
 }
 
 impl DbKind {
@@ -46,6 +47,7 @@ impl DbKind {
             DbKind::S3 => "Amazon S3",
             DbKind::ClickHouse => "ClickHouse",
             DbKind::Turso => "TursoDB",
+            DbKind::DuckDB => "DuckDB",
         }
     }
 }
@@ -244,6 +246,14 @@ pub struct SshTunnelConfig {
     /// Authentication method (private key or password).
     #[serde(default)]
     pub auth_method: SshAuthMethod,
+
+    /// Alias of a host in the user's SSH config that this tunnel references, if any.
+    ///
+    /// When this is `Some`, the alias is the only source of the target: it is resolved at
+    /// connect time and `host`, `port` and `user` are never dialed from (A7). A resolution
+    /// failure is an error, never a fallback to the stored values.
+    #[serde(default)]
+    pub ssh_config_host: Option<String>,
 }
 
 /// Saved SSH tunnel profile for reuse across connections.
@@ -605,6 +615,22 @@ pub enum DbConfig {
     },
     /// Remote Turso endpoint; its auth token is only stored in the canonical keyring slot.
     Turso { url: String },
+    /// Embedded DuckDB database, optionally with a DuckLake catalog attached.
+    DuckDB {
+        /// Database file; empty opens an in-memory database.
+        path: PathBuf,
+        /// DuckLake catalog attached on connect as `lake` and made the default
+        /// database, e.g. `metadata.ducklake` or `postgres:dbname=lake`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ducklake_catalog: Option<String>,
+        /// Where DuckLake writes its Parquet files, e.g. `s3://bucket/lake/`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ducklake_data_path: Option<String>,
+        /// SQL run after opening, before the DuckLake attach (extensions,
+        /// `CREATE SECRET ... (PROVIDER credential_chain)`, settings).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        init_sql: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -633,6 +659,7 @@ impl DbConfig {
             DbConfig::S3 { .. } => DbKind::S3,
             DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
             DbConfig::Turso { .. } => DbKind::Turso,
+            DbConfig::DuckDB { .. } => DbKind::DuckDB,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -794,6 +821,15 @@ impl DbConfig {
         DbConfig::Turso { url: String::new() }
     }
 
+    pub fn default_duckdb() -> Self {
+        DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        }
+    }
+
     pub fn default_clickhouse() -> Self {
         DbConfig::ClickHouse {
             url: "http://localhost:8123".to_string(),
@@ -818,6 +854,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -856,6 +893,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -907,6 +945,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -951,6 +990,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -971,6 +1011,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -1025,6 +1066,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -1059,6 +1101,7 @@ impl DbConfig {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -1090,6 +1133,7 @@ impl DbConfig {
             DbConfig::SqlServer { database, .. } => database.clone(),
             DbConfig::Redshift { database, .. } => Some(database.clone()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
+            DbConfig::DuckDB { .. } => None,
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::ClickHouse { database, .. } => Some(database.clone()),
@@ -1730,6 +1774,7 @@ impl ConnectionProfile {
             DbKind::S3 => "s3",
             DbKind::ClickHouse => "clickhouse",
             DbKind::Turso => "turso",
+            DbKind::DuckDB => "duckdb",
         }
     }
 
@@ -1923,12 +1968,30 @@ mod tests {
     }
 
     #[test]
+    fn ssh_tunnel_config_without_alias_field_deserializes_with_none() {
+        // A tunnel config serialized before migration 044 carries no
+        // `ssh_config_host` field; it must still deserialize.
+        let json = r#"{
+            "host": "bastion.example.com",
+            "port": 22,
+            "user": "deploy",
+            "auth_method": "Password"
+        }"#;
+
+        let config: SshTunnelConfig =
+            serde_json::from_str(json).expect("legacy tunnel config should deserialize");
+
+        assert_eq!(config.ssh_config_host, None);
+    }
+
+    #[test]
     fn assign_ssh_tunnel_updates_and_clears_supported_configs() {
         let inline_tunnel = SshTunnelConfig {
             host: "bastion.example.com".to_string(),
             port: 2222,
             user: "dbflux".to_string(),
             auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
         };
         let tunnel_profile_id = Uuid::from_u128(1);
         let mut configs = [
@@ -1944,7 +2007,7 @@ mod tests {
             config.assign_ssh_tunnel(Some(inline_tunnel.clone()), None);
             assert!(matches!(
                 config.ssh_tunnel(),
-                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password })
+                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password, .. })
                     if host == "bastion.example.com" && *port == 2222 && user == "dbflux"
             ));
             assert_eq!(config.ssh_tunnel_profile_id(), None);
@@ -1966,6 +2029,7 @@ mod tests {
             port: 2222,
             user: "dbflux".to_string(),
             auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
         };
         let tunnel_profile_id = Uuid::from_u128(1);
         let mut configs = [

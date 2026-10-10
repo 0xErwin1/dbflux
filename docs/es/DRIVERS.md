@@ -48,6 +48,7 @@ en su `DriverMetadata` en código; nada se infiere.
 | InfluxDB        | Time Series    | InfluxQuery                | Auth, múltiples bases de datos, paginación, export CSV/JSON                                                                                                                                                        | v1 y v2 en un solo crate; InfluxQL en ambas, Flux solo en v2; solo lectura (sin INSERT/UPDATE/DELETE); sin transactions.                                                           |
 | ClickHouse      | Relacional     | SQL                        | Múltiples bases de datos, views, auth, paginación, ordenamiento, filtrado, agrupación, joins, CTEs, windows, export CSV/JSON                                                                                       | HTTP(S), incluyendo ClickHouse Cloud; integración orientada a lectura sin mutaciones estructuradas, DDL, transactions, túnel SSH ni parámetros de query.                           |
 | TursoDB         | Relacional     | SQL                        | Auth token, views, índices, foreign keys, constraints check/unique, prepared statements, insert/update/delete, paginación, ordenamiento, filtrado, export CSV/JSON, transactions, DDL transaccional, multi-statement | Turso / libSQL remoto sobre HTTP (`libsql://`, o `http://` para un `sqld` local); las transactions interactivas corren en streams del servidor por documento; sin cancelación de queries, túnel SSH, réplicas ni cambio de base de datos. |
+| DuckDB          | Relacional     | SQL                        | Varias bases de datos, schemas, views, índices, foreign keys, constraints check/unique, prepared statements, insert/update/delete con RETURNING, paginación, ordenamiento, filtrado, export CSV/JSON, transactions, DDL transaccional, cancelación de queries, límite de filas, enforcement de solo lectura, multi-statement | Archivo embebido o base en memoria; adjunta un catálogo DuckLake al conectar; solo un proceso puede abrir un archivo para escritura; sin timeouts de statement. |
 | Amazon S3       | Object Storage | Custom("S3")               | Auth (profile/SSO o credenciales estáticas, endpoint personalizado), navegación de buckets, navegación paginada de objetos, preview, CRUD completo, URLs presignadas                                               | Compatible con S3 (Cloudflare R2, MinIO); sin panel de multipart upload/transfers, sin visor de PDF embebido, sin gestión de lifecycle/ACL ni S3 Select.                           |
 
 ## Resumen por driver
@@ -156,6 +157,23 @@ statement de control por ejecución del editor. No soporta cancelación de
 queries, savepoints, túnel SSH, réplicas embebidas ni cambio de base de datos.
 Ver
 [`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md).
+
+### DuckDB
+
+Driver SQL analítico embebido, construido sobre el motor DuckDB incluido en el
+binario. Un perfil abre un archivo de base de datos, o una base en memoria si la
+ruta queda vacía, y puede adjuntar un catálogo DuckLake (un archivo de metadatos
+local o un catálogo PostgreSQL, SQLite o MySQL, con los datos en disco local o
+en almacenamiento de objetos) que pasa a ser la base de datos por defecto. Cada
+catálogo adjuntado es una base de datos en el sidebar, con sus schemas, tables y
+views cargados bajo demanda. Soporta parámetros vinculados, scripts
+multi-statement, límite de filas, cancelación, CRUD tipado con `RETURNING` y
+enforcement de solo lectura mediante una transaction `READ ONLY` que además
+rechaza lecturas de archivos y de red mediante table functions nombradas en el
+statement; no se verifican las views y macros creadas antes ni las funciones
+escalares que agregan las extensiones. No soporta timeouts de
+statement. Ver
+[`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md).
 
 ### Amazon S3
 

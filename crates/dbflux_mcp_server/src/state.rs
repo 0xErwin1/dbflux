@@ -632,6 +632,7 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "ClickHouse" => Some(dbflux_core::DbKind::ClickHouse),
         "S3" => Some(dbflux_core::DbKind::S3),
         "Turso" => Some(dbflux_core::DbKind::Turso),
+        "DuckDB" => Some(dbflux_core::DbKind::DuckDB),
         _ => None,
     }
 }
@@ -652,6 +653,7 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         dbflux_core::DbKind::S3 => dbflux_core::DbConfig::default_s3(),
         dbflux_core::DbKind::Turso => dbflux_core::DbConfig::default_turso(),
+        dbflux_core::DbKind::DuckDB => dbflux_core::DbConfig::default_duckdb(),
     }
 }
 
@@ -922,6 +924,14 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
         registry.insert(
             "turso".to_string(),
             Arc::new(dbflux_driver_turso::TursoDriver::new()),
+        );
+    }
+
+    #[cfg(feature = "duckdb")]
+    {
+        registry.insert(
+            "duckdb".to_string(),
+            Arc::new(dbflux_driver_duckdb::DuckDbDriver::new()),
         );
     }
 

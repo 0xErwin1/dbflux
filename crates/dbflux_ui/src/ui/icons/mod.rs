@@ -129,6 +129,7 @@ embedded_icons! {
     BrandRedis => "icons/brand/redis.svg",
     BrandClickhouse => "icons/brand/clickhouse.svg",
     BrandTurso => "icons/brand/turso.svg",
+    BrandDuckdb => "icons/brand/duckdb.svg",
     BrandLua => "icons/brand/lua.svg",
     BrandPython => "icons/brand/python.svg",
     BrandBash => "icons/brand/gnubash.svg",

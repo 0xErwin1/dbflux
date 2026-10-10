@@ -681,6 +681,13 @@ fn arrange_results(
     mut filtered: Vec<FilteredItem>,
     query: &str,
 ) -> Vec<FilteredItem> {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the three construction sites of `FilteredItem` (`filter_items`, \
+                  `open_with_items` and `toggle`) each pair the index with \
+                  `.enumerate()` over the same `items` slice, so `a.index` and \
+                  `b.index` stay below `items.len()`"
+    )]
     filtered.sort_by(|a, b| {
         let item_a = &items[a.index];
         let item_b = &items[b.index];
@@ -698,6 +705,13 @@ fn arrange_results(
     if scope == PaletteScope::All && !text.trim().is_empty() {
         let mut commands_kept = 0;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the three construction sites of `FilteredItem` (`filter_items`, \
+                      `open_with_items` and `toggle`) each pair the index with \
+                      `.enumerate()` over the same `items` slice, so \
+                      `filtered_item.index` stays below `items.len()`"
+        )]
         filtered.retain(|filtered_item| {
             if !matches!(items[filtered_item.index], PaletteItem::Action { .. }) {
                 return true;
@@ -1280,6 +1294,14 @@ impl Render for CommandPalette {
             let mut header_pushed = false;
 
             for &(display_idx, palette_idx) in &windowed {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "`palette_idx` is a `FilteredItem` index; the three \
+                              construction sites of `FilteredItem` (`filter_items`, \
+                              `open_with_items` and `toggle`) each pair the index \
+                              with `.enumerate()` over `self.items`, so \
+                              `palette_idx` stays below `self.items.len()`"
+                )]
                 if PaletteSection::for_item(&self.items[palette_idx]) != section {
                     continue;
                 }
@@ -1311,6 +1333,14 @@ impl Render for CommandPalette {
                 } => {
                     let is_selected = display_idx == self.selected_index;
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "`palette_idx` is a `FilteredItem` index; the three \
+                                  construction sites of `FilteredItem` (`filter_items`, \
+                                  `open_with_items` and `toggle`) each pair the index \
+                                  with `.enumerate()` over `self.items`, so \
+                                  `palette_idx` stays below `self.items.len()`"
+                    )]
                     self.render_palette_item(display_idx, &self.items[palette_idx], is_selected, cx)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();

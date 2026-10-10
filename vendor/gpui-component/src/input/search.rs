@@ -211,7 +211,11 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
     }
 
     fn on_action_enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        if action.shift {
+        let reversed = self
+            .editor
+            .read_with(cx, |state, _| state.search_reversed())
+            .unwrap_or(false);
+        if action.shift != reversed {
             self.prev(window, cx);
         } else {
             self.next(window, cx);

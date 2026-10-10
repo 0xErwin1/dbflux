@@ -19,6 +19,12 @@ fn assert_pixels_close(actual: gpui::Pixels, expected: gpui::Pixels, message: &s
 }
 
 fn isolated_test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: a failing in-memory storage runtime or app-state \
+                  construction is broken test setup, so the helper panics \
+                  instead of returning a `Result`"
+    )]
     cx.update(|cx| {
         cx.new(|_| {
             let storage_runtime = StorageRuntime::in_memory().expect("isolated storage runtime");
@@ -34,6 +40,13 @@ struct ProductionRefreshDropdownHarness {
 
 impl ProductionRefreshDropdownHarness {
     fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        #[expect(
+            clippy::expect_used,
+            reason = "test harness: the audit repository opens against the \
+                      in-memory runtime built by `isolated_test_app_state`, so \
+                      a failure is broken test setup and panics instead of \
+                      propagating a `Result`"
+        )]
         let audit_repo = app_state
             .read(cx)
             .storage_runtime()

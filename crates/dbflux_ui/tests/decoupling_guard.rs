@@ -27,6 +27,11 @@ const SCOPE_DIRS: &[&str] = &[
 ];
 
 fn workspace_root() -> PathBuf {
+    #[expect(
+        clippy::unwrap_used,
+        reason = "`CARGO_MANIFEST_DIR` ends in `crates/dbflux_ui` when cargo \
+                  builds this test, so both `parent()` calls return `Some`"
+    )]
     // CARGO_MANIFEST_DIR is the crates/dbflux_ui directory; go two levels up.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

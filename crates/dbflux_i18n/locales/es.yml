@@ -5059,6 +5059,14 @@ ssh:
   private_key_with_path: "Clave privada (%{path})"
   private_key_hint: "Déjala vacía para usar el agente SSH o las claves predeterminadas (~/.ssh/id_rsa)"
   auth_label: Autenticación
+  config_host:
+    label: Host de la configuración SSH
+    manual_entry: "Manual (sin entrada en la configuración SSH)"
+    resolved: "Destino resuelto: %{target}"
+    unsupported: "usa %{directive}: el túnel no puede conectarse"
+    alias_missing: "El alias no existe en ~/.ssh/config"
+    load_error: "No se pudo leer ~/.ssh/config: %{error}"
+    diagnostic: "~/.ssh/config: %{diagnostic}"
 sso_wizard:
   title: Asistente de AWS SSO
   step:

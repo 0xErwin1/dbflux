@@ -27,7 +27,7 @@ Abre el Connection Manager para crear o editar conexiones:
 El Connection Manager muestra un selector de drivers. Los drivers disponibles
 dependen de los features con los que se compiló el binario; el build estándar
 incluye SQLite, PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, Amazon
-Redshift, ClickHouse, TursoDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch
+Redshift, ClickHouse, TursoDB, DuckDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch
 Logs y Amazon S3. El selector agrupa los drivers por categoría: Relacional,
 Documentos, Clave-valor, Series temporales y logs, y Almacenamiento de objetos.
 Los drivers RPC registrados externamente también aparecen aquí cuando están
@@ -135,6 +135,26 @@ No existe una opción separada de "SSH agent" — la autenticación basada en ag
 es lo que obtienes al elegir **Private Key** y dejar la ruta de la clave vacía.
 
 **Test SSH** verifica el túnel sin guardar la conexión.
+
+### Referenciar un host de tu configuración SSH
+
+El desplegable **SSH config host** lista cada `Host` que define tu
+`~/.ssh/config`, con el usuario, el nombre de host y el puerto a los que
+resuelve cada uno. Al elegir uno se guarda el alias y no los valores a los que
+resuelve, de modo que una edición posterior de tu configuración SSH se aplica
+en la siguiente conexión sin tocar el perfil. Mientras hay un alias
+seleccionado, los campos **Host**, **Port** y **Username** no muestran nada y
+quedan deshabilitados —el alias es el destino—, y una ruta de clave vacía toma
+el `IdentityFile` que ese host indique, o el SSH agent y las claves por defecto
+si no indica ninguna. `Include`, `Match` y los tokens `%h`, `%r` y `%d` dentro
+de un `IdentityFile` se resuelven como los resuelve OpenSSH.
+
+Un host cuya configuración necesite `ProxyJump` o `ProxyCommand` aparece en la
+lista con una marca: DBFlux no puede alcanzarlo, y la conexión falla con ese
+motivo en lugar de conectar directamente al bastión. Las claves de host se
+siguen verificando contra el almacén propio de DBFlux en su directorio de
+datos, no contra tu `~/.ssh/known_hosts`, así que un host al que llevas años
+llegando desde una terminal igual te pide confirmar su clave la primera vez.
 
 ### Dónde viven los secretos SSH
 
