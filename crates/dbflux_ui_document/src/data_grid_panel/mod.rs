@@ -2800,6 +2800,11 @@ impl DataGridPanel {
         self.apply_chart_for_result(&result, cx);
 
         self.result = result;
+        // The rows were replaced, so a client-side sort has no order left to
+        // apply; drop the order and the sort state together so neither
+        // outlives the rows it was built for.
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.reapply_result_search_to_new_rows();
         self.rebuild_table(None, cx);
         self.refresh.state = GridState::Ready;
@@ -5838,6 +5843,62 @@ mod tests {
     /// The table view's keys go through the keymap: the table's own keys
     /// move the selection inside the table, and a key of the Results panel
     /// (Ctrl+Space, the row inspector) reaches the grid as a command.
+    #[gpui::test]
+    fn local_sort_after_a_refresh_with_more_rows_keeps_every_row(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let rows_with_ids = |ids: std::ops::RangeInclusive<i64>| {
+            QueryResult::table(
+                vec![key_column("id", true)],
+                ids.map(|id| vec![dbflux_core::Value::Int(id)]).collect(),
+                None,
+                Duration::ZERO,
+            )
+        };
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    let initial = rows_with_ids(1..=2);
+                    let source = DataSource::QueryResult {
+                        result: Arc::new(initial.clone()),
+                        original_query: "SELECT id FROM users".to_string(),
+                        profile_id: None,
+                    };
+
+                    let mut panel = DataGridPanel::new_internal(
+                        source,
+                        app_state.clone(),
+                        vec!["id".to_string()],
+                        window,
+                        cx,
+                    );
+                    panel.set_result(initial, cx);
+                    panel
+                })
+            },
+            |panel, cx| panel.active_context(cx),
+            DataGridPanel::dispatch_command,
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+                // A refresh returning more rows than the sorted result had.
+                panel.set_result(rows_with_ids(1..=3), cx);
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+            });
+        });
+
+        let row_count = window.update(|_, cx| panel.read(cx).result.rows.len());
+        assert_eq!(row_count, 3);
+    }
+
     #[gpui::test]
     fn table_keys_move_the_selection_and_open_the_row_inspector(cx: &mut TestAppContext) {
         use crate::keyboard_test_support::{host_document, init_keyboard_runtime};

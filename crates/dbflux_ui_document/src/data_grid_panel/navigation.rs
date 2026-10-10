@@ -148,14 +148,14 @@ impl DataGridPanel {
 
     // current is the enumerate() index over original_order, which
     // apply_local_sort builds and apply_result_search filters in step with
-    // result.rows. set_result replaces the rows without resetting that order,
-    // so a refresh returning fewer rows can leave current past rows.len() and
-    // panic below; that gap is pre-existing and is not re-checked here. The
+    // result.rows. set_result resets the order and the sort state whenever it
+    // replaces the rows, so a refresh returning fewer rows can no longer leave
+    // current past rows.len(); only the restore path was exposed to that. The
     // original value is only a sort key and can exceed rows.len() after a
     // search.
     #[expect(
         clippy::indexing_slicing,
-        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; set_result replaces the rows without resetting it, so a refresh returning fewer rows can still panic here (pre-existing, not re-checked)"
+        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
     )]
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
         if self.server_sort_blocked(cx) {
@@ -300,13 +300,13 @@ impl DataGridPanel {
 
         // Update original_row_order to map new order -> original.
         // orig[i] indexes original_row_order, which apply_local_sort builds in
-        // step with result.rows. set_result replaces the rows without
-        // resetting that order, so a refresh returning a different number of
-        // rows can leave it stale and a later sort can index past its end and
-        // panic here; that gap is pre-existing and is not re-checked here.
+        // step with result.rows. set_result resets the order and the sort
+        // state whenever it replaces the rows, so the order always matches the
+        // current rows; only a refresh returning more rows could have overrun
+        // orig here, while fewer rows affected the restore path.
         #[expect(
             clippy::indexing_slicing,
-            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; set_result replaces the rows without resetting it, so a refresh returning a different number of rows can still panic here (pre-existing, not re-checked)"
+            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
         )]
         if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();
