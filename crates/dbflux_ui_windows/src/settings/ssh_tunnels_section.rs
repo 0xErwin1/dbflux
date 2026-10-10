@@ -355,7 +355,7 @@ impl SshTunnelsSection {
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
             pending_sync_from_app_state: false,
-            ssh_host_picker: crate::ssh_host_picker::SshHostPicker::load_default(cx),
+            ssh_host_picker,
             ssh_manual_backup: None,
             pending_ssh_config_host_index: None,
             _subscriptions: vec![

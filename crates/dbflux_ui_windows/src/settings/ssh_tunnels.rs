@@ -824,24 +824,64 @@ impl SshTunnelsSection {
 mod tests {
     use super::SshFormNav;
     use crate::settings::ssh_tunnels_section::SshFormField;
+    use crate::settings::ssh_tunnels_section::SshTunnelsSection;
+    use crate::ssh_host_picker::load_ssh_hosts;
     use crate::ssh_shared::SshAuthSelection;
+    use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateChanged;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::keymap::init_keymap;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
     use uuid::Uuid;
 
-    /// Loading a saved tunnel that references an SSH config alias shows the
-    /// alias in the picker and is not dirty: the alias and the cleared
-    /// manual fields are exactly what the profile stores.
-    #[gpui::test]
-    fn loading_an_aliased_profile_reports_no_changes(cx: &mut gpui::TestAppContext) {
-        use crate::settings::ssh_tunnels_section::SshTunnelsSection;
-        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
-        use dbflux_storage::bootstrap::StorageRuntime;
-        use dbflux_ui_base::AppStateEntity;
-        use dbflux_ui_base::keymap::init_keymap;
-        use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-        use gpui::{AppContext as _, Entity};
-        use std::cell::RefCell;
-        use std::rc::Rc;
+    /// A throwaway SSH config directory. Never the real home (S7).
+    struct SshConfigFixture(PathBuf);
 
+    impl SshConfigFixture {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "dbflux-ssh-tunnels-{name}-{}-{}",
+                std::process::id(),
+                Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).expect("create fixture dir");
+            Self(dir)
+        }
+
+        fn write_config(&self, text: &str) {
+            std::fs::write(self.0.join("config"), text).expect("write fixture config");
+        }
+
+        /// The config directory and the home the resolver expands against:
+        /// both inside the fixture, so `~` never reaches the real home (S7).
+        fn paths(&self) -> (PathBuf, PathBuf) {
+            (self.0.clone(), self.0.join("home"))
+        }
+    }
+
+    impl Drop for SshConfigFixture {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_dir_all(&self.0) {
+                eprintln!("fixture cleanup failed: {error}");
+            }
+        }
+    }
+
+    /// A settings SSH section with its app state, in a real window. The
+    /// body receives the app state, the section and the window.
+    fn with_ssh_section_harness<T>(
+        cx: &mut TestAppContext,
+        body: impl FnOnce(
+            &Entity<AppStateEntity>,
+            &Entity<SshTunnelsSection>,
+            &mut VisualTestContext,
+        ) -> T,
+    ) -> T {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
         cx.update(init_keymap);
@@ -857,19 +897,6 @@ mod tests {
             })
         });
 
-        let tunnel = SshTunnelProfile {
-            id: Uuid::new_v4(),
-            name: "aliased".to_string(),
-            config: SshTunnelConfig {
-                host: String::new(),
-                port: 22,
-                user: String::new(),
-                auth_method: SshAuthMethod::PrivateKey { key_path: None },
-                ssh_config_host: Some("alpha".to_string()),
-            },
-            save_secret: true,
-        };
-
         let slot: Rc<RefCell<Option<Entity<SshTunnelsSection>>>> = Rc::default();
         let (_, window) = cx.add_window_view({
             let slot = slot.clone();
@@ -883,27 +910,188 @@ mod tests {
         window.run_until_parked();
 
         let section = slot.borrow().clone().expect("the SSH section is built");
-        let (alias_loaded, not_dirty) = window.update(|window, cx| {
-            app_state.update(cx, |state, _| state.add_ssh_tunnel(tunnel.clone()));
+        body(&app_state, &section, window)
+    }
+
+    /// Loads `fixture`'s hosts into the section's picker and selects the
+    /// first host the way the user does: open, highlight, accept — the
+    /// dropdown's own event path.
+    fn select_first_host_from_fixture(
+        section: &Entity<SshTunnelsSection>,
+        fixture: &SshConfigFixture,
+        window: &mut VisualTestContext,
+    ) {
+        window.update(|_, cx| {
             section.update(cx, |section, cx| {
-                section.edit_tunnel(&tunnel, window, cx);
-                (
-                    section
+                let (config_dir, home) = fixture.paths();
+                let snapshot = load_ssh_hosts(&config_dir, &home);
+                assert!(snapshot.load_error.is_none());
+                section
+                    .ssh_host_picker
+                    .update(cx, |picker, cx| picker.apply_snapshot(snapshot, cx));
+            });
+            let dropdown = section.read(cx).ssh_host_picker.read(cx).dropdown().clone();
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.open(cx);
+                dropdown.select_next_item(cx);
+                dropdown.accept_selection(cx);
+            });
+        });
+        window.run_until_parked();
+
+        // The render pass the user sees between actions, which drains the
+        // dropdown selection into the form.
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
+
+    /// A state sync arrives after the user has picked an alias and must not
+    /// discard it: the config the form would save still references the alias
+    /// and stores no resolved manual values (the regression behind the empty
+    /// `ssh_config_host` row observed in the running app).
+    #[gpui::test]
+    fn selecting_an_alias_survives_a_state_sync(cx: &mut gpui::TestAppContext) {
+        let fixture = SshConfigFixture::new("sync-survives");
+        fixture.write_config(
+            "Host alpha\n  HostName alpha.example.com\n  User deploy\n  Port 2222\n\nHost *\n  ServerAliveInterval 30\n",
+        );
+        let result = with_ssh_section_harness(cx, |app_state, section, window| {
+            select_first_host_from_fixture(section, &fixture, window);
+
+            window.update(|_, cx| {
+                app_state.update(cx, |_, cx| cx.emit(AppStateChanged));
+            });
+            window.run_until_parked();
+            window.update(|window, _| window.refresh());
+            window.run_until_parked();
+
+            window.update(|_, cx| {
+                section.update(cx, |section, cx| {
+                    let host = section.input_ssh_host.read(cx).value().trim().to_string();
+                    let port_str = section.input_ssh_port.read(cx).value().trim().to_string();
+                    let user = section.input_ssh_user.read(cx).value().trim().to_string();
+                    let alias = section
                         .ssh_host_picker
                         .read(cx)
                         .selected_alias()
-                        .map(str::to_string),
-                    !section.has_unsaved_ssh_changes(cx),
-                )
+                        .map(str::to_string);
+                    crate::ssh_shared::build_ssh_config_with_alias(
+                        &host,
+                        &port_str,
+                        &user,
+                        section.ssh_auth_method,
+                        "",
+                        alias.as_deref(),
+                    )
+                })
             })
         });
 
-        assert_eq!(
-            alias_loaded.as_deref(),
-            Some("alpha"),
-            "the form shows the loaded alias"
+        let config = result;
+        assert_eq!(config.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(config.host, "");
+        assert_eq!(config.user, "");
+        assert_eq!(config.port, 22);
+    }
+
+    /// The same ordering with manual values typed first: the sync must not
+    /// put the manual host and user back while the unsaved alias is active.
+    #[gpui::test]
+    fn a_state_sync_does_not_restore_manual_fields_over_an_unsaved_alias(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let fixture = SshConfigFixture::new("sync-keeps-manual-cleared");
+        fixture.write_config(
+            "Host alpha\n  HostName alpha.example.com\n  User deploy\n  Port 2222\n\nHost *\n  ServerAliveInterval 30\n",
         );
-        assert!(not_dirty, "a freshly loaded aliased profile is not dirty");
+        let (alias, host, port, user) =
+            with_ssh_section_harness(cx, |app_state, section, window| {
+                window.update(|window, cx| {
+                    section.update(cx, |section, cx| {
+                        section.input_ssh_host.update(cx, |state, cx| {
+                            state.set_value("manual.example.com", window, cx)
+                        });
+                        section
+                            .input_ssh_port
+                            .update(cx, |state, cx| state.set_value("2200", window, cx));
+                        section
+                            .input_ssh_user
+                            .update(cx, |state, cx| state.set_value("manualuser", window, cx));
+                    });
+                });
+
+                select_first_host_from_fixture(section, &fixture, window);
+
+                window.update(|_, cx| {
+                    app_state.update(cx, |_, cx| cx.emit(AppStateChanged));
+                });
+                window.run_until_parked();
+                window.update(|window, _| window.refresh());
+                window.run_until_parked();
+
+                window.update(|_, cx| {
+                    section.update(cx, |section, cx| {
+                        (
+                            section
+                                .ssh_host_picker
+                                .read(cx)
+                                .selected_alias()
+                                .map(str::to_string),
+                            section.input_ssh_host.read(cx).value().to_string(),
+                            section.input_ssh_port.read(cx).value().to_string(),
+                            section.input_ssh_user.read(cx).value().to_string(),
+                        )
+                    })
+                })
+            });
+
+        assert_eq!(alias.as_deref(), Some("alpha"));
+        assert_eq!(host, "", "the manual host stays cleared under the alias");
+        assert_eq!(port, "", "the manual port stays cleared under the alias");
+        assert_eq!(user, "", "the manual user stays cleared under the alias");
+    }
+
+    /// Loading a saved tunnel that references an SSH config alias shows the
+    /// alias in the picker and is not dirty: the alias and the cleared
+    /// manual fields are exactly what the profile stores.
+    #[gpui::test]
+    fn loading_an_aliased_profile_reports_no_changes(cx: &mut gpui::TestAppContext) {
+        with_ssh_section_harness(cx, |app_state, section, window| {
+            let tunnel = SshTunnelProfile {
+                id: Uuid::new_v4(),
+                name: "aliased".to_string(),
+                config: SshTunnelConfig {
+                    host: String::new(),
+                    port: 22,
+                    user: String::new(),
+                    auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                    ssh_config_host: Some("alpha".to_string()),
+                },
+                save_secret: true,
+            };
+
+            let (alias_loaded, not_dirty) = window.update(|window, cx| {
+                app_state.update(cx, |state, _| state.add_ssh_tunnel(tunnel.clone()));
+                section.update(cx, |section, cx| {
+                    section.edit_tunnel(&tunnel, window, cx);
+                    (
+                        section
+                            .ssh_host_picker
+                            .read(cx)
+                            .selected_alias()
+                            .map(str::to_string),
+                        !section.has_unsaved_ssh_changes(cx),
+                    )
+                })
+            });
+
+            assert_eq!(
+                alias_loaded.as_deref(),
+                Some("alpha"),
+                "the form shows the loaded alias"
+            );
+            assert!(not_dirty, "a freshly loaded aliased profile is not dirty");
+        });
     }
 
     fn nav_private_key_new() -> SshFormNav {
