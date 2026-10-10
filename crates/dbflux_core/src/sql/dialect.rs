@@ -14,6 +14,17 @@ pub enum PlaceholderStyle {
     AtSign,
 }
 
+/// Whether the target table of `UPDATE` and `DELETE FROM` may carry an alias.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutationTargetAlias {
+    /// No alias on the target (SQL Server rejects `UPDATE t a`).
+    Unsupported,
+    /// `UPDATE t a` and `UPDATE t AS a` are both valid.
+    Accepted,
+    /// Only `UPDATE t AS a` is valid (SQLite).
+    RequiresAs,
+}
+
 /// Database-specific SQL syntax (quoting, escaping, literals).
 pub trait SqlDialect: Send + Sync {
     /// Quote an identifier (table/column name).
@@ -54,6 +65,13 @@ pub trait SqlDialect: Send + Sync {
     /// PostgreSQL supports it natively; SQLite/MySQL require re-query.
     fn supports_returning(&self) -> bool {
         false
+    }
+
+    /// Whether the target table of `UPDATE` and `DELETE FROM` accepts an
+    /// alias, and whether it needs `AS`. Off by default because the syntax
+    /// differs between engines and versions.
+    fn mutation_target_alias(&self) -> MutationTargetAlias {
+        MutationTargetAlias::Unsupported
     }
 
     /// Build the column expression used for value comparisons.
