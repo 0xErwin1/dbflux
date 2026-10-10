@@ -385,114 +385,17 @@ impl SshConfigFile {
     /// `active` is the block state of the file currently being walked;
     /// `never_match` is OpenSSH's `SSHCONF_NEVERMATCH`: inside an `Include`
     /// reached from an inactive block, no `Host`/`Match` line may activate.
-    /// `proxy_visible` marks a position inside a block whose criterion the
-    /// tunnel cannot evaluate: normal keywords stay inactive, but a
-    /// `ProxyJump`/`ProxyCommand` there still fails closed, because OpenSSH
-    /// would apply it if the criterion evaluated true (S5).
+    /// `proxy_visible` marks a position inside a block that could still
+    /// apply but whose criterion the tunnel cannot evaluate: normal
+    /// keywords stay inactive, but a `ProxyJump`/`ProxyCommand` there still
+    /// fails closed, because OpenSSH would apply it if the criterion
+    /// evaluated true (S5).
     fn resolve_directives(&self, directives: &[Directive], walk: &mut Walk<'_>, never_match: bool) {
         for directive in directives {
             match directive {
-                Directive::Host { patterns } => {
-                    if never_match {
-                        walk.active = false;
-                        walk.proxy_visible = false;
-                        continue;
-                    }
-                    // `Host` patterns and `Match user` are case-sensitive;
-                    // `Match host` below stays case-insensitive, like OpenSSH.
-                    walk.active = host_patterns_match(patterns, walk.alias);
-                    walk.state.matched |= walk.active;
-                    walk.proxy_visible = false;
-                }
-                Directive::Match { conditions } => {
-                    // A criterion the tunnel cannot evaluate never spawns a
-                    // process (C5) and never activates the block; it keeps the
-                    // block's proxy directives visible (S5, fail closed).
-                    let unevaluatable = conditions
-                        .iter()
-                        .any(|condition| matches!(condition, MatchCondition::Never));
-                    if never_match {
-                        walk.active = false;
-                        walk.proxy_visible = unevaluatable;
-                        continue;
-                    }
-                    // `Match host` sees the host name in effect so far, `Match
-                    // user` the user in effect or the local-user fallback (A6).
-                    let host_in_effect = walk
-                        .state
-                        .host_name
-                        .as_deref()
-                        .unwrap_or(walk.alias)
-                        .to_lowercase();
-                    let user_in_effect = walk.state.user.as_deref().unwrap_or(walk.local_user);
-                    walk.active = conditions.iter().all(|condition| match condition {
-                        MatchCondition::All => true,
-                        MatchCondition::Host(patterns) => {
-                            pattern_list_matches(patterns, &host_in_effect, true)
-                        }
-                        MatchCondition::User(patterns) => {
-                            pattern_list_matches(patterns, user_in_effect, false)
-                        }
-                        // Cannot be evaluated: the block never activates.
-                        MatchCondition::Never => false,
-                    });
-                    walk.state.matched |= walk.active;
-                    walk.proxy_visible = unevaluatable;
-                }
-                Directive::Keyword(keyword) => {
-                    if !walk.active {
-                        // Normal keywords only apply in an active block. A
-                        // proxy inside a block whose criterion the tunnel
-                        // cannot evaluate must still be seen, so resolution
-                        // fails closed instead of dialling directly (S5).
-                        if !walk.proxy_visible {
-                            continue;
-                        }
-                        match keyword {
-                            KnownKeyword::ProxyJump(value) => {
-                                walk.state
-                                    .mark_unsupported(value, UnsupportedDirective::ProxyJump);
-                            }
-                            KnownKeyword::ProxyCommand(value) => {
-                                walk.state
-                                    .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-                    // First value obtained for a keyword wins (OpenSSH).
-                    match keyword {
-                        KnownKeyword::HostName(value) => {
-                            if walk.state.host_name.is_none() {
-                                walk.state.host_name = Some(value.clone());
-                            }
-                        }
-                        KnownKeyword::User(value) => {
-                            if walk.state.user.is_none() {
-                                walk.state.user = Some(value.clone());
-                            }
-                        }
-                        KnownKeyword::Port(value) => {
-                            if walk.state.port.is_none() {
-                                walk.state.port = Some(*value);
-                            }
-                        }
-                        KnownKeyword::IdentityFile(value) => {
-                            if walk.state.identity_file.is_none() {
-                                walk.state.identity_file = Some(value.clone());
-                            }
-                        }
-                        KnownKeyword::ProxyJump(value) => {
-                            walk.state
-                                .mark_unsupported(value, UnsupportedDirective::ProxyJump);
-                        }
-                        KnownKeyword::ProxyCommand(value) => {
-                            walk.state
-                                .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
-                        }
-                    }
-                }
+                Directive::Host { patterns } => self.step_host(walk, patterns, never_match),
+                Directive::Match { conditions } => self.step_match(walk, conditions, never_match),
+                Directive::Keyword(keyword) => self.step_keyword(walk, keyword),
                 Directive::Include(nested) => {
                     // The included file is its own scope: it inherits the
                     // enclosing block state, and when it ends the enclosing
@@ -504,6 +407,112 @@ impl SshConfigFile {
                     walk.active = enclosing.0;
                     walk.proxy_visible = enclosing.1;
                 }
+            }
+        }
+    }
+
+    fn step_host(&self, walk: &mut Walk<'_>, patterns: &[String], never_match: bool) {
+        if never_match {
+            walk.active = false;
+            walk.proxy_visible = false;
+            return;
+        }
+        // `Host` patterns and `Match user` are case-sensitive; `Match host`
+        // in `step_match` stays case-insensitive, like OpenSSH.
+        walk.active = host_patterns_match(patterns, walk.alias);
+        walk.state.matched |= walk.active;
+        walk.proxy_visible = false;
+    }
+
+    fn step_match(&self, walk: &mut Walk<'_>, conditions: &[MatchCondition], never_match: bool) {
+        // A criterion the tunnel cannot evaluate never spawns a process (C5)
+        // and never activates the block; the block may still apply under
+        // OpenSSH, so a `ProxyJump`/`ProxyCommand` inside it fails closed (S5)
+        // — but only when every condition the resolver can evaluate is true:
+        // an evaluable condition that is false makes the block definitely
+        // inactive and its proxy invisible.
+        let unevaluatable = conditions
+            .iter()
+            .any(|condition| matches!(condition, MatchCondition::Never));
+        // `Match host` sees the host name in effect so far, `Match user` the
+        // user in effect or the local-user fallback (A6).
+        let host_in_effect = walk
+            .state
+            .host_name
+            .as_deref()
+            .unwrap_or(walk.alias)
+            .to_lowercase();
+        let user_in_effect = walk.state.user.as_deref().unwrap_or(walk.local_user);
+        let could_apply = conditions.iter().all(|condition| match condition {
+            MatchCondition::All | MatchCondition::Never => true,
+            MatchCondition::Host(patterns) => pattern_list_matches(patterns, &host_in_effect, true),
+            MatchCondition::User(patterns) => pattern_list_matches(patterns, user_in_effect, false),
+        });
+        if never_match {
+            // Inside a never-matching scope no block can activate. A proxy
+            // inside an unevaluatable block still fails closed (S5), but only
+            // when the enclosing context itself may still apply: a block that
+            // definitely does not match cannot make anything visible.
+            walk.active = false;
+            walk.proxy_visible = could_apply && unevaluatable && walk.proxy_visible;
+            return;
+        }
+        walk.active = could_apply && !unevaluatable;
+        walk.state.matched |= walk.active;
+        walk.proxy_visible = could_apply && unevaluatable;
+    }
+
+    fn step_keyword(&self, walk: &mut Walk<'_>, keyword: &KnownKeyword) {
+        if !walk.active {
+            // Normal keywords only apply in an active block. A proxy inside a
+            // block whose criterion the tunnel cannot evaluate must still be
+            // seen, so resolution fails closed instead of dialling directly
+            // (S5).
+            if !walk.proxy_visible {
+                return;
+            }
+            match keyword {
+                KnownKeyword::ProxyJump(value) => {
+                    walk.state
+                        .mark_unsupported(value, UnsupportedDirective::ProxyJump);
+                }
+                KnownKeyword::ProxyCommand(value) => {
+                    walk.state
+                        .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
+                }
+                _ => {}
+            }
+            return;
+        }
+        // First value obtained for a keyword wins (OpenSSH).
+        match keyword {
+            KnownKeyword::HostName(value) => {
+                if walk.state.host_name.is_none() {
+                    walk.state.host_name = Some(value.clone());
+                }
+            }
+            KnownKeyword::User(value) => {
+                if walk.state.user.is_none() {
+                    walk.state.user = Some(value.clone());
+                }
+            }
+            KnownKeyword::Port(value) => {
+                if walk.state.port.is_none() {
+                    walk.state.port = Some(*value);
+                }
+            }
+            KnownKeyword::IdentityFile(value) => {
+                if walk.state.identity_file.is_none() {
+                    walk.state.identity_file = Some(value.clone());
+                }
+            }
+            KnownKeyword::ProxyJump(value) => {
+                walk.state
+                    .mark_unsupported(value, UnsupportedDirective::ProxyJump);
+            }
+            KnownKeyword::ProxyCommand(value) => {
+                walk.state
+                    .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
             }
         }
     }
@@ -779,21 +788,25 @@ impl<'a> Parser<'a> {
             }
             return;
         }
-        // The pattern is expanded across every path component, case-sensitively,
-        // the way OpenSSH's glob(3) does — a wildcard may sit in a directory
-        // component, not only in the file name.
-        let mut prefix = PathBuf::new();
+        // The pattern is expanded across every path component in the order
+        // written, case-sensitively, the way OpenSSH's glob(3) does — a
+        // wildcard may sit in a directory component, not only in the file
+        // name, and a `..` keeps its written position instead of being
+        // hoisted ahead of the literal components.
+        let mut base = PathBuf::new();
         let mut parts: Vec<String> = Vec::new();
         for component in path.components() {
             match component {
+                std::path::Component::Prefix(prefix) => base.push(prefix.as_os_str()),
+                std::path::Component::RootDir => base.push(std::path::MAIN_SEPARATOR_STR),
                 std::path::Component::Normal(name) => {
                     parts.push(name.to_string_lossy().into_owned());
                 }
-                other => prefix.push(other.as_os_str()),
+                other => parts.push(other.as_os_str().to_string_lossy().into_owned()),
             }
         }
         let mut candidates: Vec<PathBuf> = Vec::new();
-        match self.expand_include_pattern(&prefix, &parts, &mut candidates) {
+        match self.expand_include_pattern(&base, &parts, &mut candidates) {
             Ok(true) => {
                 candidates.sort();
                 for candidate in candidates {
@@ -815,55 +828,43 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Expands an `Include` glob pattern component by component,
-    /// case-sensitively. Pushes every matched file onto `matches` and returns
-    /// whether anything matched. `Err` carries the directory that could not be
-    /// listed — fatal for `resolve` (S5), because a silently dropped include
-    /// can drop a proxy directive. A directory that is simply not there
-    /// matches nothing, like OpenSSH's GLOB_NOMATCH.
+    /// Expands an `Include` glob pattern component by component, in the order
+    /// written, case-sensitively. Components without `*` or `?` are joined as
+    /// text and never listed: only the directory above a wildcard component
+    /// is read, so a directory that can be entered but not listed does not
+    /// fail resolution unless a wildcard actually needs to list it. Pushes
+    /// every matched file onto `matches` and returns whether anything
+    /// matched. `Err` carries the directory that could not be listed — fatal
+    /// for `resolve` (S5), because a silently dropped include can drop a
+    /// proxy directive. A directory that is simply not there matches nothing,
+    /// like OpenSSH's GLOB_NOMATCH.
     fn expand_include_pattern(
         &mut self,
-        prefix: &Path,
+        base: &Path,
         parts: &[String],
         matches: &mut Vec<PathBuf>,
     ) -> Result<bool, (PathBuf, String)> {
         let Some((component, rest)) = parts.split_first() else {
             return Ok(false);
         };
-        if rest.is_empty() {
-            // Final component: only files match.
-            let entries = match fs::read_dir(prefix) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) => return Err((prefix.to_path_buf(), error.to_string())),
-            };
-            let mut matched = false;
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        self.diagnostics.push(format!(
-                            "cannot read directory entry for include pattern {}: {error}",
-                            prefix.display()
-                        ));
-                        continue;
-                    }
-                };
-                if !entry.path().is_file() {
-                    continue;
-                }
-                if glob_matches(component, &entry.file_name().to_string_lossy()) {
-                    matches.push(entry.path());
-                    matched = true;
-                }
+        let is_final = rest.is_empty();
+        let next = base.join(component);
+        if !component.contains('*') && !component.contains('?') {
+            // Literal component: joined in place; only a final one is
+            // required to exist, as a file.
+            if !is_final {
+                return self.expand_include_pattern(&next, rest, matches);
             }
-            return Ok(matched);
+            if next.is_file() {
+                matches.push(next);
+                return Ok(true);
+            }
+            return Ok(false);
         }
-        // Intermediate component: only directories continue the walk.
-        let entries = match fs::read_dir(prefix) {
+        let entries = match fs::read_dir(base) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err((prefix.to_path_buf(), error.to_string())),
+            Err(error) => return Err((base.to_path_buf(), error.to_string())),
         };
         let mut matched = false;
         for entry in entries {
@@ -872,17 +873,26 @@ impl<'a> Parser<'a> {
                 Err(error) => {
                     self.diagnostics.push(format!(
                         "cannot read directory entry for include pattern {}: {error}",
-                        prefix.display()
+                        base.display()
                     ));
                     continue;
                 }
             };
             let path = entry.path();
-            if !path.is_dir() {
+            if is_final {
+                if !path.is_file() {
+                    continue;
+                }
+            } else if !path.is_dir() {
                 continue;
             }
             if glob_matches(component, &entry.file_name().to_string_lossy()) {
-                matched |= self.expand_include_pattern(&path, rest, matches)?;
+                if is_final {
+                    matches.push(path);
+                    matched = true;
+                } else {
+                    matched |= self.expand_include_pattern(&path, rest, matches)?;
+                }
             }
         }
         Ok(matched)
@@ -1906,6 +1916,59 @@ mod tests {
     }
 
     #[test]
+    fn a_partly_evaluable_block_that_cannot_apply_does_not_fail_closed() {
+        // For db.example.com the `Match host *.corp` condition is evaluable
+        // and false, so OpenSSH never applies the block and dials directly —
+        // it never runs the `exec` command for that alias (oracle below). The
+        // resolver must agree instead of marking every alias outside *.corp
+        // unsupported. For db.corp the evaluable condition is true and the
+        // block may still apply, so resolution fails closed on the proxy; the
+        // oracle cannot confirm that half, because evaluating it would make
+        // OpenSSH run the command.
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host *\n\nMatch host *.corp exec \"! on-vpn\"\n  ProxyJump gateway\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("db.example.com", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "db.example.com");
+        assert_eq!(resolved.port, 22);
+        assert_eq!(
+            config.resolve_with_local_user("db.corp", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "db.corp".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+    }
+
+    #[test]
+    fn a_proxy_inside_a_never_matching_include_does_not_fail_closed() {
+        // The `Include` sits inside a block that definitely does not match, so
+        // OpenSSH reads the included file under SSHCONF_NEVERMATCH: nothing
+        // inside it can activate, including the nested unevaluatable `Match`
+        // that holds the proxy. Resolution must succeed.
+        let fixture = Fixture::new();
+        let include = fixture.dir.path().join("inc.conf");
+        fixture.write("inc.conf", "Match exec true\n  ProxyJump bastion\n");
+        fixture.write(
+            "ssh/config",
+            &format!(
+                "Host prod\n  HostName prod.internal\nMatch host other\n  Include {}\n",
+                include.display()
+            ),
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "prod.internal");
+    }
+
+    #[test]
     fn an_unevaluatable_block_still_does_not_activate_normal_keywords() {
         // Oracle: `ssh -G -F <config> prod` reports the proxy (exec true), so
         // resolution must fail closed — and the block's User/Port/IdentityFile
@@ -2038,6 +2101,85 @@ mod tests {
             .resolve_with_local_user("prod", "alice", &fixture.home())
             .unwrap();
         assert_eq!(resolved.user.as_deref(), Some("lower"));
+    }
+
+    #[test]
+    fn a_relative_include_with_a_parent_component_is_expanded_in_order() {
+        // `Include ../shared/*.conf` resolves relative to the config
+        // directory with the `..` kept in its written position: the pattern
+        // must not be rebuilt with the parent component hoisted ahead of the
+        // literal ones. With a proxy inside, resolution fails closed on it;
+        // without one, the included values apply.
+        let fixture = Fixture::new();
+        fixture.write("shared/proxy.conf", "ProxyJump bastion\n");
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nInclude ../shared/*.conf\n",
+        );
+        let config = fixture.load();
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+
+        let fixture = Fixture::new();
+        fixture.write("shared/vals.conf", "User incuser\nPort 2299\n");
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nInclude ../shared/*.conf\n",
+        );
+        let config = fixture.load();
+        let resolved = config
+            .resolve_with_local_user("prod", "alice", &fixture.home())
+            .unwrap();
+        assert_eq!(resolved.host_name, "prod.internal");
+        assert_eq!(resolved.user.as_deref(), Some("incuser"));
+        assert_eq!(resolved.port, 2299);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_literal_directory_that_cannot_be_listed_does_not_fail_resolution() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        fixture.write("ssh/locked/conf.d/a.conf", "ProxyJump bastion\n");
+        let locked = fixture.dir.path().join("ssh/locked");
+        // Enterable (x) but not listable (no r for anyone, owner included):
+        // a literal component of the pattern is joined as text and never
+        // listed, so only the directory above the wildcard is read.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o311)).unwrap();
+
+        // Running as root defeats the missing read bit; skip with a note
+        // rather than reporting a false pass.
+        if fs::read_dir(&locked).is_ok() {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!(
+                "skipping unlistable-literal-directory assertion: running as root, chmod 0711 did not deny the listing"
+            );
+            return;
+        }
+
+        fixture.write(
+            "ssh/config",
+            "Host prod\n  HostName prod.internal\nInclude locked/conf.d/*.conf\n",
+        );
+        let config = fixture.load();
+        // The include resolves through the locked directory, so the proxy
+        // inside is seen and resolution fails closed on it — not on a
+        // PermissionDenied from a listing the pattern never needed.
+        assert_eq!(
+            config.resolve_with_local_user("prod", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "prod".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+
+        // Restore access so the temp directory can be cleaned up.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
