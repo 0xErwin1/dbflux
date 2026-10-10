@@ -29,6 +29,7 @@
 | InfluxDB | 时序 | InfluxQuery | 认证、多数据库、分页、CSV/JSON 导出 | 同一个 crate 同时支持 v1 与 v2；两者都支持 InfluxQL，仅 v2 支持 Flux；只读（不支持 INSERT/UPDATE/DELETE）；不支持事务。 |
 | ClickHouse | 关系型 | SQL | 多数据库、视图、认证、分页、排序、筛选、分组、join、CTE、窗口函数、CSV/JSON 导出 | 走 HTTP(S)，包括 ClickHouse Cloud；DBFlux 的集成以读取为主，不支持结构化变更、DDL、事务、SSH 隧道或查询参数。 |
 | TursoDB | 关系型 | SQL | 认证令牌、视图、索引、外键、CHECK/唯一约束、预编译语句、插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、多语句 | 走 HTTP 的远程 Turso / libSQL（`libsql://`，本地 `sqld` 用 `http://`）；交互式事务在每个文档独立的服务端流上运行；不支持查询取消、SSH 隧道、副本或切换数据库。 |
+| DuckDB | 关系型 | SQL | 多数据库、schema、视图、索引、外键、CHECK/唯一约束、预编译语句、带 RETURNING 的插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、查询取消、行数限制、只读强制、多语句 | 嵌入式文件或内存数据库；连接时挂载 DuckLake 目录；同一文件只能由一个进程以写模式打开；不支持语句超时。 |
 | Amazon S3 | 对象存储 | Custom("S3") | 认证（profile/SSO 或静态凭据、自定义端点）、存储桶浏览、分页的对象导航、预览、完整 CRUD、预签名 URL | 兼容 S3（Cloudflare R2、MinIO）；不支持分段上传/传输面板，不支持内嵌 PDF 查看器，不支持生命周期/ACL 管理或 S3 Select。 |
 
 ## 各驱动程序概要
@@ -80,6 +81,10 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 ### TursoDB
 
 面向 Turso Cloud 与自托管 `sqld` 的关系型 SQL 驱动程序，走 HTTP，基于 `turso_serverless` SDK。它使用 SQLite 方言，通过 `sqlite_master` 与 PRAGMA 发现表、视图、列、索引、外键与约束，并支持类型化 CRUD、绑定参数、批量脚本，以及在每个文档独立的服务端流上运行的交互式事务（编辑器每次运行只能执行一条事务控制语句）。不支持查询取消、保存点、SSH 隧道、嵌入式副本与切换数据库。参见 [`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md)。
+
+### DuckDB
+
+基于内置 DuckDB 引擎的嵌入式分析型 SQL 驱动程序。配置可以打开一个数据库文件；路径留空时打开内存数据库。它还可以挂载一个 DuckLake 目录（本地元数据文件，或 PostgreSQL、SQLite、MySQL 目录，数据可放在本地磁盘或对象存储上），该目录会成为默认数据库。每个已挂载的目录都在侧边栏中显示为一个数据库，其 schema、表与视图按需加载。支持绑定参数、多语句脚本、行数限制、查询取消、带 `RETURNING` 的类型化 CRUD，以及通过 `READ ONLY` 事务实现、并拒绝语句中直接引用的表函数读取文件与网络的只读强制（不检查此前创建的视图和宏，也不检查扩展添加的标量函数）。不支持语句超时。参见 [`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md)。
 
 ### Amazon S3
 

@@ -98,6 +98,16 @@ impl TransactionVocab {
                 autocommit_lock_timeout_template: None,
                 autocommit_lock_timeout_reset_sql: None,
             }),
+            DbKind::DuckDB => Some(Self {
+                begin: "BEGIN TRANSACTION",
+                commit: "COMMIT",
+                rollback: "ROLLBACK",
+                lock_timeout_template: None,
+                lock_timeout_before_begin: false,
+                lock_timeout_reset_sql: None,
+                autocommit_lock_timeout_template: None,
+                autocommit_lock_timeout_reset_sql: None,
+            }),
             DbKind::SqlServer => Some(Self {
                 begin: "BEGIN TRANSACTION",
                 commit: "COMMIT",

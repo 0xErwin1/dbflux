@@ -94,6 +94,7 @@ unsigned macOS and Windows builds, is in [Installing DBFlux](docs/INSTALL.md).
 - **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
 - **ClickHouse** and ClickHouse Cloud over HTTP(S), with database/table discovery, visual SELECTs, and explicit raw SQL execution
 - **TursoDB** and libSQL (`sqld`) over HTTP, with schema discovery, typed CRUD, and interactive transactions per editor tab
+- **DuckDB** files and in-memory databases, with DuckLake catalogs attached on connect
 - **CloudWatch Logs** with log group/stream browsing and event streaming
 - **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))

@@ -495,6 +495,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::S3 => "S3",
         DbKind::ClickHouse => "ClickHouse",
         DbKind::Turso => "Turso",
+        DbKind::DuckDB => "DuckDB",
     }
     .to_string()
 }
@@ -515,6 +516,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "S3" => Some(DbKind::S3),
         "ClickHouse" => Some(DbKind::ClickHouse),
         "Turso" => Some(DbKind::Turso),
+        "DuckDB" => Some(DbKind::DuckDB),
         _ => None,
     }
 }
@@ -534,6 +536,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::S3 => dbflux_core::DbConfig::default_s3(),
         DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         DbKind::Turso => dbflux_core::DbConfig::default_turso(),
+        DbKind::DuckDB => dbflux_core::DbConfig::default_duckdb(),
     }
 }
 

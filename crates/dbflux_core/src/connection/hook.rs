@@ -485,7 +485,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             database,
             ..
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
-        DbConfig::SQLite { path, .. } => (None, None, Some(path.to_string_lossy().to_string())),
+        DbConfig::SQLite { path, .. } | DbConfig::DuckDB { path, .. } => {
+            (None, None, Some(path.to_string_lossy().to_string()))
+        }
         DbConfig::MySQL {
             host,
             port,

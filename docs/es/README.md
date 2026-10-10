@@ -92,6 +92,7 @@ de macOS y Windows, está en [Instalar DBFlux](INSTALL.md).
 - **InfluxDB** v1 y v2 (InfluxQL en v1, InfluxQL + Flux en v2)
 - **ClickHouse** y ClickHouse Cloud sobre HTTP(S), con descubrimiento de bases de datos/tablas, SELECTs visuales y ejecución explícita de SQL crudo
 - **TursoDB** y libSQL (`sqld`) sobre HTTP, con descubrimiento de esquema, CRUD tipado y transacciones interactivas por pestaña del editor
+- **DuckDB** en archivos y en memoria, con catálogos DuckLake adjuntados al conectar
 - **CloudWatch Logs** con navegación de log groups/streams y streaming de eventos
 - **Amazon S3** con navegación de buckets, preview/edición de objetos, CRUD completo y URLs presignadas, incluyendo endpoints compatibles con S3 (Cloudflare R2, MinIO)
 - **Drivers externos por RPC** (registra drivers fuera de proceso vía el [Protocolo RPC de drivers](DRIVER_RPC_PROTOCOL.md))

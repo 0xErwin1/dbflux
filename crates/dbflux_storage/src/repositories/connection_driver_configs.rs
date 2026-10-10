@@ -378,6 +378,26 @@ impl ConnectionDriverConfigDto {
             DbConfig::Turso { url } => {
                 dto.uri = Some(url.clone());
             }
+            // The DuckLake fields and init SQL ride in the external values
+            // column, the way S3 reuses the dynamo_* columns, so DuckDB needs
+            // no schema migration.
+            DbConfig::DuckDB {
+                path,
+                ducklake_catalog,
+                ducklake_data_path,
+                init_sql,
+            } => {
+                dto.sqlite_path = Some(path.to_string_lossy().to_string());
+                let extras: std::collections::HashMap<&str, &String> = [
+                    ("ducklake_catalog", ducklake_catalog.as_ref()),
+                    ("ducklake_data_path", ducklake_data_path.as_ref()),
+                    ("init_sql", init_sql.as_ref()),
+                ]
+                .into_iter()
+                .filter_map(|(key, value)| value.map(|value| (key, value)))
+                .collect();
+                dto.external_values_json = Some(serde_json::to_string(&extras).unwrap_or_default());
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -607,6 +627,19 @@ impl ConnectionDriverConfigDto {
             DbKind::Turso => Some(DbConfig::Turso {
                 url: self.uri.clone().unwrap_or_default(),
             }),
+            DbKind::DuckDB => {
+                let mut extras: std::collections::HashMap<String, String> = self
+                    .external_values_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok())
+                    .unwrap_or_default();
+                Some(DbConfig::DuckDB {
+                    path: self.sqlite_path.clone().unwrap_or_default().into(),
+                    ducklake_catalog: extras.remove("ducklake_catalog"),
+                    ducklake_data_path: extras.remove("ducklake_data_path"),
+                    init_sql: extras.remove("init_sql"),
+                })
+            }
         }
     }
 }
@@ -631,6 +664,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::S3 => "S3",
         DbKind::ClickHouse => "ClickHouse",
         DbKind::Turso => "Turso",
+        DbKind::DuckDB => "DuckDB",
     }
     .to_string()
 }
@@ -651,6 +685,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "S3" => Some(DbKind::S3),
         "ClickHouse" => Some(DbKind::ClickHouse),
         "Turso" => Some(DbKind::Turso),
+        "DuckDB" => Some(DbKind::DuckDB),
         _ => None,
     }
 }
@@ -1440,6 +1475,29 @@ mod tests {
         assert!(matches!(
             dto.to_db_config(),
             Some(DbConfig::Turso { url }) if url == "https://example.turso.io"
+        ));
+    }
+
+    #[test]
+    fn duckdb_driver_config_roundtrips_path_and_ducklake_fields() {
+        let config = DbConfig::DuckDB {
+            path: "/data/analytics.duckdb".into(),
+            ducklake_catalog: Some("metadata.ducklake".to_string()),
+            ducklake_data_path: None,
+            init_sql: Some("INSTALL httpfs;".to_string()),
+        };
+        let dto = ConnectionDriverConfigDto::from_db_config("profile".to_string(), &config);
+
+        assert_eq!(dto.config_key, "DuckDB");
+        assert_eq!(dto.sqlite_path.as_deref(), Some("/data/analytics.duckdb"));
+        assert!(dto.external_kind.is_none());
+        assert!(matches!(
+            dto.to_db_config(),
+            Some(DbConfig::DuckDB { path, ducklake_catalog, ducklake_data_path, init_sql })
+                if path.to_str() == Some("/data/analytics.duckdb")
+                    && ducklake_catalog.as_deref() == Some("metadata.ducklake")
+                    && ducklake_data_path.is_none()
+                    && init_sql.as_deref() == Some("INSTALL httpfs;")
         ));
     }
 }

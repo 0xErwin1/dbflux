@@ -321,6 +321,7 @@ impl SecretManager {
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }

@@ -151,7 +151,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run deterministic workspace tests
-        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
+        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
 
   # Same fail-open rationale as deterministic-tests above.
   driver-live-integration:
@@ -392,7 +392,7 @@ jobs:
 
       - name: Cargo check
         if: needs.changes.outputs.rust != 'false'
-        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws,ui-automation${{ matrix.extra_features }}"
+        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws,ui-automation${{ matrix.extra_features }}"
 
       # Compiling the Windows process-containment path (Job Objects) does not prove
       # it reclaims a cancelled hook's process tree, and this is the only job that
