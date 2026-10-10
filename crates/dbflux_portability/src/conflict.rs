@@ -6,8 +6,10 @@
 ///
 /// Identity predicates use content tuples, not display names:
 /// - Auth profiles: `(provider_id, name)` — mirrors the deterministic `aws_profile_uuid` derivation.
-/// - SSH tunnels: `(host, port, user)` — the actual endpoint matters; a tunnel renamed on the
-///   destination still refers to the same bastion.
+/// - SSH tunnels: `(host, port, user, ssh_config_host)` — the actual endpoint matters; a tunnel
+///   renamed on the destination still refers to the same bastion. The alias is part of the key
+///   because an aliased tunnel stores an empty host and user, so the alias is its only identity;
+///   a manual tunnel matches only a tunnel that also has no alias.
 /// - Proxies: `(kind, host, port)` — the proxy endpoint identity; username excluded so a
 ///   credential change is not treated as a distinct proxy.
 ///
@@ -25,11 +27,23 @@ pub fn auth_conflict(provider_id: &str, name: &str, dest: &DestSnapshot<'_>) -> 
         .map(|a| a.id)
 }
 
-/// Return the UUID of the first destination SSH tunnel matching `(host, port, user)`.
-pub fn ssh_conflict(host: &str, port: u16, user: &str, dest: &DestSnapshot<'_>) -> Option<Uuid> {
+/// Return the UUID of the first destination SSH tunnel matching
+/// `(host, port, user, ssh_config_host)`.
+pub fn ssh_conflict(
+    host: &str,
+    port: u16,
+    user: &str,
+    ssh_config_host: Option<&str>,
+    dest: &DestSnapshot<'_>,
+) -> Option<Uuid> {
     dest.ssh_tunnels
         .iter()
-        .find(|s| s.config.host == host && s.config.port == port && s.config.user == user)
+        .find(|s| {
+            s.config.host == host
+                && s.config.port == port
+                && s.config.user == user
+                && s.config.ssh_config_host.as_deref() == ssh_config_host
+        })
         .map(|s| s.id)
 }
 
@@ -85,6 +99,15 @@ mod tests {
     }
 
     fn make_ssh(host: &str, port: u16, user: &str) -> SshTunnelProfile {
+        make_ssh_with_alias(host, port, user, None)
+    }
+
+    fn make_ssh_with_alias(
+        host: &str,
+        port: u16,
+        user: &str,
+        alias: Option<&str>,
+    ) -> SshTunnelProfile {
         SshTunnelProfile::new(
             "Tunnel",
             SshTunnelConfig {
@@ -92,7 +115,7 @@ mod tests {
                 port,
                 user: user.to_string(),
                 auth_method: SshAuthMethod::Password,
-                ssh_config_host: None,
+                ssh_config_host: alias.map(str::to_string),
             },
         )
     }
@@ -201,7 +224,7 @@ mod tests {
             connections: vec![],
         };
 
-        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
+        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", None, &dest);
         assert_eq!(result, Some(expected_id));
     }
 
@@ -219,7 +242,7 @@ mod tests {
             connections: vec![],
         };
 
-        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
+        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", None, &dest);
         assert_eq!(result, Some(expected_id));
     }
 
@@ -234,7 +257,7 @@ mod tests {
             connections: vec![],
         };
 
-        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
+        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", None, &dest);
         assert!(result.is_none());
     }
 
@@ -249,7 +272,73 @@ mod tests {
             connections: vec![],
         };
 
-        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
+        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", None, &dest);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn ssh_conflict_same_tuple_different_alias_no_match() {
+        // An aliased tunnel stores an empty host and user with port 22, so the
+        // alias is the only thing distinguishing two such tunnels. Different
+        // aliases dial different endpoints and must not be treated as one.
+        let ssh = make_ssh_with_alias("", 22, "", Some("web-prod"));
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let result = ssh_conflict("", 22, "", Some("web-staging"), &dest);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn ssh_conflict_same_alias_and_tuple_matches() {
+        let ssh = make_ssh_with_alias("", 22, "", Some("web-prod"));
+        let expected_id = ssh.id;
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let result = ssh_conflict("", 22, "", Some("web-prod"), &dest);
+        assert_eq!(result, Some(expected_id));
+    }
+
+    #[test]
+    fn ssh_conflict_manual_vs_aliased_no_match() {
+        // A manual tunnel (no alias) matches only a tunnel that also has no alias.
+        let ssh = make_ssh_with_alias("", 22, "", Some("web-prod"));
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let result = ssh_conflict("", 22, "", None, &dest);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn ssh_conflict_aliased_vs_manual_no_match() {
+        // Mirror direction: an aliased tunnel must not match a manual destination.
+        let ssh = make_ssh_with_alias("", 22, "", None);
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let result = ssh_conflict("", 22, "", Some("web-prod"), &dest);
         assert!(result.is_none());
     }
 
@@ -261,7 +350,7 @@ mod tests {
             proxies: vec![],
             connections: vec![],
         };
-        assert!(ssh_conflict("bastion.example.com", 22, "ec2-user", &dest).is_none());
+        assert!(ssh_conflict("bastion.example.com", 22, "ec2-user", None, &dest).is_none());
     }
 
     #[test]
@@ -277,7 +366,7 @@ mod tests {
             connections: vec![],
         };
 
-        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
+        let result = ssh_conflict("bastion.example.com", 22, "ec2-user", None, &dest);
         assert_eq!(result, Some(first_id));
     }
 
