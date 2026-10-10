@@ -92,6 +92,14 @@ impl TasksPanel {
             .or(Some(self.selected_index.min(last)))
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`current` returned by `selected_position` is a row of `tasks` \
+                  (an `iter().position()` hit, or `selected_index.min(last)`), \
+                  and the four callers' closures map it into `0..=last` (`min`, \
+                  `saturating_sub`, `0`, and `last` itself), so `index` stays \
+                  below `tasks.len()`"
+    )]
     fn move_selection(
         &mut self,
         target: impl FnOnce(usize, usize) -> usize,

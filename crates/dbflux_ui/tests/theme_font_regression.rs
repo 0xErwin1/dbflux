@@ -70,6 +70,12 @@ fn assert_centralized_fonts(theme: &Theme) {
 }
 
 fn read_theme_source() -> String {
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: the theme source file is a checked-in workspace \
+                  file, so a failed read is a broken checkout and the helper \
+                  panics instead of returning a `Result`"
+    )]
     fs::read_to_string(THEME_SOURCE).expect("theme source should be readable")
 }
 
