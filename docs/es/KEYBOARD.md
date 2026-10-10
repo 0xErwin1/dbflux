@@ -202,14 +202,32 @@ de estado del espacio de trabajo.
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
+| Normal / Visual | `$` / `^` / `0` | Ir al último carácter / al primer carácter no blanco / al inicio de la línea; `N$` va al final de la línea N-1 líneas más abajo |
+| Normal / Visual | `f{car}` / `t{car}` / `F{car}` / `T{car}` | Ir sobre / justo antes del siguiente `{car}` de la línea, o sobre / justo después del anterior; un contador busca el N-ésimo |
+| Normal / Visual | `;` / `,` | Repetir el último `f` / `t` / `F` / `T` en la misma dirección / en la contraria |
+| Normal / Visual | `%` | Saltar al paréntesis, corchete o llave que cierra o abre el que está bajo el cursor o después de él en la línea |
+| Normal / Visual | `}` / `{` | Ir a la siguiente / anterior línea vacía |
+| Normal | `d` / `c` / `y` + `$` / `^` / `0` / `f` / `t` / `F` / `T` / `;` / `,` / `%` / `}` / `{` | Actuar sobre el rango del movimiento; `f`, `t`, `$` y `%` incluyen el carácter de destino |
+| Normal | `d` / `c` / `y` + `i` / `a` + objeto | Actuar sobre un objeto de texto (ver **Objetos de texto** más abajo), por ejemplo `ciw`, `di"`, `ca(` |
+| Normal | `D` / `C` | Borrar / cambiar hasta el final de la línea, como `d$` / `c$` |
+| Normal | `s` / `S` | Cambiar el carácter bajo el cursor (o los N siguientes) / la línea entera |
+| Normal | `J` | Unir la línea con la siguiente (o con las N-1 siguientes) con un espacio |
+| Normal | `~` | Cambiar mayúsculas y minúsculas del carácter bajo el cursor (o de los N siguientes) y avanzar |
+| Normal | `*` / `#` | Buscar la palabra completa bajo el cursor hacia adelante / hacia atrás |
+| Normal | `?` | Abrir el panel de búsqueda buscando hacia atrás |
 | Normal | `p` / `P` / `Np` | Pegar el portapapeles del sistema después / antes del cursor; un contador lo pega esa cantidad de veces |
 | Normal | `Ctrl+Shift+V` | Pegar el portapapeles del sistema antes del cursor, como `P` |
 | Normal | `u` | Deshacer |
+| Normal | `Ctrl+r` | Rehacer; un contador rehace esa cantidad de pasos |
+| Normal | `.` | Repetir el último cambio, incluido el texto escrito después; un contador reemplaza el del cambio |
+| Normal / Visual | `Ctrl+d` / `Ctrl+u` | Bajar / subir la mitad de las líneas visibles; un contador mueve esa cantidad de líneas |
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
 | Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
 | Visual / Visual Línea | `v` / `V` | Salir del modo Visual activo / alternar entre selección de caracteres y líneas |
 | Visual / Visual Línea / Visual Bloque | `c` | Cambiar los caracteres seleccionados inclusive, las líneas lógicas o las columnas del bloque y entrar en modo Insertar |
 | Visual / Visual Línea / Visual Bloque | `d` / `x` / `y` | Borrar la selección (`d` / `x`) o copiarla al portapapeles del sistema (`y`) |
+| Visual / Visual Línea | `i` / `a` + objeto | Seleccionar un objeto de texto |
+| Visual / Visual Línea | `p` / `P` | Reemplazar la selección por el portapapeles; `p` deja luego el texto reemplazado en el portapapeles y `P` conserva el portapapeles |
 | Visual / Visual Línea / Visual Bloque | `Escape` | Borrar la selección y volver al modo Normal |
 | Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
 | Insertar / Reemplazar | `Ctrl+Shift+V` | Insertar el portapapeles del sistema en el cursor, reemplazando la selección |
@@ -276,7 +294,7 @@ Todo lo demás en modo Normal:
 | Composición y confirmación del método de entrada (IME) | Se descartan |
 | `Backspace` / `Delete` | Nada |
 | `Escape` | Su significado habitual: cancelar una query en curso o salir del editor |
-| Atajos con `Ctrl`, `Alt` o `Cmd`; flechas; el mouse | Funcionan como siempre, incluidos deshacer y rehacer |
+| Atajos con `Ctrl`, `Alt` o `Cmd`; flechas; el mouse | Funcionan como siempre, incluidos deshacer y rehacer, salvo las teclas de Vim `Ctrl+r`, `Ctrl+d`, `Ctrl+u` y `Ctrl+v` |
 
 En modo Normal el cursor está sobre un carácter, nunca después del final de una
 línea. Al salir del modo Insertar retrocede un carácter, como en Vim. En una
@@ -305,6 +323,10 @@ Visual `c` por caracteres o líneas cambia la selección inclusiva mediante edic
 Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
 **Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. En modo Reemplazar, el texto que llega sin pulsar una tecla, como una confirmación del IME, se inserta en lugar de sobrescribir, y `Backspace` no restaura caracteres a su alrededor. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
+
+**Objetos de texto.** Después de `d`, `c` o `y`, o en los modos Visual y Visual Línea, `i` selecciona el interior de un objeto y `a` un poco más. `iw` / `aw` toman la palabra bajo el cursor, `aw` con los espacios que la siguen, o los que la preceden cuando no hay ninguno después; `iW` / `aW` usan palabras separadas por espacios. `i"` / `a"`, `i'` / `a'` y `` i` `` / `` a` `` toman texto entre comillas en la línea del cursor: sobre una comilla, las comillas se emparejan desde el inicio de la línea; en otro lugar se usan las comillas más cercanas alrededor del cursor, o el primer texto entre comillas después de él; una comilla precedida por una barra invertida no cuenta, y `a"` agrega los espacios que siguen a la comilla de cierre. `i(` / `a(` (también `ib`, `i)`), `i[`, `i{` (también `iB`) e `i<` toman los paréntesis, corchetes o llaves que rodean al cursor, aunque crucen líneas; `a(` los incluye. Un contador elige palabras o un par exterior (`d2i(`). Cuando el interior empieza con un salto de línea y la llave de cierre solo tiene espacios antes en su línea, `i{` abarca las líneas completas de en medio, así que `ci{` deja las llaves en sus propias líneas.
+
+**Búsquedas y repetición.** `f`, `t`, `F` y `T` no salen de la línea del cursor y toman la tecla siguiente como carácter, así que `f` seguido de `Space` busca un espacio; `Escape` cancela. Después de `t` o `T`, `;` salta un destino que está justo al lado del cursor. `%` no acepta contador. `{` y `}` solo se detienen en líneas vacías; una línea de espacios es parte de su párrafo. `*` y `#` buscan texto literal con la opción de mayúsculas del panel de búsqueda y saltan las coincidencias dentro de palabras más largas; después de ellos, y después de `?`, `n` y `N` mantienen la dirección y la regla de palabra completa. Después de `?`, `Enter` en el panel de búsqueda va a la coincidencia anterior y `Shift+Enter` a la siguiente. `.` repite el último comando de modo Normal que cambió el texto, con el texto escrito en la sesión de Insertar que abrió si el cursor quedó al final de ese texto; no repite comandos de los modos Visual ni el modo Reemplazar, y cada repetición es un solo paso de deshacer. `Ctrl+d` y `Ctrl+u` cuentan las líneas visibles en el editor y mueven el cursor; la vista sigue al cursor.
 
 **Tecla líder.** En modo Normal y en los modos Visual, la tecla líder inicia
 una secuencia de dos teclas que ejecuta un comando sin salir de la fila
@@ -352,8 +374,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten otras marcas, objetos de texto, registros,
-  macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
+  No se admiten otras marcas, registros, macros ni comandos `:`. No es Vim
   completo.
 - No hay registros: `p` / `P` pegan el portapapeles del sistema. El texto que
   DBFlux copió o borró por última vez conserva su tipo (líneas completas con
