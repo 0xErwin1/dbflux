@@ -14,7 +14,7 @@ pub(crate) enum FooterSummary {
 }
 
 impl FooterSummary {
-    pub fn new(connected: usize, total_profiles: usize) -> Self {
+    pub(crate) fn new(connected: usize, total_profiles: usize) -> Self {
         if total_profiles == 0 {
             return Self::Empty;
         }
@@ -35,7 +35,7 @@ pub(crate) struct ExternalFoldersSummary {
 }
 
 impl ExternalFoldersSummary {
-    pub fn new(availabilities: &[&dbflux_core::ScriptRootAvailability]) -> Option<Self> {
+    pub(crate) fn new(availabilities: &[&dbflux_core::ScriptRootAvailability]) -> Option<Self> {
         if availabilities.is_empty() {
             return None;
         }
