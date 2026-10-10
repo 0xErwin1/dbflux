@@ -62,6 +62,12 @@ impl PaneActionsMenu {
     }
 
     fn select_next(&mut self) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the closure runs over `self.selected_index + \
+                      1..self.actions.len()`, so the index it sees stays below \
+                      `self.actions.len()`"
+        )]
         if let Some(index) =
             (self.selected_index + 1..self.actions.len()).find(|index| self.actions[*index].enabled)
         {
@@ -70,6 +76,15 @@ impl PaneActionsMenu {
     }
 
     fn select_prev(&mut self) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the closure runs over `0..self.selected_index` reversed, and \
+                      `selected_index` is set to an `iter().position()` hit in \
+                      `self.actions`, to an index found in a range bounded by \
+                      `self.actions.len()`, or to a hover index checked with \
+                      `actions.get(index).is_some_and(...)`, so the index it \
+                      sees stays below `self.actions.len()`"
+        )]
         if let Some(index) = (0..self.selected_index)
             .rev()
             .find(|index| self.actions[*index].enabled)

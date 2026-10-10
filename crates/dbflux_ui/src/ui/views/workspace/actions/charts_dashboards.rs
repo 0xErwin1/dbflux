@@ -162,6 +162,15 @@ impl Workspace {
                 }
 
                 let app_state = self.app_state.clone();
+                #[expect(
+                    clippy::expect_used,
+                    reason = "`from_saved` returns `Err` only for `Collection` \
+                              sources (the `Collection` arm of its `match \
+                              &saved.source` in chart_document/mod.rs), and a \
+                              `Collection` source never reaches this arm: the \
+                              outer `match` above routes it to \
+                              `open_collection_document` and returns"
+                )]
                 let doc = cx.new(|cx| {
                     // from_saved is guaranteed Ok for Query and Metric sources (validated above).
                     crate::ui::document::ChartDocument::from_saved(&chart, app_state, window, cx)
@@ -370,6 +379,17 @@ impl Workspace {
                             ) =>
                             {
                                 let app_state_inner = app_state.clone();
+                                #[expect(
+                                    clippy::expect_used,
+                                    reason = "the match guard above admits the Query, \
+                                              Metric and InstanceMetric sources, \
+                                              and `from_saved` returns `Err` only \
+                                              for the Collection source (the \
+                                              `Collection` arm of its `match \
+                                              &saved.source` in \
+                                              chart_document/mod.rs), so \
+                                              `from_saved` returns `Ok` here"
+                                )]
                                 let panel_entity = cx.new(|cx| {
                                     let mut doc = crate::ui::document::ChartDocument::from_saved(
                                         &saved_chart,
@@ -878,6 +898,15 @@ impl Workspace {
                     );
 
                     let app_state_inner = app_state.clone();
+                    #[expect(
+                        clippy::expect_used,
+                        reason = "`saved_chart` was constructed by \
+                                  `SavedChart::new_metric` just above, so its \
+                                  source is the Metric variant, and `from_saved` \
+                                  returns `Err` only for the Collection source \
+                                  (the `Collection` arm of its `match \
+                                  &saved.source` in chart_document/mod.rs)"
+                    )]
                     let panel_entity = cx.new(|cx| {
                         let mut chart =
                             ChartDocument::from_saved(&saved_chart, app_state_inner, window, cx)
@@ -1697,6 +1726,12 @@ impl Workspace {
                 // never collide with a single-metric create.
                 match &chart.source {
                     SavedChartSource::Metric { series } if series.len() == 1 => {
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "the match guard `series.len() == 1` bounds the \
+                                      index: the slice holds one element, so \
+                                      index 0 is in bounds"
+                        )]
                         let s = &series[0];
                         s.namespace == namespace
                             && s.metric_name == metric_name

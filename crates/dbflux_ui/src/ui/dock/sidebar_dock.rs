@@ -26,7 +26,7 @@ fn scaled_default_width(cx: &App) -> Pixels {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum SidebarState {
+pub(crate) enum SidebarState {
     #[default]
     Expanded,
     Collapsed,
