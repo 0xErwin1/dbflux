@@ -12,6 +12,19 @@ modo de vista se elige automáticamente según la categoría de la base de datos
 Los contenedores de tipo event-stream se abren como event streams cuando el
 driver declara esa presentación.
 
+## Resultados junto al editor
+
+En una pestaña de consulta los resultados están debajo del editor. En una
+pantalla ancha, muévelos a la derecha del editor con el botón de panel de la
+cabecera de resultados, la entrada **Mostrar los resultados a la derecha** de
+las acciones del panel o **Mover los resultados junto al editor o debajo** en la
+paleta de comandos. El mismo control los vuelve a poner debajo. Arrastra el
+divisor para cambiar el tamaño de cada lado. Las pestañas de consulta nuevas se
+abren con la última posición elegida.
+
+En cualquiera de las dos posiciones, `Ctrl+j` lleva el teclado del editor a los
+resultados y `Ctrl+k` lo devuelve.
+
 ## Navegar el data grid
 
 Cuando el panel de resultados tiene el foco:

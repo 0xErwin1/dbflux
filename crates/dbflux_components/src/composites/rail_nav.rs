@@ -260,6 +260,12 @@ impl<T: 'static> RailNav<T> {
         Some(self.row_index.min(rows.len() - 1))
     }
 
+    // Attribute on the function: the indexing sits in a bare assignment
+    // statement, which rustc rejects as an attribute target (E0658).
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "callers obtain an in-range row index through resolve, clamping on non-empty rows, or rows.iter().rposition; place retains that private caller contract"
+    )]
     fn place(&mut self, rows: &[RailRow<T>], index: usize) {
         self.row = Some(rows[index].id.clone());
         self.row_index = index;
@@ -280,8 +286,16 @@ impl<T: 'static> RailNav<T> {
         let Some(index) = self.resolve(rows) else {
             return RailMark::default();
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "index comes from resolve, which returns None for an empty slice and otherwise a position below rows.len()"
+        )]
         let row = &rows[index];
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "field_index only returns values below row.fields.len(): it is min-clamped against len - 1 on a non-empty vec"
+        )]
         RailMark {
             row: Some(row.id.clone()),
             field: self
@@ -501,6 +515,10 @@ pub fn rail_command<T: RailOwner>(
         Command::ColumnLeft => step_field(this, &rows, -1),
         Command::ColumnRight => step_field(this, &rows, 1),
         Command::Execute => {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "field_index only returns values below row.fields.len(): it is min-clamped against len - 1 on a non-empty vec"
+            )]
             let target = current_row(this, &rows).and_then(|row| {
                 let nav = this.rail_nav();
                 nav.field_index(row)
@@ -562,6 +580,12 @@ pub fn rail_command<T: RailOwner>(
 }
 
 fn current_row<'a, T: RailOwner>(this: &mut T, rows: &'a [RailRow<T>]) -> Option<&'a RailRow<T>> {
+    // The attribute sits on this call-chain tail statement, not on the
+    // function: its only indexing is rows[index], bounded by resolve.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "resolve returns None for an empty slice and otherwise a position below rows.len()"
+    )]
     this.rail_nav().resolve(rows).map(|index| &rows[index])
 }
 
@@ -586,6 +610,10 @@ fn step_field<T: RailOwner>(this: &mut T, rows: &[RailRow<T>], delta: isize) -> 
     let Some(index) = nav.resolve(rows) else {
         return RailOutcome::Handled;
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index comes from resolve, which returns None for an empty slice and otherwise a position below rows.len()"
+    )]
     let row = &rows[index];
     let Some(field) = nav.field_index(row) else {
         return RailOutcome::Handled;
@@ -609,6 +637,10 @@ fn move_row<T: RailOwner>(
     let Some(index) = this.rail_nav().resolve(rows) else {
         return;
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index comes from resolve, which returns None for an empty slice and otherwise a position below rows.len()"
+    )]
     let Some(moves) = rows[index].moves.clone() else {
         return;
     };
@@ -766,6 +798,10 @@ fn step_menu<T: RailOwner>(this: &mut T, forward: bool) {
         return;
     };
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the first range is selected + 1..entries.len() and the second 0..selected, so every probed index is below entries.len(); menu.selected is maintained below entries.len() by the code that assigns it"
+    )]
     let next = if forward {
         (menu.selected + 1..menu.entries.len()).find(|index| menu.entries[*index].enabled)
     } else {

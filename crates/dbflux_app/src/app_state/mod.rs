@@ -191,10 +191,6 @@ impl AppState {
         self.facade.connections.is_connected()
     }
 
-    pub fn has_connections(&self) -> bool {
-        self.facade.connections.has_connections()
-    }
-
     #[allow(dead_code)]
     pub fn connection_display_name(&self) -> Option<&str> {
         self.facade.connections.connection_display_name()

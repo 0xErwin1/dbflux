@@ -45,7 +45,7 @@ use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
 use gpui_component::input::EditorState as GpuiEditorState;
-use gpui_component::resizable::{resizable_panel, v_resizable};
+use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertTextFormat, Position as LspPosition, Range as LspRange, TextEdit,
@@ -104,6 +104,88 @@ pub enum SqlQueryLayout {
     Split,
     EditorOnly,
     ResultsOnly,
+}
+
+/// Where the results sit in the split: below the editor, or beside it on
+/// the right for wide screens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ResultsPosition {
+    #[default]
+    Bottom,
+    Right,
+}
+
+/// UI state key holding the position the last toggle chose, which new query
+/// tabs open with.
+const RESULTS_POSITION_KEY: &str = "query_results_position";
+
+impl ResultsPosition {
+    fn toggled(self) -> Self {
+        match self {
+            Self::Bottom => Self::Right,
+            Self::Right => Self::Bottom,
+        }
+    }
+
+    fn hide_icon(self) -> AppIcon {
+        match self {
+            Self::Bottom => AppIcon::PanelBottomClose,
+            Self::Right => AppIcon::PanelRightClose,
+        }
+    }
+
+    fn show_icon(self) -> AppIcon {
+        match self {
+            Self::Bottom => AppIcon::PanelBottomOpen,
+            Self::Right => AppIcon::PanelRightOpen,
+        }
+    }
+
+    /// The label and icon of the toggle, naming the position it moves to.
+    fn toggle_label_and_icon(self) -> (String, AppIcon) {
+        match self {
+            Self::Bottom => (
+                dbflux_i18n::t!("document.code.toolbar.results_right"),
+                AppIcon::PanelRight,
+            ),
+            Self::Right => (
+                dbflux_i18n::t!("document.code.toolbar.results_bottom"),
+                AppIcon::PanelBottom,
+            ),
+        }
+    }
+
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::Bottom => "\"bottom\"",
+            Self::Right => "\"right\"",
+        }
+    }
+
+    fn load(app_state: &AppStateEntity) -> Self {
+        match app_state
+            .storage_runtime()
+            .ui_state()
+            .get(RESULTS_POSITION_KEY)
+        {
+            Ok(Some(value)) if value == Self::Right.storage_value() => Self::Right,
+            Ok(_) => Self::Bottom,
+            Err(error) => {
+                log::warn!("Could not read the saved results position: {error}");
+                Self::Bottom
+            }
+        }
+    }
+
+    fn save(self, app_state: &AppStateEntity) {
+        if let Err(error) = app_state
+            .storage_runtime()
+            .ui_state()
+            .set(RESULTS_POSITION_KEY, self.storage_value())
+        {
+            log::error!("Could not save the results position: {error}");
+        }
+    }
 }
 
 /// Where focus is within the document.
@@ -457,6 +539,7 @@ pub struct CodeDocument {
 
     // Layout/focus
     layout: SqlQueryLayout,
+    results_position: ResultsPosition,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
     /// Keyboard focus for the multi-statement script confirmation.
@@ -1000,6 +1083,7 @@ impl CodeDocument {
         let refresh_policy = default_refresh;
 
         let vim = dbflux_components::vim::VimBinding::new(input_state.clone(), window, cx);
+        let results_position = ResultsPosition::load(app_state.read(cx));
 
         let mut document = Self {
             id: doc_id,
@@ -1077,6 +1161,7 @@ impl CodeDocument {
                 _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             },
             layout: SqlQueryLayout::EditorOnly,
+            results_position,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             script_confirm_focus: ModalFocus::new(cx),
@@ -1844,6 +1929,10 @@ impl CodeDocument {
             }
             Command::ToggleResults | Command::TogglePanel => {
                 self.toggle_maximize_results(cx);
+                true
+            }
+            Command::ToggleResultsPosition => {
+                self.toggle_results_position(cx);
                 true
             }
 

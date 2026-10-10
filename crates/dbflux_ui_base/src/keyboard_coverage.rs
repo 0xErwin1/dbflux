@@ -264,6 +264,10 @@ impl Coverage {
     /// checked, so a test can also prove the surface it meant to check was
     /// drawn.
     #[track_caller]
+    #[expect(
+        clippy::panic,
+        reason = "assert_covered is a coverage-assertion helper: failing the check is its contract, and the panic carries the full problem list"
+    )]
     pub fn assert_covered(&self, frame: &AccessibilityFrame) -> Vec<String> {
         let problems = self.problems(frame);
 
@@ -431,6 +435,10 @@ impl FrameCapture {
             .clone()
         {
             Some(frame) => frame,
+            #[expect(
+                clippy::panic,
+                reason = "frame() is a test-observation helper: a caller asking for a frame before any frame was drawn is a broken test and must fail here"
+            )]
             None => panic!("the observed window has not drawn a frame"),
         }
     }

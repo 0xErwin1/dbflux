@@ -50,6 +50,10 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
             "hide-results-panel",
             KeyboardPath::Command(Command::ToggleEditor),
         ),
+        (
+            "toggle-results-position",
+            KeyboardPath::Menu("results-position"),
+        ),
         // The mode bar of the results (Data, JSON, Chart): Shift+T shows the
         // next view, and the grid's Toolbar submenu lists them.
         (

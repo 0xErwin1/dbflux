@@ -652,6 +652,10 @@ impl SavedChartManager {
     }
 
     /// Renames a chart, bumps `updated_at`, and updates the cache.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`idx` comes from `position` over `self.items` and `self.items` is not mutated between that search and the two indexes below, so `idx < self.items.len()` holds"
+    )]
     pub fn rename_chart(&mut self, id: Uuid, new_name: String) -> Result<(), StorageError> {
         let idx = self
             .items

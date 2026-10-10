@@ -391,6 +391,12 @@ impl Sidebar {
         let page = picker.page.min(page_count.saturating_sub(1));
         let start = page.saturating_mul(picker.page_size);
         let end = (start + picker.page_size).min(total);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`page` is clamped below `page_count = \
+                      rows.len().max(1).div_ceil(page_size)` and `end` is clamped \
+                      to `rows.len()`, so `start..end` stays within `rows`"
+        )]
         let visible_rows = rows[start..end].to_vec();
         let selected_index = picker.selected_index;
 

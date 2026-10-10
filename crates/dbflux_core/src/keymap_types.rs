@@ -137,6 +137,8 @@ pub enum Command {
     // === View ===
     ToggleEditor,
     ToggleResults,
+    /// Moves the query results between below and beside the editor.
+    ToggleResultsPosition,
     ToggleTasks,
     /// Cancels the task selected in the background tasks panel.
     CancelTask,
@@ -303,6 +305,7 @@ impl Command {
             "toggle_sidebar" => Some(Command::ToggleSidebar),
             "toggle_editor" => Some(Command::ToggleEditor),
             "toggle_results" => Some(Command::ToggleResults),
+            "toggle_results_position" => Some(Command::ToggleResultsPosition),
             "toggle_tasks" => Some(Command::ToggleTasks),
             "clear_finished_tasks" => Some(Command::ClearFinishedTasks),
             "open_settings" => Some(Command::OpenSettings),
@@ -432,6 +435,7 @@ impl Command {
 
             Command::ToggleEditor => "Toggle editor panel",
             Command::ToggleResults => "Toggle results panel",
+            Command::ToggleResultsPosition => "Move results beside or below the editor",
             Command::ToggleTasks => "Toggle tasks panel",
             Command::CancelTask => "Cancel task",
             Command::ClearFinishedTasks => "Clear finished tasks",
@@ -630,6 +634,7 @@ impl Command {
 
             Command::ToggleEditor => "toggle_editor",
             Command::ToggleResults => "toggle_results",
+            Command::ToggleResultsPosition => "toggle_results_position",
             Command::ToggleTasks => "toggle_tasks",
             Command::CancelTask => "cancel_task",
             Command::ClearFinishedTasks => "clear_finished_tasks",
@@ -843,6 +848,7 @@ impl Command {
             Command::CreateFolder,
             Command::ToggleEditor,
             Command::ToggleResults,
+            Command::ToggleResultsPosition,
             Command::ToggleTasks,
             Command::CancelTask,
             Command::ClearFinishedTasks,
@@ -1034,6 +1040,7 @@ impl Command {
 
             Command::ToggleEditor
             | Command::ToggleResults
+            | Command::ToggleResultsPosition
             | Command::ToggleTasks
             | Command::CancelTask
             | Command::ClearFinishedTasks
@@ -1160,6 +1167,7 @@ impl Command {
                 | Command::FocusDown
                 | Command::ToggleEditor
                 | Command::ToggleResults
+                | Command::ToggleResultsPosition
                 | Command::ToggleTasks
                 | Command::ToggleSidebar
                 | Command::OpenLoginModal
@@ -1685,6 +1693,7 @@ mod tests {
             "toggle_sidebar",
             "toggle_editor",
             "toggle_results",
+            "toggle_results_position",
             "toggle_tasks",
             "open_settings",
             "open_login_modal",

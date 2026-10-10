@@ -833,19 +833,12 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Closing connections...");
-    let teardown_handles =
+    // A teardown can block on an unreachable host until the kernel gives up
+    // retransmitting (about 15 minutes on Linux), so the handles are polled
+    // against the deadlines instead of joined; a thread still running when
+    // they pass is abandoned and ends with the process.
+    let mut teardown_handles =
         cx.update(|cx| app_state.update(cx, |state, _| state.close_all_connections()));
-    for teardown in teardown_handles {
-        let join_result = cx
-            .background_executor()
-            .spawn(async move { teardown.join() })
-            .await;
-        match join_result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => log::error!("Connection cleanup failed during shutdown: {}", error),
-            Err(_) => log::error!("Connection cleanup thread panicked during shutdown"),
-        }
-    }
 
     let conn_deadline = Instant::now() + CONNECTION_CLOSE_TIMEOUT;
     loop {
@@ -866,15 +859,30 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             return;
         }
 
-        let has_connections = cx.update(|cx| app_state.read(cx).has_connections());
+        let (finished, pending): (Vec<_>, Vec<_>) = teardown_handles
+            .into_iter()
+            .partition(|teardown| teardown.is_finished());
+        teardown_handles = pending;
+        for teardown in finished {
+            match teardown.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    log::error!("Connection cleanup failed during shutdown: {}", error)
+                }
+                Err(_) => log::error!("Connection cleanup thread panicked during shutdown"),
+            }
+        }
 
-        if !has_connections {
+        if teardown_handles.is_empty() {
             info!("All connections closed");
             break;
         }
 
         if Instant::now() > conn_deadline {
-            log::warn!("Connection close timed out, proceeding with open connections");
+            log::warn!(
+                "Connection close timed out, proceeding with {} connection(s) still closing",
+                teardown_handles.len()
+            );
             break;
         }
 

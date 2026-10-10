@@ -110,6 +110,10 @@ impl TreeNav {
                 candidate - 1
             };
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "candidate stays below count == self.rows.len(): it is either advanced modulo count, set to count - 1, or decremented while nonzero, and self.cursor is maintained below rows.len() by the cursor setters"
+            )]
             if self.rows[candidate].selectable {
                 self.cursor = candidate;
                 return;

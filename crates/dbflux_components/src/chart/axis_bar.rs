@@ -216,6 +216,10 @@ where
         .unwrap_or_else(|| "—".to_string())
         .into();
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the `1` arm requires bindings.y.len() == 1 and the `n` arm implies len >= 2, so index 0 is in bounds in every arm that indexes bindings.y"
+    )]
     let y_label: SharedString = match bindings.y.len() {
         0 => "none".to_string(),
         1 => columns

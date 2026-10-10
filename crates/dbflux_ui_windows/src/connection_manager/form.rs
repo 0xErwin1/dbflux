@@ -889,6 +889,12 @@ impl TestConnectionProbeResource {
 }
 
 impl Drop for TestConnectionProbeResource {
+    #[expect(
+        clippy::expect_used,
+        reason = "`Drop` cannot return an error, so the existing \
+                  panic-on-poisoned-mutex policy is retained here; the guard \
+                  is only locked for a single `push`"
+    )]
     fn drop(&mut self) {
         if let Some(drop_guard) = &self.drop_guard {
             drop_guard
@@ -1802,6 +1808,12 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: retains the existing panic-on-poisoned-mutex \
+                  policy in the `Result`-returning `SecretStore` methods; this \
+                  fixture does not convert poisoned locks into returned errors"
+    )]
     impl SecretStore for SecretStoreFixture {
         fn is_available(&self) -> bool {
             true

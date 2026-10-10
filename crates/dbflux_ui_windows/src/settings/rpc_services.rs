@@ -354,6 +354,11 @@ impl ServicesSection {
         service.api_contract =
             preserved_api_contract_for_edit(&self.svc_services, self.editing_svc_idx);
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the branch guard `idx < self.svc_services.len()` bounds \
+                      `idx` against the same vector indexed below"
+        )]
         let saved_idx = if let Some(idx) = self.editing_svc_idx {
             if idx < self.svc_services.len() {
                 self.svc_services[idx] = service;

@@ -520,6 +520,18 @@ pub(super) enum GridDirection {
 ///   to that section's last card.
 ///
 /// Empty sections are skipped. With no cards the result is 0.
+///
+/// Indexing contract: `section_sizes` is filtered to positive sizes and the
+/// function returns early when the total is 0, so `sections` is non-empty and
+/// `current` is clamped below `total`. Section indices come from `locate_card`
+/// results or from modulo arithmetic over `sections.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "after the zero-total early return `sections` is non-empty and \
+              holds only positive sizes; `current` is clamped below the total \
+              and every section index is a `locate_card` return value or an \
+              in-range modulo of one"
+)]
 pub(super) fn move_grid_focus(
     section_sizes: &[usize],
     columns: usize,
@@ -585,6 +597,16 @@ pub(super) fn move_grid_focus(
 
 /// Flat index of the card at `row`/`column` of `section`, clamped to the
 /// section's last card when that row is shorter than `column`.
+///
+/// Called only by `move_grid_focus`, whose contract (see above) bounds every
+/// `section` argument within `sections`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the only caller, `move_grid_focus`, passes section indices from \
+              `locate_card` outputs or in-range modulo arithmetic over its \
+              non-empty `sections`, so both the `..section` prefix and \
+              `sections[section]` are in bounds"
+)]
 fn card_at(sections: &[usize], columns: usize, section: usize, row: usize, column: usize) -> usize {
     let section_start: usize = sections[..section].iter().sum();
     let offset = (row * columns + column).min(sections[section] - 1);
@@ -594,6 +616,13 @@ fn card_at(sections: &[usize], columns: usize, section: usize, row: usize, colum
 /// Section index and offset within that section of flat card `index`.
 /// `sections` must be non-empty, hold only non-zero sizes, and sum past
 /// `index`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the doc contract requires a non-empty `sections`; the fallback \
+              arm therefore indexes the last section, and callers \
+              (`move_grid_focus`) guarantee non-emptiness by returning early \
+              when the total is 0"
+)]
 fn locate_card(sections: &[usize], index: usize) -> (usize, usize) {
     let mut start = 0;
     for (section, size) in sections.iter().enumerate() {

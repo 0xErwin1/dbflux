@@ -21,6 +21,16 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         None
     }
 
+    /// Grid-navigation contract shared by every method below: indices come
+    /// from `position()` over the same `rows` value, so they are in bounds,
+    /// and each remaining index is guarded by an explicit bounds or
+    /// emptiness check in the line above it.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the row index is guarded by `row_idx + 1 < rows.len()`; \
+                  `next_row` is checked non-empty and the column is clamped \
+                  to `next_row.len() - 1`"
+    )]
     #[allow(dead_code)]
     pub(super) fn move_down(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows)
@@ -34,6 +44,12 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the row index is guarded by `row_idx > 0`; `prev_row` is \
+                  checked non-empty and the column is clamped to \
+                  `prev_row.len() - 1`"
+    )]
     #[allow(dead_code)]
     pub(super) fn move_up(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows)
@@ -47,6 +63,12 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`row_idx`/`col_idx` come from `position()` over the same \
+                  `rows` value; `col_idx + 1 < row.len()` guards the \
+                  successor index"
+    )]
     #[allow(dead_code)]
     pub(super) fn move_right(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows) {
@@ -57,6 +79,11 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`row_idx`/`col_idx` come from `position()` over the same \
+                  `rows` value, and `col_idx > 0` guards the subtraction"
+    )]
     #[allow(dead_code)]
     pub(super) fn move_left(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows)
@@ -84,6 +111,13 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`row_idx`/`col_idx` come from `position()` over the same \
+                  `rows` value; the successor index is guarded by \
+                  `col_idx + 1 < row.len()` and the next row by \
+                  `row_idx + 1 < rows.len() && !rows[row_idx + 1].is_empty()`"
+    )]
     pub(super) fn tab_next(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows) {
             let row = &rows[row_idx];
@@ -95,6 +129,12 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`row_idx`/`col_idx` come from `position()` over the same \
+                  `rows` value; `col_idx > 0` guards the subtraction and \
+                  `row_idx > 0` guards the previous-row index"
+    )]
     pub(super) fn tab_prev(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows) {
             if col_idx > 0 {

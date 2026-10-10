@@ -15,7 +15,7 @@ use super::node::{NodeId, NodeValue, TreeNode};
 use super::state::{DocumentTreeState, DocumentViewMode};
 
 /// Height of each row in the tree at the default grid font size.
-pub const TREE_ROW_HEIGHT: Pixels = px(26.0);
+pub(super) const TREE_ROW_HEIGHT: Pixels = px(26.0);
 
 /// Indentation per depth level at the default grid font size.
 const INDENT_WIDTH: Pixels = px(16.0); // guardrail-allow: domain const, tree indentation step

@@ -364,6 +364,7 @@ fn command_icon(id: &str) -> AppIcon {
         "focus_results" | "toggle_results" => AppIcon::Rows3,
         "focus_tasks" | "toggle_tasks" => AppIcon::Loader,
         "toggle_editor" => AppIcon::SquareTerminal,
+        "toggle_results_position" => AppIcon::PanelRight,
         "open_settings" => AppIcon::Settings,
         "open_login_modal" | "open_sso_wizard" => AppIcon::KeyRound,
         "open_mcp_approvals" | "refresh_mcp_governance" => AppIcon::Bot,

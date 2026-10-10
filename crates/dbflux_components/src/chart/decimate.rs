@@ -22,12 +22,20 @@ pub fn lttb(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
     }
 
     if target < 3 {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the guard above returns early when n <= 1, so indices 0 and n - 1 are in bounds"
+        )]
         return vec![points[0], points[n - 1]];
     }
 
     let mut sampled = Vec::with_capacity(target);
 
     // Always include first point.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "target >= 3 and target < n leave n >= 4, so index 0 is in bounds"
+    )]
     sampled.push(points[0]);
 
     // The middle points are split into (target - 2) equal-width buckets.
@@ -53,6 +61,10 @@ pub fn lttb(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
             let mut sum_x = 0.0f64;
             let mut sum_y = 0.0f64;
             let count = (c_end - c_start) as f64;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "c_start and c_end are both clamped to n above and c_start < c_end is checked, so the range stays within 0..n"
+            )]
             for &(x, y) in &points[c_start..c_end] {
                 sum_x += x;
                 sum_y += y;
@@ -60,12 +72,20 @@ pub fn lttb(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
             (sum_x / count, sum_y / count, count)
         } else {
             // Edge case: last bucket averages to the final point.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "n >= 4 after the early returns above, so index n - 1 is the last element"
+            )]
             let last = points[n - 1];
             (last.0, last.1, 1.0f64)
         };
         let _ = count;
 
         // Point A is the last selected point.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a starts at 0 and is only ever assigned best, which is clamped below n in the bucket loop, so a < n"
+        )]
         let (ax, ay) = points[a];
 
         // Find the point in bucket B that forms the largest triangle with A and avg(C).
@@ -73,6 +93,10 @@ pub fn lttb(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
         let mut best = b_start.min(n - 1);
 
         for j in b_start..b_end {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the index is clamped with .min(n - 1) before use"
+            )]
             let (bx, by) = points[j.min(n - 1)];
             // Triangle area (×2, sign does not matter — we want the maximum).
             let area = ((ax - avg_x) * (by - ay) - (ax - bx) * (avg_y - ay)).abs();
@@ -82,11 +106,19 @@ pub fn lttb(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
             }
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the index is clamped with .min(n - 1) before use"
+        )]
         sampled.push(points[best.min(n - 1)]);
         a = best;
     }
 
     // Always include last point.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "n >= 4 after the early returns above, so index n - 1 is the last element"
+    )]
     sampled.push(points[n - 1]);
 
     sampled
@@ -117,6 +149,10 @@ pub fn lttb_with_indices(
     }
 
     if n == 1 {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the n == 1 branch and the assert_eq! at the top guarantee both slices have exactly one element"
+        )]
         return vec![(points[0], original_indices[0])];
     }
 
@@ -129,6 +165,10 @@ pub fn lttb_with_indices(
     }
 
     if target < 3 {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "n >= 2 after the 0/1 branches above, and original_indices has the same length as points (asserted), so indices 0 and n - 1 are in bounds"
+        )]
         return vec![
             (points[0], original_indices[0]),
             (points[n - 1], original_indices[n - 1]),
@@ -137,6 +177,10 @@ pub fn lttb_with_indices(
 
     let mut sampled = Vec::with_capacity(target);
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "n >= 4 after the early returns above (target >= 3 and target < n), so index 0 is in bounds on both equal-length slices"
+    )]
     sampled.push((points[0], original_indices[0]));
 
     let bucket_count = target - 2;
@@ -157,22 +201,38 @@ pub fn lttb_with_indices(
             let mut sum_x = 0.0f64;
             let mut sum_y = 0.0f64;
             let count = (c_end - c_start) as f64;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "c_start and c_end are both clamped to n above and c_start < c_end is checked, so the range stays within 0..n"
+            )]
             for &(x, y) in &points[c_start..c_end] {
                 sum_x += x;
                 sum_y += y;
             }
             (sum_x / count, sum_y / count)
         } else {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "n >= 4 after the early returns above, so index n - 1 is the last element"
+            )]
             let last = points[n - 1];
             (last.0, last.1)
         };
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a starts at 0 and is only ever assigned best, which is clamped below n in the bucket loop, so a < n"
+        )]
         let (ax, ay) = points[a];
 
         let mut max_area = -1.0f64;
         let mut best = b_start.min(n - 1);
 
         for j in b_start..b_end {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the index is clamped with .min(n - 1) before use"
+            )]
             let (bx, by) = points[j.min(n - 1)];
             let area = ((ax - avg_x) * (by - ay) - (ax - bx) * (avg_y - ay)).abs();
             if area > max_area {
@@ -181,10 +241,18 @@ pub fn lttb_with_indices(
             }
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the index is clamped with .min(n - 1) before use, and original_indices has the same length as points (asserted)"
+        )]
         sampled.push((points[best.min(n - 1)], original_indices[best.min(n - 1)]));
         a = best;
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "n >= 4 after the early returns above, so index n - 1 is the last element on both equal-length slices"
+    )]
     sampled.push((points[n - 1], original_indices[n - 1]));
 
     sampled

@@ -622,7 +622,18 @@ impl AuthProfilesSection {
                         self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
                     }
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "`field_id` is inserted into `dynamic_dropdowns` \
+                                  and `form_inputs` above when absent, so the \
+                                  lookups below cannot miss"
+                    )]
                     let dropdown = self.dynamic_dropdowns[&field_id].clone();
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "`field_id` is inserted into `form_inputs` above \
+                                  when absent, so this lookup cannot miss"
+                    )]
                     let input = self.form_inputs[&field_id].clone();
                     let sub = cx.subscribe_in(
                         &dropdown,
@@ -938,6 +949,11 @@ impl AuthProfilesSection {
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the block above inserts `field_id` into `dynamic_dropdowns` \
+                      when absent, so this lookup cannot miss"
+        )]
         let dropdown = self.dynamic_dropdowns[&field_id].clone();
 
         // Sync cached options into the dropdown.
@@ -1041,6 +1057,11 @@ impl AuthProfilesSection {
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the block above inserts `field_id` into `dynamic_dropdowns` \
+                      when absent, so this lookup cannot miss"
+        )]
         let dropdown = self.dynamic_dropdowns[&field_id].clone();
 
         let mut items: Vec<DropdownItem> = vec![DropdownItem::with_value(

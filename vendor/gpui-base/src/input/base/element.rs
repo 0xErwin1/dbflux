@@ -46,6 +46,26 @@ fn diagnostic_highlight_style(
     }
 }
 
+/// Byte ranges of `needle` in `haystack`, shifted by `base_offset` and
+/// excluding the `selected` range itself. Multi-line and whitespace-only
+/// selections yield nothing, matching VS Code's selection highlight.
+fn selection_occurrences(
+    haystack: &str,
+    needle: &str,
+    base_offset: usize,
+    selected: &Range<usize>,
+) -> Vec<Range<usize>> {
+    if needle.contains('\n') || needle.trim().is_empty() {
+        return vec![];
+    }
+
+    haystack
+        .match_indices(needle)
+        .map(|(start, _)| base_offset + start..base_offset + start + needle.len())
+        .filter(|range| range != selected)
+        .collect()
+}
+
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(10.);
@@ -883,6 +903,45 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         paths
+    }
+
+    /// Other occurrences of the active selection's text, limited to the
+    /// visible lines so the cost stays bounded on large documents.
+    fn layout_selection_occurrences(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        window: &Window,
+        cx: &App,
+    ) -> Vec<Path<Pixels>> {
+        let state = self.state.read(cx);
+        // The open search panel already paints its matches, and a masked
+        // input must not reveal where its secret repeats.
+        if !state.is_code_editor()
+            || state.masked
+            || state.search_session.open
+            || !state.focus_handle.is_focused(window)
+        {
+            return vec![];
+        }
+
+        let selection = state.active_selection();
+        let selected = selection.start.min(selection.end)..selection.start.max(selection.end);
+        if selected.is_empty() || selected.end > state.text.len() {
+            return vec![];
+        }
+        let needle = state.text.slice(selected.clone()).to_string();
+
+        let visible = last_layout.visible_range_offset.clone();
+        if visible.is_empty() || visible.end > state.text.len() {
+            return vec![];
+        }
+        let haystack = state.text.slice(visible.clone()).to_string();
+
+        selection_occurrences(&haystack, &needle, visible.start, &selected)
+            .into_iter()
+            .filter_map(|range| Self::layout_match_range(range, last_layout, bounds))
+            .collect()
     }
 
     fn layout_hover_highlight(
@@ -1900,6 +1959,7 @@ pub(super) struct PrepaintState {
     selection_paths: Vec<Path<Pixels>>,
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
+    selection_occurrence_paths: Vec<Path<Pixels>>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -2335,6 +2395,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
             .map(|info| info.bounds);
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
+        let selection_occurrence_paths =
+            self.layout_selection_occurrences(&last_layout, &bounds, window, cx);
         let selection_paths = self.layout_selections(&last_layout, &mut bounds, window, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let document_color_paths =
@@ -2457,6 +2519,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             current_row,
             selection_paths,
             search_match_paths,
+            selection_occurrence_paths,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -2528,24 +2591,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
                 let height = line_height * lines.len() as f32;
 
-                // A row of the statement under the cursor takes the statement
-                // fill (the cursor row a stronger one) instead of the plain
-                // active-line colour.
-                if let Some(gutter) = prepaint
-                    .statement_gutter
-                    .as_ref()
-                    .filter(|gutter| gutter.is_active_row(buffer_line))
-                {
-                    let row_fill = if is_active {
-                        gutter.style.cursor_line_fill
-                    } else {
-                        gutter.style.statement_fill
-                    };
-                    window.paint_quad(fill(
-                        Bounds::new(p, size(bounds.size.width, height)),
-                        row_fill,
-                    ));
-                } else if is_active {
+                // The statement under the cursor is marked in the gutter only,
+                // so the text being edited stays on the editor background.
+                if is_active {
                     if let Some(bg_color) = active_line_color {
                         window.paint_quad(fill(
                             Bounds::new(p, size(bounds.size.width, height)),
@@ -2619,6 +2667,10 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 if *is_active {
                     window.paint_path(path.clone(), editor_style.selection);
                 }
+            }
+
+            for path in prepaint.selection_occurrence_paths.drain(..) {
+                window.paint_path(path, secondary_selection);
             }
 
             for path in prepaint.selection_paths.drain(..) {
@@ -3135,6 +3187,18 @@ fn split_runs_by_bg_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_occurrences_skip_selection_and_offset_by_base() {
+        let haystack = "select id from users u where u.id = 1";
+        assert_eq!(
+            selection_occurrences(haystack, "id", 100, &(107..109)),
+            vec![131..133]
+        );
+        assert!(selection_occurrences(haystack, "  ", 0, &(0..2)).is_empty());
+        assert!(selection_occurrences("a\nb\na\nb", "a\nb", 0, &(0..3)).is_empty());
+        assert!(selection_occurrences(haystack, "missing", 0, &(0..7)).is_empty());
+    }
 
     #[test]
     fn block_wrap_boundary_matches_cursor_affinity() {
