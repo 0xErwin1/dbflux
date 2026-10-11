@@ -8083,30 +8083,42 @@ mod tests {
     fn test_select_up_down_keeps_column(cx: &mut TestAppContext) {
         let view = InputView::<EditorMode>::new(cx);
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
-        setup_cursors(&mut cx, &view.input, "abcd\nx\nab|cd");
-        cx.update(|window, cx| {
-            view.input.update(cx, |state, cx| state.focus(window, cx));
-        });
+        // `setup_cursors` drops empty lines, so set the text directly.
+        let place_cursor = |cx: &mut VisualTestContext, text: &str, offset: usize| {
+            cx.update(|window, cx| {
+                view.input.update(cx, |state, cx| {
+                    state.set_value(text, window, cx);
+                    state.set_selected_range(offset..offset, cx);
+                    state.focus(window, cx);
+                });
+            });
+        };
         let selection = |cx: &mut VisualTestContext| {
             view.input.read_with(cx, |state, _| {
                 let sel = state.active_selection();
                 (sel.start..sel.end, sel.cursor_offset())
             })
         };
+
+        place_cursor(&mut cx, "select 1;\n\nselect 2;", 14);
         cx.simulate_keystrokes("shift-up");
-        assert_eq!(selection(&mut cx), (6..9, 6));
+        assert_eq!(selection(&mut cx), (10..14, 10));
         cx.simulate_keystrokes("shift-up");
-        assert_eq!(selection(&mut cx), (2..9, 2));
+        assert_eq!(selection(&mut cx), (3..14, 3));
         cx.simulate_keystrokes("shift-up");
-        assert_eq!(selection(&mut cx), (0..9, 0));
+        assert_eq!(selection(&mut cx), (0..14, 0));
         cx.simulate_keystrokes("shift-down");
-        assert_eq!(selection(&mut cx), (6..9, 6));
+        assert_eq!(selection(&mut cx), (10..14, 10));
         cx.simulate_keystrokes("shift-down");
-        assert_eq!(selection(&mut cx), (9..9, 9));
+        assert_eq!(selection(&mut cx), (14..14, 14));
         cx.simulate_keystrokes("shift-down");
-        assert_eq!(selection(&mut cx), (9..12, 12));
+        assert_eq!(selection(&mut cx), (14..20, 20));
         cx.simulate_keystrokes("shift-down");
-        assert_eq!(selection(&mut cx), (9..12, 12));
+        assert_eq!(selection(&mut cx), (14..20, 20));
+
+        place_cursor(&mut cx, "ab\nabcd", 5);
+        cx.simulate_keystrokes("shift-down");
+        assert_eq!(selection(&mut cx), (5..7, 7));
     }
 
     #[gpui::test]
