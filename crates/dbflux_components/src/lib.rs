@@ -9,6 +9,9 @@
 
 pub mod actions;
 pub mod density;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod accessibility;
 pub mod fonts;
 pub mod helpers;
 pub mod icon;
