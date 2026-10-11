@@ -130,7 +130,7 @@ pub(crate) async fn count_incoming_references<Count>(
 
 /// A single column value pair captured from the selected row.
 #[derive(Debug, Clone)]
-pub struct InspectorCell {
+pub(crate) struct InspectorCell {
     pub name: String,
     pub value: Value,
     /// The column type shown at the right of the name ("int8", or
@@ -143,7 +143,7 @@ pub struct InspectorCell {
 /// All data the inspector needs to render without further async calls
 /// (except the reference counts, which load lazily).
 #[derive(Debug, Clone)]
-pub struct InspectorSnapshot {
+pub(crate) struct InspectorSnapshot {
     /// One-based row number shown in the header.
     pub row_number: usize,
     /// The row's key expression, shown next to the row number.
@@ -159,7 +159,7 @@ pub struct InspectorSnapshot {
 /// "orders.id = 2", with the columns of a composite key joined by " · ".
 /// `table` qualifies each column when the row comes from a known table.
 /// `None` when the row has no primary key column.
-pub fn row_key_label(table: Option<&str>, cells: &[InspectorCell]) -> Option<String> {
+pub(crate) fn row_key_label(table: Option<&str>, cells: &[InspectorCell]) -> Option<String> {
     let parts: Vec<String> = cells
         .iter()
         .filter(|cell| cell.is_primary_key)
@@ -177,7 +177,7 @@ pub fn row_key_label(table: Option<&str>, cells: &[InspectorCell]) -> Option<Str
 
 /// The type label of a column: its type, followed by the table a foreign key
 /// on it points at.
-pub fn column_type_label(type_name: &str, referenced_table: Option<&str>) -> String {
+pub(crate) fn column_type_label(type_name: &str, referenced_table: Option<&str>) -> String {
     match referenced_table {
         Some(table) if type_name.is_empty() => format!("→ {table}"),
         Some(table) => format!("{type_name} → {table}"),
@@ -202,7 +202,7 @@ fn row_json(cells: &[InspectorCell]) -> String {
 
 /// Which way a reference runs from the inspected row.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ReferenceKind {
+pub(crate) enum ReferenceKind {
     /// A foreign key of this row: its `column` holds `value`, which is the
     /// `target_column` of one row of the target table.
     Outgoing,
@@ -213,7 +213,7 @@ pub enum ReferenceKind {
 
 /// One entry of the REFERENCES section.
 #[derive(Debug, Clone)]
-pub struct FkReference {
+pub(crate) struct FkReference {
     /// The foreign key column: of this row for an outgoing reference, of the
     /// target table for an incoming one.
     pub column: String,
@@ -231,7 +231,7 @@ pub struct FkReference {
 
 impl FkReference {
     /// The referenced table, schema-qualified when the schema is known.
-    pub fn qualified_target(&self) -> String {
+    pub(crate) fn qualified_target(&self) -> String {
         match &self.target_schema {
             Some(schema) => format!("{}.{}", schema, self.target_table),
             None => self.target_table.clone(),
@@ -241,7 +241,7 @@ impl FkReference {
     /// The text at the right of the reference: the key an outgoing
     /// reference matches ("id = 2129"), or how many rows an incoming one
     /// has ("3 rows"); `None` while that count loads.
-    pub fn detail(&self) -> Option<String> {
+    pub(crate) fn detail(&self) -> Option<String> {
         match &self.kind {
             ReferenceKind::Outgoing => Some(format!(
                 "{} = {}",
@@ -264,7 +264,7 @@ impl FkReference {
 /// linked through the row's value of the referenced column, which must not
 /// be null. `values` holds the row's cells by column name. Counts start
 /// loading.
-pub fn incoming_references(
+pub(crate) fn incoming_references(
     foreign_keys: &[dbflux_core::SchemaForeignKeyInfo],
     table: &str,
     schema: Option<&str>,
@@ -478,7 +478,7 @@ fn render_fk_reference_entry(
 // ---------------------------------------------------------------------------
 
 /// The row inspector panel mounted in the workspace inspector rail.
-pub struct RowInspectorContent {
+pub(crate) struct RowInspectorContent {
     snapshot: InspectorSnapshot,
     references: Vec<FkReference>,
     references_ready: bool,
@@ -494,7 +494,7 @@ pub struct RowInspectorContent {
 
 /// Requests from the inspector's buttons; the owning grid carries them out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowInspectorContentEvent {
+pub(crate) enum RowInspectorContentEvent {
     /// The close button: dismiss the inspector.
     Close,
     /// The pin button: stop or resume following the grid selection.
@@ -510,7 +510,7 @@ pub enum RowInspectorContentEvent {
 impl EventEmitter<RowInspectorContentEvent> for RowInspectorContent {}
 
 impl RowInspectorContent {
-    pub fn new(snapshot: InspectorSnapshot, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(snapshot: InspectorSnapshot, cx: &mut Context<Self>) -> Self {
         Self {
             snapshot,
             references: Vec::new(),
@@ -523,7 +523,7 @@ impl RowInspectorContent {
     }
 
     /// Scroll the field list by a line, a page, or to either end.
-    pub fn scroll(
+    pub(crate) fn scroll(
         &self,
         step: crate::data_grid_panel::side_island::IslandScroll,
         cx: &mut Context<Self>,
@@ -533,7 +533,7 @@ impl RowInspectorContent {
     }
 
     /// Replace the snapshot for a new row selection while keeping the entity alive.
-    pub fn open(&mut self, snapshot: InspectorSnapshot, cx: &mut Context<Self>) {
+    pub(crate) fn open(&mut self, snapshot: InspectorSnapshot, cx: &mut Context<Self>) {
         self.snapshot = snapshot;
         self.references = Vec::new();
         self.references_ready = false;
@@ -542,12 +542,12 @@ impl RowInspectorContent {
     }
 
     /// Identifies the row currently open, for references that load later.
-    pub fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
 
     /// Show the pin button as pressed (`true`) or released.
-    pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         if self.pinned != pinned {
             self.pinned = pinned;
             cx.notify();
@@ -556,14 +556,14 @@ impl RowInspectorContent {
 
     /// Set the complete reference list.
     #[cfg(test)]
-    pub fn set_references(&mut self, references: Vec<FkReference>, cx: &mut Context<Self>) {
+    pub(crate) fn set_references(&mut self, references: Vec<FkReference>, cx: &mut Context<Self>) {
         self.references = references;
         self.references_ready = true;
         cx.notify();
     }
 
     /// Show the outgoing references while the incoming ones still load.
-    pub fn set_outgoing_references(
+    pub(crate) fn set_outgoing_references(
         &mut self,
         references: Vec<FkReference>,
         cx: &mut Context<Self>,
@@ -576,7 +576,7 @@ impl RowInspectorContent {
     /// Append the incoming references found for row `generation` and mark
     /// the list complete. Returns the index of the first one appended, or
     /// `None` when another row opened in the meantime.
-    pub fn add_incoming_references(
+    pub(crate) fn add_incoming_references(
         &mut self,
         generation: u64,
         references: Vec<FkReference>,
@@ -596,7 +596,7 @@ impl RowInspectorContent {
 
     /// Record how many rows point at row `generation` through the incoming
     /// reference at `index`. Ignored for another row or another kind.
-    pub fn resolve_count(
+    pub(crate) fn resolve_count(
         &mut self,
         generation: u64,
         index: usize,
@@ -624,18 +624,18 @@ impl RowInspectorContent {
 
     /// Whether the references list has been populated (even if empty).
     #[cfg(test)]
-    pub fn references_ready(&self) -> bool {
+    pub(crate) fn references_ready(&self) -> bool {
         self.references_ready
     }
 
     /// Number of FK references.
     #[cfg(test)]
-    pub fn references_len(&self) -> usize {
+    pub(crate) fn references_len(&self) -> usize {
         self.references.len()
     }
 
     #[cfg(test)]
-    pub fn is_pinned(&self) -> bool {
+    pub(crate) fn is_pinned(&self) -> bool {
         self.pinned
     }
 

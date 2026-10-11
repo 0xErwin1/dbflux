@@ -330,6 +330,10 @@ impl SchemaVizContextMenuState {
             .map(|(actions, _)| SchemaVizMenuAction::to_menu_items(actions))
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "selected_index is assigned only values in 0..count below (decrement or count - 1) and count > 0 after the early return"
+    )]
     fn navigate_up(&mut self) -> bool {
         let count = self.actions.len();
         if count == 0 {
@@ -351,6 +355,10 @@ impl SchemaVizContextMenuState {
         false
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "selected_index is assigned only values in 0..count below (increment or 0) and count > 0 after the early return"
+    )]
     fn navigate_down(&mut self) -> bool {
         let count = self.actions.len();
         if count == 0 {
@@ -1729,6 +1737,10 @@ impl SchemaVizDocument {
     }
 
     /// Finds the next node in the given direction from the currently selected node.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "candidate ids pass a layout.nodes.get(...) probe earlier in the same function"
+    )]
     fn find_next_node(&self, direction: Direction) -> Option<NodeIndex> {
         let current = self.selected_node?;
         let sorted = self.spatial_sorted_nodes();
@@ -2587,6 +2599,10 @@ impl SchemaVizDocument {
     }
 
     fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "index >= menu.actions.len() returns early, so both menu.actions[index] accesses are in bounds"
+        )]
         let action = match self.context_menu.as_mut() {
             Some(menu) => {
                 if index >= menu.actions.len() {

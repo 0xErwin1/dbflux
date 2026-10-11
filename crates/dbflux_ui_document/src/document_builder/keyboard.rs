@@ -29,73 +29,73 @@ use super::values::{ScalarKind, ValueEditor, ValueProblem};
 pub(super) mod row_id {
     use super::NodeId;
 
-    pub fn name() -> String {
+    pub(crate) fn name() -> String {
         "name".to_string()
     }
 
-    pub fn saved(id: &str) -> String {
+    pub(crate) fn saved(id: &str) -> String {
         format!("saved-{id}")
     }
 
-    pub fn conflict() -> String {
+    pub(crate) fn conflict() -> String {
         "conflict".to_string()
     }
 
-    pub fn match_summary() -> String {
+    pub(crate) fn match_summary() -> String {
         "match".to_string()
     }
 
-    pub fn group(id: NodeId) -> String {
+    pub(crate) fn group(id: NodeId) -> String {
         format!("group-{id}")
     }
 
-    pub fn condition(id: NodeId) -> String {
+    pub(crate) fn condition(id: NodeId) -> String {
         format!("condition-{id}")
     }
 
-    pub fn chip(id: NodeId, index: usize) -> String {
+    pub(crate) fn chip(id: NodeId, index: usize) -> String {
         format!("chip-{id}-{index}")
     }
 
-    pub fn projection_mode() -> String {
+    pub(crate) fn projection_mode() -> String {
         "projection-mode".to_string()
     }
 
-    pub fn projection_field(index: usize) -> String {
+    pub(crate) fn projection_field(index: usize) -> String {
         format!("projection-{index}")
     }
 
-    pub fn projection_add() -> String {
+    pub(crate) fn projection_add() -> String {
         "projection-add".to_string()
     }
 
-    pub fn sort(index: usize) -> String {
+    pub(crate) fn sort(index: usize) -> String {
         format!("sort-{index}")
     }
 
     /// Adding a sort key, limit and skip.
-    pub fn paging() -> String {
+    pub(crate) fn paging() -> String {
         "paging".to_string()
     }
 
-    pub fn group_stage_add() -> String {
+    pub(crate) fn group_stage_add() -> String {
         "group-stage-add".to_string()
     }
 
-    pub fn group_key(index: usize) -> String {
+    pub(crate) fn group_key(index: usize) -> String {
         format!("group-key-{index}")
     }
 
-    pub fn group_key_add() -> String {
+    pub(crate) fn group_key_add() -> String {
         "group-key-add".to_string()
     }
 
-    pub fn accumulator(id: NodeId) -> String {
+    pub(crate) fn accumulator(id: NodeId) -> String {
         format!("accumulator-{id}")
     }
 
     /// Adding an accumulator and removing the stage.
-    pub fn group_stage_actions() -> String {
+    pub(crate) fn group_stage_actions() -> String {
         "group-stage-actions".to_string()
     }
 }
@@ -115,7 +115,7 @@ fn flipped(combinator: DocumentCombinator) -> DocumentCombinator {
 
 impl DocumentBuilderPanel {
     /// Answers a key while the rail holds the keyboard.
-    pub fn keyboard_command(
+    pub(crate) fn keyboard_command(
         &mut self,
         command: Command,
         window: &mut Window,
@@ -171,19 +171,19 @@ impl DocumentBuilderPanel {
     }
 
     /// Whether the rail's action menu is open.
-    pub fn keyboard_menu_is_open(&self) -> bool {
+    pub(crate) fn keyboard_menu_is_open(&self) -> bool {
         self.rail.menu_is_open()
     }
 
     /// Id of the row the keyboard cursor is on, once a key moved it.
     #[cfg(test)]
-    pub fn rail_cursor_for_test(&self) -> Option<String> {
+    pub(crate) fn rail_cursor_for_test(&self) -> Option<String> {
         self.rail.cursor_row().map(|row| row.to_string())
     }
 
     /// Ids of the rail's rows, in order.
     #[cfg(test)]
-    pub fn rail_rows_for_test(&self, cx: &App) -> Vec<String> {
+    pub(crate) fn rail_rows_for_test(&self, cx: &App) -> Vec<String> {
         self.rail_rows(cx)
             .into_iter()
             .map(|row| row.id.to_string())
@@ -409,6 +409,12 @@ impl DocumentBuilderPanel {
                 .iter()
                 .position(|op| *op == accumulator.op)
                 .unwrap_or(0);
+            // position() over ALL, or 0, stepped modulo the non-empty
+            // ALL const array.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "position comes from position() over the non-empty ALL const array (or 0) and is stepped modulo ALL.len()"
+            )]
             let next = AccumulatorOp::ALL[(position + 1) % AccumulatorOp::ALL.len()];
             let cycle = move |this: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
                 this.set_accumulator_op(id, next, cx)

@@ -27,7 +27,7 @@ use uuid::Uuid;
 /// Folder-name validation: non-empty, no leading/trailing slash, no
 /// consecutive slashes — the folder is created directly under the current
 /// prefix, so any nesting must be typed as separate creates.
-pub fn folder_name_error(name: &str) -> Option<String> {
+pub(crate) fn folder_name_error(name: &str) -> Option<String> {
     if name.is_empty() {
         return Some(dbflux_i18n::t!(
             "document.object_browser.create_folder.error.empty"

@@ -24,26 +24,26 @@ use super::values::{
     parse_count, parse_pattern, parse_scalar, value_editor,
 };
 
-pub type NodeId = u64;
+pub(crate) type NodeId = u64;
 
 /// The field every document has and find results need to stay editable.
-pub const ID_FIELD: &str = "_id";
+pub(crate) const ID_FIELD: &str = "_id";
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct GroupDraft {
+pub(crate) struct GroupDraft {
     pub id: NodeId,
     pub combinator: DocumentCombinator,
     pub children: Vec<NodeDraft>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum NodeDraft {
+pub(crate) enum NodeDraft {
     Condition(ConditionDraft),
     Group(GroupDraft),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConditionDraft {
+pub(crate) struct ConditionDraft {
     pub id: NodeId,
     /// Field path; relative to the array inside an `ElemMatch`, where an
     /// empty path tests the element itself.
@@ -55,14 +55,14 @@ pub struct ConditionDraft {
 }
 
 impl ConditionDraft {
-    pub fn editor(&self) -> ValueEditor {
+    pub(crate) fn editor(&self) -> ValueEditor {
         value_editor(self.operator, self.kind)
     }
 }
 
 /// The operand of a condition, shaped by its editor.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Operand {
+pub(crate) enum Operand {
     /// Text typed into a single-value input and what it reads as.
     Text {
         text: String,
@@ -75,18 +75,18 @@ pub enum Operand {
 
 /// What an accumulator computes for each group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccumulatorOp {
+pub(crate) enum AccumulatorOp {
     Count,
     Sum,
     Avg,
 }
 
 impl AccumulatorOp {
-    pub const ALL: [AccumulatorOp; 3] =
+    pub(crate) const ALL: [AccumulatorOp; 3] =
         [AccumulatorOp::Count, AccumulatorOp::Sum, AccumulatorOp::Avg];
 
     /// Whether the accumulator reads a field.
-    pub fn takes_field(self) -> bool {
+    pub(crate) fn takes_field(self) -> bool {
         self != AccumulatorOp::Count
     }
 }
@@ -94,7 +94,7 @@ impl AccumulatorOp {
 /// One named output of the group stage. The field stays when the operator
 /// switches to `Count`, so switching back finds it again.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AccumulatorDraft {
+pub(crate) struct AccumulatorDraft {
     pub id: NodeId,
     pub name: String,
     pub op: AccumulatorOp,
@@ -102,7 +102,7 @@ pub struct AccumulatorDraft {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct GroupStageDraft {
+pub(crate) struct GroupStageDraft {
     pub id: NodeId,
     pub keys: Vec<String>,
     pub accumulators: Vec<AccumulatorDraft>,
@@ -113,7 +113,7 @@ pub struct GroupStageDraft {
 const DEFAULT_ACCUMULATOR_NAME: &str = "count";
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ProblemKind {
+pub(crate) enum ProblemKind {
     MissingField,
     Value(ValueProblem),
     EmptyList,
@@ -124,13 +124,13 @@ pub enum ProblemKind {
 
 /// Why a node keeps the draft from becoming a spec.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DraftProblem {
+pub(crate) struct DraftProblem {
     pub node: NodeId,
     pub kind: ProblemKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct BuilderDraft {
+pub(crate) struct BuilderDraft {
     next_id: NodeId,
     pub mode: DocumentQueryMode,
     pub filter: GroupDraft,
@@ -166,19 +166,19 @@ impl Default for BuilderDraft {
 
 impl BuilderDraft {
     /// An empty draft whose values are written as `syntax` says.
-    pub fn with_value_syntax(syntax: ValueSyntax) -> Self {
+    pub(crate) fn with_value_syntax(syntax: ValueSyntax) -> Self {
         Self {
             syntax,
             ..Self::default()
         }
     }
 
-    pub fn value_syntax(&self) -> ValueSyntax {
+    pub(crate) fn value_syntax(&self) -> ValueSyntax {
         self.syntax
     }
 
     #[cfg(test)]
-    pub fn from_spec(spec: &DocumentQuerySpec) -> Self {
+    pub(crate) fn from_spec(spec: &DocumentQuerySpec) -> Self {
         let mut draft = Self::default();
         draft.load_all(spec);
         draft
@@ -186,7 +186,7 @@ impl BuilderDraft {
 
     /// Replaces the whole draft with `spec`, its mode and group stage
     /// included, as when a saved query is opened.
-    pub fn load_all(&mut self, spec: &DocumentQuerySpec) {
+    pub(crate) fn load_all(&mut self, spec: &DocumentQuerySpec) {
         self.load(spec);
         self.mode = spec.mode;
         self.group = spec
@@ -199,7 +199,7 @@ impl BuilderDraft {
     /// sort, limit and skip. The mode and the group stage stay, since the
     /// slots never hold them. Every node gets an id never used before, so
     /// inputs keyed by the old ids are dropped rather than reused.
-    pub fn load(&mut self, spec: &DocumentQuerySpec) {
+    pub(crate) fn load(&mut self, spec: &DocumentQuerySpec) {
         self.filter = self.group_from_spec(&spec.filter);
         self.projection = spec.projection.clone();
         self.sort = spec.sort.clone();
@@ -286,7 +286,7 @@ impl BuilderDraft {
     // ---- reading ---------------------------------------------------------
 
     /// The spec the draft describes, or every reason it cannot be one yet.
-    pub fn to_spec(&self) -> Result<DocumentQuerySpec, Vec<DraftProblem>> {
+    pub(crate) fn to_spec(&self) -> Result<DocumentQuerySpec, Vec<DraftProblem>> {
         let mut problems = Vec::new();
         let filter = group_to_spec(&self.filter, false, &mut problems);
 
@@ -385,32 +385,32 @@ impl BuilderDraft {
         }
     }
 
-    pub fn condition(&self, id: NodeId) -> Option<&ConditionDraft> {
+    pub(crate) fn condition(&self, id: NodeId) -> Option<&ConditionDraft> {
         find_condition(&self.filter, id)
     }
 
     /// Path of the array an `ElemMatch` condition tests, joined for nested
     /// matches; empty for a condition on the document itself.
-    pub fn condition_scope(&self, id: NodeId) -> Option<String> {
+    pub(crate) fn condition_scope(&self, id: NodeId) -> Option<String> {
         scope_in_group(&self.filter, id, "")
     }
 
     /// Conditions on the document itself, nested groups included and the
     /// sub-conditions of an `ElemMatch` left out.
-    pub fn condition_count(&self) -> usize {
+    pub(crate) fn condition_count(&self) -> usize {
         count_conditions(&self.filter)
     }
 
     /// Every condition, those inside `ElemMatch` bodies included, in
     /// display order.
-    pub fn conditions(&self) -> Vec<&ConditionDraft> {
+    pub(crate) fn conditions(&self) -> Vec<&ConditionDraft> {
         let mut conditions = Vec::new();
         collect_conditions(&self.filter, &mut conditions);
         conditions
     }
 
     /// Every node id, for dropping inputs of removed nodes.
-    pub fn node_ids(&self) -> Vec<NodeId> {
+    pub(crate) fn node_ids(&self) -> Vec<NodeId> {
         let mut ids = Vec::new();
         collect_ids(&self.filter, &mut ids);
         ids
@@ -419,7 +419,7 @@ impl BuilderDraft {
     // ---- filter edits ----------------------------------------------------
 
     /// Appends an empty condition to `group`.
-    pub fn add_condition(&mut self, group: NodeId) -> Option<NodeId> {
+    pub(crate) fn add_condition(&mut self, group: NodeId) -> Option<NodeId> {
         let id = self.allocate();
         let target = find_group_mut(&mut self.filter, group)?;
         target
@@ -431,7 +431,7 @@ impl BuilderDraft {
     /// Appends a nested group with one empty condition to `group`. It
     /// combines the other way from its parent: nesting an `And` in an `And`
     /// adds nothing.
-    pub fn add_group(&mut self, group: NodeId) -> Option<NodeId> {
+    pub(crate) fn add_group(&mut self, group: NodeId) -> Option<NodeId> {
         let group_id = self.allocate();
         let condition_id = self.allocate();
         let target = find_group_mut(&mut self.filter, group)?;
@@ -450,11 +450,11 @@ impl BuilderDraft {
     }
 
     /// Removes a condition or a nested group. The root group stays.
-    pub fn remove_node(&mut self, id: NodeId) -> bool {
+    pub(crate) fn remove_node(&mut self, id: NodeId) -> bool {
         remove_from_group(&mut self.filter, id)
     }
 
-    pub fn set_combinator(&mut self, group: NodeId, combinator: DocumentCombinator) -> bool {
+    pub(crate) fn set_combinator(&mut self, group: NodeId, combinator: DocumentCombinator) -> bool {
         match find_group_mut(&mut self.filter, group) {
             Some(target) if target.combinator != combinator => {
                 target.combinator = combinator;
@@ -467,7 +467,7 @@ impl BuilderDraft {
     /// Points a condition at `path`, sampled with `types`. The value kind
     /// follows the field; an operator the field does not offer falls back to
     /// its first one.
-    pub fn set_path(&mut self, id: NodeId, path: &str, types: &[DocumentFieldType]) -> bool {
+    pub(crate) fn set_path(&mut self, id: NodeId, path: &str, types: &[DocumentFieldType]) -> bool {
         let Some(condition) = self.condition_mut(id) else {
             return false;
         };
@@ -486,7 +486,7 @@ impl BuilderDraft {
         true
     }
 
-    pub fn set_operator(&mut self, id: NodeId, operator: DocumentOperator) -> bool {
+    pub(crate) fn set_operator(&mut self, id: NodeId, operator: DocumentOperator) -> bool {
         match self.condition_mut(id) {
             Some(condition) if condition.operator != operator => {
                 condition.operator = operator;
@@ -499,7 +499,7 @@ impl BuilderDraft {
     }
 
     /// Reads typed text as the condition's value.
-    pub fn set_text(&mut self, id: NodeId, text: &str) -> bool {
+    pub(crate) fn set_text(&mut self, id: NodeId, text: &str) -> bool {
         let syntax = self.syntax;
         let Some(condition) = self.condition_mut(id) else {
             return false;
@@ -519,7 +519,7 @@ impl BuilderDraft {
         }
     }
 
-    pub fn set_toggle(&mut self, id: NodeId, flag: bool) -> bool {
+    pub(crate) fn set_toggle(&mut self, id: NodeId, flag: bool) -> bool {
         match self.condition_mut(id) {
             Some(ConditionDraft {
                 operand: Operand::Toggle(current),
@@ -534,7 +534,7 @@ impl BuilderDraft {
 
     /// Reads the condition's values as `kind` from now on (typing a
     /// hexadecimal text as an object id, for one).
-    pub fn set_kind(&mut self, id: NodeId, kind: ScalarKind) -> bool {
+    pub(crate) fn set_kind(&mut self, id: NodeId, kind: ScalarKind) -> bool {
         match self.condition_mut(id) {
             Some(condition) if condition.kind != kind => {
                 condition.kind = kind;
@@ -547,7 +547,7 @@ impl BuilderDraft {
     }
 
     /// Adds a typed chip to a list operand.
-    pub fn add_chip(&mut self, id: NodeId, text: &str) -> Result<(), ValueProblem> {
+    pub(crate) fn add_chip(&mut self, id: NodeId, text: &str) -> Result<(), ValueProblem> {
         let syntax = self.syntax;
         let Some(condition) = self.condition_mut(id) else {
             return Err(ValueProblem::Empty);
@@ -563,7 +563,7 @@ impl BuilderDraft {
         Ok(())
     }
 
-    pub fn remove_chip(&mut self, id: NodeId, index: usize) -> bool {
+    pub(crate) fn remove_chip(&mut self, id: NodeId, index: usize) -> bool {
         match self.condition_mut(id) {
             Some(ConditionDraft {
                 operand: Operand::Chips(items),
@@ -659,7 +659,7 @@ impl BuilderDraft {
 
     /// Switches between Find and Aggregate. Aggregate needs a group stage:
     /// the one kept from before, or a new one counting the documents.
-    pub fn set_mode(&mut self, mode: DocumentQueryMode) -> bool {
+    pub(crate) fn set_mode(&mut self, mode: DocumentQueryMode) -> bool {
         if self.mode == mode {
             return false;
         }
@@ -684,14 +684,14 @@ impl BuilderDraft {
     }
 
     /// Drops the group stage and returns to Find.
-    pub fn remove_group_stage(&mut self) -> bool {
+    pub(crate) fn remove_group_stage(&mut self) -> bool {
         let had_stage = self.group.take().is_some();
         let changed_mode = self.mode != DocumentQueryMode::Find;
         self.mode = DocumentQueryMode::Find;
         had_stage || changed_mode
     }
 
-    pub fn add_group_key(&mut self, path: &str) -> bool {
+    pub(crate) fn add_group_key(&mut self, path: &str) -> bool {
         let path = path.trim();
         let Some(stage) = self.group.as_mut() else {
             return false;
@@ -705,7 +705,7 @@ impl BuilderDraft {
         true
     }
 
-    pub fn remove_group_key(&mut self, index: usize) -> bool {
+    pub(crate) fn remove_group_key(&mut self, index: usize) -> bool {
         match self.group.as_mut() {
             Some(stage) if index < stage.keys.len() => {
                 stage.keys.remove(index);
@@ -716,7 +716,7 @@ impl BuilderDraft {
     }
 
     /// Appends a `Count` accumulator with a name no other one uses.
-    pub fn add_accumulator(&mut self) -> Option<NodeId> {
+    pub(crate) fn add_accumulator(&mut self) -> Option<NodeId> {
         let id = self.allocate();
         let stage = self.group.as_mut()?;
 
@@ -744,7 +744,7 @@ impl BuilderDraft {
         Some(id)
     }
 
-    pub fn remove_accumulator(&mut self, id: NodeId) -> bool {
+    pub(crate) fn remove_accumulator(&mut self, id: NodeId) -> bool {
         let Some(stage) = self.group.as_mut() else {
             return false;
         };
@@ -757,7 +757,7 @@ impl BuilderDraft {
     }
 
     #[cfg(test)]
-    pub fn accumulator(&self, id: NodeId) -> Option<&AccumulatorDraft> {
+    pub(crate) fn accumulator(&self, id: NodeId) -> Option<&AccumulatorDraft> {
         self.group
             .as_ref()?
             .accumulators
@@ -773,7 +773,7 @@ impl BuilderDraft {
             .find(|accumulator| accumulator.id == id)
     }
 
-    pub fn set_accumulator_name(&mut self, id: NodeId, name: &str) -> bool {
+    pub(crate) fn set_accumulator_name(&mut self, id: NodeId, name: &str) -> bool {
         match self.accumulator_mut(id) {
             Some(accumulator) if accumulator.name != name => {
                 accumulator.name = name.to_string();
@@ -783,7 +783,7 @@ impl BuilderDraft {
         }
     }
 
-    pub fn set_accumulator_op(&mut self, id: NodeId, op: AccumulatorOp) -> bool {
+    pub(crate) fn set_accumulator_op(&mut self, id: NodeId, op: AccumulatorOp) -> bool {
         match self.accumulator_mut(id) {
             Some(accumulator) if accumulator.op != op => {
                 accumulator.op = op;
@@ -793,7 +793,7 @@ impl BuilderDraft {
         }
     }
 
-    pub fn set_accumulator_path(&mut self, id: NodeId, path: &str) -> bool {
+    pub(crate) fn set_accumulator_path(&mut self, id: NodeId, path: &str) -> bool {
         let path = path.trim();
         match self.accumulator_mut(id) {
             Some(accumulator) if accumulator.path != path => {
@@ -806,7 +806,7 @@ impl BuilderDraft {
 
     /// What a sort key may name after the group stage: the group keys, then
     /// the accumulator names, each once.
-    pub fn sort_choices(&self) -> Vec<String> {
+    pub(crate) fn sort_choices(&self) -> Vec<String> {
         let Some(stage) = self.group.as_ref() else {
             return Vec::new();
         };
@@ -832,14 +832,14 @@ impl BuilderDraft {
 
     /// Switches between returning and hiding the listed fields. Hiding
     /// `_id` is never allowed, so it leaves the list when excluding.
-    pub fn set_projection_mode(&mut self, mode: DocumentProjectionMode) {
+    pub(crate) fn set_projection_mode(&mut self, mode: DocumentProjectionMode) {
         self.projection.mode = mode;
         if mode == DocumentProjectionMode::Exclude {
             self.projection.fields.retain(|field| field != ID_FIELD);
         }
     }
 
-    pub fn add_projection_field(&mut self, path: &str) -> bool {
+    pub(crate) fn add_projection_field(&mut self, path: &str) -> bool {
         let path = path.trim();
         let hides_id = self.projection.mode == DocumentProjectionMode::Exclude && path == ID_FIELD;
 
@@ -851,7 +851,7 @@ impl BuilderDraft {
         true
     }
 
-    pub fn remove_projection_field(&mut self, index: usize) -> bool {
+    pub(crate) fn remove_projection_field(&mut self, index: usize) -> bool {
         if index < self.projection.fields.len() {
             self.projection.fields.remove(index);
             true
@@ -862,7 +862,7 @@ impl BuilderDraft {
 
     // ---- sort ------------------------------------------------------------
 
-    pub fn add_sort_key(&mut self, path: &str) -> bool {
+    pub(crate) fn add_sort_key(&mut self, path: &str) -> bool {
         let path = path.trim();
         if path.is_empty() || self.sort.iter().any(|key| key.path == path) {
             return false;
@@ -873,7 +873,7 @@ impl BuilderDraft {
         true
     }
 
-    pub fn remove_sort_key(&mut self, index: usize) -> bool {
+    pub(crate) fn remove_sort_key(&mut self, index: usize) -> bool {
         if index < self.sort.len() {
             self.sort.remove(index);
             true
@@ -882,7 +882,11 @@ impl BuilderDraft {
         }
     }
 
-    pub fn set_sort_direction(&mut self, index: usize, direction: DocumentSortDirection) -> bool {
+    pub(crate) fn set_sort_direction(
+        &mut self,
+        index: usize,
+        direction: DocumentSortDirection,
+    ) -> bool {
         match self.sort.get_mut(index) {
             Some(key) if key.direction != direction => {
                 key.direction = direction;
@@ -893,7 +897,7 @@ impl BuilderDraft {
     }
 
     /// Moves the key at `from` to position `to`, shifting the keys between.
-    pub fn move_sort_key(&mut self, from: usize, to: usize) -> bool {
+    pub(crate) fn move_sort_key(&mut self, from: usize, to: usize) -> bool {
         if from == to || from >= self.sort.len() || to >= self.sort.len() {
             return false;
         }

@@ -289,6 +289,10 @@ impl FakeObjectStore {
     }
 
     #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn with_object<T>(
         &self,
         bucket: &str,
@@ -323,6 +327,10 @@ impl ObjectStoreConnection for FakeObjectStore {
         not_used()
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMetadata, DbError> {
         self.head_calls.fetch_add(1, Ordering::SeqCst);
 
@@ -364,6 +372,10 @@ impl ObjectStoreConnection for FakeObjectStore {
         })
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError> {
         if let Some(message) = self.read_failure.lock().expect("the read failure").clone() {
             return Err(DbError::query_failed(message));
@@ -372,6 +384,10 @@ impl ObjectStoreConnection for FakeObjectStore {
         self.with_object(bucket, key, |object| object.bytes.clone())
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn get_object_range(
         &self,
         bucket: &str,
@@ -416,6 +432,10 @@ impl ObjectStoreConnection for FakeObjectStore {
         not_used()
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn upload_object(
         &self,
         bucket: &str,

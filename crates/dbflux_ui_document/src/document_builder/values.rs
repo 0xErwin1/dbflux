@@ -8,13 +8,13 @@ use dbflux_core::{DocumentFieldType, DocumentOperator, DocumentQueryCodec, Docum
 /// from its codec. The default has no object identifier literal and no
 /// text that would run as another type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ValueSyntax {
+pub(crate) struct ValueSyntax {
     object_id_wrapper: Option<(&'static str, &'static str)>,
     object_id_hex_digits: Option<usize>,
 }
 
 impl ValueSyntax {
-    pub fn of(codec: &dyn DocumentQueryCodec) -> Self {
+    pub(crate) fn of(codec: &dyn DocumentQueryCodec) -> Self {
         Self {
             object_id_wrapper: codec.object_id_wrapper(),
             object_id_hex_digits: codec.object_id_hex_digits(),
@@ -22,7 +22,7 @@ impl ValueSyntax {
     }
 
     /// Text shown before and after an object identifier input.
-    pub fn object_id_affixes(&self) -> Option<(String, String)> {
+    pub(crate) fn object_id_affixes(&self) -> Option<(String, String)> {
         self.object_id_wrapper
             .map(|(open, close)| (format!("{open}\""), format!("\"{close}")))
     }
@@ -68,7 +68,7 @@ impl ValueSyntax {
 
 /// The type a single value is read as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScalarKind {
+pub(crate) enum ScalarKind {
     Text,
     /// Integers and decimals: an integer literal reads as an integer.
     Number,
@@ -81,7 +81,7 @@ pub enum ScalarKind {
 
 impl ScalarKind {
     /// Kind of a field from its sampled types, most common first.
-    pub fn for_types(types: &[DocumentFieldType]) -> Self {
+    pub(crate) fn for_types(types: &[DocumentFieldType]) -> Self {
         match types.first() {
             Some(DocumentFieldType::String) => ScalarKind::Text,
             Some(DocumentFieldType::Integer | DocumentFieldType::Decimal) => ScalarKind::Number,
@@ -93,7 +93,7 @@ impl ScalarKind {
     }
 
     /// Kind that keeps `value` the same type when its text is edited.
-    pub fn of_value(value: &DocumentValue) -> Self {
+    pub(crate) fn of_value(value: &DocumentValue) -> Self {
         match value {
             DocumentValue::String(_) | DocumentValue::Regex { .. } => ScalarKind::Text,
             DocumentValue::Integer(_) | DocumentValue::Decimal(_) => ScalarKind::Number,
@@ -108,7 +108,7 @@ impl ScalarKind {
 
 /// The control a condition shows for its operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueEditor {
+pub(crate) enum ValueEditor {
     /// One value typed as text.
     Scalar(ScalarKind),
     /// A true / false switch.
@@ -124,7 +124,7 @@ pub enum ValueEditor {
 }
 
 /// Editor for `operator` on a field read as `kind`.
-pub fn value_editor(operator: DocumentOperator, kind: ScalarKind) -> ValueEditor {
+pub(crate) fn value_editor(operator: DocumentOperator, kind: ScalarKind) -> ValueEditor {
     match operator {
         DocumentOperator::Exists => ValueEditor::Toggle,
         DocumentOperator::ElemMatch => ValueEditor::Nested,
@@ -143,7 +143,7 @@ pub fn value_editor(operator: DocumentOperator, kind: ScalarKind) -> ValueEditor
 /// Operators offered for a field sampled with `types`: the type's own list
 /// for one type, the union for several, every operator for a path the
 /// sample never saw.
-pub fn operator_choices(types: &[DocumentFieldType]) -> Vec<DocumentOperator> {
+pub(crate) fn operator_choices(types: &[DocumentFieldType]) -> Vec<DocumentOperator> {
     match types {
         [] => DocumentOperator::ALL.to_vec(),
         [single] => single.operators().to_vec(),
@@ -153,7 +153,7 @@ pub fn operator_choices(types: &[DocumentFieldType]) -> Vec<DocumentOperator> {
 
 /// Why typed text is not a value of the expected kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueProblem {
+pub(crate) enum ValueProblem {
     Empty,
     NotANumber,
     NotACount,
@@ -166,7 +166,7 @@ pub enum ValueProblem {
 }
 
 /// Reads `text` as a single value of `kind`.
-pub fn parse_scalar(
+pub(crate) fn parse_scalar(
     kind: ScalarKind,
     text: &str,
     syntax: ValueSyntax,
@@ -187,7 +187,7 @@ pub fn parse_scalar(
 }
 
 /// Reads `text` as an element count.
-pub fn parse_count(text: &str) -> Result<DocumentValue, ValueProblem> {
+pub(crate) fn parse_count(text: &str) -> Result<DocumentValue, ValueProblem> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err(ValueProblem::Empty);
@@ -200,7 +200,7 @@ pub fn parse_count(text: &str) -> Result<DocumentValue, ValueProblem> {
 }
 
 /// Reads `/pattern/flags`, or a bare pattern without flags.
-pub fn parse_pattern(text: &str) -> Result<DocumentValue, ValueProblem> {
+pub(crate) fn parse_pattern(text: &str) -> Result<DocumentValue, ValueProblem> {
     if text.is_empty() {
         return Err(ValueProblem::Empty);
     }
@@ -223,7 +223,7 @@ pub fn parse_pattern(text: &str) -> Result<DocumentValue, ValueProblem> {
 
 /// Text that reads back as `value` through [`parse_scalar`] with `kind`, or
 /// through [`parse_pattern`] for a regular expression.
-pub fn format_value(value: &DocumentValue, kind: ScalarKind, syntax: ValueSyntax) -> String {
+pub(crate) fn format_value(value: &DocumentValue, kind: ScalarKind, syntax: ValueSyntax) -> String {
     match value {
         DocumentValue::String(text) => {
             let plain_reads_back = match kind {
@@ -264,7 +264,7 @@ pub fn format_value(value: &DocumentValue, kind: ScalarKind, syntax: ValueSyntax
 }
 
 /// A UTC timestamp as the date input shows it, dropping zero seconds.
-pub fn format_date(date: &DateTime<Utc>) -> String {
+pub(crate) fn format_date(date: &DateTime<Utc>) -> String {
     if date.nanosecond() != 0 {
         date.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
     } else if date.second() != 0 {
@@ -401,7 +401,7 @@ fn parse_auto(text: &str, syntax: ValueSyntax) -> Result<DocumentValue, ValuePro
 }
 
 /// Byte ranges of the `$operator` tokens in preview text, for highlighting.
-pub fn operator_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn operator_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let mut ranges = Vec::new();
     let mut characters = text.char_indices().peekable();
 

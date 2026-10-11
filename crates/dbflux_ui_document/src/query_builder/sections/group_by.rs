@@ -9,7 +9,7 @@ use crate::query_builder::panel::{AggregateRow, GroupByRow, QueryBuilderPanel};
 /// Two sub-sections:
 /// 1. Group-by rows: column text input + remove button, "+" button at bottom.
 /// 2. Aggregate rows: function dropdown + column input + alias input + remove button.
-pub fn render_group_by(
+pub(crate) fn render_group_by(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
@@ -215,7 +215,7 @@ pub fn render_group_by(
 ///
 /// Delegates to the same filter-node renderer used by the WHERE section,
 /// but bound to `FilterTarget::Having` so mutations land on `spec.having`.
-pub fn render_having(
+pub(crate) fn render_having(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

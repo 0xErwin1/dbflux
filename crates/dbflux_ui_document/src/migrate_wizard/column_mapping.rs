@@ -25,7 +25,7 @@ const MAPPING_MODE_VALUES: &[TableMappingMode] = &[
 /// translation catalog. Exhaustive by construction so a new
 /// [`TableMappingMode`] variant fails this crate's build until its
 /// `document.migrate_wizard.mapping_mode.*` entry is added here.
-pub fn mapping_mode_option_label(mode: TableMappingMode) -> String {
+pub(crate) fn mapping_mode_option_label(mode: TableMappingMode) -> String {
     match mode {
         TableMappingMode::Create => dbflux_i18n::t!("document.migrate_wizard.mapping_mode.create"),
         TableMappingMode::Existing => {
@@ -41,7 +41,7 @@ pub fn mapping_mode_option_label(mode: TableMappingMode) -> String {
     }
 }
 
-pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappingMode)> {
+pub(crate) fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappingMode)> {
     MAPPING_MODE_VALUES
         .iter()
         .copied()
@@ -50,7 +50,7 @@ pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappin
         .collect()
 }
 
-pub fn default_mapping_mode(target_exists: bool) -> TableMappingMode {
+pub(crate) fn default_mapping_mode(target_exists: bool) -> TableMappingMode {
     if target_exists {
         TableMappingMode::Existing
     } else {

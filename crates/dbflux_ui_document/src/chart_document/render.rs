@@ -168,6 +168,10 @@ impl Render for ChartDocument {
         }
 
         let focus_handle = self.focus_handle.clone();
+        #[expect(
+            clippy::unwrap_used,
+            reason = "the branch above sets result_panel to Some when it was None"
+        )]
         let result_panel = self.result_panel.as_ref().unwrap().clone();
 
         // -- Name prompt modal overlay --

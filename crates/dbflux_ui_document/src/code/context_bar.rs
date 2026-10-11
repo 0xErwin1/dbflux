@@ -1208,6 +1208,12 @@ impl CodeDocument {
         }
     }
 
+    // The single indexing site reads visible[0] after the is_empty() early
+    // return, so the bound lives on the function.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "visible[0] runs after the is_empty() early return, so visible has at least one slot"
+    )]
     pub(super) fn enter_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let visible = self.visible_context_bar_slots(cx);
         if visible.is_empty() {
@@ -1222,6 +1228,10 @@ impl CodeDocument {
     }
 
     /// Clamp `context_bar_slot` to a visible control after connection changes.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "both sites run after the is_empty() early return, so visible has at least one slot"
+    )]
     fn revalidate_context_bar_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let visible = self.visible_context_bar_slots(cx);
 
@@ -1285,6 +1295,10 @@ impl CodeDocument {
 
         match cmd {
             Command::FocusRight => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "pos comes from position() over visible and pos + 1 < visible.len() is checked before the indexing"
+                )]
                 if let Some(pos) = visible
                     .iter()
                     .position(|&slot| slot == self.context_bar_slot)
@@ -1297,6 +1311,10 @@ impl CodeDocument {
                 true
             }
             Command::FocusLeft => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "pos comes from position() over visible and pos > 0 is checked before the indexing"
+                )]
                 if let Some(pos) = visible
                     .iter()
                     .position(|&slot| slot == self.context_bar_slot)

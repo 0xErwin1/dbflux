@@ -240,6 +240,12 @@ impl DashboardDocument {
 
     /// Selects the panel `delta` places away in reading order, wrapping.
     /// Without a selection the first key selects the first (or last) panel.
+    // next is a rem_euclid over panels.len(), or panels.len() - 1 / 0 after
+    // the is_empty() early return, so it always indexes an existing panel.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is rem_euclid over panels.len(), or panels.len() - 1 / 0 after the is_empty() early return"
+    )]
     fn select_in_reading_order(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
         let panels = self.selectable_panels();
         if panels.is_empty() {

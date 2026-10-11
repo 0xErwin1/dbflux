@@ -18,13 +18,13 @@ use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter, Audit
 
 /// Adapter exposing the `EventSource` interface over the `AuditRepository` storage layer.
 #[derive(Clone)]
-pub struct AuditSourceAdapter {
+pub(crate) struct AuditSourceAdapter {
     repo: AuditRepository,
 }
 
 impl AuditSourceAdapter {
     /// Creates a new adapter wrapping the given repository.
-    pub fn new(repo: AuditRepository) -> Self {
+    pub(crate) fn new(repo: AuditRepository) -> Self {
         Self { repo }
     }
 
@@ -157,7 +157,7 @@ impl AuditSourceAdapter {
     /// Unlike `EventSource::export_events`, this accepts an `AuditQueryFilter`
     /// directly and uses a very high internal limit so exports are not
     /// silently truncated at the viewer page size.
-    pub fn export_filtered(
+    pub(crate) fn export_filtered(
         &self,
         filter: &AuditQueryFilter,
         format: &str,
@@ -174,13 +174,16 @@ impl AuditSourceAdapter {
     /// This is the primary query method used by `AuditDocument` to populate
     /// the event table. Unlike `EventSource::query`, this works directly with
     /// `AuditQueryFilter` and returns `AuditEventDto` without conversion.
-    pub fn query_filter(&self, filter: &AuditQueryFilter) -> Result<Vec<AuditEventDto>, String> {
+    pub(crate) fn query_filter(
+        &self,
+        filter: &AuditQueryFilter,
+    ) -> Result<Vec<AuditEventDto>, String> {
         self.repo
             .query(filter)
             .map_err(|e| format!("audit query failed: {}", e))
     }
 
-    pub fn count_filter(&self, filter: &AuditQueryFilter) -> Result<u64, String> {
+    pub(crate) fn count_filter(&self, filter: &AuditQueryFilter) -> Result<u64, String> {
         self.repo
             .count_filtered(filter)
             .map(|count| count.max(0) as u64)
@@ -192,7 +195,7 @@ impl AuditSourceAdapter {
     ///
     /// Delegates pivot logic to `dbflux_audit::pivot_long_to_wide` so the wide-format
     /// schema is defined in exactly one place.
-    pub fn aggregate(&self, params: &AuditAggregateParams) -> Result<QueryResult, String> {
+    pub(crate) fn aggregate(&self, params: &AuditAggregateParams) -> Result<QueryResult, String> {
         use std::time::Instant;
 
         let started = Instant::now();
@@ -208,7 +211,7 @@ impl AuditSourceAdapter {
     /// Queries using the `EventQuery` abstraction and returns an `EventPage`.
     ///
     /// Implements `EventSource::query` for swappable-source support.
-    pub fn query_abstract(
+    pub(crate) fn query_abstract(
         &self,
         query: &EventQuery,
     ) -> Result<dbflux_core::observability::query::EventPage, EventSourceError> {

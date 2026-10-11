@@ -146,6 +146,17 @@ impl DataGridPanel {
         }
     }
 
+    // current is the enumerate() index over original_order, which
+    // apply_local_sort builds and apply_result_search filters in step with
+    // result.rows. set_result resets the order and the sort state whenever it
+    // replaces the rows, so a refresh returning fewer rows can no longer leave
+    // current past rows.len(); only the restore path was exposed to that. The
+    // original value is only a sort key and can exceed rows.len() after a
+    // search.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
+    )]
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
         if self.server_sort_blocked(cx) {
             return;
@@ -252,6 +263,12 @@ impl DataGridPanel {
 
         // Sort using indices for tracking
         let mut indices: Vec<usize> = (0..self.result.rows.len()).collect();
+        // a and b come from indices, a permutation of 0..rows.len(), so both
+        // row indexings stay in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a and b come from indices, a permutation of 0..result.rows.len()"
+        )]
         indices.sort_by(|&a, &b| {
             let val_a = self.result.rows[a].get(col_ix);
             let val_b = self.result.rows[b].get(col_ix);
@@ -269,14 +286,30 @@ impl DataGridPanel {
             }
         });
 
-        // Reorder rows according to sorted indices
+        // Reorder rows according to sorted indices. i comes from indices, a
+        // permutation of 0..rows.len().
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "i comes from indices, a permutation of 0..result.rows.len()"
+        )]
         let sorted_rows: Vec<_> = indices
             .iter()
             .map(|&i| self.result.rows[i].clone())
             .collect();
         self.result.rows = sorted_rows;
 
-        // Update original_row_order to map new order -> original
+        // Update original_row_order to map new order -> original.
+        // orig[i] indexes original_row_order, which apply_local_sort builds in
+        // step with result.rows. set_result resets the order and the sort
+        // state whenever it replaces the rows, so the order matches the rows
+        // for the paths that go through it; only a refresh returning more rows
+        // could have overrun orig here, while fewer rows affected the restore
+        // path. The document-grid rebuild paths in documents/mod.rs assign
+        // `result` directly and do not reset the order.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
+        )]
         if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();
         }

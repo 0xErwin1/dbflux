@@ -40,7 +40,7 @@ pub(crate) fn cycle_value_kind(current: &AssignmentValue, current_text: &str) ->
 /// The `InputState` objects for each row are stored in `QueryBuilderPanel.assign_col_inputs`
 /// and `.assign_val_inputs`, keyed by row index. The panel rebuilds them when assignment
 /// count changes via `rebuild_assign_inputs`.
-pub fn render_assignments(
+pub(crate) fn render_assignments(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

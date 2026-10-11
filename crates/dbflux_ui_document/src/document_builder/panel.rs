@@ -28,7 +28,7 @@ use super::values::{ScalarKind, ValueEditor, ValueProblem, ValueSyntax, operator
 
 /// What the rail asks of the grid that owns the slots.
 #[derive(Debug, Clone)]
-pub enum DocumentBuilderEvent {
+pub(crate) enum DocumentBuilderEvent {
     /// Write these texts into the query slots.
     WriteSlots(SlotWrite),
     /// Run the slots, which hold the builder's query.
@@ -58,7 +58,7 @@ pub enum DocumentBuilderEvent {
 
 /// A saved query as the rail lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SavedQueryEntry {
+pub(crate) struct SavedQueryEntry {
     pub id: String,
     pub name: String,
     pub mode: DocumentQueryMode,
@@ -66,7 +66,7 @@ pub struct SavedQueryEntry {
 
 /// What a pick in the field picker fills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PickTarget {
+pub(crate) enum PickTarget {
     Condition(NodeId),
     Projection,
     Sort,
@@ -97,7 +97,7 @@ pub(super) struct OperatorMenu {
 }
 
 /// Visual find builder for one collection.
-pub struct DocumentBuilderPanel {
+pub(crate) struct DocumentBuilderPanel {
     connection: Arc<dyn Connection>,
     pub(super) collection: CollectionRef,
     pub(super) draft: BuilderDraft,
@@ -157,7 +157,7 @@ impl Focusable for DocumentBuilderPanel {
 }
 
 impl DocumentBuilderPanel {
-    pub fn new(
+    pub(crate) fn new(
         connection: Arc<dyn Connection>,
         collection: CollectionRef,
         window: &mut Window,
@@ -249,30 +249,30 @@ impl DocumentBuilderPanel {
     // ---- state the grid reads --------------------------------------------
 
     #[cfg(test)]
-    pub fn draft(&self) -> &BuilderDraft {
+    pub(crate) fn draft(&self) -> &BuilderDraft {
         &self.draft
     }
 
     #[cfg(test)]
-    pub fn pipeline_text(&self) -> Option<String> {
+    pub(crate) fn pipeline_text(&self) -> Option<String> {
         self.pipeline.clone()
     }
 
-    pub fn skip(&self) -> Option<u64> {
+    pub(crate) fn skip(&self) -> Option<u64> {
         self.draft.skip
     }
 
     /// Whether some slot holds clauses the builder could not read.
-    pub fn is_conflicted(&self) -> bool {
+    pub(crate) fn is_conflicted(&self) -> bool {
         self.sync.is_conflicted()
     }
 
-    pub fn mode(&self) -> DocumentQueryMode {
+    pub(crate) fn mode(&self) -> DocumentQueryMode {
         self.draft.mode
     }
 
     /// Whether the connection runs aggregations, which Aggregate mode needs.
-    pub fn aggregate_available(&self) -> bool {
+    pub(crate) fn aggregate_available(&self) -> bool {
         self.connection
             .document_features()
             .contains(DocumentFeatures::AGGREGATE)
@@ -280,7 +280,7 @@ impl DocumentBuilderPanel {
 
     /// Stage names of the pipeline, in order, while in Aggregate mode; empty
     /// until the draft renders to a pipeline.
-    pub fn pipeline_stages(&self) -> Option<Vec<String>> {
+    pub(crate) fn pipeline_stages(&self) -> Option<Vec<String>> {
         if self.draft.mode != DocumentQueryMode::Aggregate {
             return None;
         }
@@ -298,7 +298,7 @@ impl DocumentBuilderPanel {
     }
 
     /// Whether the primary action can run: Find, or Run pipeline.
-    pub fn can_run(&self) -> bool {
+    pub(crate) fn can_run(&self) -> bool {
         match self.draft.mode {
             DocumentQueryMode::Find => self.can_find(),
             DocumentQueryMode::Aggregate => {
@@ -314,7 +314,7 @@ impl DocumentBuilderPanel {
     }
 
     /// Whether the slots hold the builder's query, so Find runs it.
-    pub fn can_find(&self) -> bool {
+    pub(crate) fn can_find(&self) -> bool {
         self.codec().is_some()
             && self.problems.is_empty()
             && self.render_error.is_none()
@@ -329,7 +329,7 @@ impl DocumentBuilderPanel {
     /// builder last wrote or read. Never writes back.
     /// In Aggregate mode the slots are not the builder's query: they are
     /// kept aside and reconciled when the draft returns to Find.
-    pub fn read_slots(&mut self, slots: DocumentFindSlots, cx: &mut Context<Self>) {
+    pub(crate) fn read_slots(&mut self, slots: DocumentFindSlots, cx: &mut Context<Self>) {
         if self.draft.mode == DocumentQueryMode::Aggregate {
             self.unread_slots = (!self.sync.is_echo(&slots)).then_some(slots);
             return;
@@ -412,7 +412,7 @@ impl DocumentBuilderPanel {
     }
 
     /// Takes a new schema sample for the field picker and type tags.
-    pub fn set_schema(&mut self, sample: &CollectionSchemaSample, cx: &mut Context<Self>) {
+    pub(crate) fn set_schema(&mut self, sample: &CollectionSchemaSample, cx: &mut Context<Self>) {
         let catalog = match self.codec() {
             Some(codec) => FieldCatalog::new(sample, |type_name| codec.field_type(type_name)),
             None => FieldCatalog::default(),
@@ -424,7 +424,7 @@ impl DocumentBuilderPanel {
         cx.notify();
     }
 
-    pub fn set_sampling(&mut self, sampling: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_sampling(&mut self, sampling: bool, cx: &mut Context<Self>) {
         self.sampling = sampling;
         cx.notify();
     }
@@ -495,14 +495,14 @@ impl DocumentBuilderPanel {
 
     /// Discards the edits held back by a slot the builder could not read and
     /// shows that slot's text again.
-    pub fn keep_text(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn keep_text(&mut self, cx: &mut Context<Self>) {
         let slots = self.sync.texts().clone();
         self.reload(slots, cx);
     }
 
     /// Replaces every slot with the builder's query, dropping the clauses it
     /// could not read.
-    pub fn rewrite_from_builder(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn rewrite_from_builder(&mut self, cx: &mut Context<Self>) {
         if self.draft.mode != DocumentQueryMode::Find {
             return;
         }
@@ -527,14 +527,14 @@ impl DocumentBuilderPanel {
         cx.notify();
     }
 
-    pub fn request_find(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_find(&mut self, cx: &mut Context<Self>) {
         if self.can_find() {
             cx.emit(DocumentBuilderEvent::FindRequested);
         }
     }
 
     /// The primary action of the rail: Find, or Run pipeline.
-    pub fn request_run(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_run(&mut self, cx: &mut Context<Self>) {
         match self.draft.mode {
             DocumentQueryMode::Find => self.request_find(cx),
             DocumentQueryMode::Aggregate => {
@@ -547,7 +547,7 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn request_open_in_editor(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_open_in_editor(&mut self, cx: &mut Context<Self>) {
         if self.problems.is_empty() && self.render_error.is_none() && !self.preview.is_empty() {
             cx.emit(DocumentBuilderEvent::OpenInEditorRequested(
                 self.preview.clone(),
@@ -555,7 +555,7 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn request_close(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) {
         self.picker = None;
         self.saved_menu_open = false;
         cx.emit(DocumentBuilderEvent::CloseRequested);
@@ -565,24 +565,29 @@ impl DocumentBuilderPanel {
 
     /// The name in the header, trimmed. A name set by opening a saved
     /// query counts before the next render puts it into the input.
-    pub fn query_name(&self, cx: &App) -> String {
+    pub(crate) fn query_name(&self, cx: &App) -> String {
         match &self.pending_name {
             Some(name) => name.trim().to_string(),
             None => self.name_input.read(cx).value().trim().to_string(),
         }
     }
 
-    pub fn loaded_id(&self) -> Option<&str> {
+    pub(crate) fn loaded_id(&self) -> Option<&str> {
         self.loaded_id.as_deref()
     }
 
     /// The saved queries of the collection, as last sent by the grid.
-    pub fn saved_queries(&self) -> &[SavedQueryEntry] {
+    pub(crate) fn saved_queries(&self) -> &[SavedQueryEntry] {
         &self.saved_queries
     }
 
     #[cfg(test)]
-    pub fn set_query_name(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_query_name(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.pending_name = None;
         self.name_input.update(cx, |state, cx| {
             state.set_value(name.to_string(), window, cx)
@@ -590,12 +595,12 @@ impl DocumentBuilderPanel {
     }
 
     /// Whether Save can run: the query has a name and describes a spec.
-    pub fn can_save(&self, cx: &App) -> bool {
+    pub(crate) fn can_save(&self, cx: &App) -> bool {
         !self.query_name(cx).is_empty() && self.draft.to_spec().is_ok()
     }
 
     /// Asks the grid to save the draft under the name in the header.
-    pub fn request_save(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_save(&mut self, cx: &mut Context<Self>) {
         if !self.can_save(cx) {
             return;
         }
@@ -610,14 +615,14 @@ impl DocumentBuilderPanel {
     }
 
     /// Records that the draft was saved as `id`.
-    pub fn mark_saved(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(crate) fn mark_saved(&mut self, id: String, cx: &mut Context<Self>) {
         self.loaded_id = Some(id);
         cx.notify();
     }
 
     /// Opens or closes the list of saved queries. Opening asks the grid for
     /// the current list.
-    pub fn toggle_saved_menu(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_saved_menu(&mut self, cx: &mut Context<Self>) {
         self.saved_menu_open = !self.saved_menu_open;
         if self.saved_menu_open {
             self.picker = None;
@@ -627,7 +632,11 @@ impl DocumentBuilderPanel {
         cx.notify();
     }
 
-    pub fn set_saved_queries(&mut self, entries: Vec<SavedQueryEntry>, cx: &mut Context<Self>) {
+    pub(crate) fn set_saved_queries(
+        &mut self,
+        entries: Vec<SavedQueryEntry>,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .loaded_id
             .as_ref()
@@ -640,13 +649,13 @@ impl DocumentBuilderPanel {
         cx.notify();
     }
 
-    pub fn request_open_saved(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn request_open_saved(&mut self, id: &str, cx: &mut Context<Self>) {
         self.saved_menu_open = false;
         cx.emit(DocumentBuilderEvent::OpenSavedRequested { id: id.to_string() });
         cx.notify();
     }
 
-    pub fn request_delete_saved(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn request_delete_saved(&mut self, id: &str, cx: &mut Context<Self>) {
         cx.emit(DocumentBuilderEvent::DeleteSavedRequested { id: id.to_string() });
     }
 
@@ -654,7 +663,7 @@ impl DocumentBuilderPanel {
     /// find is written to the slots, replacing whatever they held; an
     /// aggregation leaves them alone. Returns `false`, changing nothing,
     /// when the query is an aggregation this connection cannot run.
-    pub fn open_saved(
+    pub(crate) fn open_saved(
         &mut self,
         id: String,
         name: &str,
@@ -694,7 +703,7 @@ impl DocumentBuilderPanel {
     /// Switches between Find and Aggregate. Aggregate is refused without the
     /// connection's aggregation support. Back in Find, the parts edited in
     /// the meantime are written to the slots.
-    pub fn set_mode(&mut self, mode: DocumentQueryMode, cx: &mut Context<Self>) {
+    pub(crate) fn set_mode(&mut self, mode: DocumentQueryMode, cx: &mut Context<Self>) {
         if mode == DocumentQueryMode::Aggregate && !self.aggregate_available() {
             return;
         }
@@ -705,12 +714,12 @@ impl DocumentBuilderPanel {
     }
 
     /// "Add group stage": switches to Aggregate.
-    pub fn add_group_stage(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn add_group_stage(&mut self, cx: &mut Context<Self>) {
         self.set_mode(DocumentQueryMode::Aggregate, cx);
     }
 
     /// "Remove group stage": drops it and returns to Find.
-    pub fn remove_group_stage(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn remove_group_stage(&mut self, cx: &mut Context<Self>) {
         if self.draft.remove_group_stage() {
             self.mode_changed(cx);
         }
@@ -735,31 +744,36 @@ impl DocumentBuilderPanel {
     }
 
     /// Opens or closes the Filter card behind the `$match` summary.
-    pub fn toggle_filter_expanded(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_filter_expanded(&mut self, cx: &mut Context<Self>) {
         self.filter_expanded = !self.filter_expanded;
         cx.notify();
     }
 
-    pub fn remove_group_key(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn remove_group_key(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.draft.remove_group_key(index) {
             self.edited(cx);
         }
     }
 
-    pub fn add_accumulator(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn add_accumulator(&mut self, cx: &mut Context<Self>) {
         if self.draft.add_accumulator().is_some() {
             self.edited(cx);
         }
     }
 
-    pub fn remove_accumulator(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    pub(crate) fn remove_accumulator(&mut self, id: NodeId, cx: &mut Context<Self>) {
         if self.draft.remove_accumulator(id) {
             self.sweep_inputs();
             self.edited(cx);
         }
     }
 
-    pub fn set_accumulator_op(&mut self, id: NodeId, op: AccumulatorOp, cx: &mut Context<Self>) {
+    pub(crate) fn set_accumulator_op(
+        &mut self,
+        id: NodeId,
+        op: AccumulatorOp,
+        cx: &mut Context<Self>,
+    ) {
         if self.draft.set_accumulator_op(id, op) {
             self.edited(cx);
         }
@@ -859,26 +873,26 @@ impl DocumentBuilderPanel {
         !(target == PickTarget::Sort && self.draft.mode == DocumentQueryMode::Aggregate)
     }
 
-    pub fn add_condition(&mut self, group: NodeId, cx: &mut Context<Self>) {
+    pub(crate) fn add_condition(&mut self, group: NodeId, cx: &mut Context<Self>) {
         if self.draft.add_condition(group).is_some() {
             self.edited(cx);
         }
     }
 
-    pub fn add_group(&mut self, group: NodeId, cx: &mut Context<Self>) {
+    pub(crate) fn add_group(&mut self, group: NodeId, cx: &mut Context<Self>) {
         if self.draft.add_group(group).is_some() {
             self.edited(cx);
         }
     }
 
-    pub fn remove_node(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    pub(crate) fn remove_node(&mut self, id: NodeId, cx: &mut Context<Self>) {
         if self.draft.remove_node(id) {
             self.sweep_inputs();
             self.edited(cx);
         }
     }
 
-    pub fn set_combinator(
+    pub(crate) fn set_combinator(
         &mut self,
         group: NodeId,
         combinator: DocumentCombinator,
@@ -889,7 +903,7 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn set_path(&mut self, id: NodeId, path: &str, cx: &mut Context<Self>) {
+    pub(crate) fn set_path(&mut self, id: NodeId, path: &str, cx: &mut Context<Self>) {
         let types = self.types_for(id, path);
         if self.draft.set_path(id, path, &types) {
             self.after_operand_reshape(id);
@@ -897,34 +911,39 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn set_operator(&mut self, id: NodeId, operator: DocumentOperator, cx: &mut Context<Self>) {
+    pub(crate) fn set_operator(
+        &mut self,
+        id: NodeId,
+        operator: DocumentOperator,
+        cx: &mut Context<Self>,
+    ) {
         if self.draft.set_operator(id, operator) {
             self.after_operand_reshape(id);
             self.edited(cx);
         }
     }
 
-    pub fn set_kind(&mut self, id: NodeId, kind: ScalarKind, cx: &mut Context<Self>) {
+    pub(crate) fn set_kind(&mut self, id: NodeId, kind: ScalarKind, cx: &mut Context<Self>) {
         if self.draft.set_kind(id, kind) {
             self.after_operand_reshape(id);
             self.edited(cx);
         }
     }
 
-    pub fn set_text(&mut self, id: NodeId, text: &str, cx: &mut Context<Self>) {
+    pub(crate) fn set_text(&mut self, id: NodeId, text: &str, cx: &mut Context<Self>) {
         if self.draft.set_text(id, text) {
             self.edited(cx);
         }
     }
 
-    pub fn set_toggle(&mut self, id: NodeId, flag: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_toggle(&mut self, id: NodeId, flag: bool, cx: &mut Context<Self>) {
         if self.draft.set_toggle(id, flag) {
             self.edited(cx);
         }
     }
 
     /// Adds the chip typed into the condition's entry and clears the entry.
-    pub fn add_chip(&mut self, id: NodeId, text: &str, cx: &mut Context<Self>) {
+    pub(crate) fn add_chip(&mut self, id: NodeId, text: &str, cx: &mut Context<Self>) {
         match self.draft.add_chip(id, text) {
             Ok(()) => {
                 self.chip_problems.remove(&id);
@@ -938,7 +957,7 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn remove_chip(&mut self, id: NodeId, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn remove_chip(&mut self, id: NodeId, index: usize, cx: &mut Context<Self>) {
         if self.draft.remove_chip(id, index) {
             self.edited(cx);
         }
@@ -958,26 +977,30 @@ impl DocumentBuilderPanel {
 
     // ---- projection, sort, limit, skip -----------------------------------
 
-    pub fn set_projection_mode(&mut self, mode: DocumentProjectionMode, cx: &mut Context<Self>) {
+    pub(crate) fn set_projection_mode(
+        &mut self,
+        mode: DocumentProjectionMode,
+        cx: &mut Context<Self>,
+    ) {
         if self.draft.projection.mode != mode {
             self.draft.set_projection_mode(mode);
             self.edited(cx);
         }
     }
 
-    pub fn remove_projection_field(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn remove_projection_field(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.draft.remove_projection_field(index) {
             self.edited(cx);
         }
     }
 
-    pub fn remove_sort_key(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn remove_sort_key(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.draft.remove_sort_key(index) {
             self.edited(cx);
         }
     }
 
-    pub fn set_sort_direction(
+    pub(crate) fn set_sort_direction(
         &mut self,
         index: usize,
         direction: DocumentSortDirection,
@@ -988,7 +1011,7 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn move_sort_key(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+    pub(crate) fn move_sort_key(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         if self.draft.move_sort_key(from, to) {
             self.edited(cx);
         }
@@ -1027,7 +1050,7 @@ impl DocumentBuilderPanel {
 
     /// Documents a Find passes over before its first page. The slots have
     /// no skip, so only the preview changes.
-    pub fn set_skip(&mut self, skip: Option<u64>, cx: &mut Context<Self>) {
+    pub(crate) fn set_skip(&mut self, skip: Option<u64>, cx: &mut Context<Self>) {
         let skip = skip.filter(|skip| *skip > 0);
         if self.draft.skip != skip {
             self.draft.skip = skip;
@@ -1039,7 +1062,7 @@ impl DocumentBuilderPanel {
 
     /// Drops the skip without writing the slots, when a query without one
     /// replaced them.
-    pub fn reset_skip(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reset_skip(&mut self, cx: &mut Context<Self>) {
         if self.draft.skip.take().is_none() && !self.skip_problem {
             return;
         }
@@ -1063,7 +1086,7 @@ impl DocumentBuilderPanel {
 
     /// Opens the operator list of condition `id`, or closes it when open.
     /// The list takes the keyboard focus so the arrows and Enter pick.
-    pub fn toggle_operator_menu(
+    pub(crate) fn toggle_operator_menu(
         &mut self,
         id: NodeId,
         window: &mut Window,
@@ -1097,7 +1120,7 @@ impl DocumentBuilderPanel {
         cx.notify();
     }
 
-    pub fn close_operator_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_operator_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.operator_menu.take().is_some() {
             self.focus_handle.focus(window, cx);
             cx.notify();
@@ -1105,7 +1128,7 @@ impl DocumentBuilderPanel {
     }
 
     /// Moves the keyboard highlight of the open list by `step`, wrapping.
-    pub fn move_operator_highlight(&mut self, step: isize, cx: &mut Context<Self>) {
+    pub(crate) fn move_operator_highlight(&mut self, step: isize, cx: &mut Context<Self>) {
         let Some(id) = self.operator_menu.as_ref().map(|menu| menu.condition) else {
             return;
         };
@@ -1122,7 +1145,11 @@ impl DocumentBuilderPanel {
     }
 
     /// Picks the highlighted operator of the open list.
-    pub fn choose_highlighted_operator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn choose_highlighted_operator(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some((id, highlighted)) = self
             .operator_menu
             .as_ref()
@@ -1137,7 +1164,7 @@ impl DocumentBuilderPanel {
     }
 
     /// Sets the operator of condition `id` and closes its list.
-    pub fn choose_operator(
+    pub(crate) fn choose_operator(
         &mut self,
         id: NodeId,
         operator: DocumentOperator,
@@ -1150,7 +1177,12 @@ impl DocumentBuilderPanel {
 
     // ---- field picker ----------------------------------------------------
 
-    pub fn open_picker(&mut self, target: PickTarget, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_picker(
+        &mut self,
+        target: PickTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .picker
             .as_ref()
@@ -1230,7 +1262,7 @@ impl DocumentBuilderPanel {
         }
     }
 
-    pub fn close_picker(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_picker(&mut self, cx: &mut Context<Self>) {
         if self.picker.take().is_some() {
             cx.notify();
         }
@@ -1245,7 +1277,7 @@ impl DocumentBuilderPanel {
     }
 
     /// Fills the picker's target with `path`.
-    pub fn pick(&mut self, path: &str, cx: &mut Context<Self>) {
+    pub(crate) fn pick(&mut self, path: &str, cx: &mut Context<Self>) {
         let Some(picker) = self.picker.take() else {
             return;
         };
