@@ -740,3 +740,56 @@ fn table_profile_reads_planner_statistics_and_projects_columns() -> Result<(), D
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn table_profile_reads_planner_statistics_of_a_partitioned_table_from_its_leaves()
+-> Result<(), DbError> {
+    use dbflux_core::{TableFactKind, TableRef};
+
+    containers::with_postgres_url(|uri| {
+        let connection = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE profile_events (id int NOT NULL, region text NOT NULL) \
+             PARTITION BY RANGE (id); \
+             CREATE TABLE profile_events_low PARTITION OF profile_events \
+             FOR VALUES FROM (1) TO (1001); \
+             CREATE TABLE profile_events_high PARTITION OF profile_events \
+             FOR VALUES FROM (1001) TO (3001) PARTITION BY LIST (region); \
+             CREATE TABLE profile_events_high_us PARTITION OF profile_events_high \
+             FOR VALUES IN ('US'); \
+             CREATE TABLE profile_events_high_de PARTITION OF profile_events_high \
+             FOR VALUES IN ('DE'); \
+             CREATE TABLE profile_events_empty PARTITION OF profile_events \
+             FOR VALUES FROM (3001) TO (4001); \
+             INSERT INTO profile_events \
+             SELECT i, CASE WHEN i % 2 = 0 THEN 'US' ELSE 'DE' END \
+             FROM generate_series(1, 3000) AS i",
+        ))?;
+
+        let table = TableRef::with_schema("public", "profile_events");
+        let before = connection.table_profile(&table)?;
+
+        assert_eq!(before.row_count, None);
+        assert!(before.total_compressed_bytes.is_some_and(|bytes| bytes > 0));
+
+        connection.execute(&QueryRequest::new("ANALYZE profile_events"))?;
+
+        let profile = connection.table_profile(&table)?;
+
+        assert_eq!(profile.row_count, Some(3_000));
+        assert!(
+            profile
+                .total_compressed_bytes
+                .is_some_and(|bytes| bytes > 0)
+        );
+        assert!(
+            profile
+                .facts
+                .iter()
+                .any(|fact| fact.kind == TableFactKind::PartitionKey)
+        );
+
+        Ok(())
+    })
+}

@@ -154,8 +154,9 @@ pub fn column_statistics(file: &ParquetFile) -> Result<Vec<ColumnStatistics>, Pa
 }
 
 /// The leaf columns of the sort order every row group declares, in order.
-/// Empty when a row group declares none or row groups disagree: rows are then
-/// not known to be sorted across the file.
+/// Empty when a row group declares none, declares an index that is not a valid
+/// leaf position, or row groups disagree: rows are then not known to be sorted
+/// across the file.
 fn declared_sort_positions(metadata: &ParquetMetaData) -> Vec<usize> {
     let mut declared: Option<Vec<usize>> = None;
 
@@ -164,10 +165,13 @@ fn declared_sort_positions(metadata: &ParquetMetaData) -> Vec<usize> {
             return Vec::new();
         };
 
-        let leaves: Vec<usize> = sorting
+        let Ok(leaves) = sorting
             .iter()
-            .filter_map(|column| usize::try_from(column.column_idx).ok())
-            .collect();
+            .map(|column| usize::try_from(column.column_idx))
+            .collect::<Result<Vec<usize>, _>>()
+        else {
+            return Vec::new();
+        };
 
         match &declared {
             Some(previous) if *previous != leaves => return Vec::new(),

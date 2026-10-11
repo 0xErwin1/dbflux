@@ -776,7 +776,8 @@ impl Connection for DuckDbConnection {
         // profile, without codecs or ranges.
         let segments = match self.run(
             &format!(
-                "SELECT row_group_id, column_id, column_path, compression, stats, count                  FROM pragma_storage_info({})",
+                "SELECT row_group_id, column_id, column_path, compression, stats, count \
+                 FROM pragma_storage_info({})",
                 Self::literal(&qualified)
             ),
             &[],
@@ -807,6 +808,15 @@ impl Connection for DuckDbConnection {
             .into_iter()
             .filter(|(name, _)| columns.contains(name))
             .collect();
+
+        if typed.is_empty() {
+            return Err(DbError::object_not_found(format!(
+                "None of the requested columns exist on {}: {}",
+                table.name,
+                columns.join(", ")
+            )));
+        }
+
         let qualified = crate::table_views::qualified_name(&self.profile_catalog(), table);
         let sql = crate::table_views::sample_sql(&qualified, &typed, row_limit);
 

@@ -333,26 +333,26 @@ pub fn source_label(source: ProfileSource) -> String {
 /// When a profile was read, in local time: the time alone for today, the
 /// date and time otherwise.
 pub fn read_at_label(captured_at: DateTime<Utc>, now: DateTime<Local>) -> String {
-    let local = captured_at.with_timezone(&Local);
-
-    let time = if local.date_naive() == now.date_naive() {
-        local.format("%H:%M:%S").to_string()
-    } else {
-        local.format("%Y-%m-%d %H:%M").to_string()
-    };
+    let time = source_time(captured_at, now);
 
     dbflux_i18n::t!("components.column_profile.source.read_at", time = time)
 }
 
-/// When a file was last modified, as the source line of its footer says it.
-fn file_modified_label(modified: DateTime<Utc>, now: DateTime<Local>) -> String {
-    let local = modified.with_timezone(&Local);
+/// A moment as a source line shows it: the time alone when it falls on the
+/// same local day as `now`, the date and time otherwise.
+fn source_time(moment: DateTime<Utc>, now: DateTime<Local>) -> String {
+    let local = moment.with_timezone(&Local);
 
-    let time = if local.date_naive() == now.date_naive() {
+    if local.date_naive() == now.date_naive() {
         local.format("%H:%M:%S").to_string()
     } else {
         local.format("%Y-%m-%d %H:%M").to_string()
-    };
+    }
+}
+
+/// When a file was last modified, as the source line of its footer says it.
+fn file_modified_label(modified: DateTime<Utc>, now: DateTime<Local>) -> String {
+    let time = source_time(modified, now);
 
     dbflux_i18n::t!(
         "components.column_profile.source.file_modified",

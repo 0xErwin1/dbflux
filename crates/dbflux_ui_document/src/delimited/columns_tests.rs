@@ -24,6 +24,7 @@ use super::editing_tests::{
     record_events, save, save_results, select, table_state, type_into_cell,
 };
 use super::tests::TestDirectory;
+use super::text_view::DelimitedView;
 use crate::keyboard_coverage::DELIMITED;
 
 /// A record whose second field is 150 characters long, over the table's
@@ -1507,4 +1508,38 @@ fn the_load_of_the_rest_keeps_bytes_only_while_every_record_of_a_page_was_kept()
     assert_eq!(remaining_budget(100, &read(two(), None)), 0);
     assert_eq!(remaining_budget(100, &read(Vec::new(), None)), 100);
     assert_eq!(remaining_budget(5, &read(two(), Some(vec![0; 10]))), 0);
+}
+
+/// A save gives the file a new reader. A full scan running with the Columns
+/// view out of sight stops, and the scan can be started again.
+#[gpui::test]
+fn a_save_during_a_full_scan_stops_the_scan(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("column-save-during-scan");
+    let bytes: &[u8] = b"name,city\nAna,Lima\nBo,Quito\nCy,Oslo\n";
+    let path = local_file(&directory, "cities.csv", bytes);
+
+    let (document, window) = open_local(cx, path.clone());
+
+    type_into_cell(&document, window, 0, 1, "Cusco");
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.profile_whole_file(cx);
+            assert!(document.is_profiling_whole_file());
+
+            document.show_view(DelimitedView::Table, cx);
+            document.save(cx);
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(read(&path), b"name,city\nAna,Cusco\nBo,Quito\nCy,Oslo\n");
+    assert!(!is_dirty(&document, window));
+
+    window.update(|_, cx| {
+        let document = document.read(cx);
+
+        assert!(!document.is_profiling_whole_file());
+        assert!(document.can_profile_whole_file());
+    });
 }

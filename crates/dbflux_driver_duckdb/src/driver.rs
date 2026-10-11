@@ -755,6 +755,15 @@ mod tests {
                 .table_profile(&TableRef::with_schema("main", "missing"))
                 .is_err()
         );
+
+        let unknown = connection
+            .sample_table_profile(&table, &["no_such_column".to_string()], 10)
+            .unwrap_err();
+        assert!(
+            matches!(unknown, DbError::ObjectNotFound(_))
+                && unknown.to_string().contains("no_such_column"),
+            "unexpected error: {unknown:?}"
+        );
     }
 
     #[cfg(unix)]

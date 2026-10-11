@@ -214,15 +214,7 @@ pub(crate) fn table_partitions(
         literal(&database),
         literal(&name)
     );
-    let partitions_sql = format!(
-        "SELECT partition, count(), sum(rows), sum(data_compressed_bytes), \
-         sum(data_uncompressed_bytes), toString(min(min_time)), toString(max(max_time)), \
-         toString(min(min_date)), toString(max(max_date)), toUnixTimestamp(max(modification_time)) \
-         FROM system.parts WHERE database = {} AND table = {} AND active \
-         GROUP BY partition ORDER BY partition DESC",
-        literal(&database),
-        literal(&name)
-    );
+    let partitions_sql = partitions_sql(&database, &name);
 
     let key = connection
         .execute_sql(&key_sql, Some("system"), None, Some(1), None)?
@@ -245,6 +237,23 @@ pub(crate) fn table_partitions(
         source: ProfileSource::Catalog(PARTS_SOURCE),
         captured_at: Some(Utc::now()),
     })
+}
+
+/// The grouped `system.parts` query `partition_from_row` reads. The part
+/// times are `DateTime` in the server time zone, so they are formatted in UTC:
+/// that keeps them consistent with the data grid and makes the zero value
+/// ClickHouse stores for a key without a time read as the UTC epoch.
+fn partitions_sql(database: &str, name: &str) -> String {
+    format!(
+        "SELECT partition, count(), sum(rows), sum(data_compressed_bytes), \
+         sum(data_uncompressed_bytes), toString(min(min_time), 'UTC'), \
+         toString(max(max_time), 'UTC'), toString(min(min_date)), \
+         toString(max(max_date)), toUnixTimestamp(max(modification_time)) \
+         FROM system.parts WHERE database = {} AND table = {} AND active \
+         GROUP BY partition ORDER BY partition DESC",
+        literal(database),
+        literal(name)
+    )
 }
 
 /// One partition from a grouped `system.parts` row. The key range comes from
@@ -684,48 +693,70 @@ fn flag_at(row: &[Value], index: usize) -> bool {
         || matches!(row.get(index), Some(Value::Bool(true)))
 }
 
-/// Whether `filter` holds a `SELECT` keyword outside string literals and
-/// quoted identifiers. ClickHouse runs such a subquery while it plans the
-/// read, so estimating the filter would cost as much as the subquery.
+/// Whether `filter` holds a `SELECT` keyword, or an `IN` followed by a table
+/// name instead of a value list, outside string literals and quoted
+/// identifiers. ClickHouse reads such a subquery or table while it plans the
+/// read, so estimating the filter would cost as much as that read.
+///
+/// After `IN`, only a parenthesized list, an array, a string or a number is
+/// treated as values; anything else, comments included, counts as a table.
 fn filter_runs_subquery(filter: &str) -> bool {
     let mut characters = filter.chars().peekable();
     let mut word = String::new();
+    let mut follows_in = false;
 
-    let ends_select = |word: &mut String| {
-        let is_select = word.eq_ignore_ascii_case("select");
-        word.clear();
-        is_select
-    };
+    loop {
+        let next = characters.next();
+        let is_word_character =
+            next.is_some_and(|character| character.is_alphanumeric() || character == '_');
 
-    while let Some(character) = characters.next() {
-        match character {
-            '\'' | '"' | '`' => {
-                if ends_select(&mut word) {
-                    return true;
-                }
-
-                while let Some(inner) = characters.next() {
-                    if inner == '\\' {
-                        characters.next();
-                    } else if inner == character {
-                        if characters.peek() == Some(&character) {
-                            characters.next();
-                        } else {
-                            break;
-                        }
-                    }
-                }
+        if !is_word_character && !word.is_empty() {
+            if word.eq_ignore_ascii_case("select") {
+                return true;
             }
-            character if character.is_alphanumeric() || character == '_' => word.push(character),
-            _ => {
-                if ends_select(&mut word) {
-                    return true;
-                }
+
+            follows_in = word.eq_ignore_ascii_case("in");
+            word.clear();
+        }
+
+        let Some(character) = next else {
+            return false;
+        };
+
+        if follows_in && !character.is_whitespace() {
+            if !starts_in_values(character) {
+                return true;
+            }
+
+            follows_in = false;
+        }
+
+        match character {
+            '\'' | '"' | '`' => skip_quoted(&mut characters, character),
+            character if is_word_character => word.push(character),
+            _ => {}
+        }
+    }
+}
+
+fn starts_in_values(character: char) -> bool {
+    matches!(character, '(' | '[' | '\'') || character.is_ascii_digit()
+}
+
+/// Consumes a quoted literal or identifier up to its closing `quote`,
+/// honoring backslash escapes and doubled quotes.
+fn skip_quoted(characters: &mut std::iter::Peekable<std::str::Chars<'_>>, quote: char) {
+    while let Some(inner) = characters.next() {
+        if inner == '\\' {
+            characters.next();
+        } else if inner == quote {
+            if characters.peek() == Some(&quote) {
+                characters.next();
+            } else {
+                break;
             }
         }
     }
-
-    ends_select(&mut word)
 }
 
 #[cfg(test)]
@@ -956,6 +987,18 @@ mod tests {
     }
 
     #[test]
+    fn partition_times_are_formatted_in_utc() {
+        let sql = partitions_sql("analytics", "page_views");
+
+        assert!(sql.contains("toString(min(min_time), 'UTC')"), "{sql}");
+        assert!(sql.contains("toString(max(max_time), 'UTC')"), "{sql}");
+        assert!(
+            sql.contains("database = 'analytics' AND table = 'page_views'"),
+            "{sql}"
+        );
+    }
+
+    #[test]
     fn an_estimate_scales_projected_column_bytes_by_the_granules_read() {
         let profile = TableProfile::new(
             vec![
@@ -1074,5 +1117,26 @@ mod tests {
         assert!(!filter_runs_subquery("`select` = 1"));
         assert!(!filter_runs_subquery("\"selected\" = 1"));
         assert!(!filter_runs_subquery("selected = 1 AND preselect > 0"));
+    }
+
+    #[test]
+    fn a_filter_reading_a_table_through_in_is_not_estimated() {
+        assert!(filter_runs_subquery("id IN other_table"));
+        assert!(filter_runs_subquery("id in other_table"));
+        assert!(filter_runs_subquery("id NOT IN other_table"));
+        assert!(filter_runs_subquery("id GLOBAL IN other_table"));
+        assert!(filter_runs_subquery("id IN db.other_table"));
+        assert!(filter_runs_subquery("id IN `other table`"));
+        assert!(filter_runs_subquery("id IN \"other_table\""));
+        assert!(filter_runs_subquery("id IN\n\tother_table"));
+        assert!(filter_runs_subquery("id IN /* note */ other_table"));
+
+        assert!(!filter_runs_subquery("x IN (1, 2)"));
+        assert!(!filter_runs_subquery("x IN ('a')"));
+        assert!(!filter_runs_subquery("x IN('a', 'b')"));
+        assert!(!filter_runs_subquery("x IN [1, 2]"));
+        assert!(!filter_runs_subquery("in_stock = 1"));
+        assert!(!filter_runs_subquery("note = 'IN t'"));
+        assert!(!filter_runs_subquery("`in` = 1 AND \"in\" = 2"));
     }
 }

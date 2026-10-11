@@ -1204,6 +1204,13 @@ mod tests {
             "value_compact",
             "value_revert",
             "value_save",
+            "view_table_data",
+            "view_table_columns",
+            "view_table_partitions",
+            "column_picker",
+            "refresh_profile",
+            "sample_profile",
+            "refresh_partitions",
         ];
 
         for key in keys {

@@ -455,6 +455,8 @@ impl DelimitedDocument {
                 let still_current = cx.update(|cx| {
                     this.update(cx, |document, cx| {
                         if document.reader_epoch() != Some(epoch) {
+                            document.stop_profiling_whole_file(cx);
+                            cx.notify();
                             return false;
                         }
 
@@ -488,15 +490,22 @@ impl DelimitedDocument {
         cx.notify();
     }
 
-    /// Stores the outcome of a full scan started at `epoch`, unless the file
-    /// was read again meanwhile.
+    /// Stores the outcome of a full scan started at `epoch`. When the file
+    /// was read again meanwhile, the outcome is stale: the scan is only
+    /// marked stopped, so it can be started again.
     fn apply_scan_outcome(
         &mut self,
         epoch: u64,
         outcome: Result<Scan, OpenError>,
         cx: &mut Context<Self>,
     ) {
-        if self.reader_epoch() != Some(epoch) || self.columns.scan.is_none() {
+        if self.columns.scan.is_none() {
+            return;
+        }
+
+        if self.reader_epoch() != Some(epoch) {
+            self.stop_profiling_whole_file(cx);
+            cx.notify();
             return;
         }
 

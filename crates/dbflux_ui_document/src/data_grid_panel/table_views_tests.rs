@@ -13,6 +13,8 @@ use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use uuid::Uuid;
 
+use dbflux_components::components::column_profile_view::ProfileAction;
+
 use super::{TableTab, available_table_tabs, header_annotations};
 use crate::data_grid_panel::DataGridPanel;
 
@@ -23,6 +25,11 @@ struct Calls {
     profiles: usize,
     partitions: usize,
     estimates: Vec<TableBrowseRequest>,
+    samples: usize,
+    /// Makes every browse fail, as a driver error would.
+    fail_browses: bool,
+    /// Makes every sample fail, as a driver error would.
+    fail_samples: bool,
 }
 
 struct StubColumnarConnection {
@@ -145,6 +152,11 @@ impl Connection for StubColumnarConnection {
             .lock()
             .map_err(|_| DbError::query_failed("poisoned"))?;
         calls.browses.push(request.clone());
+
+        if calls.fail_browses {
+            return Err(DbError::query_failed("browse failed"));
+        }
+
         Ok(result_for(request))
     }
 
@@ -169,6 +181,25 @@ impl Connection for StubColumnarConnection {
             .lock()
             .map_err(|_| DbError::query_failed("poisoned"))?
             .profiles += 1;
+        Ok(profile())
+    }
+
+    fn sample_table_profile(
+        &self,
+        _: &TableRef,
+        _: &[String],
+        _: u64,
+    ) -> Result<TableProfile, DbError> {
+        let mut calls = self
+            .calls
+            .lock()
+            .map_err(|_| DbError::query_failed("poisoned"))?;
+        calls.samples += 1;
+
+        if calls.fail_samples {
+            return Err(DbError::query_failed("sample failed"));
+        }
+
         Ok(profile())
     }
 
@@ -640,6 +671,127 @@ fn the_read_estimate_follows_the_applied_filter_not_the_draft(cx: &mut TestAppCo
         Some("site_id = 7"),
         "the estimate follows the filter once it runs"
     );
+}
+
+#[gpui::test]
+fn a_failed_browse_leaves_the_read_estimate_on_the_rows_shown(cx: &mut TestAppContext) {
+    let (panel, calls, window) = open_table(all_features() | TableViewFeatures::READ_ESTIMATE, cx);
+
+    let estimates_before = calls.lock().unwrap().estimates.len();
+    assert!(estimates_before > 0, "the opening read is estimated");
+
+    calls.lock().unwrap().fail_browses = true;
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.filter_bar.filter_input.update(cx, |input, cx| {
+                input.set_value("site_id = 7", window, cx);
+            });
+            panel.refresh(window, cx);
+        })
+    });
+    window.run_until_parked();
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .browses
+            .last()
+            .and_then(|request| request.filter.clone())
+            .as_deref(),
+        Some("site_id = 7"),
+        "the filtered browse ran"
+    );
+    assert_eq!(
+        calls.estimates.len(),
+        estimates_before,
+        "a browse that failed is not estimated"
+    );
+
+    window.update(|_, app| {
+        let last_browse = panel
+            .read(app)
+            .table_views
+            .last_browse
+            .clone()
+            .expect("the opening read");
+        assert_eq!(
+            last_browse.filter, None,
+            "the estimate still describes the rows shown"
+        );
+    });
+}
+
+/// Simulates a Refresh that started while the sample was in flight and has
+/// not finished: the generation moved on and the view shows the Refresh.
+fn start_sample_then_a_refresh(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) {
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.sample_table_profile(cx);
+
+            panel.table_views.profile_generation += 1;
+            if let Some(view) = panel.table_views.profile_view.clone() {
+                view.update(cx, |view, cx| {
+                    view.set_running(Some(ProfileAction::Refresh), cx)
+                });
+            }
+        })
+    });
+    window.run_until_parked();
+}
+
+fn running_profile_action(
+    panel: &Entity<DataGridPanel>,
+    window: &mut VisualTestContext,
+) -> Option<ProfileAction> {
+    window.update(|_, app| {
+        panel
+            .read(app)
+            .table_views
+            .profile_view
+            .as_ref()
+            .expect("a Columns view")
+            .read(app)
+            .running()
+    })
+}
+
+#[gpui::test]
+fn a_sample_finishing_during_a_refresh_leaves_the_refresh_running(cx: &mut TestAppContext) {
+    let (panel, calls, window) = open_table(all_features(), cx);
+
+    start_sample_then_a_refresh(&panel, window);
+
+    assert_eq!(calls.lock().unwrap().samples, 1);
+    assert_eq!(
+        running_profile_action(&panel, window),
+        Some(ProfileAction::Refresh)
+    );
+}
+
+#[gpui::test]
+fn a_sample_failing_during_a_refresh_leaves_the_refresh_running(cx: &mut TestAppContext) {
+    let (panel, calls, window) = open_table(all_features(), cx);
+    calls.lock().unwrap().fail_samples = true;
+
+    start_sample_then_a_refresh(&panel, window);
+
+    assert_eq!(calls.lock().unwrap().samples, 1);
+    assert_eq!(
+        running_profile_action(&panel, window),
+        Some(ProfileAction::Refresh)
+    );
+}
+
+#[gpui::test]
+fn a_sample_clears_its_running_indicator_when_it_finishes(cx: &mut TestAppContext) {
+    let (panel, calls, window) = open_table(all_features(), cx);
+
+    window.update(|_, app| panel.update(app, |panel, cx| panel.sample_table_profile(cx)));
+    window.run_until_parked();
+
+    assert_eq!(calls.lock().unwrap().samples, 1);
+    assert_eq!(running_profile_action(&panel, window), None);
 }
 
 #[gpui::test]

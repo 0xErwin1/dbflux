@@ -310,7 +310,7 @@ impl DataGridPanel {
             browse_request.table.qualified_name()
         );
 
-        self.estimate_table_read(browse_request.clone(), cx);
+        let estimate_request = browse_request.clone();
 
         let task_target = TaskTarget {
             profile_id,
@@ -383,6 +383,7 @@ impl DataGridPanel {
                                 query_result,
                                 cx,
                             );
+                            panel.estimate_table_read(estimate_request, cx);
                         });
                     }
                     Err(e) => {

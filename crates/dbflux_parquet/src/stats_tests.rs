@@ -487,3 +487,34 @@ fn a_declared_sort_order_gives_sort_positions() {
     let unsorted = column_statistics(&open_bytes(flat_file(layout_properties().build()))).unwrap();
     assert!(unsorted.iter().all(|column| column.sort_position.is_none()));
 }
+
+#[test]
+fn an_unreadable_sort_column_index_gives_no_sort_positions() {
+    use parquet::file::metadata::SortingColumn;
+
+    let sorting = |column_idx| SortingColumn {
+        column_idx,
+        descending: false,
+        nulls_first: false,
+    };
+
+    let negative = layout_properties()
+        .set_sorting_columns(Some(vec![sorting(-1), sorting(0)]))
+        .build();
+    let statistics = column_statistics(&open_bytes(flat_file(negative))).unwrap();
+    assert!(
+        statistics
+            .iter()
+            .all(|column| column.sort_position.is_none())
+    );
+
+    let empty = layout_properties()
+        .set_sorting_columns(Some(Vec::new()))
+        .build();
+    let statistics = column_statistics(&open_bytes(flat_file(empty))).unwrap();
+    assert!(
+        statistics
+            .iter()
+            .all(|column| column.sort_position.is_none())
+    );
+}

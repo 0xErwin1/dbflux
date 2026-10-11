@@ -43,17 +43,50 @@ pub(crate) struct TableStatistics {
     pub analyzed_at: Option<f64>,
 }
 
+/// A partitioned table has no storage of its own: its size and row estimate
+/// are the sums over its leaf partitions, found through `pg_inherits` so that
+/// servers older than PostgreSQL 12 (no `pg_partition_tree`) are covered. A
+/// leaf that was never analyzed has no row estimate and is left out of the
+/// sum; when no leaf has one, the estimate stays unknown.
 const TABLE_QUERY: &str = r#"
-    SELECT c.reltuples::float8,
-           pg_catalog.pg_table_size(c.oid),
+    WITH RECURSIVE target AS (
+        SELECT c.oid, c.relkind, c.reltuples, c.relam
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = $2
+    ),
+    tree(relid) AS (
+        SELECT oid FROM target WHERE relkind = 'p'
+        UNION ALL
+        SELECT i.inhrelid
+        FROM pg_catalog.pg_inherits i
+        JOIN tree ON i.inhparent = tree.relid
+    ),
+    leaves AS (
+        SELECT
+            count(*) AS leaf_count,
+            sum(c.reltuples::float8) FILTER (WHERE c.reltuples >= 0) AS row_estimate,
+            sum(pg_catalog.pg_table_size(c.oid))::bigint AS table_bytes
+        FROM tree
+        JOIN pg_catalog.pg_class c ON c.oid = tree.relid
+        WHERE c.relkind <> 'p'
+    )
+    SELECT CASE
+               WHEN t.relkind <> 'p' THEN t.reltuples::float8
+               WHEN l.leaf_count = 0 THEN 0
+               ELSE l.row_estimate
+           END,
+           CASE
+               WHEN t.relkind <> 'p' THEN pg_catalog.pg_table_size(t.oid)
+               ELSE COALESCE(l.table_bytes, 0)
+           END,
            am.amname::text,
-           CASE WHEN c.relkind = 'p' THEN pg_catalog.pg_get_partkeydef(c.oid) END,
+           CASE WHEN t.relkind = 'p' THEN pg_catalog.pg_get_partkeydef(t.oid) END,
            EXTRACT(EPOCH FROM GREATEST(st.last_analyze, st.last_autoanalyze))::float8
-    FROM pg_catalog.pg_class c
-    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam
-    LEFT JOIN pg_catalog.pg_stat_all_tables st ON st.relid = c.oid
-    WHERE n.nspname = $1 AND c.relname = $2
+    FROM target t
+    CROSS JOIN leaves l
+    LEFT JOIN pg_catalog.pg_am am ON am.oid = t.relam
+    LEFT JOIN pg_catalog.pg_stat_all_tables st ON st.relid = t.oid
 "#;
 
 /// A partitioned table keeps its statistics as inherited rows.

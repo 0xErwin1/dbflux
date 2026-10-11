@@ -51,8 +51,9 @@ the endpoint is a URL and not a host/port pair.
   size. The Partitions view lists each partition's active parts, rows, sizes
   and key range from `system.parts`, newest first. The Data view gets a column
   picker that names only the chosen columns in the query, and a read estimate
-  from `EXPLAIN ESTIMATE`. A filter with a subquery gets no estimate, because
-  planning it would run the subquery. **Profile the first 1 000 000 rows** fills in nulls,
+  from `EXPLAIN ESTIMATE`. A filter with a subquery, or with `IN` followed by a
+  table name, gets no estimate, because planning it would read that subquery or
+  table. **Profile the first 1 000 000 rows** calculates null counts,
   approximate distinct counts (`uniq`) and ranges on request, and is recorded
   in the audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 

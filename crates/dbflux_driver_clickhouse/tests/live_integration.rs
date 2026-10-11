@@ -547,7 +547,7 @@ fn clickhouse_table_views_read_metadata_partitions_estimates_and_samples() -> Re
              site_id UInt32, ts DateTime, user_id UInt64, path String CODEC(ZSTD(3)), \
              duration_ms Nullable(UInt32)) \
              ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (site_id, toDate(ts), user_id) \
-             TTL ts + INTERVAL 13 MONTH",
+             TTL ts + INTERVAL 50 YEAR",
         ))?;
         let _cleanup = TableCleanup {
             connection: connection.as_ref(),

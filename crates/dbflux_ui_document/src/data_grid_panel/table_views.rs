@@ -848,12 +848,14 @@ impl DataGridPanel {
             match result {
                 Ok(sample) => {
                     let update = this.update(cx, |panel, cx| {
-                        if let Some(view) = panel.table_views.profile_view.clone() {
-                            view.update(cx, |view, cx| view.set_running(None, cx));
-                        }
-
+                        // A Refresh started meanwhile owns the running
+                        // indicator until it lands.
                         if panel.table_views.profile_generation != generation {
                             return;
+                        }
+
+                        if let Some(view) = panel.table_views.profile_view.clone() {
+                            view.update(cx, |view, cx| view.set_running(None, cx));
                         }
 
                         let Some(current) = panel.table_views.profile.clone() else {
@@ -885,6 +887,10 @@ impl DataGridPanel {
                 }
                 Err(error) => {
                     let update = this.update(cx, |panel, cx| {
+                        if panel.table_views.profile_generation != generation {
+                            return;
+                        }
+
                         if let Some(view) = panel.table_views.profile_view.clone() {
                             view.update(cx, |view, cx| view.set_running(None, cx));
                         }
