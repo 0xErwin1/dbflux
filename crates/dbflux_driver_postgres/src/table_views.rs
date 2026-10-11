@@ -46,8 +46,8 @@ pub(crate) struct TableStatistics {
 /// A partitioned table has no storage of its own: its size and row estimate
 /// are the sums over its leaf partitions, found through `pg_inherits` so that
 /// servers older than PostgreSQL 12 (no `pg_partition_tree`) are covered. A
-/// leaf that was never analyzed has no row estimate and is left out of the
-/// sum; when no leaf has one, the estimate stays unknown.
+/// leaf that was never analyzed has no row estimate, so while any leaf lacks
+/// one the table's estimate stays unknown rather than undercounting.
 const TABLE_QUERY: &str = r#"
     WITH RECURSIVE target AS (
         SELECT c.oid, c.relkind, c.reltuples, c.relam
@@ -65,7 +65,9 @@ const TABLE_QUERY: &str = r#"
     leaves AS (
         SELECT
             count(*) AS leaf_count,
-            sum(c.reltuples::float8) FILTER (WHERE c.reltuples >= 0) AS row_estimate,
+            CASE WHEN bool_or(c.reltuples < 0) THEN NULL
+                 ELSE sum(c.reltuples::float8)
+            END AS row_estimate,
             sum(pg_catalog.pg_table_size(c.oid))::bigint AS table_bytes
         FROM tree
         JOIN pg_catalog.pg_class c ON c.oid = tree.relid

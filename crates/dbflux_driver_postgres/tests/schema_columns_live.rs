@@ -773,6 +773,15 @@ fn table_profile_reads_planner_statistics_of_a_partitioned_table_from_its_leaves
         assert_eq!(before.row_count, None);
         assert!(before.total_compressed_bytes.is_some_and(|bytes| bytes > 0));
 
+        connection.execute(&QueryRequest::new("ANALYZE profile_events_low"))?;
+
+        let partly_analyzed = connection.table_profile(&table)?;
+
+        assert_eq!(
+            partly_analyzed.row_count, None,
+            "a leaf without an estimate keeps the total unknown instead of undercounting"
+        );
+
         connection.execute(&QueryRequest::new("ANALYZE profile_events"))?;
 
         let profile = connection.table_profile(&table)?;
