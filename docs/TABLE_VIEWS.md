@@ -29,6 +29,11 @@ status bar; the header stays.
 
 ## The Columns view
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/table-views/columns-dark.webp">
+  <img src="images/table-views/columns-light.webp" alt="The Columns view of a PostgreSQL customers table, with the table facts above and one row per column with its distinct values, nulls and range">
+</picture>
+
 One row per column, in table order, with the facts the source knows. A fact
 the source does not know is a dash, never a zero.
 
@@ -118,9 +123,10 @@ ESTIMATE` over the query the grid last ran, so a filter on the sort or
 partition key shows its effect once you run it. A filter still being typed
 does not change the estimate.
 
-A filter with a subquery (`id IN (SELECT …)`) gets no estimate: ClickHouse
-runs the subquery while it plans the read, so the estimate would cost as much
-as the subquery.
+A filter with a subquery (`id IN (SELECT …)`) or with `IN` followed by a
+table name (`id IN other_table`) gets no estimate: ClickHouse reads the
+subquery or table while it plans the read, so the estimate would cost as much
+as that read.
 
 The figure is an upper bound. A `LIMIT` can stop the read sooner than the
 estimate says. The bytes are also an approximation: each read column's size
