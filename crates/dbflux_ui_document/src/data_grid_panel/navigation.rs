@@ -148,14 +148,14 @@ impl DataGridPanel {
 
     // current is the enumerate() index over original_order, which
     // apply_local_sort builds and apply_result_search filters in step with
-    // result.rows. set_result resets the order and the sort state whenever it
-    // replaces the rows, so a refresh returning fewer rows can no longer leave
+    // result.rows. The order and the sort state are reset wherever the rows
+    // are replaced, including the document-grid rebuild paths, so a refresh returning fewer rows can no longer leave
     // current past rows.len(); only the restore path was exposed to that. The
     // original value is only a sort key and can exceed rows.len() after a
     // search.
     #[expect(
         clippy::indexing_slicing,
-        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
+        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; the order and sort state are reset wherever the rows are replaced"
     )]
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
         if self.server_sort_blocked(cx) {
@@ -300,15 +300,14 @@ impl DataGridPanel {
 
         // Update original_row_order to map new order -> original.
         // orig[i] indexes original_row_order, which apply_local_sort builds in
-        // step with result.rows. set_result resets the order and the sort
-        // state whenever it replaces the rows, so the order matches the rows
-        // for the paths that go through it; only a refresh returning more rows
-        // could have overrun orig here, while fewer rows affected the restore
-        // path. The document-grid rebuild paths in documents/mod.rs assign
-        // `result` directly and do not reset the order.
+        // step with result.rows. The order and the sort state are reset
+        // wherever the rows are replaced, including the document-grid rebuild
+        // paths, so orig always indexes an order built in step with the
+        // current rows; only a refresh returning more rows could have overrun
+        // orig here, while fewer rows affected the restore path.
         #[expect(
             clippy::indexing_slicing,
-            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
+            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; the order and sort state are reset wherever the rows are replaced"
         )]
         if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();

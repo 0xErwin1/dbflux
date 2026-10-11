@@ -12823,6 +12823,71 @@ mod tests {
     }
 
     #[gpui::test]
+    fn local_sort_after_stepping_into_a_longer_array_keeps_every_row(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        use dbflux_core::Value;
+        use std::collections::BTreeMap;
+
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        let column = |name: &str, is_primary_key: bool| ColumnMeta {
+            name: name.to_string(),
+            type_name: "BSON".to_string(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key,
+        };
+        let items = Value::Array(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|sku| {
+                    Value::Document(BTreeMap::from([(
+                        "sku".to_string(),
+                        Value::Text(sku.into()),
+                    )]))
+                })
+                .collect(),
+        );
+        // Two documents, but the first one's array has three elements, so
+        // stepping into it yields more rows than the sorted page had.
+        let documents = QueryResult::json(
+            vec![column("_id", true), column("items", false)],
+            vec![
+                vec![Value::Int(1), items.clone()],
+                vec![Value::Int(2), items],
+            ],
+            Duration::ZERO,
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    documents,
+                    cx,
+                );
+                assert_eq!(panel.result.rows.len(), 2);
+
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+                panel.step_into_document_value(0, 1, cx);
+                assert!(panel.is_stepped_into());
+                assert_eq!(panel.result.rows.len(), 3);
+
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+                assert_eq!(panel.result.rows.len(), 3);
+            });
+        });
+    }
+
+    #[gpui::test]
     fn time_series_collection_chart_draws_one_line_per_tag_value(cx: &mut TestAppContext) {
         let (app_state, profile_id) = register_time_series_connection(cx);
         let (panel, window) = open_collection_panel(cx, app_state, profile_id);
