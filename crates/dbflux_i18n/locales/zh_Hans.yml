@@ -198,6 +198,13 @@ components:
       name: "排序：名称"
     source:
       file_footer: "大小来自文件尾部"
+      catalog: "大小来自 %{name}"
+      planner_statistics: "统计信息来自 %{name}"
+      loaded_rows: "基于已加载的 %{rows} 行"
+      full_scan: "基于全部 %{rows} 行"
+      sample: "分布来自最先读取的 %{rows} 行"
+      read_at: "读取于 %{time}"
+      file_modified: "文件修改于 %{time}"
     header:
       column: "列"
       codec: "编码"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} 列 · 数据中显示 %{shown} 列"
       hint: "切换某列即可将其加入或移出数据投影"
+      counts_only: "%{total} 列"
     loading: "正在读取列统计信息…"
     empty: "此表没有列"
     no_match: "没有与筛选匹配的列"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "排序键"
       partition_key: "分区键"
+      sort_key_position: "排序键 %{position}"
+      distribution_key: "分布键"
+    action:
+      refresh: "刷新统计信息"
+      sample: "分析前 %{rows} 行"
+      full_scan: "分析整个文件"
+      running: "正在分析…"
+    fact:
+      engine: "引擎"
+      sort_key: "排序键"
+      partition_key: "分区键"
+      primary_key: "主键"
+      sampling_key: "采样键"
+      ttl: "TTL"
+      distribution_style: "分布"
+      active_parts: "活动分片"
+      statistics_updated: "统计信息更新时间"
+      rows: "行数"
+      on_disk: "磁盘占用"
+      raw: "未压缩"
+      ratio: "压缩比"
+      row_groups: "行组"
+      unsorted: "未排序"
+      created_by: "写入程序"
   read_estimate:
     lead: "将读取"
     row_groups: "%{total} 个行组中的 %{touched} 个"
     more:
       one: "另外 %{count} 个"
       many: "另外 %{count} 个"
+    parts: "%{total} 个分片中的 %{touched} 个"
+    granules: "%{total} 个颗粒中的 %{touched} 个"
+    rows: "%{rows} 行"
+    lead_upper: "最多读取"
+  partition_list:
+    summary: "%{count} 个分区"
+    summary_with_key: "%{count} 个分区 · PARTITION BY %{key}"
+    refresh: "刷新分区"
+    loading: "正在读取分区…"
+    empty: "此表没有分区"
+    error_title: "无法读取分区"
+    header:
+      partition: "分区"
+      parts: "分片"
+      rows: "行数"
+      on_disk: "磁盘占用"
+      raw: "未压缩"
+      ratio: "压缩比"
+      range: "键范围"
+      modified: "最后更改"
 composites:
   rail:
     add: "添加"
@@ -1591,6 +1643,13 @@ document:
         value_compact: "压缩值"
         value_revert: "还原值"
         value_save: "保存值"
+        view_table_data: "显示数据"
+        view_table_columns: "显示列"
+        view_table_partitions: "显示分区"
+        column_picker: "选择列"
+        refresh_profile: "刷新列统计信息"
+        sample_profile: "分析前几行"
+        refresh_partitions: "刷新分区"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1810,6 +1869,20 @@ document:
         references: 引用
         row: 行
       title: "行 %{row}"
+    table_views:
+      tab:
+        data: "数据"
+        columns: "列"
+        partitions: "分区"
+      projection_keeps_keys: "主键保留在投影中，以便仍可编辑行：%{columns}"
+      sample_failed: "分析样本失败：%{error}"
+      badge:
+        sort_position: "排序 %{position}"
+        sort: "排序"
+        partition: "分区"
+        distribution: "分布"
+      header_nulls: "%{percent} 为空"
+      refresh_failed: "刷新列统计信息失败：%{error}"
   delimited:
     unsaved_summary: "%{name} 有未保存的编辑"
     loading: "正在加载 %{name}…"
@@ -1927,6 +2000,7 @@ document:
       text: "文本"
       raw: "原始"
       aligned: "对齐"
+      columns: "列"
     text:
       more_in_file: "文件中还有更多记录。加载更多即可在此显示。"
       capped: "文本只显示已加载的 %{loaded} 条记录中的前 %{shown} 条。表格会显示全部记录。"
@@ -1935,6 +2009,17 @@ document:
       apply_failed: "无法应用文本：%{cause}"
       read_only_capped: "此文本无法编辑，因为它没有显示所有已加载的记录，而对部分记录的编辑无法对应回这些记录。请在表格中编辑。"
       raw_edit_hint: "切换视图、保存或加载更多时，编辑会应用到表格。只从文本中取字段值：值没有变化的行保留文件中的换行和引号，修改或新增的行按文件的列写入。"
+    columns:
+      type:
+        integer: "整数"
+        decimal: "小数"
+        boolean: "布尔值"
+        date: "日期"
+        timestamp: "时间戳"
+        text: "文本"
+      progress: "%{scanned} / %{total}"
+      error:
+        scan_failed: "无法分析 %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"

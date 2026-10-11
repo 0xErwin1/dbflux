@@ -854,30 +854,24 @@ mod tests {
 
     fn column(name: &str, type_name: &str, compressed_bytes: Option<u64>) -> ColumnProfile {
         ColumnProfile {
-            name: name.into(),
-            type_name: type_name.into(),
-            badges: Vec::new(),
-            codec: None,
             compressed_bytes,
-            uncompressed_bytes: None,
-            null_count: None,
-            distinct_count: None,
-            range: None,
+            ..ColumnProfile::new(name, type_name)
         }
     }
 
     fn profile() -> Arc<TableProfile> {
         Arc::new(TableProfile {
-            columns: vec![
-                column("id", "INT64", Some(4096)),
-                column("name", "UTF8", Some(2048)),
-                column("note", "UTF8", None),
-                column("created_at", "TIMESTAMP(MICROS)", Some(8192)),
-            ],
             row_count: Some(100),
             total_compressed_bytes: Some(14336),
-            total_uncompressed_bytes: None,
-            source_label: ProfileSource::FileFooter,
+            ..TableProfile::new(
+                vec![
+                    column("id", "INT64", Some(4096)),
+                    column("name", "UTF8", Some(2048)),
+                    column("note", "UTF8", None),
+                    column("created_at", "TIMESTAMP(MICROS)", Some(8192)),
+                ],
+                ProfileSource::FileFooter,
+            )
         })
     }
 

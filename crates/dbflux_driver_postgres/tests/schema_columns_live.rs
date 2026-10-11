@@ -674,3 +674,69 @@ fn schema_foreign_keys_pair_positionally_and_constraint_text_is_pinned() -> Resu
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn table_profile_reads_planner_statistics_and_projects_columns() -> Result<(), DbError> {
+    use dbflux_core::{
+        ProfileSource, TableBrowseRequest, TableFactKind, TableRef, TableViewFeatures,
+    };
+
+    containers::with_postgres_url(|uri| {
+        let connection = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE profile_orders AS \
+             SELECT i AS id, CASE WHEN i % 4 = 0 THEN NULL ELSE (ARRAY['US','DE','AR'])[1 + i % 3] END AS country, \
+             (i % 10)::int AS bucket FROM generate_series(1, 2000) AS i",
+        ))?;
+
+        let table = TableRef::with_schema("public", "profile_orders");
+        let before = connection.table_profile(&table)?;
+        assert!(
+            before
+                .facts
+                .iter()
+                .any(|fact| fact.kind == TableFactKind::StatisticsUpdated
+                    && fact.value.as_ref() == "never")
+        );
+
+        connection.execute(&QueryRequest::new("ANALYZE profile_orders"))?;
+
+        assert!(
+            connection
+                .table_view_features()
+                .contains(TableViewFeatures::COLUMN_PROFILE)
+        );
+        let profile = connection.table_profile(&table)?;
+
+        assert_eq!(
+            profile.source_label,
+            ProfileSource::PlannerStatistics("pg_stats")
+        );
+        assert_eq!(profile.row_count, Some(2_000));
+        assert_eq!(profile.engine.as_deref(), Some("heap"));
+
+        let country = &profile.columns[1];
+        assert_eq!(country.null_count, Some(500));
+        assert_eq!(country.distinct_count, Some(3));
+        assert_eq!(country.top_values.len(), 3);
+
+        let id = &profile.columns[0];
+        let range = id.range.as_ref().expect("id has a histogram");
+        assert_eq!((range.min.as_ref(), range.max.as_ref()), ("1", "2000"));
+        assert_eq!(id.distinct_count, Some(2_000));
+
+        let page = connection.browse_table(
+            &TableBrowseRequest::new(table.clone()).with_columns(vec!["bucket".to_string()]),
+        )?;
+        assert_eq!(
+            page.columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bucket"]
+        );
+
+        Ok(())
+    })
+}

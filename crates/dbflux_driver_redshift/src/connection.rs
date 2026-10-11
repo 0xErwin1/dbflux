@@ -840,6 +840,23 @@ impl Connection for RedshiftConnection {
         SchemaFeatures::FOREIGN_KEYS | SchemaFeatures::UNIQUE_CONSTRAINTS
     }
 
+    fn table_view_features(&self) -> dbflux_core::TableViewFeatures {
+        dbflux_core::TableViewFeatures::COLUMN_PROFILE
+            | dbflux_core::TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(
+        &self,
+        table: &dbflux_core::TableRef,
+    ) -> Result<dbflux_core::TableProfile, DbError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+        crate::table_views::table_profile(&mut client, table)
+    }
+
     fn kind(&self) -> DbKind {
         DbKind::Redshift
     }

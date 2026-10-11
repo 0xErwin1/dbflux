@@ -198,6 +198,13 @@ components:
       name: "정렬: 이름"
     source:
       file_footer: "파일 푸터의 크기"
+      catalog: "%{name}의 크기"
+      planner_statistics: "%{name}의 통계"
+      loaded_rows: "불러온 %{rows}개 행 기준"
+      full_scan: "전체 %{rows}개 행 기준"
+      sample: "처음 읽은 %{rows}개 행의 분포"
+      read_at: "%{time}에 읽음"
+      file_modified: "파일 수정 %{time}"
     header:
       column: "열"
       codec: "코덱"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total}개 열 · 데이터에 %{shown}개 표시"
       hint: "열을 전환해 데이터 프로젝션에 추가하거나 제거합니다"
+      counts_only: "열 %{total}개"
     loading: "열 통계를 읽는 중…"
     empty: "이 테이블에는 열이 없습니다"
     no_match: "필터와 일치하는 열이 없습니다"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "정렬 키"
       partition_key: "파티션 키"
+      sort_key_position: "정렬 키 %{position}"
+      distribution_key: "분산 키"
+    action:
+      refresh: "통계 새로 고침"
+      sample: "처음 %{rows}개 행 프로파일링"
+      full_scan: "파일 전체 프로파일링"
+      running: "프로파일링 중…"
+    fact:
+      engine: "엔진"
+      sort_key: "정렬 키"
+      partition_key: "파티션 키"
+      primary_key: "기본 키"
+      sampling_key: "샘플링 키"
+      ttl: "TTL"
+      distribution_style: "분산"
+      active_parts: "활성 파트"
+      statistics_updated: "통계 갱신"
+      rows: "행"
+      on_disk: "디스크"
+      raw: "비압축"
+      ratio: "압축률"
+      row_groups: "행 그룹"
+      unsorted: "미정렬"
+      created_by: "작성 프로그램"
   read_estimate:
     lead: "읽을 양"
     row_groups: "행 그룹 %{total}개 중 %{touched}개"
     more:
       one: "외 %{count}개"
       many: "외 %{count}개"
+    parts: "파트 %{total}개 중 %{touched}개"
+    granules: "그래뉼 %{total}개 중 %{touched}개"
+    rows: "%{rows}개 행"
+    lead_upper: "최대 읽기"
+  partition_list:
+    summary: "파티션 %{count}개"
+    summary_with_key: "파티션 %{count}개 · PARTITION BY %{key}"
+    refresh: "파티션 새로 고침"
+    loading: "파티션을 읽는 중…"
+    empty: "이 테이블에는 파티션이 없습니다"
+    error_title: "파티션을 읽을 수 없습니다"
+    header:
+      partition: "파티션"
+      parts: "파트"
+      rows: "행"
+      on_disk: "디스크"
+      raw: "비압축"
+      ratio: "압축률"
+      range: "키 범위"
+      modified: "마지막 변경"
 composites:
   rail:
     add: "추가"
@@ -1591,6 +1643,13 @@ document:
         value_compact: "값 압축"
         value_revert: "값 되돌리기"
         value_save: "값 저장"
+        view_table_data: "데이터 보기"
+        view_table_columns: "열 보기"
+        view_table_partitions: "파티션 보기"
+        column_picker: "열 선택"
+        refresh_profile: "열 통계 새로 고침"
+        sample_profile: "처음 행 프로파일링"
+        refresh_partitions: "파티션 새로 고침"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -1810,6 +1869,20 @@ document:
         references: 참조
         row: 행
       title: "행 %{row}"
+    table_views:
+      tab:
+        data: "데이터"
+        columns: "열"
+        partitions: "파티션"
+      projection_keeps_keys: "행을 편집할 수 있도록 기본 키는 프로젝션에 남습니다: %{columns}"
+      sample_failed: "샘플 프로파일링 실패: %{error}"
+      badge:
+        sort_position: "정렬 %{position}"
+        sort: "정렬"
+        partition: "파티션"
+        distribution: "분산"
+      header_nulls: "NULL %{percent}"
+      refresh_failed: "열 통계를 새로 고치지 못했습니다: %{error}"
   delimited:
     unsaved_summary: "%{name}의 저장되지 않은 편집"
     loading: "%{name} 불러오는 중…"
@@ -1927,6 +2000,7 @@ document:
       text: "텍스트"
       raw: "원본"
       aligned: "정렬"
+      columns: "열"
     text:
       more_in_file: "파일에 레코드가 더 있습니다. 여기에 표시하려면 더 불러오세요."
       capped: "텍스트에는 불러온 레코드 %{loaded}개 중 처음 %{shown}개만 표시됩니다. 표에는 모두 표시됩니다."
@@ -1935,6 +2009,17 @@ document:
       apply_failed: "텍스트를 적용할 수 없습니다: %{cause}"
       read_only_capped: "이 텍스트는 불러온 레코드를 모두 표시하지 않으므로 편집할 수 없습니다. 레코드 일부의 편집은 해당 레코드에 맞출 수 없습니다. 표에서 편집하세요."
       raw_edit_hint: "편집 내용은 보기를 전환하거나 저장하거나 더 불러올 때 표에 적용됩니다. 텍스트에서는 필드 값만 가져옵니다. 값이 바뀌지 않은 행은 파일의 줄바꿈과 따옴표를 유지하고, 바뀌거나 추가된 행은 파일의 열에 맞춰 기록됩니다."
+    columns:
+      type:
+        integer: "정수"
+        decimal: "소수"
+        boolean: "불리언"
+        date: "날짜"
+        timestamp: "타임스탬프"
+        text: "텍스트"
+      progress: "%{total} 중 %{scanned}"
+      error:
+        scan_failed: "%{file}을(를) 프로파일링할 수 없습니다"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"

@@ -731,12 +731,12 @@ fn estimate_bar_matches_the_bytes_the_next_page_reads(cx: &mut TestAppContext) {
             columns
         );
         assert_eq!(
-            estimate.scope,
-            EstimateScope::Parts {
+            estimate.scopes,
+            vec![EstimateScope::Parts {
                 touched: 1,
                 total: 1,
                 unit: PartUnit::RowGroups,
-            }
+            }]
         );
 
         let summary = summary.expect("the estimate is shown");

@@ -10,6 +10,7 @@ use crate::DataViewMode;
 use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
+use crate::data_grid_panel::table_views::TableTab;
 use crate::data_grid_panel::value_panel::ValuePanelButton;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
 use crate::result_view::ResultViewMode;
@@ -74,6 +75,16 @@ pub(crate) enum ToolbarAction {
     StepToRoot,
     /// A view tab of a document collection (Documents, Schema, Aggregate).
     CollectionView(CollectionTab),
+    /// A view tab of a table (Data, Columns, Partitions).
+    TableView(TableTab),
+    /// The column picker of a table's Data view: opens it for the keyboard.
+    ColumnPicker,
+    /// Reads a table's column profile again (Columns view).
+    RefreshProfile,
+    /// Profiles a sample of a table's rows (Columns view).
+    SampleProfile,
+    /// Reads a table's partitions again (Partitions view).
+    RefreshPartitions,
     /// Reload in the commit conflict panel.
     ConflictReload,
     /// Apply anyway in the commit conflict panel.
@@ -148,6 +159,13 @@ impl ToolbarAction {
             ToolbarAction::CollectionView(CollectionTab::Documents) => "view-documents",
             ToolbarAction::CollectionView(CollectionTab::Schema) => "view-schema",
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => "view-aggregate",
+            ToolbarAction::TableView(TableTab::Data) => "view-table-data",
+            ToolbarAction::TableView(TableTab::Columns) => "view-table-columns",
+            ToolbarAction::TableView(TableTab::Partitions) => "view-table-partitions",
+            ToolbarAction::ColumnPicker => "column-picker",
+            ToolbarAction::RefreshProfile => "refresh-profile",
+            ToolbarAction::SampleProfile => "sample-profile",
+            ToolbarAction::RefreshPartitions => "refresh-partitions",
             ToolbarAction::ConflictReload => "conflict-reload",
             ToolbarAction::ConflictApply => "conflict-apply",
             ToolbarAction::PinRowInspector => "pin-row-inspector",
@@ -194,6 +212,12 @@ impl ToolbarAction {
             ToolbarAction::CollectionView(CollectionTab::Documents) => AppIcon::Table,
             ToolbarAction::CollectionView(CollectionTab::Schema) => AppIcon::Layers,
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => AppIcon::Braces,
+            ToolbarAction::TableView(TableTab::Data) => AppIcon::Table,
+            ToolbarAction::TableView(TableTab::Columns) => AppIcon::Columns,
+            ToolbarAction::TableView(TableTab::Partitions) => AppIcon::Layers,
+            ToolbarAction::ColumnPicker => AppIcon::Columns,
+            ToolbarAction::RefreshProfile | ToolbarAction::RefreshPartitions => AppIcon::RefreshCcw,
+            ToolbarAction::SampleProfile => AppIcon::ChartBar,
             ToolbarAction::ConflictReload => AppIcon::RefreshCcw,
             ToolbarAction::ConflictApply => AppIcon::Check,
             ToolbarAction::PinRowInspector => AppIcon::Pin,
@@ -215,7 +239,12 @@ impl ToolbarAction {
             ToolbarAction::ClearFilter => Some(Command::ClearFilter),
             ToolbarAction::ToggleView => Some(Command::CycleDocumentView),
             ToolbarAction::ResultView(_) => Some(Command::CycleResultView),
-            ToolbarAction::CollectionView(_) => Some(Command::NextResultTab),
+            ToolbarAction::CollectionView(_) | ToolbarAction::TableView(_) => {
+                Some(Command::NextResultTab)
+            }
+            ToolbarAction::RefreshProfile | ToolbarAction::RefreshPartitions => {
+                Some(Command::RefreshSchema)
+            }
             _ => None,
         }
     }
@@ -244,7 +273,8 @@ impl DataGridPanel {
         let filter_row_shown = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        ) && !document_collection;
+        ) && !document_collection
+            && self.table_tab() == TableTab::Data;
         let shows_chart = self.result_view_mode().shows_chart() && self.chart.chart_shell.is_some();
 
         if has_data {
@@ -266,6 +296,31 @@ impl DataGridPanel {
         if filter_row_shown && !self.builder.builder_open && self.can_open_builder(cx) {
             actions.push(ToolbarAction::OpenBuilder);
         }
+
+        if filter_row_shown && self.shows_table_column_picker() {
+            actions.push(ToolbarAction::ColumnPicker);
+        }
+
+        let current_tab = self.table_tab();
+
+        if current_tab == TableTab::Columns && self.table_views.profile_view.is_some() {
+            actions.push(ToolbarAction::RefreshProfile);
+
+            if self.offers_sample_profile() {
+                actions.push(ToolbarAction::SampleProfile);
+            }
+        }
+
+        if current_tab == TableTab::Partitions && self.table_views.partitions_view.is_some() {
+            actions.push(ToolbarAction::RefreshPartitions);
+        }
+
+        actions.extend(
+            self.table_tabs()
+                .into_iter()
+                .filter(|tab| *tab != current_tab)
+                .map(ToolbarAction::TableView),
+        );
 
         let current_view = self.result_view_mode();
         actions.extend(
@@ -500,6 +555,27 @@ impl DataGridPanel {
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.view_aggregate")
             }
+            ToolbarAction::TableView(TableTab::Data) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_table_data")
+            }
+            ToolbarAction::TableView(TableTab::Columns) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_table_columns")
+            }
+            ToolbarAction::TableView(TableTab::Partitions) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_table_partitions")
+            }
+            ToolbarAction::ColumnPicker => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.column_picker")
+            }
+            ToolbarAction::RefreshProfile => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.refresh_profile")
+            }
+            ToolbarAction::SampleProfile => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.sample_profile")
+            }
+            ToolbarAction::RefreshPartitions => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.refresh_partitions")
+            }
             ToolbarAction::ConflictReload => {
                 dbflux_i18n::t!("document.collection.conflict.reload")
             }
@@ -685,6 +761,18 @@ impl DataGridPanel {
             ToolbarAction::QueryHistory => self.open_query_history(window, cx),
             ToolbarAction::StepToRoot => self.step_to_depth(0, cx),
             ToolbarAction::CollectionView(tab) => self.set_collection_tab(tab, cx),
+            ToolbarAction::TableView(tab) => {
+                self.set_table_tab(tab, window, cx);
+                self.focus_table_view(window, cx);
+            }
+            ToolbarAction::ColumnPicker => {
+                if let Some(picker) = self.table_views.picker.clone() {
+                    picker.update(cx, |picker, cx| picker.open(window, cx));
+                }
+            }
+            ToolbarAction::RefreshProfile => self.load_table_profile(cx),
+            ToolbarAction::SampleProfile => self.request_sample_profile(cx),
+            ToolbarAction::RefreshPartitions => self.load_table_partitions(cx),
             ToolbarAction::ConflictReload => self.reload_conflicting_document(window, cx),
             ToolbarAction::ConflictApply => self.apply_conflicting_commit(cx),
             ToolbarAction::PinRowInspector => self.handle_row_inspector_event(

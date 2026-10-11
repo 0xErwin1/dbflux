@@ -461,3 +461,29 @@ fn zero_row_groups_gives_empty_statistics() {
     assert_eq!(estimate.total_bytes, 0);
     assert_eq!(estimate.row_group_count, 0);
 }
+
+#[test]
+fn a_declared_sort_order_gives_sort_positions() {
+    use parquet::file::metadata::SortingColumn;
+
+    let sorting = |column_idx| SortingColumn {
+        column_idx,
+        descending: false,
+        nulls_first: false,
+    };
+
+    let sorted = layout_properties()
+        .set_sorting_columns(Some(vec![sorting(2), sorting(0)]))
+        .build();
+    let statistics = column_statistics(&open_bytes(flat_file(sorted))).unwrap();
+
+    assert_eq!(
+        statistics_named(&statistics, "score").sort_position,
+        Some(1)
+    );
+    assert_eq!(statistics_named(&statistics, "id").sort_position, Some(2));
+    assert_eq!(statistics_named(&statistics, "name").sort_position, None);
+
+    let unsorted = column_statistics(&open_bytes(flat_file(layout_properties().build()))).unwrap();
+    assert!(unsorted.iter().all(|column| column.sort_position.is_none()));
+}

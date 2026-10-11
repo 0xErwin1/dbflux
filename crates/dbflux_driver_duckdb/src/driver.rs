@@ -660,6 +660,103 @@ mod tests {
         assert!(folder.join("datos año.duckdb").is_file());
     }
 
+    #[test]
+    fn table_views_profile_storage_sample_rows_and_project_columns() {
+        use dbflux_core::{
+            ProfileSource, TableBrowseRequest, TableFactKind, TableRef, TableViewFeatures,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = DbConfig::DuckDB {
+            path: dir.path().join("views.duckdb"),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        };
+        let connection = DuckDbDriver::new().connect(&profile(config)).unwrap();
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE ev AS SELECT i AS id, 'path' || (i % 50) AS path, \
+                 CASE WHEN i % 10 = 0 THEN NULL ELSE i % 7 END AS n, [i, i + 1] AS arr \
+                 FROM range(300000) t(i); CHECKPOINT;",
+            ))
+            .unwrap();
+
+        assert!(
+            connection
+                .table_view_features()
+                .contains(TableViewFeatures::COLUMN_PROFILE | TableViewFeatures::COLUMN_PROJECTION)
+        );
+
+        let table = TableRef::with_schema("main", "ev");
+        let profile = connection.table_profile(&table).unwrap();
+
+        assert_eq!(
+            profile.source_label,
+            ProfileSource::Catalog("pragma_storage_info")
+        );
+        assert_eq!(profile.row_count, Some(300_000));
+        assert!(
+            profile
+                .facts
+                .iter()
+                .any(|fact| fact.kind == TableFactKind::RowGroups)
+        );
+        let names: Vec<&str> = profile
+            .columns
+            .iter()
+            .map(|column| column.name.as_ref())
+            .collect();
+        assert_eq!(names, vec!["id", "path", "n", "arr"]);
+        assert!(profile.columns.iter().all(|column| column.codec.is_some()));
+        let id_range = profile.columns[0].range.as_ref().unwrap();
+        assert_eq!(
+            (id_range.min.as_ref(), id_range.max.as_ref()),
+            ("0", "299999")
+        );
+        assert_eq!(profile.columns[0].null_count, Some(0));
+        assert_eq!(profile.columns[2].null_count, None);
+
+        let columns: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+        let sample = connection
+            .sample_table_profile(&table, &columns, 1_000_000)
+            .unwrap();
+        assert_eq!(sample.source_label, ProfileSource::Sample { rows: 300_000 });
+        assert_eq!(sample.columns[2].null_count, Some(30_000));
+        assert_eq!(
+            sample.columns[2]
+                .range
+                .as_ref()
+                .map(|range| range.max.as_ref()),
+            Some("6")
+        );
+
+        let capped = connection
+            .sample_table_profile(&table, &columns, 10)
+            .unwrap();
+        assert_eq!(capped.source_label, ProfileSource::Sample { rows: 10 });
+
+        let page = connection
+            .browse_table(
+                &TableBrowseRequest::new(table.clone())
+                    .with_columns(vec!["path".to_string(), "id".to_string()]),
+            )
+            .unwrap();
+        assert_eq!(
+            page.columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["path", "id"]
+        );
+
+        assert!(
+            connection
+                .table_profile(&TableRef::with_schema("main", "missing"))
+                .is_err()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_new_file_keeps_its_instance_path_once_created() {

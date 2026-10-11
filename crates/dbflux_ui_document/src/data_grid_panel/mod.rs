@@ -10,6 +10,7 @@ mod render;
 mod result_search;
 pub(crate) mod row_inspector;
 pub(crate) mod side_island;
+mod table_views;
 mod utils;
 pub(crate) mod value_panel;
 
@@ -778,6 +779,9 @@ pub struct DataGridPanel {
     /// Document collection presentation (flattened table, query bar, schema,
     /// field edits). Inert for other sources.
     collection: documents::CollectionViewState,
+    /// Columns and Partitions views of a table whose connection offers them.
+    /// Inert for other sources.
+    table_views: table_views::TableViewsState,
     pk_columns: Vec<String>,
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
@@ -880,6 +884,7 @@ impl DataGridPanel {
 
         let mut panel =
             Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
+        panel.init_table_views(window, cx);
         panel.refresh(window, cx);
 
         // If pk_columns is empty, fetch table details to get PK info
@@ -1097,6 +1102,10 @@ impl DataGridPanel {
             self.pk_columns = pk_names;
         }
 
+        // A projection chosen before the key was known may leave key columns
+        // out; they come back, and the table is read again with them.
+        let restored_keys = self.keep_keys_in_table_projection(cx);
+
         // Everything below needs the table this panel reads, so the source is
         // destructured once and both the binding recompute and the requery
         // decision work from that.
@@ -1143,7 +1152,7 @@ impl DataGridPanel {
         // carried no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or skip
         // rows. Rewrite the source with the order just learned and requery — the
         // shape `handle_sort_clear` uses for the same reason.
-        if !unordered {
+        if !unordered && !restored_keys {
             self.pending.rebuild = true;
             cx.notify();
             return;
@@ -1157,7 +1166,7 @@ impl DataGridPanel {
             cx,
         );
 
-        if order_by.is_empty() {
+        if order_by.is_empty() && !restored_keys {
             self.pending.rebuild = true;
             cx.notify();
             return;
@@ -1599,6 +1608,7 @@ impl DataGridPanel {
                 builder_editable_binding: None,
             },
             collection,
+            table_views: table_views::TableViewsState::default(),
             runner,
             focus_handle,
             panel_origin: Point::default(),
@@ -2936,10 +2946,19 @@ impl DataGridPanel {
                 Vec::new()
             }
         } else {
-            self.pk_columns
+            let indices: Vec<usize> = self
+                .pk_columns
                 .iter()
                 .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
-                .collect()
+                .collect();
+
+            // A save addresses a row by every key column; with part of the
+            // key missing from the result it could match several rows.
+            if indices.len() == self.pk_columns.len() {
+                indices
+            } else {
+                Vec::new()
+            }
         };
 
         log::debug!(
@@ -10782,6 +10801,40 @@ mod tests {
             Some(crate::labels::grid_edits_dropped_on_reload(1)),
             "an edit that could not be carried over must not vanish silently"
         );
+    }
+
+    /// A result that lacks part of a composite primary key cannot address one
+    /// row per save, so the grid must not take edits (a column projection can
+    /// drop a key column before the key is known).
+    #[gpui::test]
+    fn a_result_missing_part_of_a_composite_key_is_read_only(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let partial = keyed_table_panel(
+            window,
+            app_state.clone(),
+            Uuid::nil(),
+            vec!["tenant_id".to_string(), "id".to_string()],
+        );
+        let whole = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
+
+        window.update(|_, app| {
+            let editable = |panel: &gpui::Entity<DataGridPanel>, app: &gpui::App| {
+                panel
+                    .read(app)
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .is_editable()
+            };
+
+            assert!(!editable(&partial, app), "tenant_id is not in the result");
+            assert!(editable(&whole, app), "every key column is in the result");
+        });
     }
 
     #[gpui::test]

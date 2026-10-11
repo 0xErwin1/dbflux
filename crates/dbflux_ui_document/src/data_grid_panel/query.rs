@@ -254,7 +254,8 @@ impl DataGridPanel {
 
         let mut request = TableBrowseRequest::new(table.clone())
             .with_pagination(pagination.clone())
-            .with_order_by(order_by.clone());
+            .with_order_by(order_by.clone())
+            .with_columns(self.table_projection_columns());
 
         if let Some(ref f) = filter {
             request = request.with_filter(f.clone());
@@ -309,14 +310,22 @@ impl DataGridPanel {
             browse_request.table.qualified_name()
         );
 
+        self.estimate_table_read(browse_request.clone(), cx);
+
         let task_target = TaskTarget {
             profile_id,
             database: database.clone(),
         };
 
+        let select_list = if browse_request.columns.is_empty() {
+            "*".to_string()
+        } else {
+            browse_request.columns.join(", ")
+        };
+
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
             TaskKind::Query,
-            format!("SELECT * FROM {}", table.qualified_name()),
+            format!("SELECT {select_list} FROM {}", table.qualified_name()),
             Some(task_target),
             cx,
         );
