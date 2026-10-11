@@ -228,12 +228,11 @@ impl QueryCompletionProvider {
                 .map_or(!lazy_per_database, |selected| selected == database)
         };
 
-        let snapshot = connected.schema.as_ref().filter(|snapshot| {
-            match (effective_database.as_deref(), snapshot.current_database()) {
-                (Some(selected), Some(current)) => selected == current,
-                _ => true,
-            }
-        });
+        let snapshot = target_database_snapshot(
+            connected.schema.as_ref(),
+            database_slot_snapshot(connected, effective_database.as_deref()),
+            effective_database.as_deref(),
+        );
 
         build_sql_completion_metadata(
             snapshot,
@@ -385,7 +384,11 @@ impl QueryCompletionProvider {
                 .or((!lazy_per_database).then_some("default"));
 
             let known = known_relational_tables(
-                connected.schema.as_ref(),
+                target_database_snapshot(
+                    connected.schema.as_ref(),
+                    database_slot_snapshot(connected, effective_database.as_deref()),
+                    effective_database.as_deref(),
+                ),
                 connected.database_schemas.iter().filter(|(database, _)| {
                     // Same scope as the metadata builder: without a selection,
                     // lazy-per-database drivers contribute nothing (otherwise
@@ -526,6 +529,34 @@ impl QueryCompletionProvider {
     }
 }
 
+fn database_slot_snapshot<'a>(
+    connected: &'a dbflux_core::ConnectedProfile,
+    database: Option<&str>,
+) -> Option<&'a dbflux_core::SchemaSnapshot> {
+    database
+        .and_then(|database| connected.database_connection(database))
+        .and_then(|slot| slot.schema.as_ref())
+}
+
+/// The catalog snapshot describing `database`.
+///
+/// `ConnectionPerDatabase` drivers keep a secondary database's snapshot in
+/// its per-database slot, so that slot wins. The primary snapshot only
+/// applies when it describes the selected database: falling back to it for a
+/// slot that is not loaded yet would offer another database's tables.
+fn target_database_snapshot<'a>(
+    primary: Option<&'a dbflux_core::SchemaSnapshot>,
+    database_slot: Option<&'a dbflux_core::SchemaSnapshot>,
+    database: Option<&str>,
+) -> Option<&'a dbflux_core::SchemaSnapshot> {
+    database_slot.or_else(|| {
+        primary.filter(|snapshot| match (database, snapshot.current_database()) {
+            (Some(selected), Some(current)) => selected == current,
+            _ => true,
+        })
+    })
+}
+
 /// A table from a connection's cached schema listings, tagged with its
 /// `table_details` cache key.
 struct KnownTableListing {
@@ -537,8 +568,8 @@ struct KnownTableListing {
 
 /// Flattens a connection's relational schema listings into [`KnownTableListing`]s.
 ///
-/// Mirrors the sources of [`build_sql_completion_metadata`]: the connect-time
-/// snapshot (top-level tables plus per-schema tables) and the lazily cached
+/// Mirrors the sources of [`build_sql_completion_metadata`]: the selected
+/// database's snapshot (top-level tables plus per-schema tables) and the lazily cached
 /// per-database schemas. Snapshot tables are tagged with `snapshot_database`
 /// as their fetch key; without one they are skipped, since there is no valid
 /// key to fetch them under.
@@ -1945,7 +1976,7 @@ mod tests {
     use super::{
         CompletionItem, KnownTableListing, SqlCompletionMetadata, build_sql_completion_metadata,
         known_relational_tables, should_use_sql_completion, sql_completion_items_with_context,
-        tables_needing_details,
+        tables_needing_details, target_database_snapshot,
     };
     use crate::completion_support::normalize_identifier;
     use dbflux_core::{
@@ -2307,6 +2338,98 @@ mod tests {
         assert!(labels.contains(&"events".to_string()));
         assert!(labels.contains(&"event_counts".to_string()));
         assert!(!labels.contains(&"users".to_string()));
+    }
+
+    fn database_snapshot(database: &str, schemas: &[(&str, &str)]) -> SchemaSnapshot {
+        SchemaSnapshot::relational(RelationalSchema {
+            current_database: Some(database.to_string()),
+            schemas: schemas
+                .iter()
+                .map(|(schema, table)| DbSchemaInfo {
+                    name: schema.to_string(),
+                    tables: vec![TableInfo {
+                        name: table.to_string(),
+                        schema: Some(schema.to_string()),
+                        columns: None,
+                        ..t1_table()
+                    }],
+                    views: vec![],
+                    custom_types: None,
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    /// Completion labels without SQL keywords.
+    fn non_keyword_labels(items: &[CompletionItem]) -> Vec<String> {
+        items
+            .iter()
+            .filter(|item| item.kind != Some(lsp_types::CompletionItemKind::KEYWORD))
+            .map(|item| item.label.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_secondary_database_completes_from_its_own_snapshot() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot("completion_secondary", &[("public", "other_users")]);
+
+        let snapshot = target_database_snapshot(
+            Some(&primary),
+            Some(&secondary),
+            Some("completion_secondary"),
+        );
+        let metadata =
+            build_sql_completion_metadata(snapshot, std::iter::empty(), std::iter::empty(), false);
+
+        assert!(
+            non_keyword_labels(&analyzed_items(&metadata, "SELECT * FROM ot"))
+                .contains(&"other_users".to_string())
+        );
+        assert!(
+            !non_keyword_labels(&analyzed_items(&metadata, "SELECT * FROM ra"))
+                .iter()
+                .any(|label| label.contains("rates")),
+            "tables of the initial database must not leak into the secondary one"
+        );
+
+        let known =
+            known_relational_tables(snapshot, std::iter::empty(), Some("completion_secondary"));
+        assert_eq!(
+            tables_needing_details(&known, &[table_ref(None, "other_users")]),
+            vec![(
+                "completion_secondary".to_string(),
+                Some("public".to_string()),
+                "other_users".to_string()
+            )],
+            "table details prefetch targets the selected database"
+        );
+    }
+
+    #[test]
+    fn target_database_snapshot_never_borrows_another_databases_catalog() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot("completion_secondary", &[("public", "other_users")]);
+
+        assert!(
+            target_database_snapshot(Some(&primary), None, Some("completion_secondary")).is_none(),
+            "a database whose snapshot is not loaded yet must not fall back to the primary"
+        );
+        assert!(std::ptr::eq(
+            target_database_snapshot(Some(&primary), None, Some("completion_primary"))
+                .expect("primary snapshot"),
+            &primary
+        ));
+        assert!(std::ptr::eq(
+            target_database_snapshot(Some(&primary), None, None).expect("primary snapshot"),
+            &primary
+        ));
+        assert!(std::ptr::eq(
+            target_database_snapshot(None, Some(&secondary), Some("completion_secondary"))
+                .expect("secondary snapshot"),
+            &secondary
+        ));
     }
 
     #[test]
