@@ -6530,6 +6530,153 @@ mod tests {
         assert!(!window.update(|_, cx| panel.read(cx).inspector.pinned));
     }
 
+    /// A panel showing `id` and `note` of a table that also has a
+    /// `quantity` column between them, with `note` of the only row edited.
+    fn panel_with_edited_partial_row(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "order_lines"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(1),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                panel.set_result(
+                    QueryResult::table(
+                        vec![key_column("id", true), key_column("note", false)],
+                        vec![vec![
+                            dbflux_core::Value::Int(1),
+                            dbflux_core::Value::Text("before".to_string()),
+                        ]],
+                        None,
+                        Duration::ZERO,
+                    ),
+                    cx,
+                );
+
+                if let Some(table_state) = panel.grid_table.table_state.clone() {
+                    table_state.update(cx, |state, _cx| {
+                        state.edit_buffer_mut().set_cell(
+                            0,
+                            1,
+                            dbflux_components::components::data_table::model::CellValue::text(
+                                "saved",
+                            ),
+                        );
+                    });
+                }
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        (panel, window)
+    }
+
+    fn shown_cells(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) -> Vec<String> {
+        window.update(|_, app| {
+            let state = panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("a table");
+            let state = state.read(app);
+            let model = state.model();
+
+            (0..model.col_count())
+                .map(|col| {
+                    let base = model.cell(0, col).cloned().expect("a cell");
+                    state
+                        .edit_buffer()
+                        .get_cell(0, col, &base)
+                        .display_text()
+                        .to_string()
+                })
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn a_saved_row_wider_than_the_grid_keeps_each_value_in_its_column(cx: &mut TestAppContext) {
+        let (panel, window) = panel_with_edited_partial_row(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.handle_save_result(
+                    0,
+                    Ok(dbflux_core::CrudResult::success(vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Int(5),
+                        dbflux_core::Value::Text("saved".to_string()),
+                    ])),
+                    cx,
+                )
+            })
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            shown_cells(&panel, window),
+            vec!["1".to_string(), "saved".to_string()],
+            "the table's quantity column must not shift into note"
+        );
+    }
+
+    #[gpui::test]
+    fn a_saved_row_matching_the_grid_replaces_the_row(cx: &mut TestAppContext) {
+        let (panel, window) = panel_with_edited_partial_row(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.handle_save_result(
+                    0,
+                    Ok(dbflux_core::CrudResult::success(vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Text("from the server".to_string()),
+                    ])),
+                    cx,
+                )
+            })
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            shown_cells(&panel, window),
+            vec!["1".to_string(), "from the server".to_string()]
+        );
+    }
+
     #[gpui::test]
     fn filtered_empty_table_runtime_keeps_header_and_active_filter(cx: &mut TestAppContext) {
         init_test_runtime(cx);
