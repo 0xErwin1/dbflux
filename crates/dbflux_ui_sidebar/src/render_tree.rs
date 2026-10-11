@@ -417,6 +417,10 @@ pub(super) fn render_tree_item(
                     let item_id = item_id.clone();
                     move || format!("row-{item_id}")
                 })
+                // Named by the item rather than by what the row draws: while the
+                // inline editor stands in for the label, the drawn text is the
+                // editor, and the name would be the menu glyph on its own.
+                .aria_label(label_text.clone())
                 .w_full()
                 .flex()
                 .items_center()

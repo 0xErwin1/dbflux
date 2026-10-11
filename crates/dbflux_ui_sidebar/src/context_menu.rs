@@ -2509,6 +2509,57 @@ mod menu_availability_tests {
         })
     }
 
+    /// A row is named by its item, not by what it draws: while the inline
+    /// editor stands in for the label, the row would otherwise be named by the
+    /// menu glyph on its own.
+    #[gpui::test]
+    async fn a_row_keeps_its_name_while_it_is_renamed(cx: &mut TestAppContext) {
+        use dbflux_components::accessibility::{FrameCapture, accessible_name};
+
+        let (state, profile_id) = connected_profile(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        let profile_item = tree_rows(&sidebar, cx)
+            .into_iter()
+            .find(|item| crate::parse_node_kind(item) == SchemaNodeKind::Profile)
+            .expect("the profile row");
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_expanded(&profile_item, true, cx)
+        });
+        cx.run_until_parked();
+
+        let profile_name = cx.update(|_, cx| {
+            state
+                .read(cx)
+                .profiles()
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .map(|profile| profile.name.clone())
+                .expect("the connected profile")
+        });
+
+        let capture = FrameCapture::observe(cx);
+        let frame = capture.frame(cx);
+        assert_eq!(
+            accessible_name(&frame, &format!("row-{profile_item}")),
+            Some(profile_name.clone()),
+            "the row is named by its item"
+        );
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.editing_id = Some(profile_id);
+            cx.notify();
+        });
+        let frame = capture.frame(cx);
+
+        assert_eq!(
+            accessible_name(&frame, &format!("row-{profile_item}")),
+            Some(profile_name),
+            "the inline editor does not take the name away"
+        );
+    }
+
     fn expand_first_of_kind(
         sidebar: &Entity<Sidebar>,
         kind: SchemaNodeKind,
