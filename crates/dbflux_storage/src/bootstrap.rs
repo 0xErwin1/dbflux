@@ -53,24 +53,31 @@ pub struct StorageRuntime {
     /// Content stays on disk; metadata about paths lives in dbflux.db.
     artifacts: ArtifactStore,
     /// The temporary directory [`StorageRuntime::in_memory`] created, removed
-    /// when the runtime drops, and its locked owner file. Without it every test
-    /// runtime leaves a migrated database behind in the temp dir, which on a
-    /// RAM-backed `/tmp` fills memory after a few full test runs.
-    owned_temp_dir: Option<(PathBuf, std::fs::File)>,
+    /// when the runtime drops. Without it every test runtime leaves a migrated
+    /// database behind in the temp dir, which on a RAM-backed `/tmp` fills
+    /// memory after a few full test runs.
+    ///
+    /// Declared last: fields drop in declaration order, so `dbflux_db` is
+    /// closed before the directory holding `dbflux.db` and its `-wal` and
+    /// `-shm` files is removed. Windows refuses to remove an open file.
+    owned_temp_dir: Option<OwnedTempDir>,
 }
 
-impl Drop for StorageRuntime {
-    fn drop(&mut self) {
-        let Some((temp_dir, owner)) = self.owned_temp_dir.take() else {
-            return;
-        };
-        // Windows refuses to remove a directory holding an open file.
-        drop(owner);
+/// A test runtime directory and its locked owner file, removed on drop.
+struct OwnedTempDir {
+    path: PathBuf,
+    owner: Option<std::fs::File>,
+}
 
-        if let Err(error) = std::fs::remove_dir_all(&temp_dir) {
+impl Drop for OwnedTempDir {
+    fn drop(&mut self) {
+        // Windows refuses to remove a directory holding an open file.
+        drop(self.owner.take());
+
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
             log::warn!(
                 "Could not remove test storage directory {}: {error}",
-                temp_dir.display()
+                self.path.display()
             );
         }
     }
@@ -230,7 +237,10 @@ impl StorageRuntime {
 
         match owner.and_then(|owner| Ok((owner, Self::for_path(temp_dir.join("dbflux.db"))?))) {
             Ok((owner, mut runtime)) => {
-                runtime.owned_temp_dir = Some((temp_dir, owner));
+                runtime.owned_temp_dir = Some(OwnedTempDir {
+                    path: temp_dir,
+                    owner: Some(owner),
+                });
                 Ok(runtime)
             }
             Err(error) => {
