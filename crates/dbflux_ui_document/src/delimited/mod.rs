@@ -16,9 +16,11 @@
 //! toolbar shows the dialect the file was read with and overrides parts of
 //! it. A second view shows the same loaded records as text, raw or aligned.
 //! The raw text can be edited, and an edit of it is applied to the table's
-//! pending changes.
+//! pending changes. A third view profiles every column of the file, from
+//! the loaded records or from all of them.
 
 mod columns;
+mod columns_view;
 mod document;
 mod editing;
 mod page_model;
@@ -32,6 +34,8 @@ mod toolbar;
 
 #[cfg(test)]
 mod columns_tests;
+#[cfg(test)]
+mod columns_view_tests;
 #[cfg(test)]
 mod document_tests;
 #[cfg(test)]

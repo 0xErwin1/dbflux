@@ -164,7 +164,7 @@ fn t_shows_the_text_at_the_active_row_and_escape_then_t_returns_to_the_table(
     assert_eq!(context(&document, window), ContextId::Results);
     assert!(!text_is_focused(&document, window));
 
-    press(window, "t");
+    press(window, "t t");
 
     assert_eq!(view(&document, window), DelimitedView::Table);
     assert!(table_is_focused(&document, window));
@@ -327,7 +327,7 @@ fn switching_keeps_the_pending_edits_both_ways(cx: &mut TestAppContext) {
     assert!(is_dirty(&document, window));
 
     press(window, "escape");
-    press(window, "t");
+    press(window, "t t");
 
     assert!(is_dirty(&document, window));
     assert!(has_pending_operations(&document, window));
@@ -784,7 +784,7 @@ fn a_header_too_large_to_keep_shows_no_text_and_a_note(cx: &mut TestAppContext) 
 
         // A row inserted at the end changes nothing in the text.
         press(window, "escape");
-        press(window, "t");
+        press(window, "t t");
         window.update(|_, cx| document.update(cx, |document, cx| document.insert_row_above(cx)));
         window.run_until_parked();
         press(window, "t");
@@ -966,7 +966,7 @@ fn typing_in_the_raw_text_edits_the_row_and_a_save_rewrites_only_its_record(
     );
 
     press(window, "escape");
-    press(window, "t");
+    press(window, "t t");
 
     assert_eq!(view(&document, window), DelimitedView::Table);
     assert_eq!(shown_rows(&document, window), ["Ana|Lima", "zBo|Quito"]);
@@ -1000,7 +1000,7 @@ fn lines_inserted_deleted_and_replaced_in_the_text_are_saved_where_the_text_puts
         "name,city\nTop,1\nAna,Lima\nMid,2\nCy,Rome\nEnd,3\n".to_string()
     });
     press(window, "escape");
-    press(window, "t");
+    press(window, "t t");
 
     assert_eq!(
         shown_rows(&document, window),
@@ -1465,7 +1465,7 @@ fn one_table_undo_undoes_the_last_operation_of_an_applied_text_edit(cx: &mut Tes
     press(window, "t");
     replace_in_text(&document, window, "Bo,Quito", "Bx,Qx");
     press(window, "escape");
-    press(window, "t");
+    press(window, "t t");
 
     assert_eq!(shown_rows(&document, window), ["Ana|Lima", "Bx|Qx"]);
 

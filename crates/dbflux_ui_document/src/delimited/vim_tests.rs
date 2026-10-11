@@ -164,7 +164,7 @@ fn x_and_dd_edit_the_text_which_is_applied_and_saved(cx: &mut TestAppContext) {
     assert_eq!(text(&document, window), "name,city\no,Quito\n");
 
     press(window, "escape");
-    press(window, "t");
+    press(window, "t t");
 
     assert_eq!(view(&document, window), DelimitedView::Table);
     assert_eq!(shown_rows(&document, window), ["o|Quito"]);
@@ -353,7 +353,7 @@ fn the_mode_indicator_shows_with_vim_mode_in_the_text_view(cx: &mut TestAppConte
     press(window, "t");
     assert!(draws(window, "vim-mode-indicator"));
 
-    press(window, "escape t");
+    press(window, "escape t t");
     assert!(!draws(window, "vim-mode-indicator"), "the table is shown");
     assert!(key_context_entries(&document, window).is_empty());
 
