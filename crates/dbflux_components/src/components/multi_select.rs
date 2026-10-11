@@ -376,7 +376,8 @@ impl MultiSelect {
                     }))
                     .child(
                         Checkbox::new(SharedString::from(format!("ms-item-{}", index)))
-                            .checked(checked),
+                            .checked(checked)
+                            .aria_label(item.label.clone()),
                     )
                     .child(item.label.clone())
                     .into_any_element()
@@ -875,6 +876,38 @@ mod tests {
                 !is_open(&owner, window),
                 "a second trigger click closes the list"
             );
+        }
+
+        /// The rows of the open list and the boxes they draw are named after
+        /// their item, so a screen reader can tell them apart (issue #807).
+        #[gpui::test]
+        fn every_control_of_the_open_list_is_named(cx: &mut TestAppContext) {
+            let (capture, owner, window) = setup(cx);
+            open_menu(&capture, &owner, window);
+
+            let frame = capture
+                .0
+                .lock()
+                .expect("frame capture lock")
+                .clone()
+                .expect("the window rendered a frame");
+            let unnamed = crate::accessibility::unnamed_clickables(&frame);
+            assert_eq!(unnamed, Vec::<String>::new());
+
+            // A node keeps its element id only while that id names it alone,
+            // so the box of an item may be filed under its path inside the row.
+            let name_of = |suffix: &str| -> Option<String> {
+                let id = frame
+                    .nodes()
+                    .map(|(_, node)| node.id().to_string())
+                    .find(|id| id == suffix || id.ends_with(&format!(".{suffix}")))?;
+
+                crate::accessibility::accessible_name(&frame, &id)
+            };
+
+            assert_eq!(name_of("ms-item-0").as_deref(), Some("One"));
+            assert_eq!(name_of("ms-item-1").as_deref(), Some("Two"));
+            assert_eq!(name_of("ms-item-2").as_deref(), Some("Three"));
         }
     }
 

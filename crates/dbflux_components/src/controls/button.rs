@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     AbsoluteLength, App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent,
-    KeyUpEvent, MouseButton, Pixels, Rems, SharedString, Window, div,
+    KeyUpEvent, MouseButton, Pixels, Rems, Role, SharedString, Window, div,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::theme::Theme;
@@ -189,7 +189,9 @@ type ButtonClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'stat
 /// toolbar button leaves focus in the editor or grid it acts on.
 ///
 /// An icon-only button is a flag: `.icon_only()` hides the label, and the
-/// label becomes the tooltip unless `.tooltip()` sets another one.
+/// label becomes the tooltip unless `.tooltip()` sets another one. Either
+/// names the button for assistive technology; `.aria_label()` overrides both
+/// when neither says what the button does.
 #[derive(IntoElement)]
 pub struct Button {
     id: ElementId,
@@ -202,6 +204,7 @@ pub struct Button {
     trailing_icon: Option<IconSource>,
     kbd: Option<SharedString>,
     tooltip: Option<SharedString>,
+    aria_label: Option<SharedString>,
     text_color: Option<Hsla>,
     disabled: bool,
     selected: bool,
@@ -227,6 +230,7 @@ impl Button {
             trailing_icon: None,
             kbd: None,
             tooltip: None,
+            aria_label: None,
             text_color: None,
             disabled: false,
             selected: false,
@@ -311,6 +315,19 @@ impl Button {
 
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Names the button for assistive technology, overriding the name it would
+    /// take from its own text.
+    ///
+    /// A button that draws its label is already named by that text and an
+    /// icon-only button by its tooltip (its label, when it sets no explicit
+    /// one). Reach for this when neither says what the button does: an empty
+    /// label with only an icon, or an abbreviation such as `1:1` that means
+    /// nothing read aloud.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 
@@ -412,6 +429,14 @@ impl RenderOnce for Button {
         let held = has_focus && state.read(cx).key_held;
 
         let tooltip = self.resolved_tooltip();
+        // A button that draws its label is named by that text; an icon-only
+        // button draws none, so its tooltip (its label, when it sets no other
+        // one) names it instead. `.aria_label()` overrides either.
+        let accessible_name = match &self.aria_label {
+            Some(label) => Some(label.clone()),
+            None if self.icon_only => tooltip.clone(),
+            None => None,
+        };
         let theme = cx.theme();
         let (fills, content) = button_colors(theme, self.variant, self.selected);
         let content = self.text_color.unwrap_or(content);
@@ -460,6 +485,8 @@ impl RenderOnce for Button {
 
         let mut button = div()
             .id(id)
+            .role(Role::Button)
+            .when_some(accessible_name, |button, name| button.aria_label(name))
             .relative()
             .flex()
             .flex_shrink_0()
@@ -553,6 +580,7 @@ impl RenderOnce for Button {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::icons::AppIcon;
     use crate::tokens::{BASE_REM, ui};
     use gpui::px;
 
@@ -917,5 +945,116 @@ mod tests {
         window.run_until_parked();
         press(window, "enter");
         assert_eq!(*clicks.borrow(), vec!["first", "first", "parent"]);
+    }
+
+    /// A window whose whole body is the buttons under test.
+    ///
+    /// The buttons come from a factory because a button is a one-shot element:
+    /// a repaint of the window needs to build them again.
+    struct ButtonRow(std::sync::Arc<dyn Fn() -> Vec<Button>>);
+
+    impl Render for ButtonRow {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full().children((self.0)())
+        }
+    }
+
+    /// Renders the buttons of `build` and returns the window's frame.
+    fn frame_with_buttons(
+        build: impl Fn() -> Vec<Button> + 'static,
+        cx: &mut gpui::TestAppContext,
+    ) -> gpui::AccessibilityFrame {
+        cx.update(crate::theme::init);
+
+        let capture = std::sync::Arc::new(crate::accessibility::FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            ButtonRow(std::sync::Arc::new(build))
+        });
+        window.run_until_parked();
+
+        capture.frame(window)
+    }
+
+    fn name_of(frame: &gpui::AccessibilityFrame, id: &str) -> Option<String> {
+        crate::accessibility::accessible_name(frame, id)
+    }
+
+    #[gpui::test]
+    fn a_label_button_is_named_by_its_visible_text(cx: &mut gpui::TestAppContext) {
+        let frame = frame_with_buttons(|| vec![Button::new("save", "Save")], cx);
+
+        assert_eq!(name_of(&frame, "save").as_deref(), Some("Save"));
+        assert_eq!(
+            crate::accessibility::unnamed_clickables(&frame),
+            Vec::<String>::new()
+        );
+    }
+
+    /// An icon-only button draws no text, so its label — which becomes the
+    /// tooltip — names it for assistive technology.
+    #[gpui::test]
+    fn an_icon_only_button_is_named_by_its_label(cx: &mut gpui::TestAppContext) {
+        let frame = frame_with_buttons(
+            || {
+                vec![
+                    Button::new("save", "Save file")
+                        .icon_only()
+                        .icon(AppIcon::Save),
+                ]
+            },
+            cx,
+        );
+
+        assert_eq!(name_of(&frame, "save").as_deref(), Some("Save file"));
+    }
+
+    /// An icon-only button may carry no label (the caller names the action
+    /// with `aria_label` or a tooltip instead), and it may also be disabled.
+    #[gpui::test]
+    fn an_icon_only_button_is_named_by_its_aria_label_or_tooltip(cx: &mut gpui::TestAppContext) {
+        let frame = frame_with_buttons(
+            || {
+                vec![
+                    Button::new("close", "")
+                        .icon_only()
+                        .icon(AppIcon::CircleX)
+                        .aria_label("Close the dialog"),
+                    Button::new("remove", "")
+                        .icon_only()
+                        .icon(AppIcon::Delete)
+                        .tooltip("Delete the row")
+                        .disabled(true),
+                ]
+            },
+            cx,
+        );
+
+        assert_eq!(
+            name_of(&frame, "close").as_deref(),
+            Some("Close the dialog")
+        );
+        assert_eq!(name_of(&frame, "remove").as_deref(), Some("Delete the row"));
+    }
+
+    /// `aria_label` wins over the label the button draws, for a control whose
+    /// visible text is an abbreviation of the action.
+    #[gpui::test]
+    fn aria_label_overrides_the_drawn_text(cx: &mut gpui::TestAppContext) {
+        let frame = frame_with_buttons(
+            || vec![Button::new("zoom", "1:1").aria_label("Reset the zoom to 100%")],
+            cx,
+        );
+
+        assert_eq!(
+            name_of(&frame, "zoom").as_deref(),
+            Some("Reset the zoom to 100%")
+        );
     }
 }

@@ -231,6 +231,7 @@ impl Render for ModalUnsavedChanges {
                     .child(
                         Checkbox::new(("unsaved-check", row_idx))
                             .checked(is_checked)
+                            .aria_label(entry.name.clone())
                             .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                 this.set_selected(id, *checked, cx);
                             })),

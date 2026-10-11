@@ -526,6 +526,7 @@ impl RenderOnce for Modal {
                         .icon(AppIcon::CircleX)
                         .icon_size(ModalMetrics::CLOSE_ICON)
                         .icon_only()
+                        .aria_label(dbflux_i18n::t!("modals.close"))
                         .on_click(move |_, window, cx| (handler)(window, cx)),
                 )
         });
@@ -789,6 +790,29 @@ mod tests {
     }
 
     type Log = Arc<Mutex<Vec<&'static str>>>;
+
+    /// The dialog's close button draws only an icon, so it announces the
+    /// action it performs (issue #807).
+    #[gpui::test]
+    fn the_close_button_is_named(cx: &mut TestAppContext) {
+        let setup = setup(cx, true);
+        let frame = setup
+            .capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("a frame");
+        let node = frame
+            .nodes()
+            .find(|(_, node)| node.id() == MODAL_CLOSE_ID)
+            .and_then(|(_, node)| frame.accessibility_node(node))
+            .expect("the close button is an accessible node");
+        let expected = dbflux_i18n::t!("modals.close").to_string();
+
+        assert_eq!(node.role(), gpui::Role::Button);
+        assert_eq!(node.label(), Some(expected.as_str()));
+    }
 
     struct Harness {
         focus: FocusHandle,

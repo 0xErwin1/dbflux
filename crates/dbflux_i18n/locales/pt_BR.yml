@@ -3246,6 +3246,7 @@ document:
       close_others: Fechar as outras
       close_right: Fechar à direita
     new: Nova aba
+    close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
 document_tree:
   search_placeholder: Buscar…
@@ -3383,6 +3384,7 @@ login:
     no_url: Nenhuma URL de login está disponível para este provedor.
     no_url_provided: A URL de login não foi fornecida pelo provedor
 modals:
+  close: Fechar
   active_query:
     title: Consulta ativa em execução
     prompt: Ainda há uma consulta em execução nesta conexão. O que você gostaria de fazer?
