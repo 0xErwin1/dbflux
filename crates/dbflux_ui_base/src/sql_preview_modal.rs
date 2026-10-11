@@ -707,6 +707,9 @@ impl Render for SqlPreviewModal {
                                 Checkbox::new("fqn-checkbox")
                                     .checked(use_fqn)
                                     .small()
+                                    .aria_label(dbflux_i18n::t!(
+                                        "sql_preview.options.fully_qualified"
+                                    ))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.toggle_fully_qualified(window, cx);
                                     })),
@@ -724,6 +727,7 @@ impl Render for SqlPreviewModal {
                                 Checkbox::new("compact-checkbox")
                                     .checked(compact)
                                     .small()
+                                    .aria_label(dbflux_i18n::t!("sql_preview.options.compact"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.toggle_compact(window, cx);
                                     })),
@@ -1053,6 +1057,98 @@ mod tests {
                 window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
             assert_eq!(copied, None);
             assert!(!visible(window, &preview));
+        }
+    }
+
+    mod accessibility {
+        // Explicit imports rather than the parent glob; see the note in
+        // `keyboard` above.
+        use crate::sql_preview_modal::SqlPreviewModal;
+        use dbflux_components::accessibility::{FrameCapture, accessible_name};
+        use dbflux_components::{SqlGenerationType, SqlPreviewContext};
+        use dbflux_core::Value;
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+            TestAppContext, VisualTestContext, Window, div,
+        };
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use uuid::Uuid;
+
+        struct Harness {
+            preview: Entity<SqlPreviewModal>,
+        }
+
+        impl Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(self.preview.clone())
+            }
+        }
+
+        /// Opens the preview the way a table row does: the options row is drawn
+        /// only for a concrete context and a non-DDL generation.
+        fn open_preview(
+            cx: &mut TestAppContext,
+        ) -> (Entity<SqlPreviewModal>, &mut VisualTestContext) {
+            cx.update(gpui_component::init);
+            cx.update(dbflux_components::theme::init);
+            cx.update(crate::keymap::init_keymap);
+            let app_state = crate::object_tree::test_support::test_app_state(cx);
+
+            let slot: Rc<RefCell<Option<Entity<SqlPreviewModal>>>> = Rc::default();
+            let (_, window) = cx.add_window_view({
+                let slot = slot.clone();
+                move |window, cx| {
+                    let preview = cx.new(|cx| SqlPreviewModal::new(app_state, window, cx));
+                    slot.replace(Some(preview.clone()));
+                    let harness = cx.new(|_| Harness { preview });
+                    gpui_component::Root::new(harness, window, cx)
+                }
+            });
+            let preview = slot.borrow().clone().expect("preview entity");
+
+            window.update(|window, cx| {
+                preview.update(cx, |preview, cx| {
+                    preview.open(
+                        SqlPreviewContext::DataTableRow {
+                            profile_id: Uuid::nil(),
+                            schema_name: None,
+                            table_name: "users".to_string(),
+                            column_names: vec!["id".to_string()],
+                            row_values: vec![Value::Int(1)],
+                            pk_indices: vec![0],
+                        },
+                        SqlGenerationType::Insert,
+                        window,
+                        cx,
+                    );
+                });
+            });
+            window.run_until_parked();
+
+            (preview, window)
+        }
+
+        /// The two options of the dialog draw their text beside the box, so
+        /// each box is named by that text (issue #807).
+        #[gpui::test]
+        fn the_dialog_options_are_named_by_the_text_beside_them(cx: &mut TestAppContext) {
+            let (_preview, window) = open_preview(cx);
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+            let fully_qualified =
+                dbflux_i18n::t!("sql_preview.options.fully_qualified").to_string();
+            let compact = dbflux_i18n::t!("sql_preview.options.compact").to_string();
+
+            assert_eq!(
+                accessible_name(&frame, "fqn-checkbox"),
+                Some(fully_qualified)
+            );
+            assert_eq!(accessible_name(&frame, "compact-checkbox"), Some(compact));
         }
     }
 }
