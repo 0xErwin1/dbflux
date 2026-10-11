@@ -124,6 +124,22 @@ cargo nextest run --workspace _covered
 
 在整个 workspace 上运行时，UI crate 会以应用发布时的 feature 编译，因此也会检查 MCP 界面和钩子的 Lua 模式。辅助模块自身的测试用 `cargo nextest run -p dbflux_ui_base keyboard_coverage` 运行。
 
+## 无障碍名称
+
+每个控件都必须能被辅助技术和 UI 自动化识别：具有无障碍名称，以及与之配套的角色和状态。不自行绘制文本的控件——只显示图标的按钮、手工绘制的复选框——会被朗读为没有名称的控件，读屏软件无法把它们区分开。
+
+可点击元素在自己的 `aria_label` 存在时以它命名，否则以它绘制的文本命名；后者适用于从内容取名的角色（按钮、复选框、单选框、开关、链接、菜单项、标签页）。挑选能命名该控件的最小改动：
+
+- `Button` 以自身的 label 命名；只显示图标的按钮以它的 tooltip 命名（未另行设置时即为它的 label）。仅当两者都说不清按钮的作用时才添加 `.aria_label(...)`。
+- `Checkbox` 以 `.label(...)` 命名，用于它画在方框旁的文本；以 `.aria_label(...)` 命名，用于外层行绘制的文本。
+- 手工绘制的控件自行声明语义：复选框使用 `.role(Role::CheckBox)`、`.aria_label(...)` 和 `.aria_toggled(...)`；开关使用 `.role(Role::Switch)` 和 `.aria_toggled(...)`；展开箭头使用 `.aria_expanded(...)`。
+
+请按用户在该控件旁看到的文本来命名，使朗读出的名称与可见标签一致。每个界面用一个渲染测试来证明：用 `dbflux_components::accessibility::FrameCapture` 捕获帧，再用 `accessible_name`、`accessibility_node` 或 `unnamed_clickables` 进行断言。
+
+```bash
+cargo nextest run -p dbflux_components accessibility
+```
+
 ## 问题反馈
 
 提交问题反馈前：
