@@ -2186,8 +2186,8 @@ fn table_reference_position(before_reference: &str) -> Option<TableReferencePosi
         (Some("JOIN"), _) => Some(TableReferencePosition::Relation),
         (Some("FROM"), Some("DELETE")) => Some(TableReferencePosition::MutationTarget),
         (Some("FROM"), _) => Some(TableReferencePosition::Relation),
-        // `DO UPDATE`, `KEY UPDATE` and `FOR UPDATE` are not followed by a table.
-        (Some("UPDATE"), Some("DO" | "KEY" | "FOR")) => None,
+        // `DO UPDATE`, `KEY UPDATE`, `FOR UPDATE` and `ON UPDATE` are not followed by a table.
+        (Some("UPDATE"), Some("DO" | "KEY" | "FOR" | "ON")) => None,
         (Some("UPDATE"), _) => Some(TableReferencePosition::MutationTarget),
         _ => None,
     }
@@ -3174,6 +3174,15 @@ mod tests {
                 .is_none()
         );
         assert!(super::table_reference_position("SELECT * FROM t1 FOR UPDATE ").is_none());
+        assert!(
+            super::table_reference_position(
+                "CREATE TABLE t2 (id INT REFERENCES t1 (id) ON UPDATE "
+            )
+            .is_none()
+        );
+        assert!(
+            super::table_reference_position("CREATE TABLE t2 (at TIMESTAMP ON UPDATE ").is_none()
+        );
     }
 
     #[test]
