@@ -67,6 +67,21 @@ así que el endpoint es una URL y no un par host/port.
   escrituras de todos modos (sin efectos secundarios; los grants alcanzables
   solo a través de un rol dentro de otro rol no se resuelven y dejan la
   política sin cambios).
+- Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla lee
+  `system.columns`, `system.tables` y `system.parts` para obtener el codec de
+  cada columna, su tamaño en disco y sin comprimir, la razón de compresión, la
+  posición en la clave de ordenación y la clave de partición, y el motor, las
+  claves, el TTL, las partes activas, las filas y el tamaño de la tabla. La
+  vista Particiones lista las partes activas, filas, tamaños y rango de clave
+  de cada partición desde `system.parts`, de la más reciente a la más antigua.
+  La vista Datos incorpora un selector de columnas que nombra en la query solo
+  las columnas elegidas, y una estimación de lectura a partir de
+  `EXPLAIN ESTIMATE`. Un filtro con una subconsulta, o con `IN` seguido del
+  nombre de una tabla, no recibe estimación, porque planificarlo leería esa
+  subconsulta o tabla. **Perfilar las primeras 1 000 000 filas** calcula, a
+  pedido, la cantidad de nulos, los conteos aproximados de valores distintos
+  (`uniq`) y los rangos, y queda registrado en el log de auditoría. Ver [Columnas y
+  particiones](../TABLE_VIEWS.md).
 
 ### Manejo de tipos
 
@@ -107,3 +122,10 @@ texto crudo:
   `system.processes` son candidatos naturales para un futuro `InstanceCatalog`,
   así que esto está planeado y no excluido permanentemente.
 - Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se envía con el ajuste por petición `readonly = 2`, de modo que ClickHouse rechaza escrituras, DDL e intentos de cambiar `readonly`. El ajuste no limita lo que una lectura puede alcanzar; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
+- La estimación de lectura es una cota superior: un `LIMIT` puede detener la
+  lectura antes. Sus bytes escalan el tamaño en disco de cada columna leída por
+  la proporción de gránulos que toca la lectura, así que son una aproximación.
+- **Perfilar las primeras 1 000 000 filas** lee las primeras filas que devuelve
+  el servidor, no una muestra aleatoria. En una tabla MergeTree siguen la clave
+  de ordenación, así que el rango de una columna inicial de esa clave puede ser
+  más estrecho que el de la tabla.

@@ -692,6 +692,21 @@ impl DataGridPanel {
             return true;
         }
 
+        // The same keys move between a table's Data, Columns and Partitions
+        // views when its connection offers them.
+        if matches!(cmd, Command::NextResultTab | Command::PrevResultTab)
+            && self.step_table_tab(cmd == Command::NextResultTab, window, cx)
+        {
+            if !self.focus_table_view(window, cx) {
+                self.focus_table(window, cx);
+            }
+            return true;
+        }
+
+        if let Some(handled) = self.dispatch_table_view_command(cmd, window, cx) {
+            return handled;
+        }
+
         if let Some(handled) = self.dispatch_side_island_command(cmd, window, cx) {
             return handled;
         }

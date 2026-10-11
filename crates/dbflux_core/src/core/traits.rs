@@ -1483,7 +1483,8 @@ pub trait Connection: Send + Sync {
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
         let sql = if let Some(filter) = request.semantic_filter.as_ref() {
             let mut sql = format!(
-                "SELECT * FROM {}",
+                "SELECT {} FROM {}",
+                request.select_list_with(self.dialect()),
                 request.table.quoted_with(self.dialect())
             );
 
@@ -1607,6 +1608,68 @@ pub trait Connection: Send + Sync {
     /// `DocumentFeatures::VISUAL_BUILDER`.
     fn document_query_codec(&self) -> Option<&dyn crate::DocumentQueryCodec> {
         None
+    }
+
+    // =========================================================================
+    // Table views (Columns, Partitions, read estimate)
+    // =========================================================================
+
+    /// The table views this connection fills beyond the data grid. The default
+    /// fills none; drivers report the seams below they implement.
+    fn table_view_features(&self) -> crate::TableViewFeatures {
+        crate::TableViewFeatures::empty()
+    }
+
+    /// Per-column storage facts of `table`, read from metadata only: catalogs,
+    /// planner statistics or storage information. It must never read table
+    /// rows, because the UI calls it when the table opens. Connections that
+    /// implement it report `TableViewFeatures::COLUMN_PROFILE`.
+    fn table_profile(&self, _table: &crate::TableRef) -> Result<crate::TableProfile, DbError> {
+        Err(DbError::NotSupported(
+            "Column profiles are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The partitions of `table`, read from metadata only. Connections that
+    /// implement it report `TableViewFeatures::PARTITIONS`.
+    fn table_partitions(
+        &self,
+        _table: &crate::TableRef,
+    ) -> Result<crate::TablePartitions, DbError> {
+        Err(DbError::NotSupported(
+            "Table partitions are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// What `request` would read, worked out without reading table rows.
+    /// `profile` is the table's metadata profile, used to put bytes on the
+    /// columns the request reads. Connections that implement it report
+    /// `TableViewFeatures::READ_ESTIMATE`.
+    fn estimate_table_read(
+        &self,
+        _request: &TableBrowseRequest,
+        _profile: &crate::TableProfile,
+    ) -> Result<crate::ReadEstimate, DbError> {
+        Err(DbError::NotSupported(
+            "Read estimates are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Null counts, distinct counts, ranges and top values of `columns`,
+    /// computed from at most `row_limit` rows of `table`, with the limit
+    /// inside the query the driver runs. This reads table data, so the UI
+    /// runs it only on an explicit action. The returned profile's source is
+    /// [`crate::ProfileSource::Sample`] with the rows actually read.
+    /// Connections that implement it report `TableViewFeatures::SAMPLE_PROFILE`.
+    fn sample_table_profile(
+        &self,
+        _table: &crate::TableRef,
+        _columns: &[String],
+        _row_limit: u64,
+    ) -> Result<crate::TableProfile, DbError> {
+        Err(DbError::NotSupported(
+            "Sample profiles are not supported by this driver".to_string(),
+        ))
     }
 
     /// Count documents matching a filter, allowing the driver to answer from

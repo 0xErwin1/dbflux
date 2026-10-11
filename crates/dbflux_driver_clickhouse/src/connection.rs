@@ -6,8 +6,9 @@ use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
     DocumentConnection, DriverMetadata, ExecutionSourceContext, InstanceCatalog,
     KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest, QueryResult,
-    RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    TableInfo, Value, WritePrivilege,
+    ReadEstimate, RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, TableBrowseRequest, TableInfo, TablePartitions, TableProfile,
+    TableRef, TableViewFeatures, Value, WritePrivilege,
 };
 use serde::Deserialize;
 
@@ -67,7 +68,7 @@ impl ClickHouseConnection {
     /// this request while still accepting the settings DBFlux sends with it.
     /// Each HTTP request is its own query, so no session or transaction state
     /// carries over from earlier requests.
-    fn execute_sql_read_only(
+    pub(crate) fn execute_sql_read_only(
         &self,
         sql: &str,
         database: Option<&str>,
@@ -92,7 +93,7 @@ impl ClickHouseConnection {
         parse_response(response, started.elapsed())
     }
 
-    fn current_database(&self) -> Result<String, DbError> {
+    pub(crate) fn current_database(&self) -> Result<String, DbError> {
         self.active_database
             .read()
             .map(|database| database.clone())
@@ -405,6 +406,46 @@ impl Connection for ClickHouseConnection {
         let readonly_setting = self.probe_readonly_setting();
         let grants = self.probe_grants();
         resolve_clickhouse_write_privilege(readonly_setting, &grants)
+    }
+
+    fn table_view_features(&self) -> TableViewFeatures {
+        TableViewFeatures::COLUMN_PROFILE
+            | TableViewFeatures::PARTITIONS
+            | TableViewFeatures::READ_ESTIMATE
+            | TableViewFeatures::SAMPLE_PROFILE
+            | TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(&self, table: &TableRef) -> Result<TableProfile, DbError> {
+        crate::table_views::table_profile(self, table)
+    }
+
+    fn table_partitions(&self, table: &TableRef) -> Result<TablePartitions, DbError> {
+        crate::table_views::table_partitions(self, table)
+    }
+
+    fn estimate_table_read(
+        &self,
+        request: &TableBrowseRequest,
+        profile: &TableProfile,
+    ) -> Result<ReadEstimate, DbError> {
+        crate::table_views::estimate_table_read(self, request, profile)
+    }
+
+    fn sample_table_profile(
+        &self,
+        table: &TableRef,
+        columns: &[String],
+        row_limit: u64,
+    ) -> Result<TableProfile, DbError> {
+        let profile = crate::table_views::table_profile(self, table)?;
+        let types = profile
+            .columns
+            .iter()
+            .map(|column| (column.name.to_string(), column.type_name.to_string()))
+            .collect();
+
+        crate::table_views::sample_table_profile(self, table, columns, &types, row_limit)
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {

@@ -477,8 +477,13 @@ class McpSession:
 
         return result
 
-    def find(self, label: str, *, exact: bool = True) -> list[dict]:
-        result = self.call("find_elements", {"query": label, "exact": exact})
+    def find(self, label: str, *, exact: bool = True, role: str | None = None) -> list[dict]:
+        query = {"query": label, "exact": exact}
+
+        if role is not None:
+            query["role"] = role
+
+        result = self.call("find_elements", query)
 
         return result.get("structuredContent", {}).get("elements", [])
 
@@ -766,11 +771,11 @@ def fill_placeholders(value, placeholders: dict[str, str]):
 
 
 def find_labelled(session: McpSession, arguments: dict) -> dict:
-    """The element labelled `label`, taking the `index`-th match."""
+    """The element labelled `label`, taking the `index`-th match, of `role` when one is given."""
 
     label = arguments["label"]
     index = arguments.get("index", 0)
-    matches = session.find(label, exact=arguments.get("exact", True))
+    matches = session.find(label, exact=arguments.get("exact", True), role=arguments.get("role"))
 
     if len(matches) <= index:
         raise ScreenshotError(f"no element labelled {label!r} (match {index}) is visible")
@@ -805,7 +810,7 @@ def resolve_label(session: McpSession, arguments: dict) -> dict:
     if "label" not in arguments:
         return arguments
 
-    resolved = {key: value for key, value in arguments.items() if key not in ("label", "exact", "index")}
+    resolved = {key: value for key, value in arguments.items() if key not in ("label", "exact", "index", "role")}
     resolved["id"] = find_labelled(session, arguments)["id"]
 
     return resolved

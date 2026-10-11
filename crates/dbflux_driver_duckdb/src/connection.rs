@@ -11,7 +11,8 @@ use dbflux_core::{
     IndexInfo, KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest,
     QueryResult, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    SqlMutationGenerator, SqlQueryBuilder, TableInfo, TableProfile, TableRef, TableViewFeatures,
+    Value, ViewInfo,
 };
 use duckdb::arrow::datatypes::{DataType, TimeUnit as ArrowTimeUnit};
 use duckdb::types::{TimeUnit, Value as DuckValue};
@@ -543,6 +544,41 @@ impl DuckDbConnection {
         (filter, schema)
     }
 
+    /// The catalog a table view reads: the active one, as grid queries do.
+    fn profile_catalog(&self) -> String {
+        self.active_database().unwrap_or_default()
+    }
+
+    /// The name and type of each column of `table`, in order.
+    fn profile_columns(&self, table: &TableRef) -> Result<Vec<(String, String)>, DbError> {
+        let (schema_filter, _) = self.schema_filter("", table.schema.as_deref());
+        let columns: Vec<(String, String)> = self
+            .run(
+                &format!(
+                    "SELECT column_name, data_type FROM duckdb_columns() \
+                     WHERE {schema_filter} AND table_name = {} ORDER BY column_index",
+                    Self::literal(&table.name)
+                ),
+                &[],
+                None,
+            )?
+            .rows
+            .into_iter()
+            .filter_map(|row| match <[Value; 2]>::try_from(row) {
+                Ok([Value::Text(name), Value::Text(type_name)]) => Some((name, type_name)),
+                _ => None,
+            })
+            .collect();
+
+        if columns.is_empty() {
+            return Err(DbError::ObjectNotFound(
+                format!("DuckDB table {} was not found", table.qualified_name()).into(),
+            ));
+        }
+
+        Ok(columns)
+    }
+
     /// Runs an insert or delete with `RETURNING *` and reports the first
     /// returned row.
     fn run_returning(&self, sql: Option<String>) -> Result<CrudResult, DbError> {
@@ -723,6 +759,78 @@ impl Connection for DuckDbConnection {
             storage_hints: None,
             pseudo_columns: Box::default(),
         })
+    }
+
+    fn table_view_features(&self) -> TableViewFeatures {
+        TableViewFeatures::COLUMN_PROFILE
+            | TableViewFeatures::SAMPLE_PROFILE
+            | TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(&self, table: &TableRef) -> Result<TableProfile, DbError> {
+        let columns = self.profile_columns(table)?;
+        let qualified = crate::table_views::qualified_name(&self.profile_catalog(), table);
+
+        // A catalog without local storage (a DuckLake catalog keeps its data
+        // in Parquet files) has no storage information; its columns still
+        // profile, without codecs or ranges.
+        let segments = match self.run(
+            &format!(
+                "SELECT row_group_id, column_id, column_path, compression, stats, count \
+                 FROM pragma_storage_info({})",
+                Self::literal(&qualified)
+            ),
+            &[],
+            None,
+        ) {
+            Ok(result) => crate::table_views::segments_from_rows(&result.rows),
+            Err(error) => {
+                log::debug!("DuckDB storage info unavailable for {qualified}: {error}");
+                Vec::new()
+            }
+        };
+
+        Ok(crate::table_views::build_profile(
+            &columns,
+            &segments,
+            chrono::Utc::now(),
+        ))
+    }
+
+    fn sample_table_profile(
+        &self,
+        table: &TableRef,
+        columns: &[String],
+        row_limit: u64,
+    ) -> Result<TableProfile, DbError> {
+        let typed: Vec<(String, String)> = self
+            .profile_columns(table)?
+            .into_iter()
+            .filter(|(name, _)| columns.contains(name))
+            .collect();
+
+        if typed.is_empty() {
+            return Err(DbError::object_not_found(format!(
+                "None of the requested columns exist on {}: {}",
+                table.name,
+                columns.join(", ")
+            )));
+        }
+
+        let qualified = crate::table_views::qualified_name(&self.profile_catalog(), table);
+        let sql = crate::table_views::sample_sql(&qualified, &typed, row_limit);
+
+        let result = self.run(&sql, &[], None)?;
+        let row = result
+            .rows
+            .first()
+            .ok_or_else(|| DbError::query_failed("The sample query returned no rows"))?;
+
+        Ok(crate::table_views::sample_from_row(
+            row,
+            &typed,
+            chrono::Utc::now(),
+        ))
     }
 
     fn schema_indexes(

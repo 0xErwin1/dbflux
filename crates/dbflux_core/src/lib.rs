@@ -137,7 +137,8 @@ pub use data::{
 pub use data::{
     ColumnBadge, ColumnProfile, ColumnProjection, DEFAULT_PAGE_ROWS,
     DEFAULT_PROJECTION_BUDGET_BYTES, DEFAULT_PROJECTION_MAX_COLUMNS, EstimateScope, PartUnit,
-    ProfileSource, ReadEstimate, TableProfile, ValueRange, default_projection,
+    ProfileSource, ReadEstimate, TableFact, TableFactKind, TablePartition, TablePartitions,
+    TableProfile, TableViewFeatures, ValueCount, ValueRange, default_projection,
 };
 
 pub use data::{

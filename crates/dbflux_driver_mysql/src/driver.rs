@@ -1870,7 +1870,8 @@ fn plan_mysql_table_browse(
 ) -> Result<SemanticPlan, DbError> {
     let sql = if let Some(filter) = request.semantic_filter.as_ref() {
         let mut sql = format!(
-            "SELECT * FROM {}",
+            "SELECT {} FROM {}",
+            request.select_list_with(&MYSQL_DIALECT),
             request.table.quoted_with(&MYSQL_DIALECT)
         );
         let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;

@@ -18,6 +18,7 @@
 mod connection;
 mod dialect;
 mod driver;
+mod table_views;
 
 pub use connection::DuckDbConnection;
 pub use dialect::DuckDbDialect;

@@ -1,5 +1,5 @@
-//! The text view of `DelimitedDocument` and the switch between it and the
-//! table.
+//! The text view of `DelimitedDocument` and the switch between the table,
+//! the text and the Columns view (`columns_view.rs`).
 //!
 //! The two views show the same data: the page model and the table's edit
 //! buffer stay the only pending state, and switching never touches either,
@@ -37,8 +37,9 @@
 //! monospace font, with line numbers, and wrapped only when a line is longer
 //! than the object editors allow unwrapped.
 //!
-//! Keys: `t` (`CycleDocumentView`) switches between the table and the text,
-//! and `Shift+T` (`CycleResultView`) between raw and aligned, both in the
+//! Keys: `t` (`CycleDocumentView`) cycles the table, the text and the
+//! Columns view, and `Shift+T` (`CycleResultView`) switches the text between
+//! raw and aligned, both in the
 //! `Results` context. While the editor holds the keyboard its context is
 //! `TextInput`, where letters are text, so Escape first hands the keyboard to
 //! the tab, as it does in the object editor, and Enter hands it back. The
@@ -79,6 +80,8 @@ pub enum DelimitedView {
     #[default]
     Table,
     Text,
+    /// The profile of every column.
+    Columns,
 }
 
 /// How the text view shows the records.
@@ -195,8 +198,11 @@ impl DelimitedDocument {
             return;
         }
 
-        if view == DelimitedView::Text {
+        if self.text.view == DelimitedView::Table {
             self.commit_inline_edit(cx);
+        }
+
+        if view == DelimitedView::Text {
             self.text.stale = true;
         }
 
@@ -207,11 +213,12 @@ impl DelimitedDocument {
         cx.notify();
     }
 
-    /// Shows the table when the text is shown, and the text otherwise.
+    /// Shows the next view of the cycle: table, text, Columns.
     pub fn toggle_view(&mut self, cx: &mut Context<Self>) {
         let view = match self.text.view {
             DelimitedView::Table => DelimitedView::Text,
-            DelimitedView::Text => DelimitedView::Table,
+            DelimitedView::Text => DelimitedView::Columns,
+            DelimitedView::Columns => DelimitedView::Table,
         };
 
         self.show_view(view, cx);
@@ -377,6 +384,11 @@ impl DelimitedDocument {
                 self.focus(window, cx);
             }
 
+            return;
+        }
+
+        if self.text.view == DelimitedView::Columns {
+            self.prepare_columns_view(window, cx);
             return;
         }
 
@@ -783,8 +795,9 @@ impl DelimitedDocument {
 
     // -- Rendering -----------------------------------------------------------
 
-    /// The switch between the table and the text, and, while the text is
-    /// shown, between raw and aligned. `None` until the file is loaded.
+    /// The switch between the table, the text and the Columns view, and,
+    /// while the text is shown, between raw and aligned. `None` until the
+    /// file is loaded.
     pub(super) fn render_view_controls(&self, cx: &Context<Self>) -> Option<AnyElement> {
         self.loaded()?;
 
@@ -794,16 +807,21 @@ impl DelimitedDocument {
             vec![
                 SegmentedItem::new("table", dbflux_i18n::t!("document.delimited.view.table")),
                 SegmentedItem::new("text", dbflux_i18n::t!("document.delimited.view.text")),
+                SegmentedItem::new(
+                    "columns",
+                    dbflux_i18n::t!("document.delimited.view.columns"),
+                ),
             ],
             match self.text.view {
                 DelimitedView::Table => "table",
                 DelimitedView::Text => "text",
+                DelimitedView::Columns => "columns",
             },
             move |id, _window, cx| {
-                let view = if id.as_ref() == "text" {
-                    DelimitedView::Text
-                } else {
-                    DelimitedView::Table
+                let view = match id.as_ref() {
+                    "text" => DelimitedView::Text,
+                    "columns" => DelimitedView::Columns,
+                    _ => DelimitedView::Table,
                 };
 
                 if let Some(document) = document.upgrade() {

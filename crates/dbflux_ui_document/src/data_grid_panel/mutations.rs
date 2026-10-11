@@ -776,17 +776,34 @@ impl DataGridPanel {
                     |warning| report_error(warning, cx),
                 );
 
-                let column_count = self.result.columns.len();
+                let grid_columns: Vec<String> = self
+                    .result
+                    .columns
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect();
+                let table_columns: Option<Vec<String>> =
+                    self.table_views.profile.as_ref().map(|profile| {
+                        profile
+                            .columns
+                            .iter()
+                            .map(|column| column.name.to_string())
+                            .collect()
+                    });
+                let returned_row = crud_result.returning_row.as_deref().and_then(|row| {
+                    super::table_views::returned_row_for_grid(
+                        row,
+                        &grid_columns,
+                        table_columns.as_deref(),
+                    )
+                });
 
                 table_state.update(cx, |state, cx| {
-                    // Drivers return the whole table row (`RETURNING *` or a
-                    // re-read), which a grid showing only some of the table's
-                    // columns cannot place by position.
-                    match crud_result.returning_row {
-                        Some(returning_row) if returning_row.len() == column_count => {
-                            state.apply_returning_row(row_idx, &returning_row)
+                    match returned_row {
+                        Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
+                        None if crud_result.returning_row.is_some() => {
+                            state.keep_row_edits(row_idx)
                         }
-                        Some(_) => state.keep_row_edits(row_idx),
                         None => {}
                     }
                     state.edit_buffer_mut().clear_row(row_idx);

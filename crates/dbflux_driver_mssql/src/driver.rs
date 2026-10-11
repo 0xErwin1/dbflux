@@ -2831,7 +2831,11 @@ impl Connection for MssqlConnection {
     /// schema in the `FROM` clause and leave the active database alone.
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
         let table = request.table.quoted_with(&MSSQL_DIALECT);
-        let mut sql = format!("SELECT * FROM {}", table);
+        let mut sql = format!(
+            "SELECT {} FROM {}",
+            request.select_list_with(&MSSQL_DIALECT),
+            table
+        );
 
         if let Some(filter) = request.semantic_filter.as_ref() {
             let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;

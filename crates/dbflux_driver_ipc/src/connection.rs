@@ -249,6 +249,15 @@ impl Connection for IpcConnection {
     }
 
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
+        // The RPC protocol has no way to learn whether a driver reads the
+        // projection, so a projected browse is refused rather than answered
+        // with every column.
+        if !request.columns.is_empty() {
+            return Err(DbError::NotSupported(
+                "Column projection is not supported by external drivers".to_string(),
+            ));
+        }
+
         self.client
             .browse_table(self.session_id, request.clone())
             .map_err(DbError::from)

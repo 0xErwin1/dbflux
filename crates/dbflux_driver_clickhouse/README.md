@@ -44,6 +44,18 @@ the endpoint is a URL and not a host/port pair.
 - Dangerous-query detection uses the shared `SqlLanguageService` (no ClickHouse-specific override): `ALTER TABLE ... DELETE WHERE ...` and `ALTER TABLE ... UPDATE ... WHERE ...` are already caught as `Alter` (any `ALTER`-prefixed statement is flagged regardless of sub-command), and `TRUNCATE`/`DROP` are caught as usual. `KILL QUERY`/`KILL MUTATION` and `OPTIMIZE TABLE ... FINAL` are not flagged — neither deletes rows or changes table structure — matching how other relational drivers treat comparable non-destructive administrative statements.
 - Write-privilege probe: after connecting, checks the `readonly` server setting and `system.grants` for the current user and their active session roles to detect a read-only session or a user without `INSERT`/`ALTER UPDATE`/`ALTER DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; grants reachable only through a role-of-a-role are not resolved and leave the policy unchanged).
 - Instance metrics and inspector (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR`): a curated set of gauges and counters from `system.metrics`, `system.events`, and `system.asynchronous_metrics` (active queries, tracked memory, TCP/HTTP connections, selected/inserted rows, OS memory available), plus a `system.processes` running-queries inspector with a "Kill query" row action. The kill action is gated by a `KILL QUERY` privilege probe run once when the catalog is built; the action stays hidden unless that probe succeeds, so a probe that fails for any reason leaves a destructive control out of the UI rather than offering one the session cannot execute.
+- Table views (`TableViewFeatures`): a table's Columns view reads
+  `system.columns`, `system.tables` and `system.parts` for each column's codec,
+  size on disk and uncompressed, compression ratio, sort key position and
+  partition key, and for the table's engine, keys, TTL, active parts, rows and
+  size. The Partitions view lists each partition's active parts, rows, sizes
+  and key range from `system.parts`, newest first. The Data view gets a column
+  picker that names only the chosen columns in the query, and a read estimate
+  from `EXPLAIN ESTIMATE`. A filter with a subquery, or with `IN` followed by a
+  table name, gets no estimate, because planning it would read that subquery or
+  table. **Profile the first 1 000 000 rows** calculates null counts,
+  approximate distinct counts (`uniq`) and ranges on request, and is recorded
+  in the audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 
 ### Type handling
 
@@ -74,3 +86,9 @@ arrives fully structured rather than as raw text:
   carrying an offset are handled accurately; timestamps without one are treated
   as UTC.
 - Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) is sent with the per-request setting `readonly = 2`, so ClickHouse rejects writes, DDL and attempts to change `readonly`. The setting does not limit what a read can reach; least-privilege database credentials remain the real boundary.
+- The read estimate is an upper bound: a `LIMIT` can stop the read sooner. Its
+  bytes scale each read column's size on disk by the share of granules the read
+  touches, so they are an approximation.
+- **Profile the first 1 000 000 rows** reads the first rows the server returns,
+  not a random sample. On a MergeTree table they follow the sort key, so the
+  range of a leading sort key column can be narrower than the table's.

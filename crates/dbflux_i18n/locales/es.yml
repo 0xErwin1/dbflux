@@ -198,6 +198,13 @@ components:
       name: "Orden: nombre"
     source:
       file_footer: "Tamaños del pie del archivo"
+      catalog: "Tamaños de %{name}"
+      planner_statistics: "Estadísticas de %{name}"
+      loaded_rows: "De las %{rows} filas cargadas"
+      full_scan: "De las %{rows} filas"
+      sample: "Distribuciones de las primeras %{rows} filas leídas"
+      read_at: "leído a las %{time}"
+      file_modified: "archivo modificado %{time}"
     header:
       column: "Columna"
       codec: "Códec"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} columnas · %{shown} visibles en Datos"
       hint: "Activa o desactiva una columna para agregarla a la proyección de Datos o quitarla"
+      counts_only: "%{total} columnas"
     loading: "Leyendo estadísticas de columnas…"
     empty: "Esta tabla no tiene columnas"
     no_match: "Ninguna columna coincide con el filtro"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "Clave de orden"
       partition_key: "Clave de partición"
+      sort_key_position: "Clave de orden %{position}"
+      distribution_key: "Clave de distribución"
+    action:
+      refresh: "Actualizar estadísticas"
+      sample: "Perfilar las primeras %{rows} filas"
+      full_scan: "Perfilar el archivo completo"
+      running: "Perfilando…"
+    fact:
+      engine: "Motor"
+      sort_key: "Clave de orden"
+      partition_key: "Clave de partición"
+      primary_key: "Clave primaria"
+      sampling_key: "Clave de muestreo"
+      ttl: "TTL"
+      distribution_style: "Distribución"
+      active_parts: "Partes activas"
+      statistics_updated: "Estadísticas actualizadas"
+      rows: "Filas"
+      on_disk: "En disco"
+      raw: "Sin comprimir"
+      ratio: "Proporción"
+      row_groups: "Grupos de filas"
+      unsorted: "Sin ordenar"
+      created_by: "Escrito por"
   read_estimate:
     lead: "Leerá"
     row_groups: "%{touched} de %{total} grupos de filas"
     more:
       one: "+%{count} más"
       many: "+%{count} más"
+    parts: "%{touched} de %{total} partes"
+    granules: "%{touched} de %{total} gránulos"
+    rows: "%{rows} filas"
+    lead_upper: "Leerá hasta"
+  partition_list:
+    summary: "%{count} particiones"
+    summary_with_key: "%{count} particiones · PARTITION BY %{key}"
+    refresh: "Actualizar particiones"
+    loading: "Leyendo particiones…"
+    empty: "Esta tabla no tiene particiones"
+    error_title: "No se pudieron leer las particiones"
+    header:
+      partition: "Partición"
+      parts: "Partes"
+      rows: "Filas"
+      on_disk: "En disco"
+      raw: "Sin comprimir"
+      ratio: "Proporción"
+      range: "Rango de la clave"
+      modified: "Último cambio"
 composites:
   rail:
     add: "Agregar"
@@ -1593,6 +1645,13 @@ document:
         value_compact: "Compactar el valor"
         value_revert: "Revertir el valor"
         value_save: "Guardar el valor"
+        view_table_data: "Mostrar Datos"
+        view_table_columns: "Mostrar Columnas"
+        view_table_partitions: "Mostrar Particiones"
+        column_picker: "Elegir columnas"
+        refresh_profile: "Actualizar estadísticas de columnas"
+        sample_profile: "Perfilar las primeras filas"
+        refresh_partitions: "Actualizar particiones"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido
@@ -1812,6 +1871,20 @@ document:
         references: REFERENCIAS
         row: FILA
       title: "Fila %{row}"
+    table_views:
+      tab:
+        data: "Datos"
+        columns: "Columnas"
+        partitions: "Particiones"
+      projection_keeps_keys: "La clave primaria sigue en la proyección para poder editar filas: %{columns}"
+      sample_failed: "Falló el perfilado de la muestra: %{error}"
+      badge:
+        sort_position: "Orden %{position}"
+        sort: "Orden"
+        partition: "Part."
+        distribution: "Dist."
+      header_nulls: "%{percent} nulos"
+      refresh_failed: "Falló la actualización de las estadísticas de columnas: %{error}"
   delimited:
     unsaved_summary: "Cambios sin guardar en %{name}"
     loading: "Cargando %{name}…"
@@ -1929,6 +2002,7 @@ document:
       text: "Texto"
       raw: "Sin formato"
       aligned: "Alineado"
+      columns: "Columnas"
     text:
       more_in_file: "El archivo tiene más registros. Carga más para mostrarlos aquí."
       capped: "El texto muestra los primeros %{shown} de los %{loaded} registros cargados. La tabla los muestra todos."
@@ -1937,6 +2011,17 @@ document:
       apply_failed: "El texto no se puede aplicar: %{cause}"
       read_only_capped: "Este texto no se puede editar porque no muestra todos los registros cargados, y una edición de parte de los registros no se puede asociar con ellos. Edita en la tabla."
       raw_edit_hint: "Las ediciones se aplican a la tabla al cambiar de vista, guardar o cargar más. Del texto solo se toman los valores de los campos: una línea cuyos valores no cambiaron conserva el salto de línea y las comillas del archivo, y las líneas cambiadas o agregadas se escriben con las columnas del archivo."
+    columns:
+      type:
+        integer: "Entero"
+        decimal: "Decimal"
+        boolean: "Booleano"
+        date: "Fecha"
+        timestamp: "Fecha y hora"
+        text: "Texto"
+      progress: "%{scanned} de %{total}"
+      error:
+        scan_failed: "No se pudo perfilar %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analizando %{file} (%{analyzer})"

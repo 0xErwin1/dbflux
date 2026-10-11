@@ -37,10 +37,15 @@ use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 pub use encoding_rs::Encoding;
 use encoding_rs::UTF_8;
 
+mod profile;
 mod reader;
 mod source;
 mod writer;
 
+pub use profile::{
+    ColumnSummary, EXACT_DISTINCT_LIMIT, ProfileAccumulator, TOP_VALUE_COUNT, ValueBounds,
+    ValueKind,
+};
 pub use reader::{
     Page, PagedReader, ParseTextError, ReadError, ReaderOptions, Record, RecordCount, TextRecord,
     parse_text,
@@ -53,6 +58,8 @@ pub use writer::{
     render_appended_fields, render_record, write_edited,
 };
 
+#[cfg(test)]
+mod profile_tests;
 #[cfg(test)]
 mod reader_tests;
 #[cfg(test)]

@@ -358,7 +358,8 @@ jobs:
     # GPUI carries a large amount of platform-specific code; a macOS- or
     # Windows-only break otherwise surfaces only when build.yml runs at release
     # or nightly tag time. A lightweight `cargo check` on each platform catches
-    # it in the PR instead. Full test execution stays on Linux above.
+    # it in the PR instead. Full test execution stays on Linux above; only the
+    # scoped test steps below run here.
     strategy:
       fail-fast: false
       matrix:
@@ -393,6 +394,14 @@ jobs:
       - name: Cargo check
         if: needs.changes.outputs.rust != 'false'
         run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws,ui-automation${{ matrix.extra_features }}"
+
+      # The DuckDB driver links a bundled C++ engine and relies on its file lock
+      # and on native paths, which `cargo check` compiles but never exercises.
+      # Its unit tests need no service, so they run on both platforms; the
+      # network-bound DuckLake tests stay `#[ignore]`d.
+      - name: Run DuckDB driver tests
+        if: needs.changes.outputs.rust != 'false'
+        run: cargo test -p dbflux_driver_duckdb --locked
 
       # Compiling the Windows process-containment path (Job Objects) does not prove
       # it reclaims a cancelled hook's process tree, and this is the only job that

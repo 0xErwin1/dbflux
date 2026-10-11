@@ -65,18 +65,34 @@ most of it.
 ## The Columns view
 
 `t` switches between **Data** and **Columns**. The Columns view has one row per
-column of the file, with the facts from the footer, marked "Sizes from the file
-footer":
+column of the file, with the facts from the footer. A source line above it
+names the footer and when the file was last modified, for example "Sizes from
+the file footer · file modified 14:22:05". The time is shown for a file
+modified today, and the date and time otherwise. A file whose modification
+time is unknown shows only "Sizes from the file footer".
 
 | Field | What it shows |
 |-------|---------------|
-| **Column** | The name and the Parquet type. |
+| **Column** | The name, the Parquet type, and a **Sort key N** badge for a column of the sort key. |
 | **Codec** | The compression codec, or `MIXED` when the column's chunks use more than one. |
 | **On disk**, **Ratio** | The compressed size and the compression ratio. |
 | **Share of table** | The column's part of the file's size. |
 | **Nulls** | The share of null values, when the file records the null count. |
 | **Distribution** | The smallest and largest value, when the file records them. |
 | **Distinct** | The distinct count, which most files do not record. |
+
+Above the columns, a strip lists the file's facts:
+
+| Fact | What it shows |
+|------|---------------|
+| **Row groups** | How many row groups the file has. |
+| **Written by** | The writer the footer names (`created_by`), when it names one. |
+| **Sort key** | The columns the writer declared the rows sorted by (`sorting_columns`). Shown only when every row group declares the same order. |
+| **Rows**, **On disk**, **Raw**, **Ratio** | The row count, the compressed and uncompressed size, and the compression ratio. |
+
+A file whose row groups declare no sort order, or different ones, has no sort
+key fact and no **Sort key N** badges, because its rows are not known to be
+sorted across the file.
 
 - The eye on each row adds the column to the Data view or drops it, at once.
   `Space` toggles the row under the cursor. The last shown column cannot be

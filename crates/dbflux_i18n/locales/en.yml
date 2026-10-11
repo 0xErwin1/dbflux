@@ -198,6 +198,13 @@ components:
       name: "Sort: name"
     source:
       file_footer: "Sizes from the file footer"
+      catalog: "Sizes from %{name}"
+      planner_statistics: "Statistics from %{name}"
+      loaded_rows: "From the %{rows} loaded rows"
+      full_scan: "From all %{rows} rows"
+      sample: "Distributions from the first %{rows} rows read"
+      read_at: "read at %{time}"
+      file_modified: "file modified %{time}"
     header:
       column: "Column"
       codec: "Codec"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} columns · %{shown} shown in Data"
       hint: "Toggle a column to add or drop it from the Data projection"
+      counts_only: "%{total} columns"
     loading: "Reading column statistics…"
     empty: "This table has no columns"
     no_match: "No columns match the filter"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "Sort key"
       partition_key: "Partition key"
+      sort_key_position: "Sort key %{position}"
+      distribution_key: "Distribution key"
+    action:
+      refresh: "Refresh statistics"
+      sample: "Profile the first %{rows} rows"
+      full_scan: "Profile whole file"
+      running: "Profiling…"
+    fact:
+      engine: "Engine"
+      sort_key: "Sort key"
+      partition_key: "Partition key"
+      primary_key: "Primary key"
+      sampling_key: "Sampling key"
+      ttl: "TTL"
+      distribution_style: "Distribution"
+      active_parts: "Active parts"
+      statistics_updated: "Statistics updated"
+      rows: "Rows"
+      on_disk: "On disk"
+      raw: "Raw"
+      ratio: "Ratio"
+      row_groups: "Row groups"
+      unsorted: "Unsorted"
+      created_by: "Written by"
   read_estimate:
     lead: "Will read"
     row_groups: "%{touched} of %{total} row groups"
     more:
       one: "+%{count} more"
       many: "+%{count} more"
+    parts: "%{touched} of %{total} parts"
+    granules: "%{touched} of %{total} granules"
+    rows: "%{rows} rows"
+    lead_upper: "Reads up to"
+  partition_list:
+    summary: "%{count} partitions"
+    summary_with_key: "%{count} partitions · PARTITION BY %{key}"
+    refresh: "Refresh partitions"
+    loading: "Reading partitions…"
+    empty: "This table has no partitions"
+    error_title: "Could not read the partitions"
+    header:
+      partition: "Partition"
+      parts: "Parts"
+      rows: "Rows"
+      on_disk: "On disk"
+      raw: "Raw"
+      ratio: "Ratio"
+      range: "Key range"
+      modified: "Last change"
 composites:
   rail:
     add: "Add"
@@ -1593,6 +1645,13 @@ document:
         value_compact: "Compact the value"
         value_revert: "Revert the value"
         value_save: "Save the value"
+        view_table_data: "Show Data"
+        view_table_columns: "Show Columns"
+        view_table_partitions: "Show Partitions"
+        column_picker: "Choose columns"
+        refresh_profile: "Refresh column statistics"
+        sample_profile: "Profile the first rows"
+        refresh_partitions: "Refresh partitions"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1812,6 +1871,20 @@ document:
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
+    table_views:
+      tab:
+        data: "Data"
+        columns: "Columns"
+        partitions: "Partitions"
+      projection_keeps_keys: "The primary key stays in the projection so rows can still be edited: %{columns}"
+      sample_failed: "Profiling a sample failed: %{error}"
+      badge:
+        sort_position: "Sort %{position}"
+        sort: "Sort"
+        partition: "Part"
+        distribution: "Dist"
+      header_nulls: "%{percent} null"
+      refresh_failed: "Refreshing the column statistics failed: %{error}"
   delimited:
     unsaved_summary: "Unsaved edits to %{name}"
     loading: "Loading %{name}…"
@@ -1929,6 +2002,7 @@ document:
       text: "Text"
       raw: "Raw"
       aligned: "Aligned"
+      columns: "Columns"
     text:
       more_in_file: "More records follow in the file. Load more to show them here."
       capped: "The text shows the first %{shown} of the %{loaded} loaded records. The table shows all of them."
@@ -1937,6 +2011,17 @@ document:
       apply_failed: "The text cannot be applied: %{cause}"
       read_only_capped: "This text cannot be edited because it does not show every loaded record, and an edit of part of the records cannot be matched back to them. Edit in the table."
       raw_edit_hint: "Edits are applied to the table when you switch views, save or load more. Only field values are taken from the text: a line whose values did not change keeps its line break and quoting from the file, and changed or added lines are written with the file's columns."
+    columns:
+      type:
+        integer: "Integer"
+        decimal: "Decimal"
+        boolean: "Boolean"
+        date: "Date"
+        timestamp: "Timestamp"
+        text: "Text"
+      progress: "%{scanned} of %{total}"
+      error:
+        scan_failed: "Could not profile %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"
