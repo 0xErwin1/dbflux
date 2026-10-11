@@ -495,6 +495,8 @@ connection_manager:
       bundle_file: Bundle file
       bundle_encrypted: Bundle is encrypted
       passphrase: Passphrase
+      show_passphrase: Show passphrase
+      hide_passphrase: Hide passphrase
     hint:
       no_native_picker: No native file picker on this system — type or paste the bundle path above.
       external_refs: External value references travel as-is
@@ -4762,6 +4764,8 @@ shutdown:
   failed: Shutdown failed
 
 sidebar:
+  row:
+    actions: "Actions for %{name}"
   header:
     new_dashboard: "New Dashboard"
     add: "Add"
