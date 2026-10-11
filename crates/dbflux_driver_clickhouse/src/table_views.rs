@@ -290,6 +290,13 @@ pub(crate) fn estimate_table_read(
     request: &TableBrowseRequest,
     profile: &TableProfile,
 ) -> Result<ReadEstimate, DbError> {
+    if request.filter.as_deref().is_some_and(filter_runs_subquery) {
+        return Err(DbError::NotSupported(
+            "A filter with a subquery is not estimated: EXPLAIN ESTIMATE would run the subquery"
+                .to_string(),
+        ));
+    }
+
     let (database, name) = database_and_name(connection, &request.table)?;
 
     let explain_sql = format!(
@@ -677,6 +684,50 @@ fn flag_at(row: &[Value], index: usize) -> bool {
         || matches!(row.get(index), Some(Value::Bool(true)))
 }
 
+/// Whether `filter` holds a `SELECT` keyword outside string literals and
+/// quoted identifiers. ClickHouse runs such a subquery while it plans the
+/// read, so estimating the filter would cost as much as the subquery.
+fn filter_runs_subquery(filter: &str) -> bool {
+    let mut characters = filter.chars().peekable();
+    let mut word = String::new();
+
+    let ends_select = |word: &mut String| {
+        let is_select = word.eq_ignore_ascii_case("select");
+        word.clear();
+        is_select
+    };
+
+    while let Some(character) = characters.next() {
+        match character {
+            '\'' | '"' | '`' => {
+                if ends_select(&mut word) {
+                    return true;
+                }
+
+                while let Some(inner) = characters.next() {
+                    if inner == '\\' {
+                        characters.next();
+                    } else if inner == character {
+                        if characters.peek() == Some(&character) {
+                            characters.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            character if character.is_alphanumeric() || character == '_' => word.push(character),
+            _ => {
+                if ends_select(&mut word) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    ends_select(&mut word)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,5 +1059,20 @@ mod tests {
         assert!(!is_comparable("Map(String, UInt64)"));
         assert!(!is_comparable("AggregateFunction(uniq, UInt64)"));
         assert!(!is_comparable("JSON"));
+    }
+
+    #[test]
+    fn a_filter_with_a_subquery_is_not_estimated() {
+        assert!(filter_runs_subquery("id IN (SELECT id FROM other)"));
+        assert!(filter_runs_subquery("x > (select max(x) from t)"));
+        assert!(filter_runs_subquery(
+            "a = 1 AND b IN (\n  SELECT\tb FROM t)"
+        ));
+
+        assert!(!filter_runs_subquery("status = 'SELECT'"));
+        assert!(!filter_runs_subquery("note = 'it''s select time'"));
+        assert!(!filter_runs_subquery("`select` = 1"));
+        assert!(!filter_runs_subquery("\"selected\" = 1"));
+        assert!(!filter_runs_subquery("selected = 1 AND preselect > 0"));
     }
 }

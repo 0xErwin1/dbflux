@@ -76,7 +76,8 @@ así que el endpoint es una URL y no un par host/port.
   de cada partición desde `system.parts`, de la más reciente a la más antigua.
   La vista Datos incorpora un selector de columnas que nombra en la query solo
   las columnas elegidas, y una estimación de lectura a partir de
-  `EXPLAIN ESTIMATE`. **Perfilar las primeras 1 000 000 filas** completa, a
+  `EXPLAIN ESTIMATE`. Un filtro con una subconsulta no recibe estimación,
+  porque planificarlo ejecutaría la subconsulta. **Perfilar las primeras 1 000 000 filas** completa, a
   pedido, los nulos, los conteos aproximados de valores distintos (`uniq`) y
   los rangos, y queda registrado en el log de auditoría. Ver [Columnas y
   particiones](../TABLE_VIEWS.md).
