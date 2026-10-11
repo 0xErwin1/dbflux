@@ -256,6 +256,7 @@ pub fn menu_row(
 
     div()
         .id(id)
+        .role(Role::MenuItem)
         .relative()
         .flex()
         .flex_shrink_0()
