@@ -1128,6 +1128,33 @@ pub(super) fn restore_keys(
     (projection, restored)
 }
 
+/// The row a save returned, laid out in the grid's columns.
+///
+/// A driver returns the whole table row (`RETURNING *` or a re-read), in the
+/// table's column order, while a projected grid shows only some columns.
+/// With the table's columns known, each grid column takes its value by name.
+/// Otherwise the row is used only when it has exactly the grid's columns.
+/// `None` means the row cannot be matched and must not be shown.
+pub(super) fn returned_row_for_grid(
+    returned: &[dbflux_core::Value],
+    grid_columns: &[String],
+    table_columns: Option<&[String]>,
+) -> Option<Vec<dbflux_core::Value>> {
+    if let Some(table_columns) = table_columns
+        && table_columns.len() == returned.len()
+    {
+        return grid_columns
+            .iter()
+            .map(|name| {
+                let index = table_columns.iter().position(|column| column == name)?;
+                returned.get(index).cloned()
+            })
+            .collect();
+    }
+
+    (returned.len() == grid_columns.len()).then(|| returned.to_vec())
+}
+
 /// Whether two profiles describe the same columns in the same order.
 fn same_columns(left: &TableProfile, right: &TableProfile) -> bool {
     left.columns.len() == right.columns.len()

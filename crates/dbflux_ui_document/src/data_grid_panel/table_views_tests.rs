@@ -538,3 +538,44 @@ fn restoring_keys_selects_only_missing_key_columns() {
     assert_eq!(projection.selected_indices(), vec![0, 1]);
     assert_eq!(restored, vec!["site_id".to_string()]);
 }
+
+#[test]
+fn a_returned_row_follows_the_grid_columns_by_name() {
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    let table = names(&["order_id", "line_no", "product", "quantity", "note"]);
+    let returned = vec![
+        Value::Int(2),
+        Value::Int(1),
+        Value::Text("keyboard".into()),
+        Value::Int(1),
+        Value::Text("EDITED".into()),
+    ];
+
+    let projected = super::returned_row_for_grid(
+        &returned,
+        &names(&["order_id", "line_no", "product", "note"]),
+        Some(&table),
+    );
+    assert_eq!(
+        projected,
+        Some(vec![
+            Value::Int(2),
+            Value::Int(1),
+            Value::Text("keyboard".into()),
+            Value::Text("EDITED".into()),
+        ]),
+        "a column left out of the projection is skipped, not shifted into the next one"
+    );
+
+    assert_eq!(
+        super::returned_row_for_grid(&returned, &table, None),
+        Some(returned.clone()),
+        "a row matching the grid is used as it is"
+    );
+
+    assert_eq!(
+        super::returned_row_for_grid(&returned, &names(&["order_id", "note"]), None),
+        None,
+        "a row that cannot be matched to the grid columns is not used"
+    );
+}
