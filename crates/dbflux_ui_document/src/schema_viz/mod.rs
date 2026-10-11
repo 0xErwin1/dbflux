@@ -53,6 +53,10 @@ const SCHEMA_MENU_WIDTH: Pixels = px(160.0);
 
 /// Independent on/off toggles drawn as a segmented track (the Types and
 /// Indexes switches of P1Schema): every active item shows the raised thumb.
+///
+/// Each item is a switch named by its own label and carrying its on/off state,
+/// so assistive technology and UI automation can tell the two apart and read
+/// whether the diagram is showing that group.
 fn toggle_group<const N: usize>(
     items: [(&'static str, String, bool); N],
     on_toggle: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
@@ -64,6 +68,7 @@ fn toggle_group<const N: usize>(
         let on_toggle = on_toggle.clone();
         let id = SharedString::from(id);
         let clicked = id.clone();
+        let accessible_label = SharedString::from(label.clone());
 
         let thumb = if active {
             Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary)
@@ -75,6 +80,13 @@ fn toggle_group<const N: usize>(
 
         div()
             .id(id)
+            .role(Role::Switch)
+            .aria_label(accessible_label)
+            .aria_toggled(if active {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
             .relative()
             .flex()
             .items_center()
@@ -4001,6 +4013,9 @@ mod rail_tests;
 
 #[cfg(test)]
 mod keymap_tests;
+
+#[cfg(test)]
+mod accessibility_tests;
 
 impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 
