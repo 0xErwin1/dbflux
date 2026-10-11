@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     AbsoluteLength, App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent,
-    KeyUpEvent, MouseButton, Pixels, Rems, Role, SharedString, Window, div,
+    KeyUpEvent, MouseButton, Pixels, Rems, Role, SharedString, Toggled, Window, div,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::theme::Theme;
@@ -208,6 +208,7 @@ pub struct Button {
     text_color: Option<Hsla>,
     disabled: bool,
     selected: bool,
+    toggled: Option<bool>,
     focused: bool,
     tab_stop: bool,
     focus_handle: Option<FocusHandle>,
@@ -234,6 +235,7 @@ impl Button {
             text_color: None,
             disabled: false,
             selected: false,
+            toggled: None,
             focused: false,
             tab_stop: true,
             focus_handle: None,
@@ -343,8 +345,21 @@ impl Button {
     }
 
     /// Marks a toggle as on: ghost and secondary buttons take the tint.
+    /// Draws the button in its active state. Purely visual: use
+    /// [`Self::toggled`] to announce that state to assistive technology.
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Announces the button as a control that is currently on or off.
+    ///
+    /// For a button that switches something, such as a toolbar toggle that
+    /// shows or hides a panel; leave it unset for a plain action. It says
+    /// nothing about how the button looks, so a toggle usually sets both this
+    /// and [`Self::selected`].
+    pub fn toggled(mut self, toggled: bool) -> Self {
+        self.toggled = Some(toggled);
         self
     }
 
@@ -454,6 +469,7 @@ impl RenderOnce for Button {
             kbd,
             disabled,
             focused,
+            toggled,
             w_full,
             corners,
             padding_left,
@@ -487,6 +503,13 @@ impl RenderOnce for Button {
             .id(id)
             .role(Role::Button)
             .when_some(accessible_name, |button, name| button.aria_label(name))
+            .when_some(toggled, |button, toggled| {
+                button.aria_toggled(if toggled {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            })
             .relative()
             .flex()
             .flex_shrink_0()
@@ -1041,6 +1064,33 @@ mod tests {
             Some("Close the dialog")
         );
         assert_eq!(name_of(&frame, "remove").as_deref(), Some("Delete the row"));
+    }
+
+    /// A toolbar toggle says whether it is on; its fill alone cannot carry
+    /// that to assistive technology.
+    #[gpui::test]
+    fn a_toggled_button_announces_its_state(cx: &mut gpui::TestAppContext) {
+        let frame = frame_with_buttons(
+            || {
+                vec![
+                    Button::new("stats", "Stats").selected(true).toggled(true),
+                    Button::new("run", "Run"),
+                ]
+            },
+            cx,
+        );
+
+        let on = crate::accessibility::accessibility_node(&frame, "stats")
+            .expect("the toggle is an accessible node");
+        assert_eq!(on.toggled(), Some(Toggled::True));
+
+        let plain = crate::accessibility::accessibility_node(&frame, "run")
+            .expect("the action is an accessible node");
+        assert_eq!(
+            plain.toggled(),
+            None,
+            "a plain action carries no toggle state"
+        );
     }
 
     /// `aria_label` wins over the label the button draws, for a control whose

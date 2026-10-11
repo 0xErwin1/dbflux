@@ -256,6 +256,12 @@ pub fn menu_row(
 
     div()
         .id(id)
+        // A header or a separator is not an item of the menu; the two have
+        // renderers of their own, and this keeps the role honest if one is ever
+        // drawn as a row.
+        .when(!item.is_header && !item.is_separator, |row| {
+            row.role(Role::MenuItem)
+        })
         .relative()
         .flex()
         .flex_shrink_0()

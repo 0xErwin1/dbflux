@@ -495,6 +495,8 @@ connection_manager:
       bundle_file: 捆绑包文件
       bundle_encrypted: 捆绑包已加密
       passphrase: 口令
+      show_passphrase: 显示口令
+      hide_passphrase: 隐藏口令
     hint:
       no_native_picker: 此系统没有原生文件选择器 — 请在上方输入或粘贴捆绑包路径。
       external_refs: 外部值引用将原样保留
@@ -4760,6 +4762,8 @@ shutdown:
   complete: 关闭完成
   failed: 关闭失败
 sidebar:
+  row:
+    actions: "%{name} 的操作"
   header:
     new_dashboard: "新建仪表板"
     add: "添加"

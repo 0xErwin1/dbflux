@@ -495,6 +495,8 @@ connection_manager:
       bundle_file: 번들 파일
       bundle_encrypted: 번들이 암호화되어 있음
       passphrase: 패스프레이즈
+      show_passphrase: 암호 문구 표시
+      hide_passphrase: 암호 문구 숨기기
     hint:
       no_native_picker: 이 시스템에는 기본 파일 선택기가 없습니다 — 위에 번들 경로를 입력하거나 붙여넣으세요.
       external_refs: 외부 값 참조는 그대로 전달됩니다
@@ -4761,6 +4763,8 @@ shutdown:
   failed: 종료 실패
 
 sidebar:
+  row:
+    actions: "%{name} 작업"
   header:
     new_dashboard: "새 대시보드"
     add: "추가"

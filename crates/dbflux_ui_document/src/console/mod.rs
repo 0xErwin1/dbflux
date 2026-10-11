@@ -672,6 +672,10 @@ impl NativeConsole {
             .text_size(FontSizes::XS)
             .when(docked, |header| {
                 header
+                    .role(Role::Button)
+                    // The header folds the console away, so it says whether the
+                    // console is currently open.
+                    .aria_expanded(open)
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle(window, cx);

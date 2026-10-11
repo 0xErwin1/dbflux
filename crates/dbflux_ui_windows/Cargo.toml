@@ -32,6 +32,7 @@ open = "5"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_components = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 
 [features]

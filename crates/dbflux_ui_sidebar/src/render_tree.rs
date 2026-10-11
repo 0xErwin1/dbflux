@@ -1131,6 +1131,13 @@ pub(super) fn render_tree_item(
                                 let item_id = item_id_for_menu.clone();
                                 move || format!("menu-btn-{item_id}")
                             })
+                            // The button draws only an ellipsis, so it is named
+                            // after the row it opens the menu for.
+                            .role(Role::Button)
+                            .aria_label(dbflux_i18n::t!(
+                                "sidebar.row.actions",
+                                name = label_text.clone()
+                            ))
                             .flex_shrink_0()
                             .ml_auto()
                             .px_1()
