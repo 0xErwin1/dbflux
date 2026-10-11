@@ -948,8 +948,8 @@ impl DataGridPanel {
             table_tab_id(self.table_views.tab),
             move |selected, window, cx| {
                 let tab = match selected.as_ref() {
-                    "table-view-columns" => TableTab::Columns,
-                    "table-view-partitions" => TableTab::Partitions,
+                    "columns" => TableTab::Columns,
+                    "partitions" => TableTab::Partitions,
                     _ => TableTab::Data,
                 };
 
@@ -959,6 +959,7 @@ impl DataGridPanel {
                 }
             },
         )
+        .group("table-view")
     }
 
     /// The strip under the filter row that says what the next read costs.
@@ -1037,12 +1038,12 @@ impl DataGridPanel {
     }
 }
 
-/// The element id of a table tab's segment.
+/// The id of a table tab within the `table-view` segmented control.
 pub(super) fn table_tab_id(tab: TableTab) -> &'static str {
     match tab {
-        TableTab::Data => "table-view-data",
-        TableTab::Columns => "table-view-columns",
-        TableTab::Partitions => "table-view-partitions",
+        TableTab::Data => "data",
+        TableTab::Columns => "columns",
+        TableTab::Partitions => "partitions",
     }
 }
 

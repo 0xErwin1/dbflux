@@ -190,7 +190,7 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         // The Data / Columns / Partitions views of a table whose connection
         // offers them.
         (
-            "seg-ctl-item-table-view-*",
+            "segmented-table-view-*",
             KeyboardPath::Command(Command::NextResultTab),
         ),
         // The column picker of a table's Data view.

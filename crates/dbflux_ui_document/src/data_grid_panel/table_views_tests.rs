@@ -851,3 +851,47 @@ fn a_connection_that_cannot_project_shows_no_column_toggles(cx: &mut TestAppCont
         assert!(!view.read(app).projection_enabled());
     });
 }
+
+#[gpui::test]
+fn the_table_views_are_named_radio_buttons(cx: &mut TestAppContext) {
+    use dbflux_components::accessibility::{FrameCapture, accessibility_node, accessible_name};
+
+    init_test_runtime(cx);
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (app_state, profile_id) = app_state_with(all_features(), calls, cx);
+
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let panel = cx.new(|cx| {
+            DataGridPanel::new_for_table(
+                profile_id,
+                TableRef::with_schema("events", "page_views"),
+                None,
+                app_state,
+                window,
+                cx,
+            )
+        });
+
+        gpui_component::Root::new(panel, window, cx)
+    });
+    window.run_until_parked();
+
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    let columns = dbflux_i18n::t!("document.data.table_views.tab.columns").to_string();
+    assert_eq!(
+        accessible_name(&frame, "segmented-table-view-columns"),
+        Some(columns)
+    );
+
+    let data = accessibility_node(&frame, "segmented-table-view-data")
+        .expect("the Data view is an accessible node");
+    assert_eq!(data.role(), gpui::Role::RadioButton);
+    assert_eq!(data.toggled(), Some(gpui::Toggled::True));
+
+    assert!(
+        accessibility_node(&frame, "segmented-table-view-partitions").is_some(),
+        "every view the connection offers is announced"
+    );
+}
