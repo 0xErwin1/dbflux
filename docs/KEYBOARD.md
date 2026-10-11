@@ -381,7 +381,7 @@ A read-only delete does not change the clipboard.
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
-| `Alt+l` / `Alt+h` | Next / previous result tab of a query, or next / previous view (Documents, Schema, Aggregate) of a document collection, wrapping at either end |
+| `Alt+l` / `Alt+h` | Next / previous result tab of a query, next / previous view (Documents, Schema, Aggregate) of a document collection, or next / previous view (Data, Columns, Partitions) of a table, wrapping at either end |
 | `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
@@ -419,6 +419,15 @@ A dump analysis tab takes the table keys in each of its two tables: `Alt+l` and
 that is still reading the file, and `m` lists the other table, a sort per column
 of the table the keyboard is in (as a header click sorts it) and Cancel while
 the file is read.
+
+A table's Columns view takes `j` / `k` to move between columns, `Space` to add
+the column under the cursor to the Data view or drop it, `Shift+t` to cycle the
+order (table order, size, name), `/` to filter the columns, and `F5` to read
+the statistics again. In the Partitions view, `F5` reads the partitions again.
+The Toolbar submenu of `m` lists Show Data, Show Columns, Show Partitions,
+Choose columns, Refresh column statistics, Profile the first rows and Refresh
+partitions when the table offers them. See [Columns and
+Partitions](TABLE_VIEWS.md).
 
 ## Schema diff
 
@@ -739,13 +748,14 @@ these. See [CSV and TSV Files](CSV_FILES.md).
 
 | Keys | Action |
 |------|--------|
-| `t` | Switch between the table and the text |
-| `Shift+t` | Switch the text between Raw and Aligned |
+| `t` | Show the next view: table, text, Columns |
+| `Shift+t` | Switch the text between Raw and Aligned, or cycle the order of the columns in the Columns view |
+| `/` | In the Columns view, filter the columns by name or type |
 | `Escape` / `Enter` | Take the keyboard out of the text / put it back |
 | `]` | Load the next 500 records |
 | `F5` | Read the file again from its source |
 | `Ctrl+s` / `Cmd+s` | Save, from the table or from the text |
-| `m` (or `Shift+F10`) | Pane actions: the dialect controls, Insert row above, Add column, Rename column, Discard changes, Reload from file, and Cancel loading while the rest of the file loads |
+| `m` (or `Shift+F10`) | Pane actions: the dialect controls, Insert row above, Add column, Rename column, Discard changes, Reload from file, Profile whole file, and Cancel loading while the rest of the file loads |
 
 ## Audit viewer
 

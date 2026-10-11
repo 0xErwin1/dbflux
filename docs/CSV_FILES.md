@@ -1,7 +1,8 @@
 # CSV and TSV Files
 
 A `.csv` or `.tsv` file, local or in object storage, opens in its own tab as a
-table with one row per record. A second view shows the same records as text.
+table with one row per record. A second view shows the same records as text,
+and a third profiles each column.
 You can edit in either view, and a save writes only the records you changed:
 every other record keeps its bytes as they are in the file.
 
@@ -39,8 +40,8 @@ The footer shows how many records are loaded. **Load more** (`]`) reads the next
 
 ## Table and text views
 
-`t` switches between the table and the text. The text has two modes, switched
-with `Shift+T`:
+`t` shows the next view: table, text, Columns. The header switch selects one
+directly. The text has two modes, switched with `Shift+T`:
 
 - **Raw** shows the loaded records as a save would write them: untouched records
   exactly as they are in the file, edited ones as they will be written. You can
@@ -58,6 +59,35 @@ load more. Only field values are taken from the text, so a line whose values did
 not change keeps its line break and quoting from the file. Text that cannot be
 applied, such as a quote that is never closed, stays in the editor with the
 reason below it, and the action waits until you fix it.
+
+## The Columns view
+
+The Columns view has one row per column of the file, with what the loaded
+records say about it:
+
+| Field | What it shows |
+|-------|---------------|
+| **Column** | The name and the inferred type: Integer, Decimal, Boolean, Date, Timestamp or Text. A column is the narrowest type every non-empty value fits, and a column that mixes dates and timestamps is Timestamp. |
+| **Distinct** | Distinct values, counted exactly up to 10 000. Past that the count is a HyperLogLog estimate, marked `≈`. |
+| **Nulls** | The share of empty values. A file has no NULL, so an empty field counts as null. |
+| **Distribution** | The smallest and largest value, compared by the inferred type, or the most common values with their share. |
+
+The most common values are shown only when the most common value repeats and
+the column has at most 50 distinct values. Otherwise the range is shown.
+
+The source line says "From the N loaded rows", and the profile is updated as
+more pages load. **Profile whole file** (the button in the Columns view, or the
+pane actions menu `m`) reads the whole file again in the background and shows
+its progress as bytes scanned of the total. When it finishes, the source line
+says "From all N rows · read at …".
+
+- A reload, a dialect change or a save returns the view to the loaded rows.
+- The profile describes the file as it was read. Unsaved edits, inserted rows
+  and added columns are not reflected.
+- There is no column picker. A CSV file cannot read some columns without the
+  others, so every column is always shown.
+- `Shift+T` cycles the order of the columns, and `/` filters them by name or
+  type.
 
 ## Editing
 
@@ -77,8 +107,8 @@ with a line break, opens in a larger editor. A file has no NULL, so **Set NULL**
 - **Discard changes** drops every pending change.
 
 `m` opens the pane actions menu: the dialect controls, **Insert row above**,
-**Add column**, **Rename column**, **Discard changes**, **Reload from file**, and
-**Cancel loading** while the rest of the file loads.
+**Add column**, **Rename column**, **Discard changes**, **Reload from file**,
+**Profile whole file**, and **Cancel loading** while the rest of the file loads.
 
 ## Saving
 

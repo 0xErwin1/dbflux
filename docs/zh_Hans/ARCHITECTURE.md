@@ -710,6 +710,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - `EventStreamTarget` 为工作区/审计提供一个通用标识符，指向由驱动程序支撑的事件流。
   - `SourceContextSpec` 让驱动程序可以声明额外的查询上下文控件，而无需在 `dbflux_ui` 中硬编码驱动程序名。
   - `ObjectStoreConnection`（`crates/dbflux_core/src/core/traits.rs`，经由 `Connection::object_store_api()` 抵达）是对象存储接缝（存储桶/对象列举、CRUD、预签名、复制、版本）；`CollectionPresentation::ObjectBrowser` 与 `PaneHandle::status_segments()` 让界面能够打开对象存储文档并为其添加框架，而无需依据驱动程序 ID 做分支。
+  - `TableViewFeatures`（`crates/dbflux_core/src/data/column_profile.rs`，由 `Connection::table_view_features()` 报告）控制表的“列”与“分区”视图、读取量估算、样本分析和列选择器。数据来自 `table_profile`、`table_partitions`、`estimate_table_read` 与 `sample_table_profile`，`TableBrowseRequest::columns` 携带投影。界面（`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`）使用 `dbflux_components` 中共享的 `ColumnProfileView`、`PartitionListView`、`ColumnProjectionPicker` 与 `ReadEstimateBar` 渲染它们。Parquet 文档使用同样的分析视图、列选择器与估算栏，CSV 文档使用分析视图。
   - 如果界面需要新行为，请先添加一个通用的核心抽象；不要在 `dbflux_ui` 或面向应用的工作流代码里写 `if driver_id == ...`。
 
 ### 认证与访问流水线

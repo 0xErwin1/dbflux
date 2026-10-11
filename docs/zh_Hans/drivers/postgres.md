@@ -26,6 +26,7 @@
 - 以 PostgreSQL 自身的文本展示 `infinity` 与 `-infinity` 日期和时间戳，包括其一维数组。
 - 把客户端身份以 `application_name=dbflux/<version>` 上报给服务器，除非连接串本身已设置 `application_name` —— 此时保留用户提供的值。
 - 连接后探测写入权限：副本或只读事务模式无论授权如何都判定为只读；否则由已认证角色在可见基表上的 `INSERT`/`UPDATE`/`DELETE` 权限决定；空数据库或探测失败属于无结论，配置自身的变更策略保持不变。
+- 表视图（`TableViewFeatures`）：表的“列”视图显示来自 `pg_stats` 的规划器统计信息（空值比例、去重值估算、作为范围的直方图边界、最常见值及其占比），以及表的访问方法、分区表的分区键、统计信息的最后更新时间（最近一次 `ANALYZE` 或 autoanalyze，或 "never"）、估算行数和 `pg_table_size`。读取这些信息不会读取表中的行。“数据”视图增加列选择器，查询中只列出所选的列，在可编辑的表上会保留主键。参见[列与分区](../TABLE_VIEWS.md)。
 
 ### 实例指标
 
@@ -74,6 +75,7 @@
 - 取消是尽力而为的，取决于取消当时的服务器/会话状态。
 - 代码生成只针对受支持的 PostgreSQL 结构；不受支持的生成器 ID 会返回 `NotSupported`。
 - 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `BEGIN READ ONLY` 中运行并回滚，在已打开的事务中会被拒绝。PostgreSQL 会拒绝该会话中的数据修改，但 `TEMPORARY` 表除外，只读事务仍可修改它们；它也不会阻止具有外部效果的函数，例如 `dblink_exec`、`COPY ... TO PROGRAM`、`lo_export`、`pg_terminate_backend` 或 advisory lock；真正的边界仍是最小权限的数据库凭据。为了检测是否存在打开的事务，驱动会先执行一次 `SAVEPOINT` 探测，在事务之外它会以 SQLSTATE `25P01`（没有活动事务）失败，因此每个在事务之外运行的只读请求（包括编辑器自动刷新的每一次触发）都会让服务器记录一条 `ERROR` 日志。
+- “列”视图显示的是规划器估算，新鲜程度取决于最近一次 `ANALYZE`。规划器没有统计信息的列，其所有信息都显示为未知。它没有按列的大小或编解码器，也没有分区视图、读取量估算或行分析。
 
 ## DDL 能力
 

@@ -1111,6 +1111,18 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()`
     permiten que la UI abra y decore documents de object-storage sin bifurcar
     según driver ID.
+  - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`),
+    informado por `Connection::table_view_features()`, habilita las vistas
+    Columnas y Particiones de una tabla, la estimación de lectura, el perfil de
+    muestra y el selector de columnas. Los datos vienen de `table_profile`,
+    `table_partitions`, `estimate_table_read` y `sample_table_profile`, y
+    `TableBrowseRequest::columns` lleva la proyección. La UI
+    (`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`) los
+    muestra con los componentes compartidos `ColumnProfileView`,
+    `PartitionListView`, `ColumnProjectionPicker` y `ReadEstimateBar` de
+    `dbflux_components`. El documento Parquet usa la misma vista de perfil, el
+    selector y la barra de estimación, y el documento CSV usa la vista de
+    perfil.
   - Si la UI necesita comportamiento nuevo, agrega primero una abstracción
     genérica del core; no agregues `if driver_id == ...` en `dbflux_ui` ni en
     código de workflow orientado a la app.

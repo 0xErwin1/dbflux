@@ -23,6 +23,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - 查询执行（`SELECT`/浏览）通过标准的 `Connection::execute` 路径返回带类型的列；查询取消通过线协议客户端的取消令牌支持。
 - `RedshiftErrorFormatter` 把常见的连接与查询失败（超时、连接被拒、认证失败、集群不可达、带 `SQLSTATE` 的查询错误）映射为清晰的、由驱动程序格式化的消息，而不是原始的调试输出。
 - 每次连接都上报 `application_name` 为 `dbflux/<version>`，除非连接 URI 自己设置了 `application_name` 查询参数。
+- 表视图（`TableViewFeatures`）：表的“列”视图从 `pg_attribute` 读取每列的编码（`format_encoding`）、在排序键中的位置（复合或交错）以及分布键，并从 `svv_table_info` 读取表的分布方式、行数、大小（按 1 MB 块计）和未排序比例。“数据”视图增加列选择器，查询中只列出所选的列。参见[列与分区](../TABLE_VIEWS.md)。
 
 ## 限制
 
@@ -41,3 +42,4 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - `SUPER`/`VARBYTE`/`GEOMETRY`/`GEOGRAPHY`/`HLLSKETCH` 所用的扩展类型 OID 取值，以及用于获取存储提示的 `SVV_TABLE_INFO`/`PG_TABLE_DEF` 查询形状，只由 `#[ignore]` 的真实集成测试（`crates/dbflux_driver_redshift/tests/live_integration.rs`）验证，因为不存在本地或基于 Docker 的 Redshift 引擎。可针对真实集群显式运行：`cargo nextest run -p dbflux_driver_redshift --run-ignored all`。
 - `NUMERIC`/`DECIMAL` 值**会被**解码：驱动程序直接把 PostgreSQL 二进制 `NUMERIC` 线格式解析为精确的 `Value::Decimal` 字符串（按列声明的小数位重建整数/小数部分，并处理 `NaN`/±`Infinity`）。格式错误的载荷会安全回退，而不会损坏数据。该二进制解码器由基于合成线载荷的单元测试覆盖；端到端的保真度仍只通过那些 `#[ignore]` 的集成测试针对真实集群验证。
 - 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）除了驱动自身拒绝非读取语句外，还会在 `BEGIN READ ONLY` 中运行并回滚。具有外部效果的函数不会被阻止；真正的边界仍是最小权限的数据库凭据。
+- “列”视图没有按列的大小（这需要访问 `stv_blocklist`），也没有分区视图、读取量估算或行分析。它只由单元测试覆盖，尚未针对真实的 Redshift 集群验证。

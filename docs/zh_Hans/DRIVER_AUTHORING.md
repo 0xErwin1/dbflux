@@ -83,6 +83,7 @@
 - [ ] 源上下文、指标目录、仪表盘导入器或仪表盘来源行为（如适用）。
 - [ ] 用于指标或检查器的实例目录（如适用）。
 - [ ] 面向 `DatabaseCategory::Document` 驱动的文档集合接口：`browse_collection` 中的投影与排序以及 `sample_collection_schema`（通过 `Connection::document_features` 报告 `DocumentFeatures::QUERY_SLOTS`），以及 `patch_document`、`replace_document` 与 `fetch_document`（报告 `DocumentFeatures::FIELD_PATCH`），并通过 `QueryGenerator::document_patch_query` / `document_replace_query` 提供写入前显示的文本。`estimate_collection_count` 可以直接用集合元数据作答。
+- [ ] 表视图：通过 `Connection::table_view_features` 为已实现的接口报告 `TableViewFeatures`。`table_profile`（`COLUMN_PROFILE`）从目录、规划器统计信息或存储信息返回按列的信息，不得读取表中的行，因为它在表打开时运行。`table_partitions`（`PARTITIONS`）与 `estimate_table_read`（`READ_ESTIMATE`）同样只读取元数据。`sample_table_profile`（`SAMPLE_PROFILE`）最多读取 `row_limit` 行，限制写在查询内部，并且只在用户明确操作时运行。报告 `COLUMN_PROJECTION` 的驱动必须在 `browse_table` 中遵守 `TableBrowseRequest::columns`。参见[列与分区](TABLE_VIEWS.md)。
 - [ ] 核心 trait 与能力标志所涵盖的其他 Schema、CRUD、取消、传输或键值接缝。
 
 ### 6. feature 接线与注册

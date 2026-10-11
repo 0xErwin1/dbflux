@@ -399,7 +399,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
-| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, o vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, dando la vuelta en los extremos |
+| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, o vista siguiente / anterior (Datos, Columnas, Particiones) de una tabla, dando la vuelta en los extremos |
 | `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
@@ -441,6 +441,16 @@ tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa
 `Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
 tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
 clic en la cabecera) y Cancelar mientras se lee el archivo.
+
+La vista Columnas de una tabla toma `j` / `k` para moverse entre columnas,
+`Space` para agregar a la vista Datos la columna bajo el cursor o quitarla,
+`Shift+t` para recorrer el orden (orden de la tabla, tamaño, nombre), `/` para
+filtrar las columnas y `F5` para volver a leer las estadísticas. En la vista
+Particiones, `F5` vuelve a leer las particiones. El submenú Barra de
+herramientas de `m` lista Mostrar Datos, Mostrar Columnas, Mostrar Particiones,
+Elegir columnas, Actualizar estadísticas de columnas, Perfilar las primeras
+filas y Actualizar particiones cuando la tabla los ofrece. Ver [Columnas y
+particiones](TABLE_VIEWS.md).
 
 ## Diferencia de esquemas
 
@@ -774,13 +784,14 @@ Una pestaña CSV o TSV toma en su tabla las teclas de
 
 | Teclas | Acción |
 |--------|--------|
-| `t` | Cambiar entre la tabla y el texto |
-| `Shift+t` | Cambiar el texto entre Sin formato y Alineado |
+| `t` | Mostrar la vista siguiente: tabla, texto, Columnas |
+| `Shift+t` | Cambiar el texto entre Sin formato y Alineado, o recorrer el orden de las columnas en la vista Columnas |
+| `/` | En la vista Columnas, filtrar las columnas por nombre o tipo |
 | `Escape` / `Enter` | Sacar el teclado del texto / devolverlo |
 | `]` | Cargar los siguientes 500 registros |
 | `F5` | Volver a leer el archivo desde su origen |
 | `Ctrl+s` / `Cmd+s` | Guardar, desde la tabla o desde el texto |
-| `m` (o `Shift+F10`) | Acciones del panel: los controles del dialecto, Insertar fila arriba, Agregar columna, Renombrar columna, Descartar cambios, Recargar desde el archivo y Cancelar la carga mientras se carga el resto del archivo |
+| `m` (o `Shift+F10`) | Acciones del panel: los controles del dialecto, Insertar fila arriba, Agregar columna, Renombrar columna, Descartar cambios, Recargar desde el archivo, Perfilar el archivo completo y Cancelar la carga mientras se carga el resto del archivo |
 
 ## Visor de auditoría
 
