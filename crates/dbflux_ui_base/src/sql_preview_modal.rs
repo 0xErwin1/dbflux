@@ -1133,8 +1133,8 @@ mod tests {
             (preview, window)
         }
 
-        /// The two options of the dialog draw their text beside the box, so
-        /// each box is named by that text.
+        /// Each box sets an explicit label mirroring the visible option text,
+        /// because the dialog draws that text outside the control.
         #[gpui::test]
         fn the_dialog_options_are_named_by_the_text_beside_them(cx: &mut TestAppContext) {
             let (_preview, window) = open_preview(cx);
