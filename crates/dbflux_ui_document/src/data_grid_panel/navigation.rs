@@ -146,6 +146,17 @@ impl DataGridPanel {
         }
     }
 
+    // current is the enumerate() index over original_order, which
+    // apply_local_sort builds and apply_result_search filters in step with
+    // result.rows. The order and the sort state are reset wherever the rows
+    // are replaced, including the document-grid rebuild paths, so a refresh returning fewer rows can no longer leave
+    // current past rows.len(); only the restore path was exposed to that. The
+    // original value is only a sort key and can exceed rows.len() after a
+    // search.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; the order and sort state are reset wherever the rows are replaced"
+    )]
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
         if self.server_sort_blocked(cx) {
             return;
@@ -252,6 +263,12 @@ impl DataGridPanel {
 
         // Sort using indices for tracking
         let mut indices: Vec<usize> = (0..self.result.rows.len()).collect();
+        // a and b come from indices, a permutation of 0..rows.len(), so both
+        // row indexings stay in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a and b come from indices, a permutation of 0..result.rows.len()"
+        )]
         indices.sort_by(|&a, &b| {
             let val_a = self.result.rows[a].get(col_ix);
             let val_b = self.result.rows[b].get(col_ix);
@@ -269,14 +286,29 @@ impl DataGridPanel {
             }
         });
 
-        // Reorder rows according to sorted indices
+        // Reorder rows according to sorted indices. i comes from indices, a
+        // permutation of 0..rows.len().
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "i comes from indices, a permutation of 0..result.rows.len()"
+        )]
         let sorted_rows: Vec<_> = indices
             .iter()
             .map(|&i| self.result.rows[i].clone())
             .collect();
         self.result.rows = sorted_rows;
 
-        // Update original_row_order to map new order -> original
+        // Update original_row_order to map new order -> original.
+        // orig[i] indexes original_row_order, which apply_local_sort builds in
+        // step with result.rows. The order and the sort state are reset
+        // wherever the rows are replaced, including the document-grid rebuild
+        // paths, so orig always indexes an order built in step with the
+        // current rows; only a refresh returning more rows could have overrun
+        // orig here, while fewer rows affected the restore path.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; the order and sort state are reset wherever the rows are replaced"
+        )]
         if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();
         }
@@ -658,6 +690,21 @@ impl DataGridPanel {
             && self.step_collection_tab(cmd == Command::NextResultTab, cx)
         {
             return true;
+        }
+
+        // The same keys move between a table's Data, Columns and Partitions
+        // views when its connection offers them.
+        if matches!(cmd, Command::NextResultTab | Command::PrevResultTab)
+            && self.step_table_tab(cmd == Command::NextResultTab, window, cx)
+        {
+            if !self.focus_table_view(window, cx) {
+                self.focus_table(window, cx);
+            }
+            return true;
+        }
+
+        if let Some(handled) = self.dispatch_table_view_command(cmd, window, cx) {
+            return handled;
         }
 
         if let Some(handled) = self.dispatch_side_island_command(cmd, window, cx) {

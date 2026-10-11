@@ -8,7 +8,7 @@ use dbflux_core::observability::{
     AuditQuerySource, EventActorType, EventCategory, EventOutcome, EventSeverity, EventSourceId,
 };
 
-pub use dbflux_components::common::time_range::{
+pub(crate) use dbflux_components::common::time_range::{
     TimeRange, TimestampDisplayMode, format_timestamp_ms, timestamp_from_date_time,
     validate_custom_range_parts,
 };
@@ -17,7 +17,7 @@ pub use dbflux_components::common::time_range::{
 ///
 /// All fields are optional - `None` means no filter applied (show all).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AuditFilters {
+pub(crate) struct AuditFilters {
     /// Start of time range (epoch ms). `None` = no lower bound.
     pub start_ms: Option<i64>,
     /// End of time range (epoch ms). `None` = no upper bound.

@@ -157,8 +157,9 @@ impl DelimitedDocument {
     /// The dialect controls of a loaded file, as entries of the pane actions
     /// menu: each select entry opens its list with the keyboard on it, the
     /// header entry switches the flag, and the reset entry is enabled while
-    /// there is an override to drop. The edit controls follow them. Empty
-    /// until the file is loaded.
+    /// there is an override to drop. The edit controls follow them, then
+    /// "Profile whole file", which shows the Columns view and profiles every
+    /// record. Empty until the file is loaded.
     pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<PaneAction> {
         let Some(controls) = self.dialect_controls() else {
             return Vec::new();
@@ -219,6 +220,17 @@ impl DelimitedDocument {
         ];
 
         actions.extend(self.edit_pane_actions(this));
+
+        actions.push(
+            run(
+                "delimited-profile-full-scan",
+                dbflux_i18n::t!("components.column_profile.action.full_scan"),
+                Self::profile_whole_file,
+            )
+            .icon(AppIcon::ChartBar)
+            .enabled(self.can_profile_whole_file()),
+        );
+
         actions
     }
 }

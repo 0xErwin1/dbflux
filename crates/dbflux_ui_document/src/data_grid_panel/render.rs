@@ -151,7 +151,13 @@ impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.process_pending_actions(window, cx);
         self.flush_aggregate_json(window, cx);
+        self.ensure_table_view_controls(window, cx);
         let st = self.derive_render_state(cx);
+
+        // The Columns and Partitions views of a table replace the filter row,
+        // the grid and the status bar; the header with the tabs stays.
+        let table_side_view =
+            !st.document_collection && self.table_tab() != super::table_views::TableTab::Data;
 
         // The Schema view of a collection shows only its sample toolbar and
         // field table (IslDocSchema): no query bar and no documents footer.
@@ -176,31 +182,48 @@ impl Render for DataGridPanel {
                             .child(self.render_document_view_row(cx))
                     })
             })
-            .when(st.show_data_toolbar && !st.document_collection, |d| {
-                let edit_controls = st.show_edit_toolbar.then_some(EditControls {
-                    dirty_count: st.dirty_count,
-                    can_undo: st.can_undo,
-                    can_redo: st.can_redo,
-                });
+            .when(
+                st.show_data_toolbar && !st.document_collection && table_side_view,
+                |d| d.child(self.render_table_header(None, &st.theme, cx)),
+            )
+            .when(
+                st.show_data_toolbar && !st.document_collection && !table_side_view,
+                |d| {
+                    let edit_controls = st.show_edit_toolbar.then_some(EditControls {
+                        dirty_count: st.dirty_count,
+                        can_undo: st.can_undo,
+                        can_redo: st.can_redo,
+                    });
 
-                d.child(self.render_toolbar(
-                    &st.filter_keyword,
-                    &st.filter_input,
-                    st.filter_has_value,
-                    &st.limit_input,
-                    st.show_toolbar_focus,
-                    st.toolbar_focus,
-                    edit_controls,
-                    &st.theme,
-                    cx,
-                ))
+                    d.child(self.render_toolbar(
+                        &st.filter_keyword,
+                        &st.filter_input,
+                        st.filter_has_value,
+                        &st.limit_input,
+                        st.show_toolbar_focus,
+                        st.toolbar_focus,
+                        edit_controls,
+                        &st.theme,
+                        cx,
+                    ))
+                },
+            )
+            .when(
+                st.show_data_toolbar && self.shows_table_read_estimate(),
+                |d| d.children(self.render_table_read_estimate(cx)),
+            )
+            .when(!table_side_view, |d| {
+                d.child(self.render_warning_banners(&st))
             })
-            .child(self.render_warning_banners(&st))
             .when(st.show_panel_controls && st.shows_content_controls, |d| {
                 d.child(self.render_panel_controls_header(&st, cx))
             })
-            .child(self.render_content_body(&st, cx))
-            .when(!schema_view && !aggregate_view, |d| {
+            .child(if table_side_view {
+                self.render_table_view_body(cx)
+            } else {
+                self.render_content_body(&st, cx)
+            })
+            .when(!schema_view && !aggregate_view && !table_side_view, |d| {
                 d.child(self.render_status_bar(
                     st.row_count,
                     &st.exec_time,
@@ -1022,6 +1045,9 @@ impl DataGridPanel {
             .when(self.collection_tabs(cx).len() > 1, |header| {
                 header.child(self.render_collection_tabs(cx))
             })
+            .when(self.table_tabs().len() > 1, |header| {
+                header.child(self.render_table_tabs(cx))
+            })
             .when_some(self.render_document_builder_toggle(cx), |header, toggle| {
                 header.child(toggle)
             })
@@ -1209,6 +1235,9 @@ impl DataGridPanel {
                             this.toggle_view_mode(cx);
                         })),
                 )
+            })
+            .when(self.shows_table_column_picker(), |d| {
+                d.children(self.table_views.picker.clone())
             })
             .when(self.can_open_builder(cx), |d| {
                 d.child(builder_button(cx.listener(|this, _, window, cx| {
@@ -2175,6 +2204,10 @@ impl DataGridPanel {
         use dbflux_components::primitives::Text;
         use gpui_component::Sizable;
 
+        #[expect(
+            clippy::expect_used,
+            reason = "the sole call site renders this overlay only when pending_collection_chart_save.is_some(); this function itself does not re-check"
+        )]
         let name_input = self
             .pending_collection_chart_save
             .as_ref()
@@ -3492,9 +3525,11 @@ impl DataGridPanel {
                 .child(label)
         };
 
-        let pager_arrow = |id: &'static str, icon: AppIcon, enabled: bool| {
+        let pager_arrow = |id: &'static str, icon: AppIcon, name: String, enabled: bool| {
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(name)
                 .flex()
                 .items_center()
                 .text_color(muted)
@@ -3523,28 +3558,34 @@ impl DataGridPanel {
                     .gap(ResultMetrics::PAGER_GAP)
                     .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(
-                        pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
+                        pager_arrow(
+                            "prev-page",
+                            AppIcon::ChevronLeft,
+                            dbflux_i18n::t!("document.results.actions.results_prev_page"),
                             can_prev,
-                            |arrow| {
-                                arrow.on_click(cx.listener(|this, _, window, cx| {
-                                    this.go_to_prev_page(window, cx);
-                                }))
-                            },
-                        ),
+                        )
+                        .when(can_prev, |arrow| {
+                            arrow.on_click(cx.listener(|this, _, window, cx| {
+                                this.go_to_prev_page(window, cx);
+                            }))
+                        }),
                     )
                     .child(div().text_color(strong).child(page.to_string()))
                     .when_some(total_pages, |pager, total| {
                         pager.child(format!("/ {}", total))
                     })
                     .child(
-                        pager_arrow("next-page", AppIcon::ChevronRight, can_next).when(
+                        pager_arrow(
+                            "next-page",
+                            AppIcon::ChevronRight,
+                            dbflux_i18n::t!("document.results.actions.results_next_page"),
                             can_next,
-                            |arrow| {
-                                arrow.on_click(cx.listener(|this, _, window, cx| {
-                                    this.go_to_next_page(window, cx);
-                                }))
-                            },
-                        ),
+                        )
+                        .when(can_next, |arrow| {
+                            arrow.on_click(cx.listener(|this, _, window, cx| {
+                                this.go_to_next_page(window, cx);
+                            }))
+                        }),
                     )
             });
 

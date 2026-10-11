@@ -67,6 +67,14 @@ directamente sobre el cliente de wire protocol
 - Reporta `application_name` como `dbflux/<version>` en cada conexión, salvo
   que la URI de conexión ya defina su propio parámetro de query
   `application_name`.
+- Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla lee
+  `pg_attribute` para obtener la codificación de cada columna
+  (`format_encoding`), su posición en la clave de ordenación (compuesta o
+  intercalada) y la clave de distribución, y `svv_table_info` para el estilo de
+  distribución, las filas, el tamaño (contado en bloques de 1 MB) y la
+  proporción sin ordenar de la tabla. La vista Datos incorpora un selector de
+  columnas que nombra en la query solo las columnas elegidas. Ver [Columnas y
+  particiones](../TABLE_VIEWS.md).
 
 ## Limitaciones
 
@@ -129,3 +137,7 @@ directamente sobre el cliente de wire protocol
   sintéticos; la fidelidad de extremo a extremo solo se valida contra un cluster
   real vía las pruebas de integración marcadas `#[ignore]`.
 - Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) también se ejecuta en `BEGIN READ ONLY` y se revierte, además del rechazo propio del driver a las sentencias que no son lecturas. Las funciones con efectos externos no se detienen; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
+- La vista Columnas no tiene tamaños por columna, porque requieren acceso a
+  `stv_blocklist`, ni vista de particiones, estimación de lectura o perfil de
+  filas. Solo la cubren pruebas unitarias y no se comprobó contra un clúster
+  Redshift real.

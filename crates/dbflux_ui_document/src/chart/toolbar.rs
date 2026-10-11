@@ -216,6 +216,7 @@ pub fn render_chart_toolbar(
     )
     .icon(AppIcon::Sigma)
     .selected(is_stats_active)
+    .toggled(is_stats_active)
     .tab_stop(false)
     .on_click(move |_, window, cx| on_stats(window, cx));
 

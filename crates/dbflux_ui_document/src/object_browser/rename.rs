@@ -44,7 +44,7 @@ pub(super) fn key_leaf(key: &str) -> String {
 /// New-name validation: non-empty, no slash (rename stays within the same
 /// prefix — moving to another prefix is not this flow), and different from
 /// the current leaf name.
-pub fn rename_name_error(current_leaf: &str, new_name: &str) -> Option<String> {
+pub(crate) fn rename_name_error(current_leaf: &str, new_name: &str) -> Option<String> {
     if new_name.is_empty() {
         return Some(dbflux_i18n::t!(
             "document.object_browser.rename.error.empty"

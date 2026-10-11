@@ -125,6 +125,22 @@ cargo nextest run --workspace _covered
 
 A workspace run builds the UI crates with the features the app ships with, so it also checks the MCP surfaces and the Lua hook mode. The helper's own tests run with `cargo nextest run -p dbflux_ui_base keyboard_coverage`.
 
+## Accessible Names
+
+Every control must be identifiable by assistive technology and by UI automation: an accessible name, and the role and state that go with it. A control that draws no text of its own — an icon-only button, a hand-drawn checkbox — is announced as a bare control, and a screen reader cannot tell one from another.
+
+A clickable element is named by its `aria_label` when it sets one, otherwise by the text it draws, for the roles that take their name from their content (button, checkbox, radio button, switch, link, menu item, tab). Pick the smallest fix that names the control:
+
+- `Button` names itself from its label, and an icon-only button from its tooltip (its label, when it sets no other one). Add `.aria_label(...)` only when neither says what the button does.
+- `Checkbox` names itself from `.label(...)`, for the label it draws beside the box, or from `.aria_label(...)`, for text drawn by the row around it.
+- A hand-drawn control sets its own semantics: `.role(Role::CheckBox)`, `.aria_label(...)`, and `.aria_toggled(...)` for a box, `.role(Role::Switch)` and `.aria_toggled(...)` for an on/off toggle, `.aria_expanded(...)` for a disclosure arrow.
+
+Name the control after the text the user sees next to it, so the spoken name and the visible label agree. A render test per surface proves it: capture the frame with `dbflux_components::accessibility::FrameCapture` and assert on it with `accessible_name`, `accessibility_node` or `unnamed_clickables`.
+
+```bash
+cargo nextest run -p dbflux_components accessibility
+```
+
 ## Issues
 
 Before opening an issue:

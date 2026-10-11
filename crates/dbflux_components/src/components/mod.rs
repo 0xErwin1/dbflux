@@ -1,6 +1,7 @@
 pub mod column_facts;
 pub mod column_profile_view;
 pub mod column_projection;
+pub mod partition_list_view;
 pub mod read_estimate_bar;
 // Component modules relocated from dbflux_ui.
 pub mod data_table;

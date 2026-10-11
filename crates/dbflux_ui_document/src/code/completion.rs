@@ -234,12 +234,11 @@ impl QueryCompletionProvider {
                 .map_or(!lazy_per_database, |selected| selected == database)
         };
 
-        let snapshot = connected.schema.as_ref().filter(|snapshot| {
-            match (effective_database.as_deref(), snapshot.current_database()) {
-                (Some(selected), Some(current)) => selected == current,
-                _ => true,
-            }
-        });
+        let snapshot = target_database_snapshot(
+            connected.schema.as_ref(),
+            database_slot_snapshot(connected, effective_database.as_deref()),
+            effective_database.as_deref(),
+        );
 
         let mut metadata = build_sql_completion_metadata(
             snapshot,
@@ -408,7 +407,11 @@ impl QueryCompletionProvider {
                 .or((!lazy_per_database).then_some("default"));
 
             let known = known_relational_tables(
-                connected.schema.as_ref(),
+                target_database_snapshot(
+                    connected.schema.as_ref(),
+                    database_slot_snapshot(connected, effective_database.as_deref()),
+                    effective_database.as_deref(),
+                ),
                 connected.database_schemas.iter().filter(|(database, _)| {
                     // Same scope as the metadata builder: without a selection,
                     // lazy-per-database drivers contribute nothing (otherwise
@@ -549,6 +552,34 @@ impl QueryCompletionProvider {
     }
 }
 
+fn database_slot_snapshot<'a>(
+    connected: &'a dbflux_core::ConnectedProfile,
+    database: Option<&str>,
+) -> Option<&'a dbflux_core::SchemaSnapshot> {
+    database
+        .and_then(|database| connected.database_connection(database))
+        .and_then(|slot| slot.schema.as_ref())
+}
+
+/// The catalog snapshot describing `database`.
+///
+/// `ConnectionPerDatabase` drivers keep a secondary database's snapshot in
+/// its per-database slot, so that slot wins. The primary snapshot only
+/// applies when it describes the selected database: falling back to it for a
+/// slot that is not loaded yet would offer another database's tables.
+fn target_database_snapshot<'a>(
+    primary: Option<&'a dbflux_core::SchemaSnapshot>,
+    database_slot: Option<&'a dbflux_core::SchemaSnapshot>,
+    database: Option<&str>,
+) -> Option<&'a dbflux_core::SchemaSnapshot> {
+    database_slot.or_else(|| {
+        primary.filter(|snapshot| match (database, snapshot.current_database()) {
+            (Some(selected), Some(current)) => selected == current,
+            _ => true,
+        })
+    })
+}
+
 /// A table from a connection's cached schema listings, tagged with its
 /// `table_details` cache key.
 struct KnownTableListing {
@@ -564,8 +595,8 @@ struct KnownTableListing {
 
 /// Flattens a connection's relational schema listings into [`KnownTableListing`]s.
 ///
-/// Mirrors the sources of [`build_sql_completion_metadata`]: the connect-time
-/// snapshot (top-level tables plus per-schema tables) and the lazily cached
+/// Mirrors the sources of [`build_sql_completion_metadata`]: the selected
+/// database's snapshot (top-level tables plus per-schema tables) and the lazily cached
 /// per-database schemas. Snapshot tables are tagged with `snapshot_database`
 /// as their fetch key; without one they are skipped, since there is no valid
 /// key to fetch them under.
@@ -1292,6 +1323,12 @@ impl QueryCompletionProvider {
             return items;
         }
 
+        // Command mode returned above when tokens is empty, so this branch
+        // only runs with at least one token.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "command_mode is false here, which requires tokens to be non-empty; the empty case returned earlier"
+        )]
         let command = tokens[0].to_uppercase();
         let argument_index = if ends_with_space {
             tokens.len().saturating_sub(1)
@@ -1440,6 +1477,10 @@ impl CompletionProvider for QueryCompletionProvider {
             return false;
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the len() != 1 early return above leaves new_text with exactly one byte"
+        )]
         let ch = new_text.as_bytes()[0] as char;
         if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$' {
             return true;
@@ -1919,6 +1960,12 @@ fn scan_redis_token_start(source: &str, end: usize) -> usize {
 
     while start > 0 {
         let idx = start - 1;
+        // `end` is a byte offset into `source` (the editor cursor at the call
+        // site), so start never exceeds bytes.len() and idx stays in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "start begins at end, a byte offset within source, and only decreases; idx = start - 1 is below bytes.len()"
+        )]
         if bytes[idx].is_ascii_whitespace() {
             break;
         }
@@ -2046,6 +2093,10 @@ fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
 
     let mut idx = 0;
     while idx < tokens.len() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "loop condition holds idx < tokens.len() at this point"
+        )]
         let token_upper = tokens[idx].to_uppercase();
         if !keywords.contains(&token_upper.as_str()) {
             idx += 1;
@@ -2119,7 +2170,7 @@ mod tests {
     use super::{
         CompletionItem, KnownTableListing, SqlCompletionMetadata, build_sql_completion_metadata,
         known_relational_tables, should_use_sql_completion, sql_completion_items_with_context,
-        tables_needing_details,
+        tables_needing_details, target_database_snapshot,
     };
     use crate::completion_support::normalize_identifier;
     use dbflux_core::{
@@ -2599,6 +2650,119 @@ mod tests {
             }],
         );
         assert_eq!(keys, vec![("db".to_string(), None, "t1".to_string())]);
+    }
+
+    fn database_snapshot(database: &str, schemas: &[(&str, &str)]) -> SchemaSnapshot {
+        SchemaSnapshot::relational(RelationalSchema {
+            current_database: Some(database.to_string()),
+            schemas: schemas
+                .iter()
+                .map(|(schema, table)| DbSchemaInfo {
+                    name: schema.to_string(),
+                    tables: vec![TableInfo {
+                        name: table.to_string(),
+                        schema: Some(schema.to_string()),
+                        columns: None,
+                        ..t1_table()
+                    }],
+                    views: vec![],
+                    custom_types: None,
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    fn schema_first_snapshot_metadata(
+        snapshot: Option<&SchemaSnapshot>,
+        selected_schema: Option<&str>,
+    ) -> SqlCompletionMetadata {
+        let mut metadata =
+            build_sql_completion_metadata(snapshot, std::iter::empty(), std::iter::empty(), false);
+        metadata.schema_first = Some(super::SchemaFirst {
+            selected_schema: selected_schema.map(normalize_identifier),
+        });
+        metadata
+    }
+
+    #[test]
+    fn a_secondary_database_completes_from_its_own_snapshot() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot("completion_secondary", &[("public", "other_users")]);
+
+        let snapshot = target_database_snapshot(
+            Some(&primary),
+            Some(&secondary),
+            Some("completion_secondary"),
+        );
+        let metadata = schema_first_snapshot_metadata(snapshot, Some("public"));
+
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM ot"),
+            vec!["other_users"]
+        );
+        assert!(
+            table_position_labels(&metadata, "SELECT * FROM ra").is_empty(),
+            "tables of the initial database must not leak into the secondary one"
+        );
+
+        let known =
+            known_relational_tables(snapshot, std::iter::empty(), Some("completion_secondary"));
+        assert_eq!(
+            tables_needing_details(&known, &[table_ref(None, "other_users")]),
+            vec![(
+                "completion_secondary".to_string(),
+                Some("public".to_string()),
+                "other_users".to_string()
+            )],
+            "table details prefetch targets the selected database"
+        );
+    }
+
+    #[test]
+    fn a_secondary_database_without_public_offers_its_schemas() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot(
+            "completion_secondary",
+            &[("raw", "messages"), ("reporting", "revenue")],
+        );
+
+        let snapshot = target_database_snapshot(
+            Some(&primary),
+            Some(&secondary),
+            Some("completion_secondary"),
+        );
+        let metadata = schema_first_snapshot_metadata(snapshot, None);
+
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM ra"),
+            vec!["raw"]
+        );
+    }
+
+    #[test]
+    fn target_database_snapshot_never_borrows_another_databases_catalog() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot("completion_secondary", &[("public", "other_users")]);
+
+        assert!(
+            target_database_snapshot(Some(&primary), None, Some("completion_secondary")).is_none(),
+            "a database whose snapshot is not loaded yet must not fall back to the primary"
+        );
+        assert!(std::ptr::eq(
+            target_database_snapshot(Some(&primary), None, Some("completion_primary"))
+                .expect("primary snapshot"),
+            &primary
+        ));
+        assert!(std::ptr::eq(
+            target_database_snapshot(Some(&primary), None, None).expect("primary snapshot"),
+            &primary
+        ));
+        assert!(std::ptr::eq(
+            target_database_snapshot(None, Some(&secondary), Some("completion_secondary"))
+                .expect("secondary snapshot"),
+            &secondary
+        ));
     }
 
     #[test]

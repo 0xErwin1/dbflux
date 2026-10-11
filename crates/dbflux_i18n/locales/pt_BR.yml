@@ -198,6 +198,13 @@ components:
       name: "Ordem: nome"
     source:
       file_footer: "Tamanhos do rodapé do arquivo"
+      catalog: "Tamanhos de %{name}"
+      planner_statistics: "Estatísticas de %{name}"
+      loaded_rows: "Das %{rows} linhas carregadas"
+      full_scan: "De todas as %{rows} linhas"
+      sample: "Distribuições das primeiras %{rows} linhas lidas"
+      read_at: "lido às %{time}"
+      file_modified: "arquivo modificado %{time}"
     header:
       column: "Coluna"
       codec: "Codec"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} colunas · %{shown} exibidas em Dados"
       hint: "Alterne uma coluna para adicioná-la à projeção de Dados ou removê-la"
+      counts_only: "%{total} colunas"
     loading: "Lendo estatísticas das colunas…"
     empty: "Esta tabela não tem colunas"
     no_match: "Nenhuma coluna corresponde ao filtro"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "Chave de ordenação"
       partition_key: "Chave de partição"
+      sort_key_position: "Chave de ordenação %{position}"
+      distribution_key: "Chave de distribuição"
+    action:
+      refresh: "Atualizar estatísticas"
+      sample: "Perfilar as primeiras %{rows} linhas"
+      full_scan: "Perfilar o arquivo inteiro"
+      running: "Perfilando…"
+    fact:
+      engine: "Mecanismo"
+      sort_key: "Chave de ordenação"
+      partition_key: "Chave de partição"
+      primary_key: "Chave primária"
+      sampling_key: "Chave de amostragem"
+      ttl: "TTL"
+      distribution_style: "Distribuição"
+      active_parts: "Partes ativas"
+      statistics_updated: "Estatísticas atualizadas"
+      rows: "Linhas"
+      on_disk: "Em disco"
+      raw: "Sem compressão"
+      ratio: "Taxa"
+      row_groups: "Grupos de linhas"
+      unsorted: "Não ordenado"
+      created_by: "Escrito por"
   read_estimate:
     lead: "Vai ler"
     row_groups: "%{touched} de %{total} grupos de linhas"
     more:
       one: "+%{count} a mais"
       many: "+%{count} a mais"
+    parts: "%{touched} de %{total} partes"
+    granules: "%{touched} de %{total} grânulos"
+    rows: "%{rows} linhas"
+    lead_upper: "Lerá até"
+  partition_list:
+    summary: "%{count} partições"
+    summary_with_key: "%{count} partições · PARTITION BY %{key}"
+    refresh: "Atualizar partições"
+    loading: "Lendo partições…"
+    empty: "Esta tabela não tem partições"
+    error_title: "Não foi possível ler as partições"
+    header:
+      partition: "Partição"
+      parts: "Partes"
+      rows: "Linhas"
+      on_disk: "Em disco"
+      raw: "Sem compressão"
+      ratio: "Taxa"
+      range: "Intervalo da chave"
+      modified: "Última alteração"
 composites:
   rail:
     add: "Adicionar"
@@ -495,6 +547,8 @@ connection_manager:
       bundle_file: Arquivo do pacote
       bundle_encrypted: O pacote está criptografado
       passphrase: Senha
+      show_passphrase: Mostrar frase secreta
+      hide_passphrase: Ocultar frase secreta
     hint:
       no_native_picker: Este sistema não tem um seletor de arquivos nativo — digite ou cole o caminho do pacote acima.
       external_refs: Referências externas de valor são mantidas como estão
@@ -1591,6 +1645,13 @@ document:
         value_compact: "Compactar o valor"
         value_revert: "Reverter o valor"
         value_save: "Salvar o valor"
+        view_table_data: "Mostrar Dados"
+        view_table_columns: "Mostrar Colunas"
+        view_table_partitions: "Mostrar Partições"
+        column_picker: "Escolher colunas"
+        refresh_profile: "Atualizar estatísticas das colunas"
+        sample_profile: "Perfilar as primeiras linhas"
+        refresh_partitions: "Atualizar partições"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -1810,6 +1871,20 @@ document:
         references: REFERÊNCIAS
         row: LINHA
       title: "Linha %{row}"
+    table_views:
+      tab:
+        data: "Dados"
+        columns: "Colunas"
+        partitions: "Partições"
+      projection_keeps_keys: "A chave primária continua na projeção para que as linhas possam ser editadas: %{columns}"
+      sample_failed: "Falha ao perfilar a amostra: %{error}"
+      badge:
+        sort_position: "Ordem %{position}"
+        sort: "Ordem"
+        partition: "Part."
+        distribution: "Dist."
+      header_nulls: "%{percent} nulos"
+      refresh_failed: "Falha ao atualizar as estatísticas das colunas: %{error}"
   delimited:
     unsaved_summary: "Edições não salvas em %{name}"
     loading: "Carregando %{name}…"
@@ -1927,6 +2002,7 @@ document:
       text: "Texto"
       raw: "Bruto"
       aligned: "Alinhado"
+      columns: "Colunas"
     text:
       more_in_file: "O arquivo tem mais registros. Carregue mais para mostrá-los aqui."
       capped: "O texto mostra os primeiros %{shown} dos %{loaded} registros carregados. A tabela mostra todos."
@@ -1935,6 +2011,17 @@ document:
       apply_failed: "O texto não pode ser aplicado: %{cause}"
       read_only_capped: "Este texto não pode ser editado porque não mostra todos os registros carregados, e uma edição de parte dos registros não pode ser associada a eles. Edite na tabela."
       raw_edit_hint: "As edições são aplicadas à tabela quando você troca de visualização, salva ou carrega mais. Do texto só são usados os valores dos campos: uma linha cujos valores não mudaram mantém a quebra de linha e as aspas do arquivo, e linhas alteradas ou adicionadas são escritas com as colunas do arquivo."
+    columns:
+      type:
+        integer: "Inteiro"
+        decimal: "Decimal"
+        boolean: "Booleano"
+        date: "Data"
+        timestamp: "Data e hora"
+        text: "Texto"
+      progress: "%{scanned} de %{total}"
+      error:
+        scan_failed: "Não foi possível criar o perfil de %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"
@@ -3246,6 +3333,7 @@ document:
       close_others: Fechar as outras
       close_right: Fechar à direita
     new: Nova aba
+    close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
 document_tree:
   search_placeholder: Buscar…
@@ -3383,6 +3471,7 @@ login:
     no_url: Nenhuma URL de login está disponível para este provedor.
     no_url_provided: A URL de login não foi fornecida pelo provedor
 modals:
+  close: Fechar
   active_query:
     title: Consulta ativa em execução
     prompt: Ainda há uma consulta em execução nesta conexão. O que você gostaria de fazer?
@@ -4760,6 +4849,8 @@ shutdown:
   failed: Falha no encerramento
 
 sidebar:
+  row:
+    actions: "Ações para %{name}"
   header:
     new_dashboard: "Novo dashboard"
     add: "Adicionar"

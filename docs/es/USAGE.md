@@ -21,6 +21,8 @@ a tu primera query; si no, elige la página de lo que estás haciendo.
   DELETE sin escribir SQL.
 - [Trabajar con resultados](RESULTS.md) — el data grid, la vista de registro,
   el filtrado, la edición y la exportación.
+- [Columnas y particiones](TABLE_VIEWS.md) — estadísticas de columnas,
+  particiones, elegir las columnas que lee una tabla y estimaciones de lectura.
 - [Vista clave-valor](KEY_VALUE.md) — claves, valores, expiración y la consola
   de comandos.
 - [Colecciones de documentos](DOCUMENTS.md) — vistas de tabla, árbol y JSON de

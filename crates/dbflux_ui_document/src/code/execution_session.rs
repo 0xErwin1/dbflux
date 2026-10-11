@@ -323,6 +323,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
             if let Some(gate) = &self.execute_gate {
                 gate.entered.store(true, Ordering::SeqCst);
@@ -419,6 +423,10 @@ mod tests {
     }
 
     impl ExecutionSessionFactory for FakeFactory {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn open(&self) -> Result<Arc<dyn ExecutionSession>, DbError> {
             let open_number = self.opens.fetch_add(1, Ordering::SeqCst);
             if let Some(gate) = &self.open_gate {

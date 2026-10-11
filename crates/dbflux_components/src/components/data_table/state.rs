@@ -1650,6 +1650,12 @@ impl DataTableState {
     pub fn apply_returning_row(&mut self, row_idx: usize, values: &[dbflux_core::Value]) {
         self.model = Arc::new(self.model.with_row_updated(row_idx, values));
     }
+
+    /// Writes the pending edits of row `row_idx` into the loaded model, for a
+    /// save whose returned row cannot be placed in the grid's columns.
+    pub fn keep_row_edits(&mut self, row_idx: usize) {
+        self.model = Arc::new(self.model.with_row_edits(row_idx, &self.edit_buffer));
+    }
 }
 
 fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortState> {

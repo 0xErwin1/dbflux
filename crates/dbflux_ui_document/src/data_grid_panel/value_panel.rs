@@ -41,7 +41,7 @@ use gpui_component::{ActiveTheme, Sizable};
 
 /// Everything the panel needs to show one cell.
 #[derive(Clone, Debug)]
-pub struct ValuePanelTarget {
+pub(crate) struct ValuePanelTarget {
     /// Visual row index, matching `CellCoord::row`.
     pub row: usize,
     pub col: usize,
@@ -70,13 +70,13 @@ pub(crate) enum ValuePanelButton {
 /// Emitted when the user saves. `DataGridPanel` routes it into the shared
 /// cell-save path.
 #[derive(Clone, Debug)]
-pub struct ValuePanelSaveEvent {
+pub(crate) struct ValuePanelSaveEvent {
     pub row: usize,
     pub col: usize,
     pub value: String,
 }
 
-pub struct ValuePanelContent {
+pub(crate) struct ValuePanelContent {
     target: ValuePanelTarget,
     format: ValueFormat,
     word_wrap: bool,
@@ -111,7 +111,11 @@ impl VimHost for ValuePanelContent {
 }
 
 impl ValuePanelContent {
-    pub fn new(target: ValuePanelTarget, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        target: ValuePanelTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let format = value_format::detect_format(&target.value);
         let word_wrap = true;
         let text = initial_text(&target.value, format);
@@ -153,7 +157,7 @@ impl ValuePanelContent {
 
     /// The panel's own focus handle, which keyboard focus takes when it moves
     /// into the panel from the grid.
-    pub fn focus_handle(&self) -> &FocusHandle {
+    pub(crate) fn focus_handle(&self) -> &FocusHandle {
         &self.focus_handle
     }
 
@@ -162,7 +166,7 @@ impl ValuePanelContent {
     /// Marks the editor as focused right away rather than on its `Focus`
     /// event, which arrives only with the next frame: until then the grid
     /// would keep reporting the panel's keys and claim the letters typed.
-    pub fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |state, cx| state.focus(window, cx));
         self.editor_focused = true;
         cx.notify();
@@ -170,7 +174,7 @@ impl ValuePanelContent {
 
     /// Take the keyboard back from the editor to the panel, keeping the
     /// text as typed. Mirrors `focus_editor`.
-    pub fn leave_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn leave_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
         self.editor_focused = false;
         cx.notify();
@@ -178,7 +182,7 @@ impl ValuePanelContent {
 
     /// Scroll the value by a line, a page, or to either end. The editor
     /// clamps the offset to its content when it lays out.
-    pub fn scroll(
+    pub(crate) fn scroll(
         &self,
         step: crate::data_grid_panel::side_island::IslandScroll,
         cx: &mut Context<Self>,
@@ -208,12 +212,17 @@ impl ValuePanelContent {
     }
 
     /// Whether the panel's editor currently owns the keyboard.
-    pub fn editor_has_focus(&self) -> bool {
+    pub(crate) fn editor_has_focus(&self) -> bool {
         self.editor_focused
     }
 
     /// Point the panel at a different cell, re-detecting the format.
-    pub fn open(&mut self, target: ValuePanelTarget, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open(
+        &mut self,
+        target: ValuePanelTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.format = value_format::detect_format(&target.value);
         self.target = target;
         self.error = None;
@@ -221,7 +230,7 @@ impl ValuePanelContent {
     }
 
     /// The cell the panel is currently showing.
-    pub fn target_cell(&self) -> (usize, usize) {
+    pub(crate) fn target_cell(&self) -> (usize, usize) {
         (self.target.row, self.target.col)
     }
 
@@ -229,7 +238,7 @@ impl ValuePanelContent {
     ///
     /// Drives whether the panel may follow the cursor: an unsaved edit pins it
     /// to its cell until the user saves or reverts.
-    pub fn is_modified(&self, cx: &App) -> bool {
+    pub(crate) fn is_modified(&self, cx: &App) -> bool {
         self.input.read(cx).value().as_ref() != self.loaded_text
     }
 
@@ -359,7 +368,7 @@ impl ValuePanelContent {
         }
     }
 
-    pub fn save(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn save(&mut self, cx: &mut Context<Self>) {
         let value = self.input.read(cx).value().to_string();
 
         if let Err(error) = validate_value(&value, self.format) {

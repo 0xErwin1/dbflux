@@ -79,6 +79,10 @@ impl FakeStore {
     }
 
     #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn with_object<T>(
         &self,
         bucket: &str,

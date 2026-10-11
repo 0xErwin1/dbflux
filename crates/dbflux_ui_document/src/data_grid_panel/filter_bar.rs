@@ -44,6 +44,12 @@ pub(crate) enum FilterMode {
 /// String literals (single- and double-quoted) are skipped atomically so that
 /// `email = 'a.b@x.com'` returns `Raw` while `user.email = 'x'` returns
 /// `Relational`. Does not perform full parsing; this is intentionally cheap.
+// The five bytes[i] reads below each sit in a loop or guard conditioned on
+// i < bytes.len(); the bound is not re-checked per access.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "five bytes[i] reads: the outer match under while i < bytes.len(), the closing-quote check at the top of each inner while i < bytes.len() loop, and the doubled-quote check behind i < bytes.len() && in each quote arm"
+)]
 pub(crate) fn classify_filter_input(text: &str) -> FilterMode {
     if text.trim().is_empty() {
         return FilterMode::Raw;

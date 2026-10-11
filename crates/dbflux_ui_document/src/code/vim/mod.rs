@@ -5,7 +5,7 @@
 use super::*;
 use dbflux_components::vim::{VimBinding, VimHost};
 
-pub use dbflux_components::vim::VimMode;
+pub(crate) use dbflux_components::vim::VimMode;
 
 impl VimHost for CodeDocument {
     fn vim(&self, input: EntityId) -> Option<&VimBinding> {

@@ -13,6 +13,7 @@
 - [执行查询](EDITOR.md) — 查询标签页、执行、脚本、危险查询确认与查询历史。
 - [可视化查询构建器](QUERY_BUILDER.md) — 无需编写 SQL 即可构建 SELECT、UPDATE 与 DELETE。
 - [处理结果](RESULTS.md) — 数据网格、记录视图、筛选、编辑与导出。
+- [列与分区](TABLE_VIEWS.md) — 列统计信息、分区、选择表读取的列，以及读取量估算。
 - [键值视图](KEY_VALUE.md) — 键、值、过期时间与命令控制台。
 - [文档集合](DOCUMENTS.md) — 文档的表格、树与 JSON 视图。
 - [CSV 和 TSV 文件](CSV_FILES.md) — 以表格或文本形式打开、编辑和保存分隔符文件。

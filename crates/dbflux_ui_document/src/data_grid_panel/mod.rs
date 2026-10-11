@@ -8,10 +8,11 @@ mod navigation;
 mod query;
 mod render;
 mod result_search;
-pub mod row_inspector;
+pub(crate) mod row_inspector;
 pub(crate) mod side_island;
+mod table_views;
 mod utils;
-pub mod value_panel;
+pub(crate) mod value_panel;
 
 use super::query_builder::completion::{
     CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
@@ -282,7 +283,7 @@ enum ToolbarFocus {
 }
 
 impl ToolbarFocus {
-    pub fn left(self) -> Self {
+    pub(crate) fn left(self) -> Self {
         match self {
             ToolbarFocus::Filter => ToolbarFocus::Filter,
             ToolbarFocus::Limit => ToolbarFocus::Filter,
@@ -290,7 +291,7 @@ impl ToolbarFocus {
         }
     }
 
-    pub fn right(self) -> Self {
+    pub(crate) fn right(self) -> Self {
         match self {
             ToolbarFocus::Filter => ToolbarFocus::Limit,
             ToolbarFocus::Limit => ToolbarFocus::Refresh,
@@ -778,6 +779,9 @@ pub struct DataGridPanel {
     /// Document collection presentation (flattened table, query bar, schema,
     /// field edits). Inert for other sources.
     collection: documents::CollectionViewState,
+    /// Columns and Partitions views of a table whose connection offers them.
+    /// Inert for other sources.
+    table_views: table_views::TableViewsState,
     pk_columns: Vec<String>,
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
@@ -880,6 +884,7 @@ impl DataGridPanel {
 
         let mut panel =
             Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
+        panel.init_table_views(window, cx);
         panel.refresh(window, cx);
 
         // If pk_columns is empty, fetch table details to get PK info
@@ -1097,6 +1102,10 @@ impl DataGridPanel {
             self.pk_columns = pk_names;
         }
 
+        // A projection chosen before the key was known may leave key columns
+        // out; they come back, and the table is read again with them.
+        let restored_keys = self.keep_keys_in_table_projection(cx);
+
         // Everything below needs the table this panel reads, so the source is
         // destructured once and both the binding recompute and the requery
         // decision work from that.
@@ -1143,7 +1152,7 @@ impl DataGridPanel {
         // carried no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or skip
         // rows. Rewrite the source with the order just learned and requery — the
         // shape `handle_sort_clear` uses for the same reason.
-        if !unordered {
+        if !unordered && !restored_keys {
             self.pending.rebuild = true;
             cx.notify();
             return;
@@ -1157,7 +1166,7 @@ impl DataGridPanel {
             cx,
         );
 
-        if order_by.is_empty() {
+        if order_by.is_empty() && !restored_keys {
             self.pending.rebuild = true;
             cx.notify();
             return;
@@ -1599,6 +1608,7 @@ impl DataGridPanel {
                 builder_editable_binding: None,
             },
             collection,
+            table_views: table_views::TableViewsState::default(),
             runner,
             focus_handle,
             panel_origin: Point::default(),
@@ -1827,6 +1837,12 @@ impl DataGridPanel {
     }
 
     /// Toggle between available view modes for the current data source.
+    // next_idx is a modular step over available, whose length is > 1 after
+    // the early return.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next_idx = (current_idx + 1) % available.len() and available.len() > 1 after the early return"
+    )]
     pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
         if self.is_document_collection(cx) {
             self.cycle_document_view(cx);
@@ -1998,6 +2014,12 @@ impl DataGridPanel {
     /// Shows the view after the current one among those the result offers
     /// (`Command::CycleResultView`), wrapping. Returns false when the result
     /// has a single view.
+    // modes.len() >= 2 after the early return and next is either 0 or a
+    // modular step over modes.len().
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "modes.len() >= 2 after the early return and next is 0 or a modular step over modes.len()"
+    )]
     pub(super) fn cycle_result_view(
         &mut self,
         window: &mut Window,
@@ -2175,6 +2197,12 @@ impl DataGridPanel {
         }
 
         // Build JSON from rows
+        // row.len() == 1 is checked right before the [0] index in the
+        // single-value branch.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "row[0] is reached only in the branch guarded by row.len() == 1"
+        )]
         let json_rows: Vec<serde_json::Value> = self
             .result
             .rows
@@ -2201,6 +2229,10 @@ impl DataGridPanel {
             .collect();
 
         if json_rows.len() == 1 {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "json_rows.len() == 1 is checked by the enclosing if"
+            )]
             serde_json::to_string_pretty(&json_rows[0]).unwrap_or_default()
         } else {
             serde_json::to_string_pretty(&json_rows).unwrap_or_default()
@@ -2778,6 +2810,11 @@ impl DataGridPanel {
         self.apply_chart_for_result(&result, cx);
 
         self.result = result;
+        // The rows were replaced, so a client-side sort has no order left to
+        // apply; drop the order and the sort state together so neither
+        // outlives the rows it was built for.
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.reapply_result_search_to_new_rows();
         self.rebuild_table(None, cx);
         self.refresh.state = GridState::Ready;
@@ -2909,10 +2946,19 @@ impl DataGridPanel {
                 Vec::new()
             }
         } else {
-            self.pk_columns
+            let indices: Vec<usize> = self
+                .pk_columns
                 .iter()
                 .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
-                .collect()
+                .collect();
+
+            // A save addresses a row by every key column; with part of the
+            // key missing from the result it could match several rows.
+            if indices.len() == self.pk_columns.len() {
+                indices
+            } else {
+                Vec::new()
+            }
         };
 
         log::debug!(
@@ -3288,6 +3334,15 @@ impl DataGridPanel {
                     node_id,
                     node_value,
                 } => {
+                    // node_id is the tree cursor, built by NodeId::root(),
+                    // child() and parent(), which all keep the leading
+                    // document segment, so [1..] is in range. The event's
+                    // doc_index comes from doc_index().unwrap_or(0) and does
+                    // not prove it.
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "node_id is the tree cursor, built by NodeId::root()/child()/parent(), which all keep the leading document segment, so [1..] is in range; the event's doc_index comes from doc_index().unwrap_or(0) and does not prove it"
+                    )]
                     let field_path: Vec<String> = node_id.path[1..].to_vec();
 
                     this.context_menu = Some(TableContextMenu {
@@ -4594,6 +4649,12 @@ impl DataGridPanel {
     /// `created_by.ema`, or `name = 'x' AND created_by.`. Returns `None`
     /// when there is no dot-qualified identifier at the current cursor
     /// position (end of string for autocomplete typing).
+    // bytes[i - 1] and bytes[start - 1] are each guarded by i > 0 / start > 0
+    // in their loop or condition; the bound is not re-checked per access.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "five reads: bytes[i - 1] twice in the first while (i > 0 &&) and once behind the i == 0 || short-circuit, bytes[start - 1] twice in the second while (start > 0 &&); i and start begin at or below bytes.len() and only decrease"
+    )]
     fn extract_filter_qualifier(text: &str) -> Option<String> {
         let bytes = text.as_bytes();
         let mut i = bytes.len();
@@ -5612,6 +5673,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: no test path in this suite calls the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!()
         }
@@ -5792,6 +5857,62 @@ mod tests {
         assert_eq!(source.collection_ref(), None);
         assert_eq!(source.pagination(), None);
         assert_eq!(source.total_rows(), None);
+    }
+
+    #[gpui::test]
+    fn local_sort_after_a_refresh_with_more_rows_keeps_every_row(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let rows_with_ids = |ids: std::ops::RangeInclusive<i64>| {
+            QueryResult::table(
+                vec![key_column("id", true)],
+                ids.map(|id| vec![dbflux_core::Value::Int(id)]).collect(),
+                None,
+                Duration::ZERO,
+            )
+        };
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    let initial = rows_with_ids(1..=2);
+                    let source = DataSource::QueryResult {
+                        result: Arc::new(initial.clone()),
+                        original_query: "SELECT id FROM users".to_string(),
+                        profile_id: None,
+                    };
+
+                    let mut panel = DataGridPanel::new_internal(
+                        source,
+                        app_state.clone(),
+                        vec!["id".to_string()],
+                        window,
+                        cx,
+                    );
+                    panel.set_result(initial, cx);
+                    panel
+                })
+            },
+            |panel, cx| panel.active_context(cx),
+            DataGridPanel::dispatch_command,
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+                // A refresh returning more rows than the sorted result had.
+                panel.set_result(rows_with_ids(1..=3), cx);
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+            });
+        });
+
+        let row_count = window.update(|_, cx| panel.read(cx).result.rows.len());
+        assert_eq!(row_count, 3);
     }
 
     /// The table view's keys go through the keymap: the table's own keys
@@ -6428,6 +6549,153 @@ mod tests {
         assert!(!window.update(|_, cx| panel.read(cx).inspector.pinned));
     }
 
+    /// A panel showing `id` and `note` of a table that also has a
+    /// `quantity` column between them, with `note` of the only row edited.
+    fn panel_with_edited_partial_row(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "order_lines"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(1),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                panel.set_result(
+                    QueryResult::table(
+                        vec![key_column("id", true), key_column("note", false)],
+                        vec![vec![
+                            dbflux_core::Value::Int(1),
+                            dbflux_core::Value::Text("before".to_string()),
+                        ]],
+                        None,
+                        Duration::ZERO,
+                    ),
+                    cx,
+                );
+
+                if let Some(table_state) = panel.grid_table.table_state.clone() {
+                    table_state.update(cx, |state, _cx| {
+                        state.edit_buffer_mut().set_cell(
+                            0,
+                            1,
+                            dbflux_components::components::data_table::model::CellValue::text(
+                                "saved",
+                            ),
+                        );
+                    });
+                }
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        (panel, window)
+    }
+
+    fn shown_cells(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) -> Vec<String> {
+        window.update(|_, app| {
+            let state = panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("a table");
+            let state = state.read(app);
+            let model = state.model();
+
+            (0..model.col_count())
+                .map(|col| {
+                    let base = model.cell(0, col).cloned().expect("a cell");
+                    state
+                        .edit_buffer()
+                        .get_cell(0, col, &base)
+                        .display_text()
+                        .to_string()
+                })
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn a_saved_row_wider_than_the_grid_keeps_each_value_in_its_column(cx: &mut TestAppContext) {
+        let (panel, window) = panel_with_edited_partial_row(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.handle_save_result(
+                    0,
+                    Ok(dbflux_core::CrudResult::success(vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Int(5),
+                        dbflux_core::Value::Text("saved".to_string()),
+                    ])),
+                    cx,
+                )
+            })
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            shown_cells(&panel, window),
+            vec!["1".to_string(), "saved".to_string()],
+            "the table's quantity column must not shift into note"
+        );
+    }
+
+    #[gpui::test]
+    fn a_saved_row_matching_the_grid_replaces_the_row(cx: &mut TestAppContext) {
+        let (panel, window) = panel_with_edited_partial_row(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.handle_save_result(
+                    0,
+                    Ok(dbflux_core::CrudResult::success(vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Text("from the server".to_string()),
+                    ])),
+                    cx,
+                )
+            })
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            shown_cells(&panel, window),
+            vec!["1".to_string(), "from the server".to_string()]
+        );
+    }
+
     #[gpui::test]
     fn filtered_empty_table_runtime_keeps_header_and_active_filter(cx: &mut TestAppContext) {
         init_test_runtime(cx);
@@ -7016,6 +7284,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: no test path in this suite calls the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("StubBuilderConnection::dialect not needed for this test")
         }
@@ -7841,6 +8113,10 @@ mod tests {
                 SchemaLoadingStrategy::SingleDatabase
             }
 
+            #[expect(
+                clippy::unimplemented,
+                reason = "test-only stub connection: no test path in this suite calls the dialect"
+            )]
             fn dialect(&self) -> &dyn SqlDialect {
                 unimplemented!("StubSqlConnection2::dialect not needed")
             }
@@ -10315,6 +10591,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: raw browse does not call the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("StubBrowseConnection::dialect is not reached by a raw browse")
         }
@@ -10521,6 +10801,40 @@ mod tests {
             Some(crate::labels::grid_edits_dropped_on_reload(1)),
             "an edit that could not be carried over must not vanish silently"
         );
+    }
+
+    /// A result that lacks part of a composite primary key cannot address one
+    /// row per save, so the grid must not take edits (a column projection can
+    /// drop a key column before the key is known).
+    #[gpui::test]
+    fn a_result_missing_part_of_a_composite_key_is_read_only(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let partial = keyed_table_panel(
+            window,
+            app_state.clone(),
+            Uuid::nil(),
+            vec!["tenant_id".to_string(), "id".to_string()],
+        );
+        let whole = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
+
+        window.update(|_, app| {
+            let editable = |panel: &gpui::Entity<DataGridPanel>, app: &gpui::App| {
+                panel
+                    .read(app)
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .is_editable()
+            };
+
+            assert!(!editable(&partial, app), "tenant_id is not in the result");
+            assert!(editable(&whole, app), "every key column is in the result");
+        });
     }
 
     #[gpui::test]
@@ -12156,6 +12470,10 @@ mod tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: no test path in this suite calls the dialect"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("StubTimeSeriesConnection::dialect not needed for this test")
         }
@@ -12700,6 +13018,71 @@ mod tests {
                 panel.step_out_of_document_value(cx);
                 assert!(!panel.is_stepped_into());
                 assert_eq!(column_names(panel), vec!["_id", "price", "items"]);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn local_sort_after_stepping_into_a_longer_array_keeps_every_row(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        use dbflux_core::Value;
+        use std::collections::BTreeMap;
+
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        let column = |name: &str, is_primary_key: bool| ColumnMeta {
+            name: name.to_string(),
+            type_name: "BSON".to_string(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key,
+        };
+        let items = Value::Array(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|sku| {
+                    Value::Document(BTreeMap::from([(
+                        "sku".to_string(),
+                        Value::Text(sku.into()),
+                    )]))
+                })
+                .collect(),
+        );
+        // Two documents, but the first one's array has three elements, so
+        // stepping into it yields more rows than the sorted page had.
+        let documents = QueryResult::json(
+            vec![column("_id", true), column("items", false)],
+            vec![
+                vec![Value::Int(1), items.clone()],
+                vec![Value::Int(2), items],
+            ],
+            Duration::ZERO,
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    documents,
+                    cx,
+                );
+                assert_eq!(panel.result.rows.len(), 2);
+
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+                panel.step_into_document_value(0, 1, cx);
+                assert!(panel.is_stepped_into());
+                assert_eq!(panel.result.rows.len(), 3);
+
+                panel.apply_local_sort(0, dbflux_core::SortDirection::Descending, cx);
+                assert_eq!(panel.result.rows.len(), 3);
             });
         });
     }

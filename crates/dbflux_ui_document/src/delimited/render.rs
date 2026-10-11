@@ -1,10 +1,12 @@
 //! Rendering of `DelimitedDocument`.
 //!
 //! Layout, top to bottom: the toolbar, the warnings of the opened file, the
-//! table of the loaded records or their text, and a footer with the delimiter, the
+//! table of the loaded records, their text or the profile of their columns,
+//! and a footer with the delimiter, the
 //! encoding, the record count and, while the file has more records, the
 //! control that loads the next page. The toolbar holds the switch between
-//! the table and the text (and between raw and aligned text), the dialect controls,
+//! the table, the text and the Columns view (and between raw and aligned
+//! text), the dialect controls,
 //! the control that reads the file again from its source and, for a file
 //! that can be saved in place, the controls that insert a row above the
 //! cursor, add a column, discard the changes and save them. The toolbar wraps when the tab
@@ -326,6 +328,13 @@ impl DelimitedDocument {
         let body = match self.view() {
             DelimitedView::Table => div().flex_1().min_h_0().child(table).into_any_element(),
             DelimitedView::Text => self.render_text_body(cx),
+            DelimitedView::Columns => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .children(self.column_profile_view().cloned())
+                .into_any_element(),
         };
 
         div()

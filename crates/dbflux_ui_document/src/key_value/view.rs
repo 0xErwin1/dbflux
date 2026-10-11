@@ -35,7 +35,7 @@ use gpui::*;
 /// of view-only state (selection, animations, per-view overrides) without
 /// coupling them to the data model.
 #[allow(dead_code)]
-pub struct KeyValueView {
+pub(crate) struct KeyValueView {
     pub(super) document: Entity<KeyValueDocument>,
 }
 

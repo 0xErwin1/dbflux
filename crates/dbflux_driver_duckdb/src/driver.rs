@@ -584,6 +584,188 @@ mod tests {
         assert!(driver.connect(&profile(config(relative))).is_ok());
     }
 
+    /// Set on the child process [`a_second_process_cannot_open_a_file_held_for_writing`]
+    /// spawns; it names the database file the child tries to open.
+    const LOCK_PROBE_PATH_VARIABLE: &str = "DBFLUX_DUCKDB_LOCK_PROBE_PATH";
+
+    /// Runs only inside the child process of
+    /// [`a_second_process_cannot_open_a_file_held_for_writing`]: it tries to
+    /// open the file the parent holds and reports the outcome on stdout.
+    #[test]
+    fn lock_probe_child() {
+        let Some(path) = std::env::var_os(LOCK_PROBE_PATH_VARIABLE) else {
+            return;
+        };
+
+        let config = DbConfig::DuckDB {
+            path: PathBuf::from(path),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        };
+
+        match DuckDbDriver::new().connect(&profile(config)) {
+            Ok(_) => println!("LOCK_PROBE_OPENED"),
+            Err(error) => println!("LOCK_PROBE_REFUSED: {error}"),
+        }
+    }
+
+    #[test]
+    fn a_second_process_cannot_open_a_file_held_for_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("held.duckdb");
+        let config = DbConfig::DuckDB {
+            path: path.clone(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: Some("CREATE TABLE IF NOT EXISTS t AS SELECT 1 AS id".into()),
+        };
+        let _holder = DuckDbDriver::new().connect(&profile(config)).unwrap();
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "driver::tests::lock_probe_child", "--nocapture"])
+            .env(LOCK_PROBE_PATH_VARIABLE, &path)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert!(output.status.success(), "child failed: {stdout}");
+        assert!(
+            stdout.contains("LOCK_PROBE_REFUSED"),
+            "the second process opened a held file: {stdout}"
+        );
+    }
+
+    #[test]
+    fn a_file_under_a_path_with_spaces_and_non_ascii_names_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("carpeta con espacios").join("ñandú");
+        std::fs::create_dir_all(&folder).unwrap();
+        let config = DbConfig::DuckDB {
+            path: folder.join("datos año.duckdb"),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        };
+        let driver = DuckDbDriver::new();
+
+        let first = driver.connect(&profile(config.clone())).unwrap();
+        first
+            .execute(&QueryRequest::new("CREATE TABLE t AS SELECT 7 AS id"))
+            .unwrap();
+        drop(first);
+
+        let reopened = driver.connect(&profile(config)).unwrap();
+        assert_eq!(scalar(reopened.as_ref(), "SELECT id FROM t"), Value::Int(7));
+        assert!(folder.join("datos año.duckdb").is_file());
+    }
+
+    #[test]
+    fn table_views_profile_storage_sample_rows_and_project_columns() {
+        use dbflux_core::{
+            ProfileSource, TableBrowseRequest, TableFactKind, TableRef, TableViewFeatures,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = DbConfig::DuckDB {
+            path: dir.path().join("views.duckdb"),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        };
+        let connection = DuckDbDriver::new().connect(&profile(config)).unwrap();
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE ev AS SELECT i AS id, 'path' || (i % 50) AS path, \
+                 CASE WHEN i % 10 = 0 THEN NULL ELSE i % 7 END AS n, [i, i + 1] AS arr \
+                 FROM range(300000) t(i); CHECKPOINT;",
+            ))
+            .unwrap();
+
+        assert!(
+            connection
+                .table_view_features()
+                .contains(TableViewFeatures::COLUMN_PROFILE | TableViewFeatures::COLUMN_PROJECTION)
+        );
+
+        let table = TableRef::with_schema("main", "ev");
+        let profile = connection.table_profile(&table).unwrap();
+
+        assert_eq!(
+            profile.source_label,
+            ProfileSource::Catalog("pragma_storage_info")
+        );
+        assert_eq!(profile.row_count, Some(300_000));
+        assert!(
+            profile
+                .facts
+                .iter()
+                .any(|fact| fact.kind == TableFactKind::RowGroups)
+        );
+        let names: Vec<&str> = profile
+            .columns
+            .iter()
+            .map(|column| column.name.as_ref())
+            .collect();
+        assert_eq!(names, vec!["id", "path", "n", "arr"]);
+        assert!(profile.columns.iter().all(|column| column.codec.is_some()));
+        let id_range = profile.columns[0].range.as_ref().unwrap();
+        assert_eq!(
+            (id_range.min.as_ref(), id_range.max.as_ref()),
+            ("0", "299999")
+        );
+        assert_eq!(profile.columns[0].null_count, Some(0));
+        assert_eq!(profile.columns[2].null_count, None);
+
+        let columns: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+        let sample = connection
+            .sample_table_profile(&table, &columns, 1_000_000)
+            .unwrap();
+        assert_eq!(sample.source_label, ProfileSource::Sample { rows: 300_000 });
+        assert_eq!(sample.columns[2].null_count, Some(30_000));
+        assert_eq!(
+            sample.columns[2]
+                .range
+                .as_ref()
+                .map(|range| range.max.as_ref()),
+            Some("6")
+        );
+
+        let capped = connection
+            .sample_table_profile(&table, &columns, 10)
+            .unwrap();
+        assert_eq!(capped.source_label, ProfileSource::Sample { rows: 10 });
+
+        let page = connection
+            .browse_table(
+                &TableBrowseRequest::new(table.clone())
+                    .with_columns(vec!["path".to_string(), "id".to_string()]),
+            )
+            .unwrap();
+        assert_eq!(
+            page.columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["path", "id"]
+        );
+
+        assert!(
+            connection
+                .table_profile(&TableRef::with_schema("main", "missing"))
+                .is_err()
+        );
+
+        let unknown = connection
+            .sample_table_profile(&table, &["no_such_column".to_string()], 10)
+            .unwrap_err();
+        assert!(
+            matches!(unknown, DbError::ObjectNotFound(_))
+                && unknown.to_string().contains("no_such_column"),
+            "unexpected error: {unknown:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_new_file_keeps_its_instance_path_once_created() {

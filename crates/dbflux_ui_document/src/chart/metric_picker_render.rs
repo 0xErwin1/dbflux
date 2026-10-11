@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// Note: `ChartShell` state is accessed indirectly through `cx.listener`
 /// closures inside the render helpers rather than via a direct mutable reference.
 /// This avoids a split-borrow conflict when extracting `state` from the shell.
-pub struct MetricPickerView<'a> {
+pub(crate) struct MetricPickerView<'a> {
     pub state: &'a mut MetricPickerState,
     pub cache: &'a Arc<MetricCatalogCache>,
 }
@@ -53,7 +53,7 @@ impl<'a> MetricPickerView<'a> {
     ///   ├─────────────────────────────────────────┤
     ///   │ Config section (period, stat, apply)    │
     ///   └─────────────────────────────────────────┘
-    pub fn render(
+    pub(crate) fn render(
         &mut self,
         window: &mut Window,
         cx: &mut Context<ChartShell>,

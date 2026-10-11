@@ -103,6 +103,23 @@ pub fn format_count(count: Option<u64>) -> String {
     count.map_or_else(|| UNKNOWN_FACT.to_string(), |count| count.to_string())
 }
 
+/// A count with a thin space between each group of three digits
+/// (`224 600`, `1 204 331`), the grouping every locale reads.
+pub fn group_thousands(count: u64) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push('\u{202F}');
+        }
+
+        grouped.push(digit);
+    }
+
+    grouped
+}
+
 /// The smallest and largest value as `min → max`, marked with `≈` when a
 /// bound is not itself a value of the column.
 pub fn format_range(min: &str, max: &str, exact: bool) -> String {
@@ -116,6 +133,15 @@ pub fn format_range(min: &str, max: &str, exact: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_group_digits_in_threes() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1000), "1\u{202F}000");
+        assert_eq!(group_thousands(224_600), "224\u{202F}600");
+        assert_eq!(group_thousands(1_204_331), "1\u{202F}204\u{202F}331");
+    }
 
     #[test]
     fn bytes_use_binary_units_with_one_decimal_below_ten() {

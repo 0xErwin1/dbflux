@@ -7,12 +7,24 @@
 //! An eye toggle changes the applied projection at once and emits
 //! [`ProjectionChanged`]; dropping the last shown column is refused, so the
 //! Data view always has a column to read.
+//!
+//! Above the columns the view shows the table's storage facts (engine, keys,
+//! rows and sizes) and a line naming where the statistics came from and when
+//! they were read. The host decides which profile actions it offers (refresh,
+//! profile a sample, profile the whole file); a click emits
+//! [`ColumnProfileActionRequested`] and the host runs the work. Columns about
+//! storage (codec, size, ratio, share) are left out when no column of the
+//! profile knows any of them, instead of showing a column of dashes.
 
 use std::ops::Range;
 use std::sync::Arc;
 
+use chrono::{DateTime, Local, Utc};
 use dbflux_core::keymap_types::{Command, ContextId};
-use dbflux_core::{ColumnBadge, ColumnProfile, ColumnProjection, ProfileSource, TableProfile};
+use dbflux_core::{
+    ColumnBadge, ColumnProfile, ColumnProjection, ProfileSource, TableFact, TableFactKind,
+    TableProfile,
+};
 use gpui::prelude::*;
 use gpui::{
     Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, IntoElement, ParentElement,
@@ -24,7 +36,8 @@ use gpui_component::scroll::Scrollbar;
 
 use crate::actions::RunCommand;
 use crate::components::column_facts::{
-    UNKNOWN_FACT, format_count, format_optional_bytes, format_percent, format_range, format_ratio,
+    UNKNOWN_FACT, format_bytes, format_count, format_optional_bytes, format_percent, format_range,
+    format_ratio, group_thousands,
 };
 use crate::components::column_projection::ProjectionChanged;
 use crate::composites::EmptyState;
@@ -62,18 +75,54 @@ const DISTRIBUTION_MIN_WIDTH: Pixels = px(200.0);
 
 /// The narrowest the table gets: every fixed column plus the narrowest
 /// distribution. A narrower panel scrolls the header and rows sideways
-/// together.
-fn table_min_width() -> Pixels {
-    EYE_WIDTH
-        + NAME_WIDTH
-        + CODEC_WIDTH
-        + ON_DISK_WIDTH
-        + RATIO_WIDTH
-        + SHARE_WIDTH
-        + DISTINCT_WIDTH
-        + NULLS_WIDTH
-        + DISTRIBUTION_MIN_WIDTH
+/// together. The storage columns count only when they are shown.
+fn table_min_width(storage: StorageColumns) -> Pixels {
+    let codec = if storage.codec { CODEC_WIDTH } else { px(0.0) };
+    let sizes = if storage.sizes {
+        ON_DISK_WIDTH + RATIO_WIDTH + SHARE_WIDTH
+    } else {
+        px(0.0)
+    };
+
+    EYE_WIDTH + NAME_WIDTH + codec + sizes + DISTINCT_WIDTH + NULLS_WIDTH + DISTRIBUTION_MIN_WIDTH
 }
+
+/// Which storage columns the table shows: each only when some column of
+/// the profile knows it, so a source without sizes shows no column of dashes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StorageColumns {
+    codec: bool,
+    /// On disk, ratio and share of table.
+    sizes: bool,
+}
+
+/// How many of the most common values the distribution cell lists.
+const TOP_VALUES_SHOWN: usize = 3;
+
+/// A profile action a host can offer above the columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileAction {
+    /// Read the metadata profile again.
+    Refresh,
+    /// Compute distributions from a bounded sample of rows.
+    Sample,
+    /// Compute distributions from every row.
+    FullScan,
+}
+
+/// The profile actions a host offers. Each one shows a button only when set.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileActions {
+    pub refresh: bool,
+    /// The rows a sample reads, shown on the button. `None` hides it.
+    pub sample_rows: Option<u64>,
+    pub full_scan: bool,
+}
+
+/// Emitted when the user asks for a [`ProfileAction`]; the host runs it and
+/// reports back with [`ColumnProfileView::set_running`] and `set_profile`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnProfileActionRequested(pub ProfileAction);
 
 /// Height of the horizontal scrollbar strip over the bottom of the rows.
 const SCROLLBAR_HEIGHT: Pixels = px(12.0); // guardrail-allow: matches the data table scrollbar width
@@ -136,10 +185,17 @@ impl ProfileRow {
     pub(crate) fn new(column: &ColumnProfile, table: &TableProfile) -> Self {
         let share = column.share_of(table.total_compressed_bytes);
 
-        let distribution = column.range.as_ref().map_or_else(
-            || UNKNOWN_FACT.to_string(),
-            |range| format_range(&range.min, &range.max, range.exact),
-        );
+        let distribution = match (&column.range, shows_top_values(column)) {
+            (_, true) => format_top_values(column, profiled_rows(table)),
+            (Some(range), false) => format_range(&range.min, &range.max, range.exact),
+            (None, false) => UNKNOWN_FACT.to_string(),
+        };
+
+        let distinct = match column.distinct_count {
+            Some(count) if !column.distinct_exact => format!("≈ {}", group_thousands(count)),
+            Some(count) => group_thousands(count),
+            None => format_count(None),
+        };
 
         Self {
             name: SharedString::from(column.name.to_string()),
@@ -159,7 +215,7 @@ impl ProfileRow {
             ratio: format_ratio(column.compression_ratio()).into(),
             share: share.map(|share| share as f32),
             share_label: format_percent(share).into(),
-            distinct: format_count(column.distinct_count).into(),
+            distinct: distinct.into(),
             nulls: format_percent(column.null_fraction(table.row_count)).into(),
             distribution: distribution.into(),
             compressed_bytes: column.compressed_bytes,
@@ -168,20 +224,257 @@ impl ProfileRow {
     }
 }
 
-fn badge_label(badge: ColumnBadge) -> String {
+/// The rows the distribution facts were computed over, used to turn top
+/// value counts into shares.
+fn profiled_rows(table: &TableProfile) -> Option<u64> {
+    match table.distribution_source.unwrap_or(table.source_label) {
+        ProfileSource::LoadedRows { rows }
+        | ProfileSource::FullScan { rows }
+        | ProfileSource::Sample { rows } => Some(rows),
+        ProfileSource::FileFooter
+        | ProfileSource::Catalog(_)
+        | ProfileSource::PlannerStatistics(_) => table.row_count,
+    }
+}
+
+/// Most distinct values a column may have for its most common values to say
+/// more than its range.
+const TOP_VALUES_MAX_DISTINCT: u64 = 50;
+
+/// Whether the distribution cell lists the most common values instead of the
+/// range: only when the most common value repeats and the column has few
+/// distinct values. In a column of nearly unique values every top value is a
+/// fraction of a percent, which says nothing the range does not.
+fn shows_top_values(column: &ColumnProfile) -> bool {
+    let Some(first) = column.top_values.first() else {
+        return false;
+    };
+
+    if column.range.is_none() {
+        return true;
+    }
+
+    first.count > 1
+        && column
+            .distinct_count
+            .is_some_and(|distinct| distinct <= TOP_VALUES_MAX_DISTINCT)
+}
+
+/// The most common values with their share of the profiled rows
+/// (`US 31% · DE 12% · IN 9%`), or with their counts when the rows are
+/// unknown.
+fn format_top_values(column: &ColumnProfile, rows: Option<u64>) -> String {
+    column
+        .top_values
+        .iter()
+        .take(TOP_VALUES_SHOWN)
+        .map(|value| {
+            let share = rows
+                .filter(|rows| *rows > 0)
+                .map(|rows| value.count as f64 / rows as f64);
+
+            match share {
+                Some(share) => format!("{} {}", value.value, format_percent(Some(share))),
+                None => format!("{} ×{}", value.value, group_thousands(value.count)),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+pub(crate) fn badge_label(badge: ColumnBadge) -> String {
     match badge {
-        ColumnBadge::SortKey => dbflux_i18n::t!("components.column_profile.badge.sort_key"),
+        ColumnBadge::SortKey { position: None } => {
+            dbflux_i18n::t!("components.column_profile.badge.sort_key")
+        }
+        ColumnBadge::SortKey {
+            position: Some(position),
+        } => dbflux_i18n::t!(
+            "components.column_profile.badge.sort_key_position",
+            position = position
+        ),
         ColumnBadge::PartitionKey => {
             dbflux_i18n::t!("components.column_profile.badge.partition_key")
+        }
+        ColumnBadge::DistributionKey => {
+            dbflux_i18n::t!("components.column_profile.badge.distribution_key")
         }
     }
 }
 
-fn source_label(source: ProfileSource) -> String {
+/// What `source` is, as the lead of the source line.
+pub fn source_label(source: ProfileSource) -> String {
     match source {
         ProfileSource::FileFooter => {
             dbflux_i18n::t!("components.column_profile.source.file_footer")
         }
+        ProfileSource::Catalog(name) => {
+            dbflux_i18n::t!("components.column_profile.source.catalog", name = name)
+        }
+        ProfileSource::PlannerStatistics(name) => dbflux_i18n::t!(
+            "components.column_profile.source.planner_statistics",
+            name = name
+        ),
+        ProfileSource::LoadedRows { rows } => dbflux_i18n::t!(
+            "components.column_profile.source.loaded_rows",
+            rows = group_thousands(rows)
+        ),
+        ProfileSource::FullScan { rows } => dbflux_i18n::t!(
+            "components.column_profile.source.full_scan",
+            rows = group_thousands(rows)
+        ),
+        ProfileSource::Sample { rows } => dbflux_i18n::t!(
+            "components.column_profile.source.sample",
+            rows = group_thousands(rows)
+        ),
+    }
+}
+
+/// When a profile was read, in local time: the time alone for today, the
+/// date and time otherwise.
+pub fn read_at_label(captured_at: DateTime<Utc>, now: DateTime<Local>) -> String {
+    let time = source_time(captured_at, now);
+
+    dbflux_i18n::t!("components.column_profile.source.read_at", time = time)
+}
+
+/// A moment as a source line shows it: the time alone when it falls on the
+/// same local day as `now`, the date and time otherwise.
+fn source_time(moment: DateTime<Utc>, now: DateTime<Local>) -> String {
+    let local = moment.with_timezone(&Local);
+
+    if local.date_naive() == now.date_naive() {
+        local.format("%H:%M:%S").to_string()
+    } else {
+        local.format("%Y-%m-%d %H:%M").to_string()
+    }
+}
+
+/// When a file was last modified, as the source line of its footer says it.
+fn file_modified_label(modified: DateTime<Utc>, now: DateTime<Local>) -> String {
+    let time = source_time(modified, now);
+
+    dbflux_i18n::t!(
+        "components.column_profile.source.file_modified",
+        time = time
+    )
+}
+
+/// The source lines: where the sizes came from and when, then, on a second
+/// line, where the distributions came from and when, when a sample filled
+/// them.
+fn source_lines(profile: &TableProfile, now: DateTime<Local>) -> Vec<String> {
+    let with_time = |source: ProfileSource, captured_at: Option<DateTime<Utc>>| {
+        let lead = source_label(source);
+
+        match (source, captured_at) {
+            // A footer is as old as its file, not as the moment it was read.
+            (ProfileSource::FileFooter, Some(modified)) => {
+                format!("{lead} · {}", file_modified_label(modified, now))
+            }
+            (_, Some(captured_at)) => format!("{lead} · {}", read_at_label(captured_at, now)),
+            (_, None) => lead,
+        }
+    };
+
+    let mut lines = vec![with_time(profile.source_label, profile.captured_at)];
+
+    if let Some(source) = profile.distribution_source {
+        lines.push(with_time(source, profile.distribution_captured_at));
+    }
+
+    lines
+}
+
+fn fact_label(kind: &TableFactKind) -> String {
+    let key = match kind {
+        TableFactKind::Engine => "engine",
+        TableFactKind::SortKey => "sort_key",
+        TableFactKind::PartitionKey => "partition_key",
+        TableFactKind::PrimaryKey => "primary_key",
+        TableFactKind::SamplingKey => "sampling_key",
+        TableFactKind::Ttl => "ttl",
+        TableFactKind::DistributionStyle => "distribution_style",
+        TableFactKind::ActiveParts => "active_parts",
+        TableFactKind::RowGroups => "row_groups",
+        TableFactKind::Unsorted => "unsorted",
+        TableFactKind::CreatedBy => "created_by",
+        TableFactKind::StatisticsUpdated => "statistics_updated",
+        TableFactKind::Other(label) => return label.to_string(),
+    };
+
+    dbflux_i18n::t!(&format!("components.column_profile.fact.{key}"))
+}
+
+/// The facts strip: the source's facts, then the row count and the sizes
+/// the profile knows.
+fn facts_strip(profile: &TableProfile) -> Vec<(SharedString, SharedString)> {
+    let mut facts: Vec<(SharedString, SharedString)> = profile
+        .facts
+        .iter()
+        .map(|TableFact { kind, value }| (fact_label(kind).into(), value.to_string().into()))
+        .collect();
+
+    let fact = |key: &str| dbflux_i18n::t!(&format!("components.column_profile.fact.{key}"));
+
+    if let Some(rows) = profile.row_count {
+        let rows = if profile.row_count_exact {
+            group_thousands(rows)
+        } else {
+            format!("≈ {}", group_thousands(rows))
+        };
+
+        facts.push((fact("rows").into(), rows.into()));
+    }
+
+    if let Some(bytes) = profile.total_compressed_bytes {
+        facts.push((fact("on_disk").into(), format_bytes(bytes).into()));
+    }
+
+    if let Some(bytes) = profile.total_uncompressed_bytes {
+        facts.push((fact("raw").into(), format_bytes(bytes).into()));
+    }
+
+    let ratio = profile
+        .total_compressed_bytes
+        .filter(|bytes| *bytes > 0)
+        .zip(profile.total_uncompressed_bytes)
+        .map(|(compressed, raw)| raw as f64 / compressed as f64);
+
+    if ratio.is_some() {
+        facts.push((fact("ratio").into(), format_ratio(ratio).into()));
+    }
+
+    facts
+}
+
+/// The debug selectors of the action buttons, in the order they render.
+fn action_selectors(actions: &ProfileActions) -> Vec<&'static str> {
+    let mut selectors = Vec::new();
+
+    if actions.sample_rows.is_some() {
+        selectors.push("column-profile-sample");
+    }
+
+    if actions.full_scan {
+        selectors.push("column-profile-full-scan");
+    }
+
+    if actions.refresh {
+        selectors.push("column-profile-refresh");
+    }
+
+    selectors
+}
+
+/// The storage columns `profile` has anything to show in.
+fn storage_columns(profile: &TableProfile) -> StorageColumns {
+    StorageColumns {
+        codec: profile.columns.iter().any(|column| column.codec.is_some()),
+        sizes: profile
+            .columns
+            .iter()
+            .any(|column| column.compressed_bytes.is_some() || column.uncompressed_bytes.is_some()),
     }
 }
 
@@ -200,7 +493,20 @@ pub struct ColumnProfileView {
     table_scroll: UniformListScrollHandle,
     table_hscroll: ScrollHandle,
     sort_label: SharedString,
+    /// The source line, joined, for tests and screen readers.
     source_label: SharedString,
+    /// The source lines as drawn, one per source.
+    source_lines: Vec<SharedString>,
+    facts: Vec<(SharedString, SharedString)>,
+    storage: StorageColumns,
+    /// Whether the eye column and the footer's projection text are shown.
+    /// A source the Data view cannot project (a CSV file) turns them off.
+    projection_enabled: bool,
+    actions: ProfileActions,
+    /// The action the host is running, which disables every action button.
+    running: Option<ProfileAction>,
+    /// What the running action has done so far, such as bytes scanned.
+    progress: Option<SharedString>,
     footer_counts: SharedString,
     _subscriptions: Vec<Subscription>,
 }
@@ -235,9 +541,91 @@ impl ColumnProfileView {
             table_hscroll: ScrollHandle::new(),
             sort_label: ColumnSort::default().label().into(),
             source_label: SharedString::default(),
+            source_lines: Vec::new(),
+            facts: Vec::new(),
+            storage: StorageColumns {
+                codec: true,
+                sizes: true,
+            },
+            projection_enabled: true,
+            actions: ProfileActions::default(),
+            running: None,
+            progress: None,
             footer_counts: SharedString::default(),
             _subscriptions: vec![subscription],
         }
+    }
+
+    /// Shows or hides the eye column and the footer's projection text. With
+    /// them hidden the rows cannot change what the Data view reads.
+    pub fn set_projection_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.projection_enabled = enabled;
+        self.refresh_footer();
+        cx.notify();
+    }
+
+    pub fn projection_enabled(&self) -> bool {
+        self.projection_enabled
+    }
+
+    /// Sets the profile actions offered above the columns.
+    pub fn set_actions(&mut self, actions: ProfileActions, cx: &mut Context<Self>) {
+        self.actions = actions;
+        cx.notify();
+    }
+
+    /// Marks `action` as running (or none), which disables the action
+    /// buttons, and clears the progress text.
+    pub fn set_running(&mut self, action: Option<ProfileAction>, cx: &mut Context<Self>) {
+        self.running = action;
+        self.progress = None;
+        cx.notify();
+    }
+
+    /// Shows what the running action has done so far.
+    pub fn set_progress(&mut self, progress: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.progress = Some(progress.into());
+        cx.notify();
+    }
+
+    pub fn running(&self) -> Option<ProfileAction> {
+        self.running
+    }
+
+    /// The source line as shown, for tests and screen readers.
+    pub fn source_text(&self) -> &SharedString {
+        &self.source_label
+    }
+
+    /// The facts strip as shown: label and value pairs.
+    pub fn facts(&self) -> &[(SharedString, SharedString)] {
+        &self.facts
+    }
+
+    /// Whether the codec column is shown.
+    pub fn shows_codec(&self) -> bool {
+        self.storage.codec
+    }
+
+    /// Whether the size columns (on disk, ratio, share) are shown.
+    pub fn shows_sizes(&self) -> bool {
+        self.storage.sizes
+    }
+
+    /// Asks the host to run `action`, unless another one is running or the
+    /// host does not offer it.
+    pub fn request_action(&mut self, action: ProfileAction, cx: &mut Context<Self>) {
+        let offered = match action {
+            ProfileAction::Refresh => self.actions.refresh,
+            ProfileAction::Sample => self.actions.sample_rows.is_some(),
+            ProfileAction::FullScan => self.actions.full_scan,
+        };
+
+        if !offered || self.running.is_some() {
+            return;
+        }
+
+        cx.emit(ColumnProfileActionRequested(action));
     }
 
     /// Shows the loading state until a profile or an error arrives.
@@ -272,7 +660,11 @@ impl ColumnProfileView {
             .iter()
             .map(|column| ProfileRow::new(column, &profile))
             .collect();
-        self.source_label = source_label(profile.source_label).into();
+        let lines = source_lines(&profile, Local::now());
+        self.source_label = lines.join(" · ").into();
+        self.source_lines = lines.into_iter().map(SharedString::from).collect();
+        self.facts = facts_strip(&profile);
+        self.storage = storage_columns(&profile);
         self.content = LoadingState::Loaded(profile);
         self.applied = applied;
         self.cursor = None;
@@ -349,7 +741,7 @@ impl ColumnProfileView {
     /// emits the new projection. Returns false, emitting nothing, when the
     /// toggle would leave the projection without columns.
     pub fn toggle_column(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
-        if index >= self.applied.total_count() {
+        if !self.projection_enabled || index >= self.applied.total_count() {
             return false;
         }
 
@@ -368,11 +760,18 @@ impl ColumnProfileView {
     }
 
     fn refresh_footer(&mut self) {
-        self.footer_counts = dbflux_i18n::t!(
-            "components.column_profile.footer.counts",
-            total = self.rows.len(),
-            shown = self.applied.selected_count()
-        )
+        self.footer_counts = if self.projection_enabled {
+            dbflux_i18n::t!(
+                "components.column_profile.footer.counts",
+                total = self.rows.len(),
+                shown = self.applied.selected_count()
+            )
+        } else {
+            dbflux_i18n::t!(
+                "components.column_profile.footer.counts_only",
+                total = self.rows.len()
+            )
+        }
         .into();
     }
 
@@ -496,10 +895,11 @@ impl ColumnProfileView {
             .when(!self.source_label.is_empty(), |toolbar| {
                 toolbar.child(
                     div()
+                        .id("column-profile-source")
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .whitespace_nowrap()
+                        .min_w_0()
                         .text_size(FontSizes::XS)
                         .text_color(muted)
                         .child(
@@ -507,9 +907,163 @@ impl ColumnProfileView {
                                 .size(Fields::LEADING_ICON)
                                 .color(muted),
                         )
-                        .child(self.source_label.clone()),
+                        .child(
+                            div().flex().flex_col().min_w_0().children(
+                                self.source_lines
+                                    .iter()
+                                    .map(|line| div().truncate().child(line.clone())),
+                            ),
+                        ),
                 )
             })
+            .when_some(self.progress.clone(), |toolbar, progress| {
+                toolbar.child(
+                    div()
+                        .id("column-profile-progress")
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .whitespace_nowrap()
+                        .text_size(FontSizes::XS)
+                        .text_color(muted)
+                        .child(Spinner::new(1))
+                        .child(progress),
+                )
+            })
+            .children(self.action_buttons(cx))
+    }
+
+    fn action_buttons(&self, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
+        let busy = self.running.is_some();
+        let mut buttons = Vec::new();
+
+        let label = |action: ProfileAction, idle: String| {
+            if self.running == Some(action) {
+                dbflux_i18n::t!("components.column_profile.action.running")
+            } else {
+                idle
+            }
+        };
+
+        if let Some(rows) = self.actions.sample_rows {
+            buttons.push(
+                Button::new(
+                    "column-profile-sample",
+                    label(
+                        ProfileAction::Sample,
+                        dbflux_i18n::t!(
+                            "components.column_profile.action.sample",
+                            rows = group_thousands(rows)
+                        ),
+                    ),
+                )
+                .icon(AppIcon::ChartBar)
+                .disabled(busy)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.request_action(ProfileAction::Sample, cx)
+                }))
+                .into_any_element(),
+            );
+        }
+
+        if self.actions.full_scan {
+            buttons.push(
+                Button::new(
+                    "column-profile-full-scan",
+                    label(
+                        ProfileAction::FullScan,
+                        dbflux_i18n::t!("components.column_profile.action.full_scan"),
+                    ),
+                )
+                .icon(AppIcon::ChartBar)
+                .disabled(busy)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.request_action(ProfileAction::FullScan, cx)
+                }))
+                .into_any_element(),
+            );
+        }
+
+        if self.actions.refresh {
+            buttons.push(
+                Button::new(
+                    "column-profile-refresh",
+                    dbflux_i18n::t!("components.column_profile.action.refresh"),
+                )
+                .icon(AppIcon::RefreshCcw)
+                .icon_only()
+                .ghost()
+                .disabled(busy)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.request_action(ProfileAction::Refresh, cx)
+                }))
+                .into_any_element(),
+            );
+        }
+
+        buttons
+            .into_iter()
+            .zip(action_selectors(&self.actions))
+            .map(|(button, selector)| {
+                div()
+                    .debug_selector(move || selector.to_string())
+                    .child(button)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// The table's storage facts as label and value pairs on one wrapping
+    /// row. Nothing when the profile has no facts.
+    fn render_facts(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+        if self.facts.is_empty() {
+            return None;
+        }
+
+        let theme = cx.theme();
+
+        Some(
+            div()
+                .id("column-profile-facts")
+                .flex()
+                .flex_wrap()
+                .flex_shrink_0()
+                .items_center()
+                .gap_x(Spacing::LG)
+                .gap_y(Spacing::XS)
+                .px(Spacing::MD)
+                .py(Spacing::SM)
+                .border_b_1()
+                .border_color(theme.border)
+                .text_size(FontSizes::XS)
+                .children(
+                    self.facts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (label, value))| {
+                            div()
+                                .debug_selector(move || format!("column-profile-fact-{index}"))
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::XS)
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .whitespace_nowrap()
+                                        .text_color(theme.muted_foreground)
+                                        .child(label.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .font_family(crate::fonts::editor_family(cx))
+                                        .text_color(theme.foreground)
+                                        .child(value.clone()),
+                                )
+                        }),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -534,37 +1088,44 @@ impl ColumnProfileView {
             .bg(theme.table_head)
             .text_size(GridMetrics::TYPE_FONT)
             .text_color(theme.muted_foreground)
-            .child(div().w(EYE_WIDTH).flex_shrink_0())
+            .when(self.projection_enabled, |header| {
+                header.child(div().w(EYE_WIDTH).flex_shrink_0())
+            })
             .child(cell(
                 "column-profile-header-column",
                 Some(NAME_WIDTH),
                 header_label("column"),
                 false,
             ))
-            .child(cell(
-                "column-profile-header-codec",
-                Some(CODEC_WIDTH),
-                header_label("codec"),
-                false,
-            ))
-            .child(cell(
-                "column-profile-header-on_disk",
-                Some(ON_DISK_WIDTH),
-                header_label("on_disk"),
-                true,
-            ))
-            .child(cell(
-                "column-profile-header-ratio",
-                Some(RATIO_WIDTH),
-                header_label("ratio"),
-                true,
-            ))
-            .child(cell(
-                "column-profile-header-share",
-                Some(SHARE_WIDTH),
-                header_label("share"),
-                false,
-            ))
+            .when(self.storage.codec, |header| {
+                header.child(cell(
+                    "column-profile-header-codec",
+                    Some(CODEC_WIDTH),
+                    header_label("codec"),
+                    false,
+                ))
+            })
+            .when(self.storage.sizes, |header| {
+                header
+                    .child(cell(
+                        "column-profile-header-on_disk",
+                        Some(ON_DISK_WIDTH),
+                        header_label("on_disk"),
+                        true,
+                    ))
+                    .child(cell(
+                        "column-profile-header-ratio",
+                        Some(RATIO_WIDTH),
+                        header_label("ratio"),
+                        true,
+                    ))
+                    .child(cell(
+                        "column-profile-header-share",
+                        Some(SHARE_WIDTH),
+                        header_label("share"),
+                        false,
+                    ))
+            })
             .child(cell(
                 "column-profile-header-distinct",
                 Some(DISTINCT_WIDTH),
@@ -593,6 +1154,8 @@ impl ColumnProfileView {
     ) -> Vec<gpui::AnyElement> {
         let palette = RowPalette::of(cx.theme());
         let focused = self.table_focus.is_focused(window);
+        let storage = self.storage;
+        let projection_enabled = self.projection_enabled;
 
         range
             .filter_map(|position| {
@@ -601,7 +1164,8 @@ impl ColumnProfileView {
                 let shown = self.applied.is_selected(index);
                 let at_cursor = focused && self.cursor == Some(position);
 
-                let eye = Self::eye_cell(row, index, position, shown, &palette, cx);
+                let eye = projection_enabled
+                    .then(|| Self::eye_cell(row, index, position, shown, &palette, cx));
 
                 Some(
                     div()
@@ -619,25 +1183,30 @@ impl ColumnProfileView {
                         .font_family(crate::fonts::editor_family(cx))
                         .text_size(GridMetrics::FONT)
                         .when(at_cursor, |row| row.bg(palette.cursor_wash))
-                        .child(eye)
+                        .children(eye)
                         .child(name_cell(row, index, shown, &palette))
-                        .child(
-                            fixed_cell(CODEC_WIDTH, row.codec.clone(), palette.muted, false)
-                                .text_size(FontSizes::LABEL),
-                        )
-                        .child(fixed_cell(
-                            ON_DISK_WIDTH,
-                            row.on_disk.clone(),
-                            palette.strong,
-                            true,
-                        ))
-                        .child(fixed_cell(
-                            RATIO_WIDTH,
-                            row.ratio.clone(),
-                            palette.secondary_text,
-                            true,
-                        ))
-                        .child(share_cell(row, &palette))
+                        .when(storage.codec, |cells| {
+                            cells.child(
+                                fixed_cell(CODEC_WIDTH, row.codec.clone(), palette.muted, false)
+                                    .text_size(FontSizes::LABEL),
+                            )
+                        })
+                        .when(storage.sizes, |cells| {
+                            cells
+                                .child(fixed_cell(
+                                    ON_DISK_WIDTH,
+                                    row.on_disk.clone(),
+                                    palette.strong,
+                                    true,
+                                ))
+                                .child(fixed_cell(
+                                    RATIO_WIDTH,
+                                    row.ratio.clone(),
+                                    palette.secondary_text,
+                                    true,
+                                ))
+                                .child(share_cell(row, &palette))
+                        })
                         .child(fixed_cell(
                             DISTINCT_WIDTH,
                             row.distinct.clone(),
@@ -735,7 +1304,7 @@ impl ColumnProfileView {
                     .flex_col()
                     .h_full()
                     .w_full()
-                    .min_w(table_min_width())
+                    .min_w(table_min_width(self.storage))
                     .child(self.render_header(cx))
                     .child(rows),
             );
@@ -783,23 +1352,25 @@ impl ColumnProfileView {
                     .text_color(theme.foreground)
                     .child(self.footer_counts.clone()),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XXS)
-                    .min_w_0()
-                    .child(
-                        Icon::new(AppIcon::Info)
-                            .size(Fields::LEADING_ICON)
-                            .color(muted),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .child(dbflux_i18n::t!("components.column_profile.footer.hint")),
-                    ),
-            )
+            .when(self.projection_enabled, |footer| {
+                footer.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XXS)
+                        .min_w_0()
+                        .child(
+                            Icon::new(AppIcon::Info)
+                                .size(Fields::LEADING_ICON)
+                                .color(muted),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .child(dbflux_i18n::t!("components.column_profile.footer.hint")),
+                        ),
+                )
+            })
     }
 
     fn render_body(&self, cx: &Context<Self>) -> gpui::AnyElement {
@@ -847,6 +1418,7 @@ impl ColumnProfileView {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
+                .children(self.render_facts(cx))
                 .child(self.render_toolbar(cx))
                 .child(self.render_table(cx))
                 .child(self.render_footer(cx))
@@ -1002,6 +1574,7 @@ impl Render for ColumnProfileView {
 }
 
 impl EventEmitter<ProjectionChanged> for ColumnProfileView {}
+impl EventEmitter<ColumnProfileActionRequested> for ColumnProfileView {}
 
 #[cfg(test)]
 mod tests {
@@ -1033,17 +1606,7 @@ mod tests {
     }
 
     fn unknown(name: &str, type_name: &str) -> ColumnProfile {
-        ColumnProfile {
-            name: name.into(),
-            type_name: type_name.into(),
-            badges: Vec::new(),
-            codec: None,
-            compressed_bytes: None,
-            uncompressed_bytes: None,
-            null_count: None,
-            distinct_count: None,
-            range: None,
-        }
+        ColumnProfile::new(name, type_name)
     }
 
     fn known(name: &str, type_name: &str, compressed_bytes: u64) -> ColumnProfile {
@@ -1063,11 +1626,9 @@ mod tests {
             .sum::<u64>();
 
         TableProfile {
-            columns,
             row_count: Some(1000),
             total_compressed_bytes: Some(total),
-            total_uncompressed_bytes: None,
-            source_label: ProfileSource::FileFooter,
+            ..TableProfile::new(columns, ProfileSource::FileFooter)
         }
     }
 
@@ -1242,7 +1803,7 @@ mod tests {
                 max: "zz".into(),
                 exact: false,
             }),
-            badges: vec![ColumnBadge::SortKey],
+            badges: vec![ColumnBadge::SortKey { position: None }],
             ..unknown("empty", "UTF8")
         };
         let row = ProfileRow::new(&zero, &table(vec![zero.clone()]));
@@ -1491,6 +2052,298 @@ mod tests {
         assert!(
             first_after.is_none_or(|bounds| bounds.top() < first_before.top()),
             "the rows scroll up"
+        );
+    }
+
+    #[gpui::test]
+    fn a_catalog_profile_shows_its_facts_and_names_its_source(cx: &mut TestAppContext) {
+        use chrono::{TimeZone, Utc};
+        use dbflux_core::{TableFact, TableFactKind};
+
+        let captured_at = Utc.with_ymd_and_hms(2026, 9, 30, 14, 22, 5).unwrap();
+        let profile = Arc::new(TableProfile {
+            row_count: Some(1_840_000_000),
+            row_count_exact: false,
+            total_compressed_bytes: Some(400),
+            total_uncompressed_bytes: Some(4_320),
+            engine: Some("MergeTree".into()),
+            facts: vec![
+                TableFact::new(TableFactKind::Engine, "MergeTree"),
+                TableFact::new(TableFactKind::SortKey, "(site_id, ts)"),
+            ],
+            captured_at: Some(captured_at),
+            ..TableProfile::new(
+                vec![
+                    known("site_id", "UInt32", 100),
+                    known("ts", "DateTime", 300),
+                ],
+                ProfileSource::Catalog("system.columns"),
+            )
+        });
+        let (owner, window) = setup(Some(profile), cx);
+        let view = view(&owner, window);
+
+        let (facts, source) = window.update(|_, cx| {
+            let view = view.read(cx);
+            (
+                view.facts()
+                    .iter()
+                    .map(|(label, value)| format!("{label}={value}"))
+                    .collect::<Vec<_>>(),
+                view.source_text().to_string(),
+            )
+        });
+
+        assert_eq!(
+            facts,
+            vec![
+                "Engine=MergeTree",
+                "Sort key=(site_id, ts)",
+                "Rows=≈ 1\u{202F}840\u{202F}000\u{202F}000",
+                "On disk=400 B",
+                "Raw=4.2 KiB",
+                "Ratio=11×",
+            ]
+        );
+        assert!(
+            source.starts_with("Sizes from system.columns · read at "),
+            "{source}"
+        );
+    }
+
+    #[gpui::test]
+    fn a_profile_without_storage_facts_hides_the_storage_columns(cx: &mut TestAppContext) {
+        let profile = Arc::new(TableProfile::new(
+            vec![
+                ColumnProfile {
+                    null_count: Some(2),
+                    distinct_count: Some(3),
+                    top_values: vec![
+                        dbflux_core::ValueCount {
+                            value: "US".into(),
+                            count: 250,
+                        },
+                        dbflux_core::ValueCount {
+                            value: "DE".into(),
+                            count: 125,
+                        },
+                    ],
+                    ..unknown("country", "Text")
+                },
+                unknown("note", "Text"),
+            ],
+            ProfileSource::LoadedRows { rows: 500 },
+        ));
+        let (owner, window) = setup(Some(profile.clone()), cx);
+        let view = view(&owner, window);
+
+        let (shows_codec, shows_sizes, source) = window.update(|_, cx| {
+            let view = view.read(cx);
+            (
+                view.shows_codec(),
+                view.shows_sizes(),
+                view.source_text().to_string(),
+            )
+        });
+        assert!(!shows_codec && !shows_sizes);
+        assert_eq!(source, "From the 500 loaded rows");
+        assert!(window.debug_bounds("column-profile-header-codec").is_none());
+        assert!(
+            window
+                .debug_bounds("column-profile-header-distinct")
+                .is_some()
+        );
+
+        let row = ProfileRow::new(&profile.columns[0], &profile);
+        assert_eq!(row.distribution.as_ref(), "US 50% · DE 25%");
+        assert_eq!(row.distinct.as_ref(), "3");
+
+        let (owner, window) = setup(Some(four_columns()), cx);
+        let stored = super::tests::view(&owner, window);
+        assert!(window.update(|_, cx| stored.read(cx).shows_sizes()));
+        assert!(window.debug_bounds("column-profile-header-codec").is_some());
+    }
+
+    #[gpui::test]
+    fn actions_emit_only_when_offered_and_idle(cx: &mut TestAppContext) {
+        use super::{ColumnProfileActionRequested, ProfileAction, ProfileActions};
+
+        let (owner, window) = setup(Some(four_columns()), cx);
+        let view = view(&owner, window);
+        let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+        let _subscription = window.update(|_, cx| {
+            let requested = requested.clone();
+            cx.subscribe(&view, move |_, event: &ColumnProfileActionRequested, _| {
+                requested.borrow_mut().push(event.0);
+            })
+        });
+
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.request_action(ProfileAction::Sample, cx)
+            })
+        });
+        assert!(
+            requested.borrow().is_empty(),
+            "an action not offered emits nothing"
+        );
+
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.set_actions(
+                    ProfileActions {
+                        refresh: true,
+                        sample_rows: Some(1_000_000),
+                        full_scan: false,
+                    },
+                    cx,
+                );
+                view.request_action(ProfileAction::Sample, cx);
+                view.request_action(ProfileAction::FullScan, cx);
+                view.set_running(Some(ProfileAction::Sample), cx);
+                view.request_action(ProfileAction::Refresh, cx);
+                view.set_running(None, cx);
+                view.request_action(ProfileAction::Refresh, cx);
+            })
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            *requested.borrow(),
+            vec![ProfileAction::Sample, ProfileAction::Refresh],
+            "the full scan is not offered and nothing starts while an action runs"
+        );
+        assert!(window.debug_bounds("column-profile-sample").is_some());
+        assert!(window.debug_bounds("column-profile-full-scan").is_none());
+    }
+
+    #[test]
+    fn badges_name_their_sort_position() {
+        use super::badge_label;
+
+        assert_eq!(
+            badge_label(ColumnBadge::SortKey { position: None }),
+            "Sort key"
+        );
+        assert_eq!(
+            badge_label(ColumnBadge::SortKey { position: Some(2) }),
+            "Sort key 2"
+        );
+        assert_eq!(
+            badge_label(ColumnBadge::DistributionKey),
+            "Distribution key"
+        );
+    }
+
+    #[test]
+    fn an_estimated_distinct_count_is_marked() {
+        let column = ColumnProfile {
+            distinct_count: Some(9_800_000),
+            distinct_exact: false,
+            ..unknown("ts", "DateTime")
+        };
+        let profile = table(vec![column.clone()]);
+
+        assert_eq!(
+            ProfileRow::new(&column, &profile).distinct.as_ref(),
+            "≈ 9\u{202F}800\u{202F}000"
+        );
+    }
+
+    #[gpui::test]
+    fn a_view_without_projection_hides_the_eyes_and_refuses_toggles(cx: &mut TestAppContext) {
+        let (owner, window) = setup(Some(four_columns()), cx);
+        let view = view(&owner, window);
+
+        let toggled = window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.set_projection_enabled(false, cx);
+                view.toggle_column(2, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(!toggled);
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).footer_counts().to_string()),
+            "4 columns"
+        );
+        assert!(window.debug_bounds("column-profile-name-0").is_some());
+        assert!(
+            window.update(|_, cx| owner.read(cx).changes.is_empty()),
+            "no projection change is emitted"
+        );
+    }
+
+    #[test]
+    fn nearly_unique_columns_show_their_range_instead_of_top_values() {
+        use dbflux_core::ValueCount;
+
+        let top = |value: &str, count| ValueCount {
+            value: value.into(),
+            count,
+        };
+        let range = Some(ValueRange {
+            min: "0".into(),
+            max: "499".into(),
+            exact: true,
+        });
+        let profile = table(Vec::new());
+
+        let unique = ColumnProfile {
+            distinct_count: Some(500),
+            range: range.clone(),
+            top_values: vec![top("0", 1), top("1", 1)],
+            ..unknown("id", "Integer")
+        };
+        assert_eq!(
+            ProfileRow::new(&unique, &profile).distribution.as_ref(),
+            "0 → 499"
+        );
+
+        let categorical = ColumnProfile {
+            distinct_count: Some(5),
+            range,
+            top_values: vec![top("AR", 100), top("BR", 100)],
+            ..unknown("country", "Text")
+        };
+        assert_eq!(
+            ProfileRow::new(&categorical, &profile)
+                .distribution
+                .as_ref(),
+            "AR 10% · BR 10%"
+        );
+
+        let no_range = ColumnProfile {
+            top_values: vec![top("x", 1)],
+            ..unknown("note", "Text")
+        };
+        assert_eq!(
+            ProfileRow::new(&no_range, &profile).distribution.as_ref(),
+            "x 0.1%"
+        );
+    }
+
+    #[gpui::test]
+    fn codecs_without_sizes_show_the_codec_column_only(cx: &mut TestAppContext) {
+        let profile = Arc::new(TableProfile::new(
+            vec![ColumnProfile {
+                codec: Some("BitPacking".into()),
+                ..unknown("id", "BIGINT")
+            }],
+            ProfileSource::Catalog("pragma_storage_info"),
+        ));
+        let (owner, window) = setup(Some(profile), cx);
+        let view = view(&owner, window);
+
+        assert!(window.update(|_, cx| view.read(cx).shows_codec()));
+        assert!(!window.update(|_, cx| view.read(cx).shows_sizes()));
+        assert!(window.debug_bounds("column-profile-header-codec").is_some());
+        assert!(
+            window
+                .debug_bounds("column-profile-header-on_disk")
+                .is_none()
         );
     }
 }

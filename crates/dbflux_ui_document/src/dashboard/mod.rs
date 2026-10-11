@@ -439,6 +439,10 @@ impl DashboardDocument {
                 // their render loop), and queues the rest.
                 let slot_count = this.panel_slots.len();
                 for idx in 0..slot_count {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx ranges over 0..panel_slots.len(), so it is a valid slot index"
+                    )]
                     if matches!(this.panel_slots[idx], DashboardPanelSlot::Loaded { .. }) {
                         this.request_reexec_for_slot(idx, cx);
                     }
@@ -776,6 +780,13 @@ impl DashboardDocument {
     ///   the dashboard reflows without leaving empty bands.
     ///
     /// Row shifts compose across multiple collapsed sections.
+    // other_idx comes from enumerate() over panel_slots and shifts was sized
+    // to panel_slots.len(), so the double indexing on the shift update stays
+    // in bounds; the bound is not re-checked in the loop.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "other_idx comes from enumerate() over panel_slots and shifts has panel_slots.len() entries"
+    )]
     pub(crate) fn collapse_view(&self) -> (HashSet<usize>, Vec<u32>) {
         let mut shifts = vec![0u32; self.panel_slots.len()];
 
@@ -1980,6 +1991,10 @@ impl DashboardDocument {
                     let app_state_inner = self.app_state.clone();
                     let title_override = panel.title_override.clone();
                     let panel_entity = cx.new(|cx| {
+                        #[expect(
+                            clippy::expect_used,
+                            reason = "the match guard admits only Query, Metric and InstanceMetric sources; from_saved returns Err only for Collection sources"
+                        )]
                         let mut doc =
                             ChartDocument::from_saved(&chart, app_state_inner, window, cx).expect(
                                 "Query/Metric/InstanceMetric source validated by match guard",

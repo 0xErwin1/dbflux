@@ -719,6 +719,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
   - `EventStreamTarget` gives workspace/audit a generic identifier for driver-backed event streams.
   - `SourceContextSpec` lets drivers declare extra query-context controls without hardcoding driver names in `dbflux_ui`.
   - `ObjectStoreConnection` (`crates/dbflux_core/src/core/traits.rs`), reached via `Connection::object_store_api()`, is the object-storage seam (bucket/object listing, CRUD, presign, copy, versions); `CollectionPresentation::ObjectBrowser` and `PaneHandle::status_segments()` let the UI open and chrome object-storage documents without branching on driver ID.
+  - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`), reported by `Connection::table_view_features()`, gates a table's Columns and Partitions views, read estimate, sample profile and column picker. The data come from `table_profile`, `table_partitions`, `estimate_table_read` and `sample_table_profile`, and `TableBrowseRequest::columns` carries the projection. The UI (`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`) renders them with the shared `ColumnProfileView`, `PartitionListView`, `ColumnProjectionPicker` and `ReadEstimateBar` from `dbflux_components`. The Parquet document uses the same profile view, picker and estimate bar, and the CSV document uses the profile view.
   - If the UI needs new behavior, add a generic core abstraction first; do not add `if driver_id == ...` in `dbflux_ui` or app-facing workflow code.
 
 ### Auth & Access Pipeline

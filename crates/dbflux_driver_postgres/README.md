@@ -26,6 +26,7 @@ Advanced open-source relational database.
 - Displays `infinity` and `-infinity` dates, timestamps, and their one-dimensional arrays as PostgreSQL's own text.
 - Reports its client identity to the server as `application_name=dbflux/<version>` unless the connection string already sets `application_name`, in which case the user-supplied value is kept.
 - Probes write privilege after connecting: a replica or a read-only transaction mode resolves to read-only regardless of grants, otherwise the authenticated role's `INSERT`/`UPDATE`/`DELETE` privileges on visible base tables decide it; an empty database or a probe failure is inconclusive and leaves the profile's own mutation policy unchanged.
+- Table views (`TableViewFeatures`): a table's Columns view shows planner statistics from `pg_stats` (null share, distinct estimate, histogram bounds as the range, most common values with their shares) and the table's access method, partition key for a partitioned table, when the statistics were last updated (last `ANALYZE` or autoanalyze, or "never"), estimated rows and `pg_table_size`. Reading them reads no table rows. The Data view gets a column picker that names only the chosen columns in the query and keeps the primary key on an editable table. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 
 ### Instance Metrics
 
@@ -75,6 +76,7 @@ Exposes tabular snapshots of running server state:
 - Cancellation is best effort and depends on server/session state at cancellation time.
 - Code generation targets supported PostgreSQL constructs only; unsupported generator IDs return `NotSupported`.
 - Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs in `BEGIN READ ONLY` and is rolled back, and is refused inside an open transaction. PostgreSQL then rejects data modification in the session, except on `TEMPORARY` tables, which a read-only transaction may still change, and it does not stop functions with external effects such as `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` or advisory locks; least-privilege database credentials remain the real boundary. To detect an open transaction, the driver first runs a `SAVEPOINT` probe, which fails with SQLSTATE `25P01` (no active transaction) outside a transaction, so the server logs one `ERROR` for every read-only request that runs outside a transaction, including each editor auto-refresh tick.
+- The Columns view shows planner estimates, as fresh as the last `ANALYZE`. A column the planner has no statistics for shows every fact as unknown. It has no per-column sizes or codecs, no partitions view, no read estimate and no row profile.
 
 ## DDL Capabilities
 

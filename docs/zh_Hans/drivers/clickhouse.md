@@ -36,6 +36,7 @@
 - 危险查询检测使用共享的 `SqlLanguageService`（没有 ClickHouse 专属覆盖）：`ALTER TABLE ... DELETE WHERE ...` 与 `ALTER TABLE ... UPDATE ... WHERE ...` 已经会被识别为 `Alter`（任何以 `ALTER` 开头的语句都会被标记，无论其子命令是什么），`TRUNCATE`/`DROP` 也照常被识别。`KILL QUERY`/`KILL MUTATION` 与 `OPTIMIZE TABLE ... FINAL` 不会被标记 —— 它们既不删除行，也不改变表结构 —— 这与其他关系型驱动程序处理同类非破坏性管理语句的方式一致。
 - 写入权限探测：连接后，会检查服务器设置 `readonly` 以及 `system.grants` 中当前用户及其活动会话角色，以识别只读会话，或缺少 `INSERT`/`ALTER UPDATE`/`ALTER DELETE` 授权的用户；当服务器本来就会拒绝写入时，会把解析出的变更策略收紧为只读（无副作用；只能通过角色之角色间接获得的授权不会被解析，策略保持原样）。
 - 实例指标与检查器（`INSTANCE_METRICS`/`INSTANCE_INSPECTOR`）：从 `system.metrics`、`system.events` 与 `system.asynchronous_metrics` 精选的一组度量与计数器（活动查询、已跟踪内存、TCP/HTTP 连接数、已选取/已插入行数、操作系统可用内存），外加一个基于 `system.processes` 的运行中查询检查器，带「终止查询」行操作。该终止操作由构建目录时执行一次的 `KILL QUERY` 权限探测把关；除非探测成功，否则该操作保持隐藏 —— 因此无论探测因何失败，界面里都只是少了这个破坏性控件，而不会提供一个该会话执行不了的操作。
+- 表视图（`TableViewFeatures`）：表的“列”视图从 `system.columns`、`system.tables` 与 `system.parts` 读取每列的编解码器、磁盘占用与未压缩大小、压缩比、在排序键中的位置以及分区键，并读取表的引擎、各类键、TTL、活动 part、行数与大小。“分区”视图从 `system.parts` 列出每个分区的活动 part、行数、大小与键范围，最新的在前。“数据”视图增加列选择器（查询中只列出所选的列），以及基于 `EXPLAIN ESTIMATE` 的读取量估算。含子查询或在 `IN` 后接表名的过滤条件不做估算，因为规划它就会读取该子查询或表。**分析前 1 000 000 行**按需计算空值数量、近似去重计数（`uniq`）与取值范围，并记录到审计日志。参见[列与分区](../TABLE_VIEWS.md)。
 
 ### 类型处理
 
@@ -56,3 +57,5 @@
 - HTTP 响应体上限为 128 MiB。
 - 具名的 ClickHouse 时区不会在客户端解释。带偏移量的 ISO 时间戳会被准确处理；不带偏移量的时间戳则按 UTC 处理。
 - 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）会带上按请求生效的设置 `readonly = 2` 发送，因此 ClickHouse 会拒绝写入、DDL 以及修改 `readonly` 的尝试。该设置不限制读取能访问的范围；真正的边界仍是最小权限的数据库凭据。
+- 读取量估算是上限：`LIMIT` 可能让读取更早停止。其字节数按读取所触及的 granule 比例缩放每个被读取列的磁盘大小，因此只是近似值。
+- **分析前 1 000 000 行**读取的是服务器最先返回的行，而不是随机样本。在 MergeTree 表上，这些行按排序键排列，因此排序键前导列的范围可能比整张表窄。

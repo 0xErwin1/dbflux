@@ -94,6 +94,13 @@ fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> 
         let is_last = idx + 1 == path.len();
 
         if is_last {
+            // The Array arm indexes items[item_idx] after the
+            // item_idx >= items.len() early return, so the bound is
+            // enforced inside the arm.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the Array arm indexes items[item_idx] only after item_idx >= items.len() returned false"
+            )]
             match cursor {
                 Value::Document(fields) => {
                     fields.insert(segment.clone(), new_value);
@@ -176,6 +183,13 @@ impl DataGridPanel {
 
         let mut updated = false;
 
+        // doc_index() returned Some, so node_id.path has at least one element
+        // and [1..] is in range; the [1] index below is covered by the
+        // path.len() == 2 check.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "doc_index() returned Some, so node_id.path has a leading element and [1..] is in range"
+        )]
         if let Some(doc_col_idx) = self
             .result
             .columns
@@ -187,6 +201,10 @@ impl DataGridPanel {
         }
 
         if node_id.path.len() == 2 {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "path.len() == 2 is checked by the enclosing if, so index 1 exists"
+            )]
             let field_name = &node_id.path[1];
             if let Some(col_idx) = self
                 .result
@@ -278,6 +296,12 @@ impl DataGridPanel {
             DocumentFilter::new(serde_json::Value::Object(filter_obj))
         };
 
+        // doc_index() returned Some and path.len() < 2 returned early, so the
+        // path keeps its leading document segment and [1..] is in range.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "doc_index() returned Some and path.len() < 2 returned early, so [1..] is in range"
+        )]
         let field_path = node_id.path[1..].join(".");
         let parsed_json = parse_inline_document_value(new_value);
         let inline_value = json_to_inline_value(&parsed_json);
@@ -752,9 +776,35 @@ impl DataGridPanel {
                     |warning| report_error(warning, cx),
                 );
 
+                let grid_columns: Vec<String> = self
+                    .result
+                    .columns
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect();
+                let table_columns: Option<Vec<String>> =
+                    self.table_views.profile.as_ref().map(|profile| {
+                        profile
+                            .columns
+                            .iter()
+                            .map(|column| column.name.to_string())
+                            .collect()
+                    });
+                let returned_row = crud_result.returning_row.as_deref().and_then(|row| {
+                    super::table_views::returned_row_for_grid(
+                        row,
+                        &grid_columns,
+                        table_columns.as_deref(),
+                    )
+                });
+
                 table_state.update(cx, |state, cx| {
-                    if let Some(returning_row) = crud_result.returning_row {
-                        state.apply_returning_row(row_idx, &returning_row);
+                    match returned_row {
+                        Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
+                        None if crud_result.returning_row.is_some() => {
+                            state.keep_row_edits(row_idx)
+                        }
+                        None => {}
                     }
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();

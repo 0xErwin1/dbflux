@@ -187,6 +187,50 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "collection-builder-toggle",
             KeyboardPath::Menu("open-builder"),
         ),
+        // The Data / Columns / Partitions views of a table whose connection
+        // offers them.
+        (
+            "segmented-table-view-*",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        // The column picker of a table's Data view.
+        (
+            "column-projection-trigger",
+            KeyboardPath::Menu("column-picker"),
+        ),
+        (
+            "column-projection-row-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        ("column-projection-select-all", KeyboardPath::TabStop),
+        ("column-projection-select-none", KeyboardPath::TabStop),
+        ("column-projection-apply", KeyboardPath::TabStop),
+        // The Columns view of a table.
+        (
+            "column-profile-eye-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "column-profile-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "column-profile-sample",
+            KeyboardPath::Menu("sample-profile"),
+        ),
+        // The Partitions view of a table.
+        (
+            "partition-list-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
     ],
 };
 
@@ -637,6 +681,19 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
         (
             "segmented-delimited-view-*",
             KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        // The Columns view of the file.
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "column-profile-full-scan",
+            KeyboardPath::Menu("delimited-profile-full-scan"),
         ),
         (
             "segmented-delimited-text-mode-*",

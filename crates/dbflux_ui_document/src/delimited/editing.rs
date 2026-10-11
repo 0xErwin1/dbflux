@@ -1219,6 +1219,8 @@ impl DelimitedDocument {
     fn show_saved_file(&mut self, reopened: Result<OpenedFile, OpenError>, cx: &mut Context<Self>) {
         match reopened {
             Ok(saved) => {
+                self.stop_profiling_whole_file(cx);
+
                 if let Some(loaded) = self.loaded_mut() {
                     loaded.show_saved(saved, cx);
                 }

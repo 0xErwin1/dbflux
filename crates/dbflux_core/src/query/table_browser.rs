@@ -371,6 +371,11 @@ pub struct TableBrowseRequest {
     pub filter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_filter: Option<SemanticFilter>,
+    /// The columns to read, in the order to return them. Empty reads every
+    /// column. Honoured by connections that report
+    /// `TableViewFeatures::COLUMN_PROJECTION`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
 }
 
 impl TableBrowseRequest {
@@ -381,7 +386,27 @@ impl TableBrowseRequest {
             order_by: Vec::new(),
             filter: None,
             semantic_filter: None,
+            columns: Vec::new(),
         }
+    }
+
+    pub fn with_columns(mut self, columns: Vec<String>) -> Self {
+        self.columns = columns;
+        self
+    }
+
+    /// The select list for this request: `*` when no columns are chosen,
+    /// otherwise the chosen columns quoted with `dialect`.
+    pub fn select_list_with(&self, dialect: &dyn SqlDialect) -> String {
+        if self.columns.is_empty() {
+            return "*".to_string();
+        }
+
+        self.columns
+            .iter()
+            .map(|column| dialect.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub fn with_pagination(mut self, pagination: Pagination) -> Self {
@@ -406,7 +431,11 @@ impl TableBrowseRequest {
 
     /// Build the SQL query using a `SqlDialect` for identifier quoting.
     pub fn build_sql_with(&self, dialect: &dyn SqlDialect) -> String {
-        let mut sql = format!("SELECT * FROM {}", self.table.quoted_with(dialect));
+        let mut sql = format!(
+            "SELECT {} FROM {}",
+            self.select_list_with(dialect),
+            self.table.quoted_with(dialect)
+        );
 
         if let Some(ref filter) = self.filter {
             let trimmed = filter.trim();
@@ -669,6 +698,37 @@ mod tests {
             req.build_sql_with(&DefaultSqlDialect),
             "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" DESC LIMIT 100 OFFSET 0"
         );
+    }
+
+    #[test]
+    fn build_sql_reads_only_the_projected_columns_in_their_order() {
+        let req = TableBrowseRequest::new(TableRef::new("events"))
+            .with_columns(vec!["ts".into(), "user\"id".into()])
+            .with_filter("site_id = 12");
+
+        assert_eq!(
+            req.build_sql_with(&DefaultSqlDialect),
+            "SELECT \"ts\", \"user\"\"id\" FROM \"events\" WHERE site_id = 12 LIMIT 100 OFFSET 0"
+        );
+        assert_eq!(
+            TableBrowseRequest::new(TableRef::new("events")).select_list_with(&DefaultSqlDialect),
+            "*"
+        );
+    }
+
+    #[test]
+    fn a_request_without_columns_serializes_as_before_and_old_payloads_parse() {
+        let request = TableBrowseRequest::new(TableRef::new("events"));
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("columns").is_none());
+
+        let parsed: TableBrowseRequest = serde_json::from_value(json).unwrap();
+        assert!(parsed.columns.is_empty());
+
+        let projected = request.with_columns(vec!["ts".into()]);
+        let round_trip: TableBrowseRequest =
+            serde_json::from_value(serde_json::to_value(&projected).unwrap()).unwrap();
+        assert_eq!(round_trip.columns, vec!["ts".to_string()]);
     }
 
     #[test]
