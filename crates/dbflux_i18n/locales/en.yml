@@ -3246,6 +3246,7 @@ document:
       close_others: Close others
       close_right: Close to the right
     new: New tab
+    close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
 document_tree:
   search_placeholder: Search…
@@ -3383,6 +3384,7 @@ login:
     no_url: No login URL is available for this provider.
     no_url_provided: Login URL not provided by provider
 modals:
+  close: Close
   active_query:
     title: Active query running
     prompt: A query is still running on this connection. What would you like to do?

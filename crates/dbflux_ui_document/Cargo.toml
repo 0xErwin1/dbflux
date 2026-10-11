@@ -57,6 +57,7 @@ test-support = []
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_components = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 dbflux_driver_mssql = { workspace = true }
 dbflux_driver_mongodb = { workspace = true }
