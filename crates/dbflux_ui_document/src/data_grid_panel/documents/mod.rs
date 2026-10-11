@@ -692,7 +692,9 @@ impl DataGridPanel {
     /// Rebuilds the grid after the expansion or the step changed.
     fn reflatten_documents(&mut self, cx: &mut Context<Self>) {
         self.result = self.flattened_document_result();
-        // The rows were replaced; see set_result.
+        // Both orders describe the rows just replaced, not the new ones;
+        // keeping them would leave the grid indexing row positions that are
+        // gone.
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         self.grid_table.reload = super::TableReload::NewColumns;
@@ -1958,7 +1960,9 @@ impl DataGridPanel {
         }
 
         self.result = self.flattened_document_result();
-        // The rows were replaced; see set_result.
+        // Both orders describe the rows just replaced, not the new ones;
+        // keeping them would leave the grid indexing row positions that are
+        // gone.
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
 
