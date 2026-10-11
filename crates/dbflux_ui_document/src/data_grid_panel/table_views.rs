@@ -90,6 +90,9 @@ pub(super) struct TableViewsState {
     pub(super) projection: Option<ColumnProjection>,
     pub(super) estimate: Option<ReadEstimateBar>,
     estimate_generation: u64,
+    /// The last browse the Data grid ran, so a later estimate describes the
+    /// read that is on screen rather than a filter still being typed.
+    last_browse: Option<TableBrowseRequest>,
     /// The result columns and profile generation the header annotations were
     /// last computed for.
     annotated_for: Option<(u64, Vec<String>)>,
@@ -468,6 +471,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         self.sync_table_header_annotations(cx);
+        self.sync_columns_view_projection(cx);
 
         if self.table_views.picker.is_some()
             || !self
@@ -508,8 +512,29 @@ impl DataGridPanel {
     pub(super) fn shows_table_column_picker(&self) -> bool {
         self.table_views.tab == TableTab::Data
             && self.table_views.picker.is_some()
+            && self.table_projection_applies()
+    }
+
+    /// Whether a projection decides the columns the Data grid reads: the
+    /// connection honours one and no builder query chooses its own columns.
+    fn table_projection_applies(&self) -> bool {
+        self.table_views
+            .features
+            .contains(TableViewFeatures::COLUMN_PROJECTION)
             && self.builder.visual_select.is_none()
             && self.builder.current_visual_spec.is_none()
+    }
+
+    /// Offers the Columns view's column toggles only while a projection
+    /// applies, so it never shows a selection the grid is ignoring.
+    fn sync_columns_view_projection(&mut self, cx: &mut Context<Self>) {
+        let applies = self.table_projection_applies();
+
+        if let Some(view) = self.table_views.profile_view.clone()
+            && view.read(cx).projection_enabled() != applies
+        {
+            view.update(cx, |view, cx| view.set_projection_enabled(applies, cx));
+        }
     }
 
     /// Applies `projection` to the Data grid and reads the page again with
@@ -646,6 +671,8 @@ impl DataGridPanel {
             return;
         }
 
+        self.table_views.last_browse = Some(request.clone());
+
         let (Some(connection), Some(profile)) = (
             self.table_view_connection(cx),
             self.table_views.profile.clone(),
@@ -686,33 +713,12 @@ impl DataGridPanel {
         .detach();
     }
 
-    /// Estimates the read the current filter, projection and page make,
-    /// without running it.
+    /// Estimates the last read the Data grid ran again, now that a profile
+    /// is known. Nothing is estimated before the first read.
     fn refresh_table_read_estimate(&mut self, cx: &mut Context<Self>) {
-        let DataSource::Table {
-            pagination,
-            order_by,
-            ..
-        } = &self.source
-        else {
-            return;
-        };
-
-        let Some(table) = self.table_view_target(cx) else {
-            return;
-        };
-
-        let mut request = TableBrowseRequest::new(table)
-            .with_pagination(pagination.clone())
-            .with_order_by(order_by.clone())
-            .with_columns(self.table_projection_columns());
-
-        let filter = self.filter_bar.filter_input.read(cx).value().to_string();
-        if !filter.trim().is_empty() {
-            request = request.with_filter(filter);
+        if let Some(request) = self.table_views.last_browse.clone() {
+            self.estimate_table_read(request, cx);
         }
-
-        self.estimate_table_read(request, cx);
     }
 
     /// Whether the Data tab shows the read estimate strip.

@@ -104,7 +104,9 @@ data. Choosing every column goes back to `SELECT *`.
 - On an editable table, the primary key stays in the projection so each row
   can still be saved. A notice says when DBFlux added it back.
 - A builder query or a relational filter (`orders.status = 'paid'`) chooses its
-  own columns, so the picker is hidden while one of them drives the rows.
+  own columns, so the picker is hidden while one of them drives the rows. The
+  Columns view then hides its eyes too, and so does every Columns view on a
+  connection that cannot choose columns.
 - A change with unsaved edits pending is refused, as every reload is.
 
 ## The read estimate (ClickHouse)
@@ -112,8 +114,13 @@ data. Choosing every column goes back to `SELECT *`.
 A strip under the filter row says what the table read costs, for example
 "Reads up to ≈ 96 MiB · 1 of 13 parts, 512 of 224 600 granules, 4 194 304
 rows", with the columns that take most of it. It comes from `EXPLAIN
-ESTIMATE` over the same query the grid runs, so a filter on the sort or
-partition key shows its effect before you scroll further.
+ESTIMATE` over the query the grid last ran, so a filter on the sort or
+partition key shows its effect once you run it. A filter still being typed
+does not change the estimate.
+
+A filter with a subquery (`id IN (SELECT …)`) gets no estimate: ClickHouse
+runs the subquery while it plans the read, so the estimate would cost as much
+as the subquery.
 
 The figure is an upper bound. A `LIMIT` can stop the read sooner than the
 estimate says. The bytes are also an approximation: each read column's size

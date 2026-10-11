@@ -22,6 +22,7 @@ struct Calls {
     browses: Vec<TableBrowseRequest>,
     profiles: usize,
     partitions: usize,
+    estimates: Vec<TableBrowseRequest>,
 }
 
 struct StubColumnarConnection {
@@ -169,6 +170,26 @@ impl Connection for StubColumnarConnection {
             .map_err(|_| DbError::query_failed("poisoned"))?
             .profiles += 1;
         Ok(profile())
+    }
+
+    fn estimate_table_read(
+        &self,
+        request: &TableBrowseRequest,
+        _: &TableProfile,
+    ) -> Result<dbflux_core::ReadEstimate, DbError> {
+        self.calls
+            .lock()
+            .map_err(|_| DbError::query_failed("poisoned"))?
+            .estimates
+            .push(request.clone());
+
+        Ok(dbflux_core::ReadEstimate {
+            total_bytes: 300,
+            per_column: Vec::new(),
+            scopes: Vec::new(),
+            rows: Some(1_000),
+            exact: false,
+        })
     }
 
     fn table_partitions(&self, _: &TableRef) -> Result<TablePartitions, DbError> {
@@ -578,4 +599,103 @@ fn a_returned_row_follows_the_grid_columns_by_name() {
         None,
         "a row that cannot be matched to the grid columns is not used"
     );
+}
+
+#[gpui::test]
+fn the_read_estimate_follows_the_applied_filter_not_the_draft(cx: &mut TestAppContext) {
+    let (panel, calls, window) = open_table(all_features() | TableViewFeatures::READ_ESTIMATE, cx);
+
+    let last_estimate = |calls: &Arc<Mutex<Calls>>| {
+        calls
+            .lock()
+            .unwrap()
+            .estimates
+            .last()
+            .cloned()
+            .expect("an estimate")
+    };
+    assert_eq!(last_estimate(&calls).filter, None);
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.filter_bar.filter_input.update(cx, |input, cx| {
+                input.set_value("site_id = 7", window, cx);
+            });
+            panel.load_table_profile(cx);
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        last_estimate(&calls).filter,
+        None,
+        "a filter typed but not run is not estimated"
+    );
+
+    window.update(|window, app| panel.update(app, |panel, cx| panel.refresh(window, cx)));
+    window.run_until_parked();
+
+    assert_eq!(
+        last_estimate(&calls).filter.as_deref(),
+        Some("site_id = 7"),
+        "the estimate follows the filter once it runs"
+    );
+}
+
+#[gpui::test]
+fn the_columns_view_offers_a_projection_only_while_one_applies(cx: &mut TestAppContext) {
+    let (panel, _calls, window) = open_table(all_features(), cx);
+
+    let projection_enabled = |window: &mut VisualTestContext| {
+        window.update(|_, app| {
+            panel
+                .read(app)
+                .table_views
+                .profile_view
+                .as_ref()
+                .expect("a Columns view")
+                .read(app)
+                .projection_enabled()
+        })
+    };
+    assert!(projection_enabled(window));
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.builder.visual_select = Some(dbflux_core::SelectQuery {
+                sql: "SELECT path FROM events.page_views".to_string(),
+                params: Vec::new(),
+            });
+            panel.ensure_table_view_controls(window, cx);
+        })
+    });
+    window.run_until_parked();
+    assert!(
+        !projection_enabled(window),
+        "a builder query chooses its own columns"
+    );
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.builder.visual_select = None;
+            panel.ensure_table_view_controls(window, cx);
+        })
+    });
+    window.run_until_parked();
+    assert!(projection_enabled(window));
+}
+
+#[gpui::test]
+fn a_connection_that_cannot_project_shows_no_column_toggles(cx: &mut TestAppContext) {
+    let (panel, _calls, window) = open_table(TableViewFeatures::COLUMN_PROFILE, cx);
+
+    window.update(|_, app| {
+        let view = panel
+            .read(app)
+            .table_views
+            .profile_view
+            .clone()
+            .expect("a Columns view");
+        assert!(!view.read(app).projection_enabled());
+    });
 }
