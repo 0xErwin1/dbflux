@@ -405,6 +405,10 @@ impl CompletionProvider for SchemaCompletionProvider {
             return false;
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the len() != 1 early return above leaves new_text with exactly one byte"
+        )]
         let ch = new_text.as_bytes()[0] as char;
         ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'
     }

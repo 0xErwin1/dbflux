@@ -7,6 +7,10 @@ impl QueryBuilderPanel {
     /// Called from the render cycle when `pending_group_by_rebuild` is set.
     /// On any shrink, all per-row entities are cleared and rebuilt from scratch
     /// to avoid stale subscriptions pointing at shifted row indices.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "four reads: group_by_rows[i] in the loop to gb_target = group_by_rows.len(), and three aggregate_rows[i] in the loop to agg_target = aggregate_rows.len()"
+    )]
     pub fn rebuild_group_by_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let gb_target = self.group_by_rows.len();
         let agg_target = self.aggregate_rows.len();
@@ -590,6 +594,10 @@ impl QueryBuilderPanel {
     ///
     /// When the new function is `CountStar`, clears the column (CountStar
     /// requires no column reference). Otherwise preserves the column.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index >= self.aggregate_rows.len() returns early, so the six aggregate_rows[index] accesses below are in bounds"
+    )]
     pub fn set_aggregate_function(
         &mut self,
         index: usize,
@@ -615,6 +623,10 @@ impl QueryBuilderPanel {
     }
 
     /// Updates the column reference of the aggregate row at `index`.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index >= self.aggregate_rows.len() returns early, so the five aggregate_rows[index] accesses below are in bounds"
+    )]
     pub fn set_aggregate_column(
         &mut self,
         index: usize,

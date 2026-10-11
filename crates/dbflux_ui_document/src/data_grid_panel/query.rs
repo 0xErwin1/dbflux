@@ -513,6 +513,9 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.builder.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
+                            // The rows were replaced; see set_result.
+                            panel.grid_table.local_sort_state = None;
+                            panel.grid_table.original_row_order = None;
                             panel.refresh.state = GridState::Ready;
 
                             let binding = panel.compute_builder_binding(

@@ -230,6 +230,12 @@ fn format_table(result: &QueryResult) -> Vec<ConsoleLine> {
             .collect();
     }
 
+    // visible is built from 0..result.columns.len() with one optional index
+    // filtered out, so every element is a valid column index.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "visible holds indices from 0..result.columns.len(), so *index is within result.columns"
+    )]
     let header: Vec<String> = visible
         .iter()
         .map(|index| clip(&result.columns[*index].name))

@@ -13,7 +13,7 @@ use dbflux_ui_base::user_error::UserFacingError;
 /// Used as the `pending_mutation_modal` field on `DataGridPanel`. The render cycle
 /// reads this via `.take()` to open the appropriate modal entity.
 #[derive(Debug)]
-pub enum PendingMutationModal {
+pub(crate) enum PendingMutationModal {
     /// Light confirmation (E-1): no type-to-confirm, no opt-in checkbox.
     Light(MutationConfirmRequest),
     /// Hard confirmation (E-2/E-3/E-4/E-6): danger variant with TypeToConfirm + opt-in.
@@ -29,7 +29,7 @@ pub enum PendingMutationModal {
 ///
 /// Returns `(column_names, rows)` on success, or an empty result on failure or timeout.
 /// The deadline is 2 seconds per spec DR-9.
-pub fn fetch_sample_rows(
+pub(crate) fn fetch_sample_rows(
     connection: Arc<dyn Connection>,
     spec: &VisualMutationSpec,
     report: impl FnMut(UserFacingError),
@@ -98,7 +98,7 @@ fn sample_rows_from_result(
 ///
 /// Used to determine whether a DELETE needs a hard confirmation modal or can use the
 /// lighter variant (spec DR-9.1 vs DR-9.2).
-pub fn filter_is_pk_unique(filter: &Option<FilterNode>, pk_cols: &[&str]) -> bool {
+pub(crate) fn filter_is_pk_unique(filter: &Option<FilterNode>, pk_cols: &[&str]) -> bool {
     use dbflux_core::{BoolOp, Comparator, FilterNode, PredicateValue};
 
     if pk_cols.is_empty() {
@@ -159,7 +159,7 @@ pub fn filter_is_pk_unique(filter: &Option<FilterNode>, pk_cols: &[&str]) -> boo
 /// Selects `Light` (spec DR-9.1) when the spec is a DELETE and the filter uniquely
 /// identifies a single row by primary key (all PK columns with equality predicates)
 /// and `est_rows == Some(1)`. Uses `Hard` for all other cases.
-pub fn build_pending_modal(
+pub(crate) fn build_pending_modal(
     spec: &VisualMutationSpec,
     sql_preview: String,
     est_rows: Option<u64>,
@@ -211,7 +211,7 @@ pub fn build_pending_modal(
 ///
 /// Exposed here so it can be used without importing `Value`'s `Display` impl.
 #[allow(dead_code)]
-pub fn format_value(value: &Value) -> String {
+pub(crate) fn format_value(value: &Value) -> String {
     format!("{}", value)
 }
 
@@ -504,6 +504,10 @@ mod tests {
             fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                 Ok(())
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn execute(
                 &self,
                 req: &dbflux_core::QueryRequest,
@@ -571,6 +575,10 @@ mod tests {
             fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                 Ok(())
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn execute(
                 &self,
                 req: &dbflux_core::QueryRequest,
@@ -668,6 +676,10 @@ mod tests {
             fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                 Ok(())
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn execute(
                 &self,
                 req: &dbflux_core::QueryRequest,

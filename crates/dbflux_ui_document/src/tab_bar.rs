@@ -188,6 +188,10 @@ impl TabBar {
 }
 
 /// Returns the next non-separator index after `current`, or `current` if at the end.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "items[idx] is reached only while the loop condition holds idx < items.len()"
+)]
 pub fn next_actionable_index(current: usize, items: &[MenuItem]) -> usize {
     let mut idx = current + 1;
     while idx < items.len() {
@@ -200,6 +204,15 @@ pub fn next_actionable_index(current: usize, items: &[MenuItem]) -> usize {
 }
 
 /// Returns the previous non-separator index before `current`, or `current` if at the start.
+// current is the context menu's selected_index: 0 on open, then written by
+// next/prev_actionable_index and by context_menu_hover_at with a rendered row
+// index, so it stays below items.len(). This helper does not re-check that
+// bound; current == items.len() still works, a larger value panics at
+// items[idx].
+#[expect(
+    clippy::indexing_slicing,
+    reason = "current is the menu's selected_index: 0 on open, then a next/prev_actionable_index result or a context_menu_hover_at index taken from the rendered build_tab_menu_items() rows, all below items.len(); this helper does not re-check the upper bound"
+)]
 pub fn prev_actionable_index(current: usize, items: &[MenuItem]) -> usize {
     if current == 0 {
         return current;

@@ -296,6 +296,14 @@ impl KeyValueDocument {
     /// Alt+L / Alt+H: the next or previous mode of the open expiry editor,
     /// otherwise the next or previous key type filter (All first), wrapping.
     /// Returns false when neither is offered.
+    // next comes from step_index, a modular step over the list length, so it
+    // is a valid index into modes / options; both lists are non-empty
+    // (ExpiryMode::ALL is a const array, options always holds the None
+    // entry).
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is a modular step over the list length and both lists are non-empty (ExpiryMode::ALL is a const array; options always holds the None entry)"
+    )]
     fn step_panel_tab(
         &mut self,
         forward: bool,

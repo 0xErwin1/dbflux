@@ -18,16 +18,16 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-pub use model::{AccumulatorOp, ProblemKind};
-pub use panel::{DocumentBuilderEvent, DocumentBuilderPanel, SavedQueryEntry};
-pub use sync::SlotWrite;
-pub use values::ValueProblem;
+pub(crate) use model::{AccumulatorOp, ProblemKind};
+pub(crate) use panel::{DocumentBuilderEvent, DocumentBuilderPanel, SavedQueryEntry};
+pub(crate) use sync::SlotWrite;
+pub(crate) use values::ValueProblem;
 
 use gpui::{AnyView, Pixels, px};
 
 /// Width of the builder rail: wider than the other inspectors, since a
 /// condition row holds a field, an operator and a typed value.
-pub const RAIL_WIDTH: Pixels = px(540.0);
+pub(crate) const RAIL_WIDTH: Pixels = px(540.0);
 
 /// The width the inspector rail needs for `content`, when it needs more than
 /// its default.

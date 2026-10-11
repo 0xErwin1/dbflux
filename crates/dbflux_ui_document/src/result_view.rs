@@ -11,7 +11,7 @@ pub use dbflux_components::result_view::ResultViewMode;
 /// still become the default group. Past this the chart starts ungrouped, so a
 /// high-cardinality text field does not open as a wall of lines. A group picked
 /// in the axis bar has no such limit.
-pub const DEFAULT_GROUP_MAX_VALUES: usize = 12;
+pub(crate) const DEFAULT_GROUP_MAX_VALUES: usize = 12;
 
 /// Derive the default `BindingSpec` for a TimeSeries auto-selected chart.
 ///
@@ -24,7 +24,7 @@ pub const DEFAULT_GROUP_MAX_VALUES: usize = 12;
 /// - Group: the first `Text` column (covers tag-style grouping), when it holds
 ///   at most `DEFAULT_GROUP_MAX_VALUES` distinct values in `result`
 /// - Filter / Aggregation: both default to `None`
-pub fn default_bindings_for_time_series(
+pub(crate) fn default_bindings_for_time_series(
     time_col: usize,
     numeric_cols: &[usize],
     result: &QueryResult,
@@ -79,7 +79,7 @@ fn distinct_values_within(result: &QueryResult, column: usize, limit: usize) -> 
 /// Auto-select fires only when detection is `Ok` (has both a Timestamp column
 /// and at least one numeric column). Returning `false` leaves the default
 /// `Table` mode in place.
-pub fn should_auto_select_chart_for_time_series(detection: &ChartDetection) -> bool {
+pub(crate) fn should_auto_select_chart_for_time_series(detection: &ChartDetection) -> bool {
     matches!(detection, ChartDetection::Ok { .. })
 }
 
@@ -92,7 +92,7 @@ pub fn should_auto_select_chart_for_time_series(detection: &ChartDetection) -> b
 /// - Later results of a time-series collection (refresh, paging) keep the view
 ///   the user picked, so an auto-refresh never flips Data back to Chart.
 /// - Everything else falls back to the default view for the result shape.
-pub fn result_view_mode_for_fresh_result(
+pub(crate) fn result_view_mode_for_fresh_result(
     current: ResultViewMode,
     shape: &QueryResultShape,
     detection: &ChartDetection,

@@ -271,6 +271,10 @@ impl AuditDocument {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next_pos is taken modulo navigable.len() after the empty check"
+    )]
     fn navigate_menu_down(&mut self, cx: &mut Context<Self>) {
         let Some(row) = self.context_menu.as_ref().map(|menu| menu.row) else {
             return;
@@ -301,6 +305,10 @@ impl AuditDocument {
         cx.notify();
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "prev_pos is either current_pos - 1 or navigable.len() - 1 after the empty check"
+    )]
     fn navigate_menu_up(&mut self, cx: &mut Context<Self>) {
         let Some(row) = self.context_menu.as_ref().map(|menu| menu.row) else {
             return;
@@ -381,6 +389,10 @@ impl AuditDocument {
 
     /// The keys of the open export menu: the menu keys move and pick a
     /// format, Escape or the export shortcut close it.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "export_menu_selected starts at 0 and step_export_menu wraps it modulo EXPORT_FORMATS.len(); EXPORT_FORMATS is a two-entry const array"
+    )]
     fn dispatch_export_menu_command(&mut self, cmd: Command, cx: &mut Context<Self>) -> bool {
         match cmd {
             Command::MenuDown | Command::SelectNext => self.step_export_menu(true, cx),

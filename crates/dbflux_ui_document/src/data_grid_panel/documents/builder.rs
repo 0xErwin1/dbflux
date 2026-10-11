@@ -982,6 +982,10 @@ mod tests {
             })
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn browse_collection(
             &self,
             request: &dbflux_core::CollectionBrowseRequest,

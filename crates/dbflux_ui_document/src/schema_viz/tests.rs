@@ -909,6 +909,10 @@ impl MetadataSource for FakeSource {
         &self.metadata
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn table_details(
         &self,
         _database: &str,
@@ -926,6 +930,10 @@ impl MetadataSource for FakeSource {
             .ok_or_else(|| DbError::NotSupported(format!("no table {}", table)))
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn schema_columns(
         &self,
         _database: &str,
@@ -942,6 +950,10 @@ impl MetadataSource for FakeSource {
             .ok_or_else(|| DbError::NotSupported("no bulk column path".to_owned()))
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn schema_indexes(
         &self,
         _database: &str,
@@ -962,6 +974,10 @@ impl MetadataSource for FakeSource {
             .unwrap_or_default())
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn schema_foreign_keys(
         &self,
         _database: &str,
@@ -982,6 +998,10 @@ impl MetadataSource for FakeSource {
             .unwrap_or_default())
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+    )]
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
         self.calls
             .lock()

@@ -103,7 +103,7 @@ pub(crate) struct DocumentFieldCompletionProvider {
 }
 
 impl DocumentFieldCompletionProvider {
-    pub fn new(paths: Rc<RefCell<Vec<String>>>) -> Self {
+    pub(crate) fn new(paths: Rc<RefCell<Vec<String>>>) -> Self {
         Self { paths }
     }
 }

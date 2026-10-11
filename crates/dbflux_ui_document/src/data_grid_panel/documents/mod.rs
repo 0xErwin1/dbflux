@@ -104,7 +104,7 @@ pub(super) struct QueryHistoryEntry {
 
 impl QueryHistoryEntry {
     /// One-line description for the history menu.
-    pub fn summary(&self) -> String {
+    pub(crate) fn summary(&self) -> String {
         let mut parts = Vec::new();
 
         for (keyword, text) in [
@@ -264,7 +264,7 @@ impl VimHost for DataGridPanel {
 }
 
 impl CollectionViewState {
-    pub fn new(window: &mut Window, cx: &mut Context<DataGridPanel>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<DataGridPanel>) -> Self {
         let field_paths = Rc::new(RefCell::new(Vec::new()));
 
         let make_slot =
@@ -386,7 +386,7 @@ impl CollectionViewState {
         }
     }
 
-    pub fn current_step(&self) -> Option<&StepTarget> {
+    pub(crate) fn current_step(&self) -> Option<&StepTarget> {
         self.steps.last()
     }
 }
@@ -692,6 +692,9 @@ impl DataGridPanel {
     /// Rebuilds the grid after the expansion or the step changed.
     fn reflatten_documents(&mut self, cx: &mut Context<Self>) {
         self.result = self.flattened_document_result();
+        // The rows were replaced; see set_result.
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.grid_table.reload = super::TableReload::NewColumns;
         self.rebuild_table(None, cx);
         cx.notify();
@@ -957,6 +960,10 @@ impl DataGridPanel {
     /// Alt+L / Alt+H: the next or previous view of the collection
     /// (Documents, Schema, Aggregate), wrapping. Returns false when the
     /// connection offers a single view.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "tabs.len() >= 2 after the early return and next is a modular step over tabs.len()"
+    )]
     pub(super) fn step_collection_tab(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
         let tabs = self.collection_tabs(cx);
         if tabs.len() < 2 {
@@ -1951,6 +1958,9 @@ impl DataGridPanel {
         }
 
         self.result = self.flattened_document_result();
+        // The rows were replaced; see set_result.
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
 
         // The grid takes the new model in place: a full rebuild would also
         // rebuild the tree and drop its expansion.

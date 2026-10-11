@@ -2175,6 +2175,10 @@ impl DataGridPanel {
         use dbflux_components::primitives::Text;
         use gpui_component::Sizable;
 
+        #[expect(
+            clippy::expect_used,
+            reason = "the sole call site renders this overlay only when pending_collection_chart_save.is_some(); this function itself does not re-check"
+        )]
         let name_input = self
             .pending_collection_chart_save
             .as_ref()

@@ -152,6 +152,13 @@ impl ExportMenuEntry {
 
 /// The export menu row one step from `from`, wrapping at both ends and
 /// passing over disabled rows. Returns `from` when no other row is enabled.
+// index starts at from.min(count - 1) and only moves by modular steps over
+// count, so entries[index] stays below entries.len(); count > 0 after the
+// early return.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "index starts at from.min(count - 1) and moves only by modular steps over count, with count > 0 after the early return"
+)]
 pub(super) fn step_export_selection(
     entries: &[ExportMenuEntry],
     from: usize,
@@ -317,6 +324,14 @@ impl DataGridPanel {
                 .as_ref()
                 .and_then(|cid| {
                     let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
+                    // NodeId::root(), child() and parent() all keep the
+                    // leading document index segment, and no crate builds a
+                    // NodeId from its public path field, so the
+                    // slice after it is in range.
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "cursor ids come from NodeId::root()/child()/parent(), which all keep the leading document index segment, so path has at least one element and [1..] is in range"
+                    )]
                     let path: Vec<String> = cid.path[1..].to_vec();
                     let path_opt = if path.is_empty() { None } else { Some(path) };
                     Some((path_opt, Some(node.value.clone())))
@@ -2444,6 +2459,10 @@ impl DataGridPanel {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 if let Some(insert_data) = state.edit_buffer().get_pending_insert_by_idx(insert_idx)
                 {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "col < insert_data.len() is checked directly above"
+                    )]
                     if col < insert_data.len() {
                         insert_data[col].edit_text()
                     } else {

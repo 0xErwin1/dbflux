@@ -1345,6 +1345,10 @@ impl SchemaDiffDocument {
         };
         let (connection, event_sink, connection_id, driver_id, policy, read_only_reason) = {
             let state = self.app_state.read(cx);
+            #[expect(
+                clippy::expect_used,
+                reason = "preparation_context above returned Some, which requires connections() to contain profile_id; both reads happen in the same synchronous call"
+            )]
             let connected = state
                 .connections()
                 .get(&self.profile_id)
@@ -2462,6 +2466,11 @@ impl SchemaDiffDocument {
         .into_any_element()
     }
 
+    // group_index comes from 0..self.groups.len() at the only call site.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the only call site passes index from 0..self.groups.len()"
+    )]
     fn render_group(
         &self,
         group_index: usize,

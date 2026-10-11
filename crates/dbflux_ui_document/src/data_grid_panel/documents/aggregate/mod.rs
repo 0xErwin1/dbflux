@@ -242,7 +242,7 @@ pub(in crate::data_grid_panel) struct AggregateViewState {
 }
 
 impl AggregateViewState {
-    pub fn new(window: &mut Window, cx: &mut Context<DataGridPanel>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<DataGridPanel>) -> Self {
         let pipeline_editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("json")
@@ -296,12 +296,12 @@ impl AggregateViewState {
     }
 
     /// Number of result documents, `None` before the first run.
-    pub fn result_count(&self) -> Option<usize> {
+    pub(crate) fn result_count(&self) -> Option<usize> {
         self.results.as_ref().map(|results| results.documents.len())
     }
 
     /// Whether the last run was cut at [`AGGREGATE_RESULT_LIMIT`].
-    pub fn truncated(&self) -> bool {
+    pub(crate) fn truncated(&self) -> bool {
         self.results
             .as_ref()
             .is_some_and(|results| results.raw.rows_truncated())
@@ -1130,6 +1130,10 @@ mod panel_tests {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test-only stub connection: the aggregate tests that construct it stay on dialect-independent paths"
+        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             unimplemented!("the aggregate tests never reach a dialect")
         }
