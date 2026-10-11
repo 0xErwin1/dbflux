@@ -139,6 +139,43 @@ DBFlux는 하나의 변경에서 두 산출물을 함께 관리합니다: 이 �
 - 보안 수정: `fix(security): ...`를 사용하거나 `Security: ...` 트레일러를
   추가해 Security 섹션에 실리게 합니다.
 
+## 키보드 커버리지
+
+DBFlux의 모든 동작은 키보드로 도달할 수 있어야 합니다: 표면의 키 컨텍스트에 바인딩된 명령, 또는 키보드로 여는 메뉴(패널 동작 메뉴, 표나 레일의 `m` 메뉴)의 항목입니다. 마우스 전용 동작이 들어오는 것을 두 가지 검사가 막습니다:
+
+- `python3 scripts/lint.py mouse-down`은 `scripts/mouse_down_allowlist.txt`에 없는 왼쪽 버튼 `on_mouse_down` 핸들러를 거부합니다. 활성화에는 `on_click`을 사용합니다.
+- 키보드 커버리지 테스트는 각 표면을 렌더링하고, 클릭으로 동작을 실행하는 모든 요소를 그 표면의 커버리지 레지스트리(`dbflux_ui_base::keyboard_coverage`)와 대조합니다. 레지스트리에 없는 요소는 테스트를 실패시키고, 실패 메시지가 고치는 방법을 알려줍니다.
+
+상호작용 요소를 추가할 때:
+
+1. 안정적인 `.id(...)`를 주고 `.on_click(...)`으로 활성화합니다.
+2. 그 동작에 키보드 경로를 줍니다: 표면의 키 컨텍스트에 바인딩된 `Command`, 또는 같은 동작을 실행하는 패널 동작이나 `m` 메뉴의 항목입니다. 대화 상자 안에서 포커스를 받는 컨트롤은 Tab으로 도달합니다.
+3. 그 요소를 그리는 표면의 레지스트리에 id를 등록합니다: 문서는 `crates/dbflux_ui_document/src/keyboard_coverage.rs`, 설정 창과 연결 관리자 창은 `crates/dbflux_ui_windows/src/keyboard_coverage.rs`, 워크스페이스 셸은 `crates/dbflux_ui/src/ui/views/workspace/keyboard_coverage_tests.rs`, 대화 상자는 그 자체의 테스트 모듈입니다. `KeyboardPath::MouseOnly("이유")`는 창 크롬과 포인터 제스처에만 사용합니다. `gap:`으로 시작하는 이유는 빠진 키보드 경로를 기록해 계속 보이게 합니다.
+
+커버리지 테스트를 실행합니다:
+
+```bash
+cargo nextest run --workspace _covered
+```
+
+워크스페이스 전체 실행은 UI 크레이트를 앱이 배포되는 feature로 컴파일하므로 MCP 표면과 훅의 Lua 모드도 검사합니다. 헬퍼 자체의 테스트는 `cargo nextest run -p dbflux_ui_base keyboard_coverage`로 실행합니다.
+
+## 접근성 이름
+
+모든 컨트롤은 보조 기술과 UI 자동화가 식별할 수 있어야 합니다: 접근성 이름, 그리고 그에 따르는 역할과 상태입니다. 스스로 텍스트를 그리지 않는 컨트롤 — 아이콘만 있는 버튼, 손으로 그린 체크박스 — 은 이름 없는 컨트롤로 읽히고, 화면 낭독기는 서로 구분할 수 없습니다.
+
+클릭 가능한 요소는 `aria_label`이 있으면 그것으로, 없으면 자기가 그리는 텍스트로 이름이 정해집니다. 후자는 내용에서 이름을 가져오는 역할(버튼, 체크박스, 라디오 버튼, 스위치, 링크, 메뉴 항목, 탭)에 적용됩니다. 컨트롤의 이름을 정하는 가장 작은 수정을 고르세요:
+
+- `Button`은 자기 label로, 아이콘만 있는 버튼은 tooltip(다른 것을 설정하지 않았다면 그 label)으로 이름이 정해집니다. 둘 다 버튼의 동작을 말해 주지 못할 때만 `.aria_label(...)`을 추가합니다.
+- `Checkbox`는 `.label(...)`(상자 옆에 그리는 텍스트) 또는 `.aria_label(...)`(주변 행이 그리는 텍스트)으로 이름이 정해집니다.
+- 손으로 그린 컨트롤은 스스로 의미를 선언합니다: 상자는 `.role(Role::CheckBox)`, `.aria_label(...)`, `.aria_toggled(...)`; 켜짐/꺼짐 토글은 `.role(Role::Switch)`와 `.aria_toggled(...)`; 펼치는 화살표는 `.aria_expanded(...)`.
+
+사용자가 그 컨트롤 옆에서 보는 텍스트로 이름을 붙여, 읽히는 이름과 보이는 라벨이 일치하게 하세요. 표면마다 렌더링 테스트가 그것을 증명합니다: `dbflux_components::accessibility::FrameCapture`로 프레임을 캡처하고 `accessible_name`, `accessibility_node`, `unnamed_clickables`로 검사합니다.
+
+```bash
+cargo nextest run -p dbflux_components accessibility
+```
+
 ## 이슈
 
 이슈를 열기 전에:
