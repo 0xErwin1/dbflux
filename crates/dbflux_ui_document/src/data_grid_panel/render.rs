@@ -3489,9 +3489,11 @@ impl DataGridPanel {
                 .child(label)
         };
 
-        let pager_arrow = |id: &'static str, icon: AppIcon, enabled: bool| {
+        let pager_arrow = |id: &'static str, icon: AppIcon, name: String, enabled: bool| {
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(name)
                 .flex()
                 .items_center()
                 .text_color(muted)
@@ -3520,28 +3522,34 @@ impl DataGridPanel {
                     .gap(ResultMetrics::PAGER_GAP)
                     .font_family(AppFonts::MONO)
                     .child(
-                        pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
+                        pager_arrow(
+                            "prev-page",
+                            AppIcon::ChevronLeft,
+                            dbflux_i18n::t!("document.results.actions.results_prev_page"),
                             can_prev,
-                            |arrow| {
-                                arrow.on_click(cx.listener(|this, _, window, cx| {
-                                    this.go_to_prev_page(window, cx);
-                                }))
-                            },
-                        ),
+                        )
+                        .when(can_prev, |arrow| {
+                            arrow.on_click(cx.listener(|this, _, window, cx| {
+                                this.go_to_prev_page(window, cx);
+                            }))
+                        }),
                     )
                     .child(div().text_color(strong).child(page.to_string()))
                     .when_some(total_pages, |pager, total| {
                         pager.child(format!("/ {}", total))
                     })
                     .child(
-                        pager_arrow("next-page", AppIcon::ChevronRight, can_next).when(
+                        pager_arrow(
+                            "next-page",
+                            AppIcon::ChevronRight,
+                            dbflux_i18n::t!("document.results.actions.results_next_page"),
                             can_next,
-                            |arrow| {
-                                arrow.on_click(cx.listener(|this, _, window, cx| {
-                                    this.go_to_next_page(window, cx);
-                                }))
-                            },
-                        ),
+                        )
+                        .when(can_next, |arrow| {
+                            arrow.on_click(cx.listener(|this, _, window, cx| {
+                                this.go_to_next_page(window, cx);
+                            }))
+                        }),
                     )
             });
 

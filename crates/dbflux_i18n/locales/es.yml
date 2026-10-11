@@ -2903,6 +2903,7 @@ document:
       close_others: Cerrar las demás
       close_right: Cerrar a la derecha
     new: Nueva pestaña
+    close_named: "Cerrar %{title}"
     unsaved_changes: Cambios sin guardar
 document_tree:
   search_placeholder: Buscar…
@@ -3040,6 +3041,7 @@ login:
     no_url: No hay URL de inicio de sesión disponible para este proveedor.
     no_url_provided: El proveedor no facilitó la URL de inicio de sesión
 modals:
+  close: Cerrar
   active_query:
     title: Consulta en ejecución
     prompt: Todavía hay una consulta ejecutándose en esta conexión. ¿Qué quieres hacer?

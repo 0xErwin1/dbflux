@@ -486,7 +486,14 @@ pub(super) fn render_tree_item(
                         .flex()
                         .justify_center()
                         .when_some(chevron_icon, |el, icon| {
-                            el.cursor_pointer()
+                            // The arrow draws only an icon, so the row's own
+                            // text names it, and its expanded state says which
+                            // way it folds.
+                            let chevron_name = label_text.clone();
+                            el.role(Role::Button)
+                                .aria_label(chevron_name)
+                                .aria_expanded(is_expanded)
+                                .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })

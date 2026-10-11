@@ -291,9 +291,13 @@ pub(crate) fn footer_item(
 }
 
 /// One arrow of a footer pager; disabled arrows fade and ignore clicks.
+///
+/// The arrow draws only an icon, so `name` is what the arrow is called for
+/// assistive technology and UI automation.
 pub(crate) fn pager_arrow(
     id: &'static str,
     icon: AppIcon,
+    name: impl Into<SharedString>,
     enabled: bool,
     cx: &App,
 ) -> Stateful<Div> {
@@ -302,6 +306,8 @@ pub(crate) fn pager_arrow(
 
     div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(name.into())
         .flex()
         .items_center()
         .when(!enabled, |arrow| arrow.opacity(Fields::DISABLED_OPACITY))

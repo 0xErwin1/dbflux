@@ -2903,6 +2903,7 @@ document:
       close_others: 关闭其他
       close_right: 关闭右侧
     new: 新建标签页
+    close_named: "关闭 %{title}"
     unsaved_changes: 未保存的更改
 document_tree:
   search_placeholder: 搜索…
@@ -3040,6 +3041,7 @@ login:
     no_url: 此提供程序没有可用的登录 URL。
     no_url_provided: 提供程序未提供登录 URL
 modals:
+  close: 关闭
   active_query:
     title: 有查询正在执行
     prompt: 此连接上仍有查询在执行。您想怎么做？

@@ -31,6 +31,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_components = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 rusqlite.workspace = true
 serde_json.workspace = true

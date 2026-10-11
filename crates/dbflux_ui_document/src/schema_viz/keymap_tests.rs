@@ -59,7 +59,9 @@ fn table(name: &str) -> TableInfo {
 
 /// Opens a diagram of two tables as the window's root view, with keyboard
 /// focus on the diagram viewport.
-fn focused_diagram(cx: &mut TestAppContext) -> (Entity<SchemaVizDocument>, &mut VisualTestContext) {
+pub(super) fn focused_diagram(
+    cx: &mut TestAppContext,
+) -> (Entity<SchemaVizDocument>, &mut VisualTestContext) {
     cx.update(gpui_component::init);
     cx.update(theme::init);
     cx.update(init_keymap);

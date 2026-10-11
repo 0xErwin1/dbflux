@@ -1547,22 +1547,30 @@ impl AuditDocument {
             footer_pager(
                 self.pagination.current_page() as u32,
                 Some(total_pages),
-                pager_arrow("audit-prev-page", AppIcon::ChevronLeft, can_prev, cx).when(
+                pager_arrow(
+                    "audit-prev-page",
+                    AppIcon::ChevronLeft,
+                    dbflux_i18n::t!("document.results.actions.results_prev_page"),
                     can_prev,
-                    |arrow| {
-                        arrow.on_click(cx.listener(|this, _, _, cx| {
-                            this.go_to_prev_page(cx);
-                        }))
-                    },
-                ),
-                pager_arrow("audit-next-page", AppIcon::ChevronRight, can_next, cx).when(
+                    cx,
+                )
+                .when(can_prev, |arrow| {
+                    arrow.on_click(cx.listener(|this, _, _, cx| {
+                        this.go_to_prev_page(cx);
+                    }))
+                }),
+                pager_arrow(
+                    "audit-next-page",
+                    AppIcon::ChevronRight,
+                    dbflux_i18n::t!("document.results.actions.results_next_page"),
                     can_next,
-                    |arrow| {
-                        arrow.on_click(cx.listener(|this, _, _, cx| {
-                            this.go_to_next_page(cx);
-                        }))
-                    },
-                ),
+                    cx,
+                )
+                .when(can_next, |arrow| {
+                    arrow.on_click(cx.listener(|this, _, _, cx| {
+                        this.go_to_next_page(cx);
+                    }))
+                }),
                 cx,
             )
         });
