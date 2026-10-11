@@ -929,6 +929,9 @@ impl CodeDocument {
             Dropdown::new("sql-auto-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
+                .aria_label(dbflux_i18n::t!(
+                    "document.code.toolbar.auto_refresh_interval"
+                ))
                 .chevron_trigger(ButtonVariant::Secondary)
         });
 
