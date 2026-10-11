@@ -444,6 +444,8 @@ connection_manager:
       bundle_file: Archivo del paquete
       bundle_encrypted: El paquete está cifrado
       passphrase: Frase
+      show_passphrase: Mostrar frase de contraseña
+      hide_passphrase: Ocultar frase de contraseña
     hint:
       no_native_picker: No hay selector de archivos nativo en este sistema — escribe o pega la ruta del paquete arriba.
       external_refs: Las referencias a valores externos se mantienen igual
@@ -4367,6 +4369,8 @@ shutdown:
   failed: Error al cerrar
 
 sidebar:
+  row:
+    actions: "Acciones para %{name}"
   header:
     new_dashboard: "Nuevo dashboard"
     add: "Agregar"

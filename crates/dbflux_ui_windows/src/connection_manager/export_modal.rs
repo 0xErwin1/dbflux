@@ -1332,6 +1332,11 @@ impl ExportBundleModal {
                 .ghost()
                 .icon(eye_icon)
                 .icon_only()
+                .aria_label(if self.show_passphrase {
+                    dbflux_i18n::t!("connection_manager.import.field.hide_passphrase")
+                } else {
+                    dbflux_i18n::t!("connection_manager.import.field.show_passphrase")
+                })
                 .on_click({
                     let entity = cx.entity().clone();
                     move |_event, _window, cx| {
@@ -1520,6 +1525,8 @@ mod tests {
         "connection_manager.import.filter.all",
         "connection_manager.import.action.cancel",
         "connection_manager.import.field.passphrase",
+        "connection_manager.import.field.show_passphrase",
+        "connection_manager.import.field.hide_passphrase",
     ];
 
     #[test]
@@ -1723,6 +1730,46 @@ mod keyboard_tests {
 
         assert_eq!(validation_error(window, &modal), None);
         assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// The eye draws only an icon, so it names the action a click performs —
+    /// the opposite of the state the icon shows.
+    #[gpui::test]
+    fn the_passphrase_eye_names_the_action_it_performs(cx: &mut TestAppContext) {
+        use dbflux_components::accessibility::{FrameCapture, accessible_name};
+
+        let (modal, _outside, window, _events) = open_modal(cx);
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.force_plaintext = false;
+                cx.notify();
+            });
+        });
+
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        let show = dbflux_i18n::t!("connection_manager.import.field.show_passphrase").to_string();
+        let hide = dbflux_i18n::t!("connection_manager.import.field.hide_passphrase").to_string();
+
+        assert_eq!(
+            accessible_name(&frame, "export-passphrase-eye"),
+            Some(show),
+            "a masked passphrase offers to reveal it"
+        );
+
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.show_passphrase = true;
+                cx.notify();
+            });
+        });
+        let frame = capture.frame(window);
+
+        assert_eq!(
+            accessible_name(&frame, "export-passphrase-eye"),
+            Some(hide),
+            "a revealed passphrase offers to hide it"
+        );
     }
 
     #[gpui::test]

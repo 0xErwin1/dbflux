@@ -12,7 +12,7 @@ use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
     Anchor, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    IntoElement, ParentElement, Pixels, Render, Role, ScrollHandle, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
@@ -149,6 +149,7 @@ pub struct Dropdown {
     highlighted_index: Option<usize>,
     disabled: bool,
     placeholder: SharedString,
+    aria_label: Option<SharedString>,
     focus_ring_color: Option<Hsla>,
     focus_ring_visible: bool,
     compact_trigger: bool,
@@ -186,6 +187,7 @@ impl Dropdown {
             highlighted_index: None,
             disabled: false,
             placeholder: dbflux_i18n::t!("controls.dropdown.placeholder").into(),
+            aria_label: None,
             focus_ring_color: None,
             focus_ring_visible: false,
             compact_trigger: false,
@@ -209,6 +211,17 @@ impl Dropdown {
 
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
+        self
+    }
+
+    /// Names the control for assistive technology, overriding the name it takes
+    /// from its placeholder.
+    ///
+    /// A dropdown whose trigger draws only an icon (the chevron variant) has no
+    /// text of its own to be named by, so it needs this; one that draws its
+    /// label is already named by that text.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 
@@ -760,6 +773,12 @@ impl Dropdown {
 
         let mut trigger = div()
             .id("dropdown-trigger")
+            .role(Role::Button)
+            // The trigger is named by the text it draws (the selection, or the
+            // placeholder), unless the owner names it explicitly: a chevron
+            // trigger draws nothing, and its value alone rarely says what the
+            // control does.
+            .aria_label(self.aria_label.clone().unwrap_or_else(|| label.clone()))
             .h(Heights::BUTTON)
             .flex()
             .items_center()
@@ -1339,5 +1358,109 @@ mod tests {
         assert!(!en.is_empty() && en != "controls.dropdown.placeholder");
         assert!(!es.is_empty() && es != "controls.dropdown.placeholder");
         assert_ne!(en, es);
+    }
+
+    /// A trigger that draws only a chevron has no text of its own, so it needs
+    /// the name the owner sets; anything else is named by its placeholder.
+    mod naming {
+        use crate::accessibility::{FrameCapture, accessible_name};
+        use crate::controls::{ButtonVariant, Dropdown, DropdownItem};
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+            TestAppContext, Window, div,
+        };
+
+        struct Owner {
+            dropdown: Entity<Dropdown>,
+        }
+
+        impl Render for Owner {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div()
+                    .w_full()
+                    .child(div().w(gpui::px(200.0)).child(self.dropdown.clone()))
+            }
+        }
+
+        /// Renders one dropdown under the id `naming-dropdown` and returns the
+        /// name of its trigger.
+        fn trigger_name(
+            build: impl FnOnce() -> Dropdown + 'static,
+            cx: &mut TestAppContext,
+        ) -> Option<String> {
+            cx.update(crate::theme::init);
+
+            let capture = std::sync::Arc::new(FrameCapture::default());
+            let capture_for_window = capture.clone();
+            let (_, window) = cx.add_window_view(move |window, cx| {
+                window.observe_frames(&capture_for_window);
+                window.refresh();
+
+                Owner {
+                    dropdown: cx.new(|_cx| build()),
+                }
+            });
+            window.run_until_parked();
+            let frame = capture.frame(window);
+
+            // A node keeps its own element id only while that id names it
+            // alone, so the trigger may be filed under its path in the control.
+            let id = frame
+                .nodes()
+                .map(|(_, node)| node.id().to_string())
+                .find(|id| id == "dropdown-trigger" || id.ends_with(".dropdown-trigger"))?;
+
+            accessible_name(&frame, &id)
+        }
+
+        #[gpui::test]
+        fn an_icon_only_trigger_is_named_by_its_aria_label(cx: &mut TestAppContext) {
+            let name = trigger_name(
+                || {
+                    Dropdown::new("naming-dropdown")
+                        .items(vec![DropdownItem::new("Manual")])
+                        .aria_label("Auto-refresh interval")
+                        .chevron_trigger(ButtonVariant::Secondary)
+                },
+                cx,
+            );
+
+            assert_eq!(name.as_deref(), Some("Auto-refresh interval"));
+        }
+
+        #[gpui::test]
+        fn a_trigger_without_an_explicit_name_takes_the_placeholder(cx: &mut TestAppContext) {
+            let placeholder = dbflux_i18n::t!("controls.dropdown.placeholder").to_string();
+            let name = trigger_name(
+                || {
+                    Dropdown::new("naming-dropdown")
+                        .items(vec![DropdownItem::new("Manual")])
+                        .chevron_trigger(ButtonVariant::Secondary)
+                },
+                cx,
+            );
+
+            assert_eq!(name, Some(placeholder));
+        }
+
+        /// Once something is selected, the trigger draws that value, and the
+        /// name follows the text on screen rather than the placeholder.
+        #[gpui::test]
+        fn a_trigger_with_a_selection_is_named_by_the_value_it_shows(cx: &mut TestAppContext) {
+            let name = trigger_name(
+                || {
+                    Dropdown::new("naming-dropdown")
+                        .items(vec![DropdownItem::new("Manual"), DropdownItem::new("30s")])
+                        .selected_index(Some(1))
+                },
+                cx,
+            );
+
+            assert_eq!(name.as_deref(), Some("30s"));
+        }
     }
 }
