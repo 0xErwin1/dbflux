@@ -117,8 +117,6 @@ pub fn unnamed_clickables(frame: &AccessibilityFrame) -> Vec<String> {
 ///
 /// A test of a surface whose controls all carry a name asserts on this; the
 /// returned ids prove the surface it meant to check was drawn.
-// Attribute on the function: `assert_clickables_named` is a check helper:
-// failing the check is its contract, and the panic carries the full list.
 #[expect(
     clippy::panic,
     reason = "assert_clickables_named is a check helper: failing is its contract and the panic carries the whole list of unnamed elements"

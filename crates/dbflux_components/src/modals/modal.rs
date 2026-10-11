@@ -792,7 +792,7 @@ mod tests {
     type Log = Arc<Mutex<Vec<&'static str>>>;
 
     /// The dialog's close button draws only an icon, so it announces the
-    /// action it performs (issue #807).
+    /// action it performs.
     #[gpui::test]
     fn the_close_button_is_named(cx: &mut TestAppContext) {
         let setup = setup(cx, true);

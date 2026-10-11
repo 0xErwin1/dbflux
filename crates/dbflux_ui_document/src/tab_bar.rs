@@ -757,7 +757,7 @@ mod tests {
         }
 
         // The close button draws only an icon, so it is named after the tab it
-        // closes (issue #807).
+        // closes.
         let tab_title =
             dbflux_components::accessibility::accessible_name(&frame, &format!("tab-{}", active.0))
                 .expect("the tab is named by its title");

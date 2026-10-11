@@ -9,7 +9,7 @@ use gpui::{Entity, Role, TestAppContext, Toggled};
 
 /// The Types and Indexes switches of the diagram toolbar are independent
 /// toggles that draw their text beside a thumb, so each one is a switch named
-/// by that text and carrying its own on/off state (issue #807).
+/// by that text and carrying its own on/off state.
 #[gpui::test]
 fn the_toolbar_toggles_are_named_switches_with_their_state(cx: &mut TestAppContext) {
     let (document, window) = focused_diagram(cx);

@@ -3930,7 +3930,7 @@ mod tests {
     }
 
     /// The rail's selection boxes are checkboxes named after the change they
-    /// apply and carrying the selection state (issue #807).
+    /// apply and carrying the selection state.
     #[gpui::test]
     fn the_selection_checkboxes_are_named_checkboxes(cx: &mut TestAppContext) {
         use crate::keyboard_test_support::{host_document, init_keyboard_runtime};

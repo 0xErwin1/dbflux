@@ -1134,7 +1134,7 @@ mod tests {
         }
 
         /// The two options of the dialog draw their text beside the box, so
-        /// each box is named by that text (issue #807).
+        /// each box is named by that text.
         #[gpui::test]
         fn the_dialog_options_are_named_by_the_text_beside_them(cx: &mut TestAppContext) {
             let (_preview, window) = open_preview(cx);

@@ -879,7 +879,7 @@ mod tests {
         }
 
         /// The rows of the open list and the boxes they draw are named after
-        /// their item, so a screen reader can tell them apart (issue #807).
+        /// their item, so a screen reader can tell them apart.
         #[gpui::test]
         fn every_control_of_the_open_list_is_named(cx: &mut TestAppContext) {
             let (capture, owner, window) = setup(cx);
