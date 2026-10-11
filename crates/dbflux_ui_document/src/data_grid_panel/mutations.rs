@@ -752,9 +752,18 @@ impl DataGridPanel {
                     |warning| report_error(warning, cx),
                 );
 
+                let column_count = self.result.columns.len();
+
                 table_state.update(cx, |state, cx| {
-                    if let Some(returning_row) = crud_result.returning_row {
-                        state.apply_returning_row(row_idx, &returning_row);
+                    // Drivers return the whole table row (`RETURNING *` or a
+                    // re-read), which a grid showing only some of the table's
+                    // columns cannot place by position.
+                    match crud_result.returning_row {
+                        Some(returning_row) if returning_row.len() == column_count => {
+                            state.apply_returning_row(row_idx, &returning_row)
+                        }
+                        Some(_) => state.keep_row_edits(row_idx),
+                        None => {}
                     }
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();

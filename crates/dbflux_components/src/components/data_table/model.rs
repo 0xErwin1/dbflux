@@ -111,6 +111,26 @@ impl TableModel {
             rows: new_rows,
         }
     }
+
+    /// The model with row `row_idx` showing the cells `edits` overrides in
+    /// it, and every other cell unchanged. The cells are copied as they are,
+    /// so values a `Value` cannot hold, such as binary sizes, survive.
+    pub fn with_row_edits(&self, row_idx: usize, edits: &EditBuffer) -> Self {
+        let mut new_rows = self.rows.clone();
+
+        if let Some(row) = new_rows.get_mut(row_idx) {
+            for (col, cell) in row.cells.iter_mut().enumerate() {
+                if edits.is_cell_dirty(row_idx, col) {
+                    *cell = edits.get_cell(row_idx, col, &CellValue::null()).clone();
+                }
+            }
+        }
+
+        Self {
+            columns: self.columns.clone(),
+            rows: new_rows,
+        }
+    }
 }
 
 impl From<&QueryResult> for TableModel {
@@ -2235,5 +2255,30 @@ mod tests {
         assert!(buffer.redo());
         assert!(buffer.row_state(0).is_dirty());
         assert_eq!(buffer.dirty_rows(), vec![0]);
+    }
+
+    #[test]
+    fn keeping_row_edits_changes_only_the_edited_cells() {
+        let mut model = keyed_model(&[1, 2]);
+        model.rows[0].cells.push(CellValue::bytes(16));
+
+        let mut buffer = EditBuffer::new();
+        buffer.set_cell(0, 1, CellValue::text("edited"));
+        buffer.set_cell(1, 1, CellValue::text("other row"));
+
+        let kept = model.with_row_edits(0, &buffer);
+
+        assert_eq!(kept.cell(0, 1).unwrap().display_text().as_ref(), "edited");
+        assert!(
+            kept.cell(0, 2)
+                .unwrap()
+                .holds_same_value(&CellValue::bytes(16)),
+            "an unedited binary cell keeps its value"
+        );
+        assert_eq!(
+            kept.cell(1, 1).unwrap().display_text().as_ref(),
+            "original",
+            "another row's edits stay pending"
+        );
     }
 }
