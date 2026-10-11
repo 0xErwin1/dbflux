@@ -5840,9 +5840,6 @@ mod tests {
         assert_eq!(source.total_rows(), None);
     }
 
-    /// The table view's keys go through the keymap: the table's own keys
-    /// move the selection inside the table, and a key of the Results panel
-    /// (Ctrl+Space, the row inspector) reaches the grid as a command.
     #[gpui::test]
     fn local_sort_after_a_refresh_with_more_rows_keeps_every_row(cx: &mut TestAppContext) {
         use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
@@ -5899,6 +5896,9 @@ mod tests {
         assert_eq!(row_count, 3);
     }
 
+    /// The table view's keys go through the keymap: the table's own keys
+    /// move the selection inside the table, and a key of the Results panel
+    /// (Ctrl+Space, the row inspector) reaches the grid as a command.
     #[gpui::test]
     fn table_keys_move_the_selection_and_open_the_row_inspector(cx: &mut TestAppContext) {
         use crate::keyboard_test_support::{host_document, init_keyboard_runtime};

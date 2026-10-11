@@ -301,9 +301,11 @@ impl DataGridPanel {
         // Update original_row_order to map new order -> original.
         // orig[i] indexes original_row_order, which apply_local_sort builds in
         // step with result.rows. set_result resets the order and the sort
-        // state whenever it replaces the rows, so the order always matches the
-        // current rows; only a refresh returning more rows could have overrun
-        // orig here, while fewer rows affected the restore path.
+        // state whenever it replaces the rows, so the order matches the rows
+        // for the paths that go through it; only a refresh returning more rows
+        // could have overrun orig here, while fewer rows affected the restore
+        // path. The document-grid rebuild paths in documents/mod.rs assign
+        // `result` directly and do not reset the order.
         #[expect(
             clippy::indexing_slicing,
             reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; set_result resets the order and sort state whenever it replaces the rows"
