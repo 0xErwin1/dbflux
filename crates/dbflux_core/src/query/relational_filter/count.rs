@@ -30,9 +30,37 @@ pub fn count_query_from_spec(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -
     }
 }
 
+/// Wraps a single read statement typed by the user in a `COUNT(*)` outer
+/// query, so the total row count is known without fetching the rows.
+///
+/// Statement terminators are dropped wherever they sit, including before a
+/// trailing comment, and the statement sits on its own lines so a trailing
+/// `--` comment cannot swallow the closing parenthesis.
+pub fn count_query_from_sql(sql: &str) -> String {
+    let statement = crate::driver::capabilities::sql_statement_ranges(sql)
+        .into_iter()
+        .filter_map(|range| sql.get(range).map(str::trim))
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("SELECT COUNT(*) FROM (\n{statement}\n) AS dbflux_count_subq")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_query_from_sql_strips_semicolons_and_isolates_comments() {
+        assert_eq!(
+            count_query_from_sql("  SELECT * FROM users -- all ;\n ; \n"),
+            "SELECT COUNT(*) FROM (\nSELECT * FROM users -- all ;\n) AS dbflux_count_subq"
+        );
+        assert_eq!(
+            count_query_from_sql("SELECT * FROM users; -- note"),
+            "SELECT COUNT(*) FROM (\nSELECT * FROM users\n-- note\n) AS dbflux_count_subq"
+        );
+    }
     use crate::query::visual_query::{
         Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue, Predicate,
         PredicateValue, Projection, SourceTable, VisualQuerySpec,
