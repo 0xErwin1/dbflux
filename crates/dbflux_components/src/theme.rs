@@ -632,7 +632,6 @@ fn apply_palette(palette: &Palette, style: AppStyle, cx: &mut App) {
     theme.accordion = palette.panel;
     theme.title_bar = palette.background;
     theme.title_bar_border = palette.line;
-    theme.tiles = palette.panel;
     theme.overlay = palette.overlay;
 
     theme.link = palette.info;

@@ -105,6 +105,54 @@ fn tab_moves_through_the_new_key_dialog(cx: &mut TestAppContext) {
     );
 }
 
+/// Tab stays in the Add member dialog too: the value panel's Add row opens
+/// the dialog on the command path, and the document answers Tab there.
+#[gpui::test]
+fn tab_moves_through_the_add_member_dialog(cx: &mut TestAppContext) {
+    use super::KeyValueFocusMode;
+    use super::add_member_modal::AddMemberFocus;
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, ValueRepr};
+
+    let (_host, document, window) = open(cx);
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("user:1");
+            entry.key_type = Some(KeyType::Hash);
+            document.keys = vec![entry.clone()];
+            document.rebuild_key_rows();
+            document.selected_index = Some(0);
+            document.selected_value = Some(KeyGetResult {
+                entry,
+                value: Vec::new(),
+                repr: ValueRepr::Structured,
+                load_state: KeyLoadState::Loaded,
+            });
+            document.focus_mode = KeyValueFocusMode::ValuePanel;
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    keys(window, "o");
+    let modal = window.update(|_, cx| document.read(cx).add_member_modal.clone());
+    assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).active_context(cx)),
+        ContextId::FormNavigation
+    );
+    assert_eq!(
+        window.update(|_, cx| modal.read(cx).form_focus()),
+        AddMemberFocus::RowField(0)
+    );
+
+    keys(window, "tab");
+    assert_eq!(
+        window.update(|_, cx| modal.read(cx).form_focus()),
+        AddMemberFocus::AddRow,
+        "Tab moves to the next field"
+    );
+}
+
 /// The key menu ends with the toolbar's layout switch and auto-refresh
 /// interval, and running the layout entry switches the key list.
 #[gpui::test]

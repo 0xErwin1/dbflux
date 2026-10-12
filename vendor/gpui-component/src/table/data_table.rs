@@ -1,5 +1,5 @@
 use crate::{
-    ActiveTheme, Sizable, Size,
+    ActiveTheme, Sizable, Size, ThemeStyled as _,
     actions::{
         Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown,
         SelectPageUp, SelectPrevColumn, SelectUp,
@@ -8,7 +8,7 @@ use crate::{
 };
 use gpui::{
     App, Edges, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement,
-    RenderOnce, Styled, Window, div, prelude::FluentBuilder,
+    Pixels, RenderOnce, Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_base::TestSupportExt as _;
 
@@ -37,6 +37,8 @@ pub(super) struct TableOptions {
     pub(super) bordered: bool,
     /// The cell size of the table.
     pub(super) size: Size,
+    /// Height of each header row. `None` uses [`Size::table_row_height`].
+    pub(super) header_row_height: Option<Pixels>,
 }
 
 impl Default for TableOptions {
@@ -46,6 +48,7 @@ impl Default for TableOptions {
             stripe: false,
             bordered: true,
             size: Size::default(),
+            header_row_height: None,
         }
     }
 }
@@ -117,6 +120,17 @@ where
         self
     }
 
+    /// Set the height of each header row.
+    ///
+    /// Column-group rows use the same height, so the whole header is this
+    /// height times the number of header rows. Body rows keep the height from
+    /// [`Size::table_row_height`]. When this is unset, header rows use that
+    /// same height.
+    pub fn header_row_height(mut self, height: impl Into<Pixels>) -> Self {
+        self.options.header_row_height = Some(height.into());
+        self
+    }
+
     /// Set scrollbar visibility.
     pub fn scrollbar_visible(mut self, vertical: bool, horizontal: bool) -> Self {
         self.options.scrollbar_visible = Edges {
@@ -171,5 +185,11 @@ where
                     .border_color(cx.theme().border)
             })
             .child(self.state)
+            // Clicking a row focuses the table too, so only keyboard focus
+            // shows it, as CSS `:focus-visible` does.
+            .when(
+                focus_handle.is_focused(window) && window.last_input_was_keyboard(),
+                |this| this.focus_ring_style(window, cx),
+            )
     }
 }

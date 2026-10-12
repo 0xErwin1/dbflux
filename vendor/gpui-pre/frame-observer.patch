@@ -1,17 +1,17 @@
 diff --git a/crates/gpui/src/element.rs b/crates/gpui/src/element.rs
-index 9860370..1c363e1 100644
+index cedf304..892ed38 100644
 --- a/crates/gpui/src/element.rs
 +++ b/crates/gpui/src/element.rs
-@@ -33,7 +33,7 @@
- 
+@@ -35,7 +35,7 @@
+ use crate::InspectorElementPath;
  use crate::{
      A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
 -    FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
 +    FocusHandle, FrameNodeData, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
      util::FluentBuilder, window::with_element_arena,
  };
- use derive_more::{Deref, DerefMut};
-@@ -119,6 +119,20 @@ pub trait Element: 'static + IntoElement {
+ use std::{
+@@ -120,6 +120,20 @@ pub trait Element: 'static + IntoElement {
      /// See the [accessibility guide](crate::_accessibility) for an overview.
      fn write_a11y_info(&self, _node: &mut accesskit::Node) {}
  
@@ -32,7 +32,7 @@ index 9860370..1c363e1 100644
      /// Add synthetic child nodes to an [`Element`] that has an
      /// [`.id()`][Element::id] and a [`.role()`][Element::a11y_role].
      ///
-@@ -362,6 +376,14 @@ impl<E: Element> Drawable<E> {
+@@ -424,6 +438,14 @@ impl<E: Element> Drawable<E> {
                  }
  
                  let bounds = window.layout_bounds(layout_id);
@@ -47,7 +47,7 @@ index 9860370..1c363e1 100644
                  let mut pushed_a11y_node = false;
                  if window.a11y.is_active() {
                      if let Some(global_id) = global_id.as_ref() {
-@@ -409,6 +431,7 @@ impl<E: Element> Drawable<E> {
+@@ -471,6 +493,7 @@ impl<E: Element> Drawable<E> {
                      window,
                      cx,
                  );
@@ -56,7 +56,7 @@ index 9860370..1c363e1 100644
  
                  if pushed_a11y_node {
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index f40a4cf..533b600 100644
+index afaf5be..db480f3 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -18,13 +18,14 @@
@@ -89,7 +89,7 @@ index f40a4cf..533b600 100644
      fmt::Debug,
      marker::PhantomData,
      mem,
-@@ -1432,6 +1434,48 @@ pub trait StatefulInteractiveElement: InteractiveElement {
+@@ -1435,6 +1437,48 @@ pub trait StatefulInteractiveElement: InteractiveElement {
          self
      }
  
@@ -138,7 +138,7 @@ index f40a4cf..533b600 100644
      /// Set the minimum numeric value for this element.
      fn aria_min_numeric_value(mut self, value: f64) -> Self {
          self.interactivity().aria.min_numeric_value = Some(value);
-@@ -1903,12 +1947,25 @@ impl Element for Div {
+@@ -1908,12 +1952,25 @@ impl Element for Div {
          self.interactivity
              .override_role
              .filter(|role| *role != accesskit::Role::GenericContainer)
@@ -164,7 +164,7 @@ index f40a4cf..533b600 100644
      fn a11y_synthetic_children(
          &mut self,
          _prepaint: &mut Self::PrepaintState,
-@@ -2120,6 +2177,9 @@ pub(crate) struct AriaProperties {
+@@ -2125,6 +2182,9 @@ pub(crate) struct AriaProperties {
      pub(crate) column_index: Option<usize>,
      pub(crate) row_count: Option<usize>,
      pub(crate) column_count: Option<usize>,
@@ -174,7 +174,7 @@ index f40a4cf..533b600 100644
  }
  
  /// The interactivity struct. Powers all of the general-purpose
-@@ -2191,6 +2251,9 @@ pub struct Interactivity {
+@@ -2196,6 +2256,9 @@ pub struct Interactivity {
      pub(crate) report_active_descendant_focus: bool,
      pub(crate) override_role: Option<accesskit::Role>,
      pub(crate) aria: AriaProperties,
@@ -184,7 +184,7 @@ index f40a4cf..533b600 100644
  
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
-@@ -3598,6 +3661,15 @@ impl Interactivity {
+@@ -3602,6 +3665,15 @@ impl Interactivity {
          if let Some(count) = self.aria.column_count {
              node.set_column_count(count);
          }
@@ -200,7 +200,7 @@ index f40a4cf..533b600 100644
          if !self.click_listeners.is_empty() {
              node.add_action(accesskit::Action::Click);
          }
-@@ -3608,6 +3680,43 @@ impl Interactivity {
+@@ -3612,6 +3684,43 @@ impl Interactivity {
              node.add_action(*action);
          }
      }
@@ -244,7 +244,7 @@ index f40a4cf..533b600 100644
  }
  
  /// The per-frame state of an interactive element. Used for tracking stateful interactions like clicks
-@@ -4123,6 +4232,14 @@ where
+@@ -4127,6 +4236,14 @@ where
          self.element.write_a11y_info(node);
      }
  
@@ -260,7 +260,7 @@ index f40a4cf..533b600 100644
          &mut self,
          prepaint: &mut Self::PrepaintState,
 diff --git a/crates/gpui/src/elements/text.rs b/crates/gpui/src/elements/text.rs
-index b3e5a35..d35ca41 100644
+index d1896ad..0e73d03 100644
 --- a/crates/gpui/src/elements/text.rs
 +++ b/crates/gpui/src/elements/text.rs
 @@ -198,6 +198,17 @@ impl Element for Text {
@@ -314,7 +314,7 @@ index b3e5a35..d35ca41 100644
      fn request_layout(
          &mut self,
          _id: Option<&GlobalElementId>,
-@@ -1077,6 +1100,17 @@ impl Element for InteractiveText {
+@@ -1110,6 +1133,17 @@ impl Element for InteractiveText {
          node.set_value(self.text.text.to_string());
      }
  
@@ -805,7 +805,7 @@ index 0000000..78448c4
 +    }
 +}
 diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
-index 51585b5..e63074e 100644
+index d4da5aa..3f61fc9 100644
 --- a/crates/gpui/src/gpui.rs
 +++ b/crates/gpui/src/gpui.rs
 @@ -21,6 +21,7 @@ mod debug_overlay;
@@ -816,7 +816,7 @@ index 51585b5..e63074e 100644
  mod platform_scheduler;
  pub(crate) use platform_scheduler::PlatformScheduler;
  mod geometry;
-@@ -102,6 +103,7 @@ pub use debug_overlay::*;
+@@ -110,6 +111,7 @@ pub use debug_overlay::*;
  pub use element::*;
  pub use elements::*;
  pub use executor::*;
@@ -825,10 +825,10 @@ index 51585b5..e63074e 100644
  pub use gestures::*;
  pub use global::*;
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 2c7fbb0..5565f14 100644
+index c08d964..0e67b0d 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -1644,6 +1644,28 @@ impl PlatformInputHandler {
+@@ -2091,6 +2091,28 @@ impl PlatformInputHandler {
          self.handler.replace_text_in_range(None, input, window, cx);
      }
  
@@ -858,19 +858,21 @@ index 2c7fbb0..5565f14 100644
          marked_range: Option<Range<usize>>,
          selection: &UTF16Selection,
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index b0cda7f..15dddcf 100644
+index 3b07284..8e5a8dc 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -9,7 +9,7 @@ use crate::{
+@@ -9,8 +9,8 @@ use crate::{
      AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
--    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId,
-+    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId, FrameBuilder, FrameCheckpoint, FrameObserver, FrameParent, Global, GlobalElementId,
-     GlyphId, GpuSpecs,
-     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
-     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-@@ -350,6 +350,10 @@ impl WindowInvalidator {
+-    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId,
+-    Global, GlobalElementId, GlyphId, GpuSpecs,
++    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId, FrameBuilder,
++    FrameCheckpoint, FrameObserver, FrameParent, Global, GlobalElementId, GlyphId, GpuSpecs,
+     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
+     Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
+     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
+@@ -362,6 +362,10 @@ impl WindowInvalidator {
          self.inner.borrow().draw_phase == DrawPhase::None
      }
  
@@ -881,15 +883,15 @@ index b0cda7f..15dddcf 100644
      #[track_caller]
      pub fn debug_assert_paint(&self) {
          debug_assert!(
-@@ -1055,6 +1059,7 @@ pub(crate) struct DeferredDraw {
+@@ -1114,6 +1118,7 @@ pub(crate) struct DeferredDraw {
      current_view: EntityId,
      priority: usize,
      parent_node: DispatchNodeId,
 +    observed_parent: Option<FrameParent>,
-     element_id_stack: SmallVec<[ElementId; 32]>,
+     element_id_stack: ElementIdStack,
      text_style_stack: Vec<TextStyleRefinement>,
      content_mask: Option<ContentMask<Pixels>>,
-@@ -1088,6 +1093,7 @@ pub(crate) struct Frame {
+@@ -1149,6 +1154,7 @@ pub(crate) struct Frame {
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
      pub(crate) tab_stops: TabStopMap,
@@ -897,7 +899,7 @@ index b0cda7f..15dddcf 100644
  }
  
  #[derive(Clone, Default)]
-@@ -1099,6 +1105,7 @@ pub(crate) struct PrepaintStateIndex {
+@@ -1160,6 +1166,7 @@ pub(crate) struct PrepaintStateIndex {
      dispatch_tree_index: usize,
      accessed_element_states_index: usize,
      line_layout_index: LineLayoutIndex,
@@ -905,7 +907,7 @@ index b0cda7f..15dddcf 100644
  }
  
  #[derive(Clone, Default)]
-@@ -1139,6 +1146,7 @@ impl Frame {
+@@ -1210,6 +1217,7 @@ impl Frame {
              #[cfg(any(feature = "inspector", debug_assertions))]
              inspector_hitboxes: FxHashMap::default(),
              tab_stops: TabStopMap::default(),
@@ -913,7 +915,7 @@ index b0cda7f..15dddcf 100644
          }
      }
  
-@@ -1156,6 +1164,7 @@ impl Frame {
+@@ -1227,6 +1235,7 @@ impl Frame {
          self.window_control_hitboxes.clear();
          self.deferred_draws.clear();
          self.tab_stops.clear();
@@ -921,7 +923,7 @@ index b0cda7f..15dddcf 100644
          self.focus = None;
  
          #[cfg(any(test, feature = "test-support"))]
-@@ -1300,12 +1309,13 @@ pub struct Window {
+@@ -1373,12 +1382,13 @@ pub struct Window {
      pub(crate) next_tooltip_id: TooltipId,
      pub(crate) tooltip_bounds: Option<TooltipBounds>,
      pub(crate) next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
@@ -936,7 +938,7 @@ index b0cda7f..15dddcf 100644
      mouse_hit_test: HitTest,
      modifiers: Modifiers,
      capslock: Capslock,
-@@ -1352,6 +1362,95 @@ pub struct Window {
+@@ -1425,6 +1435,95 @@ pub struct Window {
      pub(crate) a11y: A11y,
  }
  
@@ -1032,7 +1034,7 @@ index b0cda7f..15dddcf 100644
  #[derive(Clone, Debug, Default)]
  struct ModifierState {
      modifiers: Modifiers,
-@@ -2051,7 +2150,9 @@ impl Window {
+@@ -2162,7 +2261,9 @@ impl Window {
              let mut cx = cx.to_async();
              Box::new(move |event| {
                  handle
@@ -1043,7 +1045,7 @@ index b0cda7f..15dddcf 100644
                      .log_err()
                      .unwrap_or(DispatchEventResult::default())
              })
-@@ -2159,6 +2260,7 @@ impl Window {
+@@ -2271,6 +2372,7 @@ impl Window {
              rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
              next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
              next_frame_callbacks,
@@ -1051,7 +1053,7 @@ index b0cda7f..15dddcf 100644
              next_hitbox_id: HitboxId(0),
              next_tooltip_id: TooltipId::default(),
              tooltip_bounds: None,
-@@ -2167,7 +2269,7 @@ impl Window {
+@@ -2279,7 +2381,7 @@ impl Window {
              focus_lost_listeners: SubscriberSet::new(),
              focus_lost_path: SmallVec::new(),
              default_prevented: true,
@@ -1060,7 +1062,7 @@ index b0cda7f..15dddcf 100644
              mouse_hit_test: HitTest::default(),
              modifiers,
              capslock,
-@@ -2373,6 +2475,76 @@ impl Window {
+@@ -2501,6 +2603,76 @@ impl Window {
          }
      }
  
@@ -1137,17 +1139,17 @@ index b0cda7f..15dddcf 100644
      /// Close this window.
      pub fn remove_window(&mut self) {
          self.removed = true;
-@@ -2789,7 +2961,8 @@ impl Window {
+@@ -2912,7 +3084,8 @@ impl Window {
+     pub fn bounds_changed(&mut self, cx: &mut App) {
          self.scale_factor = self.platform_window.scale_factor();
          self.viewport_size = self.platform_window.content_size();
-         self.display_id = self.platform_window.display().map(|display| display.id());
 -        self.mouse_position = self.platform_window.mouse_position();
 +        self.pointer
 +            .move_to(self.platform_window.mouse_position(), InputSource::Platform);
  
          self.refresh();
  
-@@ -3201,7 +3374,7 @@ impl Window {
+@@ -3481,7 +3654,7 @@ impl Window {
  
      /// The position of the mouse relative to the window.
      pub fn mouse_position(&self) -> Point<Pixels> {
@@ -1156,7 +1158,7 @@ index b0cda7f..15dddcf 100644
      }
  
      /// Captures the pointer for the given hitbox. While captured, all mouse move and mouse up
-@@ -3509,7 +3682,14 @@ impl Window {
+@@ -3791,7 +3964,14 @@ impl Window {
          self.invalidator.set_phase(DrawPhase::Prepaint);
          self.tooltip_bounds.take();
  
@@ -1172,7 +1174,7 @@ index b0cda7f..15dddcf 100644
          if self.a11y.is_active() {
              self.a11y.begin_frame();
          }
-@@ -3572,7 +3752,31 @@ impl Window {
+@@ -3858,7 +4038,31 @@ impl Window {
              tooltip_element = self.prepaint_tooltip(cx);
          }
  
@@ -1204,10 +1206,10 @@ index b0cda7f..15dddcf 100644
 +        }
  
          // Now actually paint the elements.
-         self.invalidator.set_phase(DrawPhase::Paint);
-@@ -3594,31 +3798,22 @@ impl Window {
-         #[cfg(any(feature = "inspector", debug_assertions))]
-         self.paint_inspector_hitbox(cx);
+         #[cfg(feature = "profiler")]
+@@ -3890,31 +4094,22 @@ impl Window {
+                 paint: Instant::now().duration_since(paint_start),
+             });
  
 -        // a11y may have been activated/deactivated halfway through the frame
 -        let a11y_active_start_of_frame = self.a11y.is_active();
@@ -1252,7 +1254,7 @@ index b0cda7f..15dddcf 100644
          }
      }
  
-@@ -3723,6 +3918,7 @@ impl Window {
+@@ -4019,6 +4214,7 @@ impl Window {
                  let (
                      element,
                      parent_node,
@@ -1260,7 +1262,7 @@ index b0cda7f..15dddcf 100644
                      current_view,
                      rem_size,
                      absolute_offset,
-@@ -3738,6 +3934,7 @@ impl Window {
+@@ -4034,6 +4230,7 @@ impl Window {
                      (
                          deferred_draw.element.take(),
                          deferred_draw.parent_node,
@@ -1268,7 +1270,7 @@ index b0cda7f..15dddcf 100644
                          deferred_draw.current_view,
                          deferred_draw.rem_size,
                          deferred_draw.absolute_offset,
-@@ -3747,6 +3944,7 @@ impl Window {
+@@ -4043,6 +4240,7 @@ impl Window {
                      )
                  };
                  self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -1276,7 +1278,7 @@ index b0cda7f..15dddcf 100644
  
                  let prepaint_start = self.prepaint_index();
                  if let Some(mut element) = element {
-@@ -3769,6 +3967,7 @@ impl Window {
+@@ -4065,6 +4263,7 @@ impl Window {
                      self.reuse_prepaint(prepaint_range);
                  }
                  let prepaint_end = self.prepaint_index();
@@ -1284,7 +1286,7 @@ index b0cda7f..15dddcf 100644
                  self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
                      prepaint_start..prepaint_end;
              }
-@@ -3837,10 +4036,16 @@ impl Window {
+@@ -4133,10 +4332,16 @@ impl Window {
              dispatch_tree_index: self.next_frame.dispatch_tree.len(),
              accessed_element_states_index: self.next_frame.accessed_element_states.len(),
              line_layout_index: self.text_system.layout_index(),
@@ -1301,7 +1303,7 @@ index b0cda7f..15dddcf 100644
          self.next_frame.hitboxes.extend(
              self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                  .iter()
-@@ -3886,6 +4091,7 @@ impl Window {
+@@ -4182,6 +4387,7 @@ impl Window {
                  .map(|deferred_draw| DeferredDraw {
                      current_view: deferred_draw.current_view,
                      parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
@@ -1309,7 +1311,7 @@ index b0cda7f..15dddcf 100644
                      element_id_stack: deferred_draw.element_id_stack.clone(),
                      text_style_stack: deferred_draw.text_style_stack.clone(),
                      content_mask: deferred_draw.content_mask,
-@@ -4164,6 +4370,7 @@ impl Window {
+@@ -4470,6 +4676,7 @@ impl Window {
              self.next_frame
                  .accessed_element_states
                  .truncate(index.accessed_element_states_index);
@@ -1317,7 +1319,7 @@ index b0cda7f..15dddcf 100644
              self.text_system.truncate_layouts(index.line_layout_index);
          }
          result
-@@ -4435,6 +4642,7 @@ impl Window {
+@@ -4733,6 +4940,7 @@ impl Window {
          self.next_frame.deferred_draws.push(DeferredDraw {
              current_view: self.current_view(),
              parent_node,
@@ -1325,7 +1327,7 @@ index b0cda7f..15dddcf 100644
              element_id_stack: self.element_id_stack.clone(),
              text_style_stack: self.text_style_stack.clone(),
              content_mask,
-@@ -5567,6 +5775,31 @@ impl Window {
+@@ -5848,6 +6056,31 @@ impl Window {
      /// Dispatch a mouse, keyboard, or touch event on the window.
      #[profiling::function]
      pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
@@ -1357,7 +1359,7 @@ index b0cda7f..15dddcf 100644
          #[cfg(feature = "profiler")]
          self.window_profiler.begin_input(event.kind_name());
          let update_count_before = self.invalidator.update_count();
-@@ -5593,17 +5826,16 @@ impl Window {
+@@ -5874,17 +6107,16 @@ impl Window {
              // Track the mouse position with our own state, since accessing the platform
              // API for the mouse position can only occur on the main thread.
              PlatformInput::MouseMove(mouse_move) => {
@@ -1377,7 +1379,7 @@ index b0cda7f..15dddcf 100644
                  self.modifiers = mouse_up.modifiers;
                  PlatformInput::MouseUp(mouse_up)
              }
-@@ -5611,6 +5843,9 @@ impl Window {
+@@ -5892,6 +6124,9 @@ impl Window {
                  PlatformInput::MousePressure(mouse_pressure)
              }
              PlatformInput::MouseExited(mouse_exited) => {
@@ -1387,7 +1389,7 @@ index b0cda7f..15dddcf 100644
                  self.modifiers = mouse_exited.modifiers;
                  PlatformInput::MouseExited(mouse_exited)
              }
-@@ -5620,12 +5855,12 @@ impl Window {
+@@ -5901,12 +6136,12 @@ impl Window {
                  PlatformInput::ModifiersChanged(modifiers_changed)
              }
              PlatformInput::ScrollWheel(scroll_wheel) => {
@@ -1402,7 +1404,7 @@ index b0cda7f..15dddcf 100644
                  self.modifiers = pinch.modifiers;
                  PlatformInput::Pinch(pinch)
              }
-@@ -5633,7 +5868,7 @@ impl Window {
+@@ -5914,7 +6149,7 @@ impl Window {
              // to internal drag and drop events.
              PlatformInput::FileDrop(file_drop) => match file_drop {
                  FileDropEvent::Entered { position, paths } => {
@@ -1411,7 +1413,7 @@ index b0cda7f..15dddcf 100644
                      let source_window = self.handle.window_id();
                      if !cx.restore_platform_drag(source_window) && cx.active_drag.is_none() {
                          cx.active_drag = Some(AnyDrag {
-@@ -5651,7 +5886,7 @@ impl Window {
+@@ -5932,7 +6167,7 @@ impl Window {
                      })
                  }
                  FileDropEvent::Pending { position } => {
@@ -1420,7 +1422,7 @@ index b0cda7f..15dddcf 100644
                      PlatformInput::MouseMove(MouseMoveEvent {
                          position,
                          pressed_button: Some(MouseButton::Left),
-@@ -5660,7 +5895,7 @@ impl Window {
+@@ -5941,7 +6176,7 @@ impl Window {
                  }
                  FileDropEvent::Submit { position } => {
                      cx.activate(true);
@@ -1429,7 +1431,7 @@ index b0cda7f..15dddcf 100644
                      PlatformInput::MouseUp(MouseUpEvent {
                          button: MouseButton::Left,
                          position,
-@@ -5683,18 +5918,21 @@ impl Window {
+@@ -5964,18 +6199,21 @@ impl Window {
              },
              PlatformInput::Touch(touch) => PlatformInput::Touch(touch),
              PlatformInput::LongPress(long_press) => {
@@ -1457,7 +1459,7 @@ index b0cda7f..15dddcf 100644
                  PlatformInput::TouchDrag(touch_drag)
              }
              PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
-@@ -5705,7 +5943,7 @@ impl Window {
+@@ -5986,7 +6224,7 @@ impl Window {
          } else if let Some(any_key_event) = event.keyboard_event() {
              self.dispatch_key_event(any_key_event, cx);
          } else if let Some(touch_event) = event.touch_event() {
@@ -1466,7 +1468,7 @@ index b0cda7f..15dddcf 100644
          }
          if let PlatformInput::LongPress(long_press) = &event {
              match long_press.phase {
-@@ -5783,7 +6021,7 @@ impl Window {
+@@ -6064,7 +6302,7 @@ impl Window {
      /// Runs the portable gesture recognizer over a raw touch event and
      /// dispatches whatever it resolves (scroll steps, synthesized taps)
      /// through the ordinary mouse-event path.
@@ -1475,7 +1477,7 @@ index b0cda7f..15dddcf 100644
          let mut event = event.clone();
          if !self.touch_prediction_enabled {
              event.predicted_position = None;
-@@ -5792,7 +6030,7 @@ impl Window {
+@@ -6073,7 +6311,7 @@ impl Window {
          if event.phase == crate::TouchPhase::Started
              && let Some(touch_drag) = self.touch_gestures.offer_touch_drag(event.id)
          {
@@ -1484,7 +1486,7 @@ index b0cda7f..15dddcf 100644
          }
          if event.phase == crate::TouchPhase::Started
              && self.touch_gestures.pending_long_press().is_some()
-@@ -5802,7 +6040,7 @@ impl Window {
+@@ -6083,7 +6321,7 @@ impl Window {
          let mut tapped = false;
          for gesture in recognized_gestures {
              tapped |= matches!(gesture, RecognizedTouchGesture::Tap { .. });
@@ -1493,7 +1495,7 @@ index b0cda7f..15dddcf 100644
          }
          if event.phase == crate::TouchPhase::Started {
              self.schedule_long_press_timer(cx);
-@@ -5822,22 +6060,27 @@ impl Window {
+@@ -6103,22 +6341,27 @@ impl Window {
          }
      }
  
@@ -1525,7 +1527,7 @@ index b0cda7f..15dddcf 100644
                  cx.propagate_event = true;
                  self.default_prevented = false;
                  let started = touch_drag.phase == crate::TouchPhase::Started;
-@@ -5848,11 +6091,14 @@ impl Window {
+@@ -6129,11 +6372,14 @@ impl Window {
                  }
              }
              RecognizedTouchGesture::LongPress(long_press) => {
@@ -1545,7 +1547,7 @@ index b0cda7f..15dddcf 100644
                  cx.propagate_event = true;
                  self.default_prevented = false;
                  let started = long_press.phase == crate::TouchPhase::Started;
-@@ -5885,7 +6131,7 @@ impl Window {
+@@ -6166,7 +6412,7 @@ impl Window {
              cx.update(move |window, cx| {
                  window.long_press_timer.take();
                  if let Some(gesture) = window.touch_gestures.offer_long_press(touch_id) {
@@ -1554,7 +1556,7 @@ index b0cda7f..15dddcf 100644
                  }
              })
              .log_err();
-@@ -5895,7 +6141,7 @@ impl Window {
+@@ -6176,7 +6422,7 @@ impl Window {
      fn schedule_touch_momentum_tick(&mut self) {
          self.on_next_frame(|window, cx| {
              if let Some(gesture) = window.touch_gestures.tick_momentum() {
@@ -1564,7 +1566,7 @@ index b0cda7f..15dddcf 100644
              if window.touch_gestures.has_momentum() {
                  window.schedule_touch_momentum_tick();
 diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
-index 234e7f0..1800dfb 100644
+index 5b63821..0acf9d1 100644
 --- a/crates/gpui/src/window/a11y.rs
 +++ b/crates/gpui/src/window/a11y.rs
 @@ -209,8 +209,13 @@ impl A11y {
@@ -1572,14 +1574,23 @@ index 234e7f0..1800dfb 100644
      /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
      /// for more commentary.
 -    pub(crate) fn sync_active_flag(&mut self) {
--        self.active_this_frame = !self.force_disabled && self.active_flag.load(Ordering::SeqCst);
+-        self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
 +    pub(crate) fn sync_active_flag(&mut self, observed: bool) {
 +        self.active_this_frame =
-+            !self.force_disabled && (observed || self.active_flag.load(Ordering::SeqCst));
++            self.is_enabled() && (observed || self.active_flag.load(Ordering::SeqCst));
 +    }
 +
 +    pub(crate) fn platform_is_active(&self) -> bool {
-+        !self.force_disabled && self.active_flag.load(Ordering::SeqCst)
++        self.is_enabled() && self.active_flag.load(Ordering::SeqCst)
      }
  
-     pub(crate) fn is_active(&self) -> bool {
+     pub(crate) fn is_enabled(&self) -> bool {
+@@ -663,7 +668,7 @@ mod tests {
+         for force_disabled in [false, true] {
+             for active in [false, true] {
+                 let mut a11y = A11y::new(Arc::new(AtomicBool::new(active)), force_disabled, None);
+-                a11y.sync_active_flag();
++                a11y.sync_active_flag(false);
+ 
+                 assert_eq!(a11y.is_enabled(), !force_disabled);
+                 assert_eq!(a11y.is_active(), !force_disabled && active);

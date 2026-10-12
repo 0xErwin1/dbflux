@@ -18,8 +18,14 @@ pub struct SearchMatcher {
     replacing: bool,
 }
 
+/// One search over an input: the query, how the built-in panel shows it, and
+/// its matches. Read it through [`InputBaseState::search_session`]; it is
+/// written only through the input state's search methods, and it grows, so
+/// build it with `Default` and do not destructure it exhaustively.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SearchSession {
+    /// The built-in search panel is showing.
     pub open: bool,
     pub replace_mode: bool,
     pub case_insensitive: bool,
@@ -27,12 +33,16 @@ pub struct SearchSession {
     pub replacement: String,
     pub anchor_offset: Option<usize>,
     pub matcher: SearchMatcher,
+    /// A search is in progress and its matches are highlighted: the panel is
+    /// open, or a query was set without it and not closed since.
+    active: bool,
 }
 
 impl Default for SearchSession {
     fn default() -> Self {
         Self {
             open: false,
+            active: false,
             replace_mode: false,
             case_insensitive: true,
             query: String::new(),
@@ -46,11 +56,27 @@ impl Default for SearchSession {
 impl SearchSession {
     pub(crate) fn open(&mut self, replace_mode: bool, replaceable: bool) {
         self.open = true;
+        self.active = true;
         self.replace_mode = replace_mode && replaceable;
+    }
+
+    /// Start a search without the built-in panel. A custom search UI drives
+    /// the session through [`InputBaseState::set_search_query`], and the
+    /// editor highlights the matches the same way it does for the panel.
+    pub(crate) fn activate(&mut self) {
+        self.active = true;
     }
 
     pub(crate) fn close(&mut self) {
         self.open = false;
+        self.active = false;
+    }
+
+    /// Whether a search is in progress: the built-in panel is open, or a
+    /// query was set without it and [`InputBaseState::close_search`] has not
+    /// run since. Matches are highlighted while this holds.
+    pub fn is_active(&self) -> bool {
+        self.active
     }
 
     pub(crate) fn update_query(&mut self, query: impl Into<String>, case_insensitive: bool) {
@@ -160,6 +186,14 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.search_reversed
     }
 
+    /// Set the search query and highlight its matches.
+    ///
+    /// This is the entry point for a custom search UI: it needs neither
+    /// `searchable` nor the built-in panel. Navigate the matches with
+    /// [`InputBaseState::next_search_match`] and
+    /// [`InputBaseState::previous_search_match`], read the count and the
+    /// current index from [`InputBaseState::search_session`], and end the
+    /// search with [`InputBaseState::close_search`].
     pub fn set_search_query(
         &mut self,
         query: impl Into<String>,
@@ -170,6 +204,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let query_changed = query != self.search_session.query
             || case_insensitive != self.search_session.case_insensitive;
 
+        self.search_session.activate();
         self.search_session.update_query(query, case_insensitive);
         self.search_session.matcher.update(&self.text);
 
@@ -180,12 +215,15 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx.notify();
     }
 
+    /// End the search: hide the built-in panel and the match highlights. The
+    /// query is kept so the next [`InputBaseState::open_search`] resumes it.
     pub fn close_search(&mut self, cx: &mut Context<Self>) {
         self.search_session.close();
         cx.notify();
     }
 
     pub fn next_search_match(&mut self, cx: &mut Context<Self>) -> Option<Range<usize>> {
+        self.sync_search_matcher();
         let range = if self.search_moves_cursor {
             let cursor = self.cursor();
             let range = self.search_session.matcher.select_next_after(cursor)?;
@@ -201,6 +239,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub fn previous_search_match(&mut self, cx: &mut Context<Self>) -> Option<Range<usize>> {
+        self.sync_search_matcher();
         let range = if self.search_moves_cursor {
             let cursor = self.cursor();
             let range = self.search_session.matcher.select_previous_before(cursor)?;
@@ -215,6 +254,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         Some(range)
     }
 
+    /// Replace the current match and move on to the next one. Returns whether
+    /// there was a match to replace.
     pub fn replace_current_search_match(
         &mut self,
         replacement: &str,
@@ -224,6 +265,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         if !self.is_replaceable() {
             return false;
         }
+        self.sync_search_matcher();
         let matcher = &mut self.search_session.matcher;
         let Some(range) = matcher
             .matched_ranges()
@@ -246,6 +288,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         true
     }
 
+    /// Replace every match. Returns how many were replaced.
     pub fn replace_all_search_matches(
         &mut self,
         replacement: &str,
@@ -255,6 +298,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         if !self.is_replaceable() {
             return 0;
         }
+        self.sync_search_matcher();
         let ranges = self.search_session.matcher.matched_ranges();
         if ranges.is_empty() {
             return 0;
@@ -270,13 +314,23 @@ impl<M: InputModeKind> InputBaseState<M> {
         count
     }
 
+    /// Keep the matches in step with an edit. A closed search skips the scan:
+    /// it copies and searches the whole document, and nothing reads the
+    /// matches until the search is resumed or navigated, which sync first.
     pub(super) fn update_search(&mut self, _cx: &mut gpui::App) {
+        if !self.search_session.is_active() {
+            return;
+        }
+        self.sync_search_matcher();
+    }
+
+    /// Recompute the matches if the text changed since the last scan.
+    fn sync_search_matcher(&mut self) {
         self.search_session.matcher.update(&self.text);
     }
 
-    /// Opens search. An input that is not searchable lets the action
-    /// propagate, so an enclosing handler or the next binding of the same
-    /// keystroke runs instead of the key being swallowed.
+    /// An input that is not `searchable` leaves the shortcut to its
+    /// ancestors, so a custom search UI can take it.
     pub(super) fn on_action_search(&mut self, _: &Search, _: &mut Window, cx: &mut Context<Self>) {
         if !self.searchable {
             cx.propagate();
@@ -285,8 +339,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.open_search(false, cx);
     }
 
-    /// Opens search in replace mode, propagating like
-    /// [`InputBaseState::on_action_search`] when the input is not searchable.
     pub(super) fn on_action_replace(
         &mut self,
         _: &Replace,
@@ -346,6 +398,12 @@ impl SearchMatcher {
         self.current_match_ix
     }
 
+    /// The index of the current match into [`SearchMatcher::matched_ranges`],
+    /// `None` while there is no match.
+    pub fn current(&self) -> Option<usize> {
+        (!self.is_empty()).then_some(self.current_match_ix)
+    }
+
     pub fn len(&self) -> usize {
         self.matched_ranges.len()
     }
@@ -354,11 +412,11 @@ impl SearchMatcher {
         self.matched_ranges.is_empty()
     }
 
+    /// `2/5`: the current match and the total, `0/0` without matches.
     pub fn label(&self) -> String {
-        if self.is_empty() {
-            "0/0".into()
-        } else {
-            format!("{}/{}", self.current_match_ix + 1, self.len())
+        match self.current() {
+            Some(ix) => format!("{}/{}", ix + 1, self.len()),
+            None => "0/0".into(),
         }
     }
 
@@ -547,6 +605,25 @@ mod tests {
         matcher.update_query("aaaaa", false);
         matcher.set_current_match_index(2);
         assert_eq!(matcher.next(), Some(5..10));
+    }
+
+    #[test]
+    fn a_query_set_without_the_panel_keeps_the_session_active_until_closed() {
+        let mut session = SearchSession::default();
+        assert!(!session.is_active());
+
+        session.open(false, true);
+        assert!(session.is_active());
+        session.close();
+        assert!(!session.is_active());
+
+        // A custom search UI never opens the panel; setting a query is what
+        // turns the match highlights on, and closing turns them off again.
+        session.activate();
+        assert!(session.is_active());
+        assert!(!session.open);
+        session.close();
+        assert!(!session.is_active());
     }
 
     #[test]

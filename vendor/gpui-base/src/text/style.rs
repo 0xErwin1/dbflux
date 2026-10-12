@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{HighlightStyle, Hsla, Pixels, Rems, StyleRefinement, px, rems};
+use gpui::{HighlightStyle, Hsla, Rems, StyleRefinement, rems};
 
 use crate::ColorTokens;
 
@@ -19,13 +19,16 @@ pub struct TextViewStyle {
     code_background: Hsla,
     border: Hsla,
     paragraph_gap: Rems,
-    heading_base_font_size: Pixels,
-    heading_font_size: Option<Arc<dyn Fn(u8, Pixels) -> Pixels + Send + Sync + 'static>>,
+    heading: Arc<dyn Fn(u8) -> StyleRefinement + Send + Sync + 'static>,
     code_block: StyleRefinement,
     table: StyleRefinement,
     table_head: StyleRefinement,
     table_cell: StyleRefinement,
     inline_code: HighlightStyle,
+    /// The table body background, or the theme surface when `None`. Only
+    /// [`Self::on_text_color`] sets it, to let a table on an inverted surface
+    /// show that surface.
+    table_background: Option<Hsla>,
     is_dark: bool,
 }
 
@@ -38,20 +41,13 @@ impl PartialEq for TextViewStyle {
             && self.selection == other.selection
             && self.code_background == other.code_background
             && self.border == other.border
-            && self.heading_base_font_size == other.heading_base_font_size
-            && match (&self.heading_font_size, &other.heading_font_size) {
-                (Some(left), Some(right)) => (1..=6).all(|level| {
-                    left(level, self.heading_base_font_size)
-                        == right(level, other.heading_base_font_size)
-                }),
-                (None, None) => true,
-                _ => false,
-            }
+            && (1..=6).all(|level| (self.heading)(level) == (other.heading)(level))
             && self.code_block == other.code_block
             && self.table == other.table
             && self.table_head == other.table_head
             && self.table_cell == other.table_cell
             && self.inline_code == other.inline_code
+            && self.table_background == other.table_background
             && self.is_dark == other.is_dark
     }
 }
@@ -84,9 +80,8 @@ impl TextViewStyle {
             selection: colors.selection,
             code_background: colors.accent,
             border: colors.border,
-            paragraph_gap: rems(1.),
-            heading_base_font_size: px(14.),
-            heading_font_size: None,
+            paragraph_gap: rems(0.75),
+            heading: Arc::new(|_| StyleRefinement::default()),
             code_block: StyleRefinement::default(),
             table: StyleRefinement::default(),
             table_head: StyleRefinement::default(),
@@ -95,6 +90,7 @@ impl TextViewStyle {
                 background_color: Some(colors.accent),
                 ..Default::default()
             },
+            table_background: None,
             is_dark,
         }
     }
@@ -138,31 +134,27 @@ impl TextViewStyle {
         self
     }
 
-    /// Sets the gap between paragraphs. Defaults to 1 rem.
+    /// Sets the gap between paragraphs. Defaults to 0.75 rem.
     pub fn with_paragraph_gap(mut self, gap: Rems) -> Self {
         self.paragraph_gap = gap;
         self
     }
 
-    /// Sets the base font size headings are derived from. Defaults to 14px.
-    pub fn with_heading_base_font_size(mut self, size: Pixels) -> Self {
-        self.heading_base_font_size = size;
-        self
-    }
-
-    /// Sets the function that resolves a heading's font size.
-    ///
-    /// The first parameter is the heading level (1-6), the second is
-    /// [`Self::heading_base_font_size`].
-    pub fn with_heading_font_size<F>(mut self, f: F) -> Self
+    /// Sets the style refinement for headings, selected by heading level (1-6).
+    pub fn with_heading<F>(mut self, heading: F) -> Self
     where
-        F: Fn(u8, Pixels) -> Pixels + Send + Sync + 'static,
+        F: Fn(u8) -> StyleRefinement + Send + Sync + 'static,
     {
-        self.heading_font_size = Some(Arc::new(f));
+        self.heading = Arc::new(heading);
         self
     }
 
     /// Sets the style refinement for code blocks.
+    ///
+    /// Set `overflow.y` to `Overflow::Scroll` together with a max height to
+    /// scroll long code inside the block: it gets its own scrollbar, and wheel
+    /// input over it no longer scrolls an ancestor list until the code reaches
+    /// its edge.
     pub fn with_code_block(mut self, style: StyleRefinement) -> Self {
         self.code_block = style;
         self
@@ -247,20 +239,9 @@ impl TextViewStyle {
         self.paragraph_gap
     }
 
-    /// The base font size headings are derived from.
-    pub fn heading_base_font_size(&self) -> Pixels {
-        self.heading_base_font_size
-    }
-
-    /// The size this style gives a heading of `level`, when it resolves
-    /// heading sizes itself.
-    ///
-    /// `None` means the caller keeps whatever size it had already derived from
-    /// [`Self::heading_base_font_size`].
-    pub fn heading_font_size(&self, level: u8) -> Option<Pixels> {
-        self.heading_font_size
-            .as_ref()
-            .map(|f| f(level, self.heading_base_font_size))
+    /// The style refinement for a heading at `level` (1-6).
+    pub fn heading(&self, level: u8) -> StyleRefinement {
+        (self.heading)(level)
     }
 
     /// The style refinement for code blocks.
@@ -294,6 +275,11 @@ impl TextViewStyle {
         self.is_dark
     }
 
+    /// The table body background, when it is not the theme surface.
+    pub(crate) fn table_background(&self) -> Option<Hsla> {
+        self.table_background
+    }
+
     /// Returns the [`HighlightStyle`] to use for inline code, falling back to
     /// the code background when no custom background was supplied.
     pub(crate) fn inline_code_highlight(&self) -> HighlightStyle {
@@ -303,18 +289,93 @@ impl TextViewStyle {
         }
         style
     }
+
+    /// This style adapted to body text drawn in `color`, the text color a
+    /// container sets for its surface.
+    ///
+    /// The body text always takes `color`. When `color` is far from this
+    /// style's foreground in lightness, the surface is inverted from the one
+    /// this style was made for (a `primary` fill, say): the link, muted text,
+    /// code, border and selection colors would vanish on it, so they are all
+    /// derived from `color`, and [`Self::is_dark`] flips.
+    pub(crate) fn on_text_color(&self, color: Hsla) -> Self {
+        let style = self.clone().with_foreground(color);
+        if !self.is_inverted_by(color) {
+            return style;
+        }
+
+        let code_background = color.opacity(0.12);
+        let mut table_head = self.table_head.clone();
+        table_head.background = Some(code_background.into());
+        table_head.text.color = Some(color);
+        let mut style = style
+            .with_muted_foreground(color.opacity(0.7))
+            .with_link(color)
+            .with_selection(color.opacity(0.25))
+            .with_code_background(code_background)
+            .with_border(color.opacity(0.2))
+            .with_inline_code(HighlightStyle {
+                background_color: Some(code_background),
+                ..self.inline_code
+            })
+            .with_table_head(table_head)
+            .with_dark(!self.is_dark);
+        style.table_background = Some(gpui::transparent_black());
+        style
+    }
+
+    /// Whether body text in `color` sits on a surface inverted from the one
+    /// this style was made for.
+    ///
+    /// Mid-tone text such as a destructive red reads on either kind of surface,
+    /// so only a lightness gap wider than that counts as inverted.
+    pub(crate) fn is_inverted_by(&self, color: Hsla) -> bool {
+        const INVERTED_LIGHTNESS_GAP: f32 = 0.6;
+        (oklab_lightness(color) - oklab_lightness(self.foreground)).abs() > INVERTED_LIGHTNESS_GAP
+    }
+}
+
+/// The perceptual (Oklab) lightness of `color`, from 0 (black) to 1 (white).
+fn oklab_lightness(color: Hsla) -> f32 {
+    let rgb = color.to_rgb();
+    let linear = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (r, g, b) = (linear(rgb.r), linear(rgb.g), linear(rgb.b));
+    let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s
 }
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Styled as _, px};
+
     use super::*;
 
     #[test]
     fn selection_layout_fingerprint_covers_callback_table_and_theme_fields() {
         let base = TextViewStyle::default();
-        let heading = base.clone().with_heading_font_size(|_, size| size);
-        assert!(heading == base.clone().with_heading_font_size(|_, size| size));
-        assert!(heading != base.clone().with_heading_font_size(|_, size| size * 2.));
+        let heading = base
+            .clone()
+            .with_heading(|_| StyleRefinement::default().text_size(px(14.)));
+        assert!(
+            heading
+                == base
+                    .clone()
+                    .with_heading(|_| StyleRefinement::default().text_size(px(14.)))
+        );
+        assert!(
+            heading
+                != base
+                    .clone()
+                    .with_heading(|_| StyleRefinement::default().text_size(px(28.)))
+        );
 
         let mut table = StyleRefinement::default();
         table.text.white_space = Some(gpui::WhiteSpace::Nowrap);
@@ -325,7 +386,8 @@ mod tests {
 
     #[test]
     fn cloning_preserves_the_same_heading_callback_fingerprint() {
-        let style = TextViewStyle::default().with_heading_font_size(|_, size| size);
+        let style = TextViewStyle::default()
+            .with_heading(|_| StyleRefinement::default().text_size(px(14.)));
         assert!(style == style.clone());
     }
 
@@ -346,13 +408,21 @@ mod tests {
     }
 
     #[test]
-    fn heading_font_size_resolves_through_the_installed_callback() {
-        let style = TextViewStyle::default();
-        assert_eq!(style.heading_font_size(1), None);
+    fn heading_refinement_defaults_empty_and_resolves_by_level() {
+        let base = TextViewStyle::default();
+        assert_eq!(base.heading(1), StyleRefinement::default());
 
-        let style = style.with_heading_font_size(|level, base| base * (7. - level as f32));
-        assert_eq!(style.heading_font_size(1), Some(px(14.) * 6.));
-        assert_eq!(style.heading_font_size(6), Some(px(14.)));
+        let style = base.clone().with_heading(|level| match level {
+            1 => StyleRefinement::default().pt(rems(1.)).pb(rems(0.5)),
+            _ => StyleRefinement::default().pb(rems(0.25)),
+        });
+
+        assert_eq!(
+            style.heading(1),
+            StyleRefinement::default().pt(rems(1.)).pb(rems(0.5))
+        );
+        assert_eq!(style.heading(2), StyleRefinement::default().pb(rems(0.25)));
+        assert!(style != base);
     }
 
     #[test]
@@ -365,6 +435,43 @@ mod tests {
             style.inline_code_highlight().background_color,
             Some(gpui::rgb(0x123456).into())
         );
+    }
+
+    #[test]
+    fn text_color_of_a_matching_surface_only_replaces_the_body_text() {
+        let style = TextViewStyle::from_colors(&ColorTokens::light(), false);
+        let destructive = ColorTokens::light().destructive;
+
+        let adapted = style.on_text_color(destructive);
+        assert_eq!(adapted.foreground(), destructive);
+        assert_eq!(adapted.link(), style.link());
+        assert_eq!(adapted.muted_foreground(), style.muted_foreground());
+        assert_eq!(adapted.code_background(), style.code_background());
+        assert_eq!(adapted.table_background(), None);
+        assert!(!adapted.is_dark());
+    }
+
+    #[test]
+    fn text_color_of_an_inverted_surface_derives_every_color_from_it() {
+        for (colors, is_dark) in [(ColorTokens::light(), false), (ColorTokens::dark(), true)] {
+            let style = TextViewStyle::from_colors(&colors, is_dark);
+            let text = colors.primary_foreground;
+
+            let adapted = style.on_text_color(text);
+            assert_eq!(adapted.foreground(), text);
+            assert_eq!(adapted.link(), text);
+            assert_eq!(adapted.muted_foreground(), text.opacity(0.7));
+            assert_eq!(adapted.code_background(), text.opacity(0.12));
+            assert_eq!(
+                adapted.inline_code_highlight().background_color,
+                Some(text.opacity(0.12))
+            );
+            assert_eq!(adapted.border(), text.opacity(0.2));
+            assert_eq!(adapted.selection(), text.opacity(0.25));
+            assert_eq!(adapted.table_background(), Some(gpui::transparent_black()));
+            assert_eq!(adapted.table_head().text.color, Some(text));
+            assert_eq!(adapted.is_dark(), !is_dark);
+        }
     }
 
     #[test]

@@ -124,9 +124,9 @@ mysql = "28"
 
 petgraph = "0.7"
 
-gpui = { package = "gpui-pre", version = "=0.3.5" }
-gpui-component = { version = "=0.6.1", features = ["tree-sitter"] }
-gpui-pre-platform = { version = "=0.3.5", default-features = false, features = ["font-kit", "wayland", "x11"] }
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui-component = { version = "=0.7.3", features = ["tree-sitter"] }
+gpui-pre-platform = { version = "=0.3.9", default-features = false, features = ["font-kit", "wayland", "x11"] }
 gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }
 # Grammars for the code-editor highlighter (gpui-component's highlighter::LanguageRegistry).
 # gpui-component's own `tree-sitter-languages` feature pulls in ~30 grammars; DBFlux only
@@ -247,17 +247,14 @@ indexing_slicing = "warn"
 # The schema visualizer pans and zooms by handing one transform to a subtree
 # (`crates/dbflux_ui_document/src/schema_viz/mod.rs`), which needs the
 # `ElementTransform` API that upstream gpui does not carry yet, and UI automation
-# needs the frame-observer hooks. The vendored crate is the published gpui-pre 0.3.5
+# needs the frame-observer hooks. The vendored crate is the published gpui-pre 0.3.9
 # source with `vendor/gpui-pre/element-transform.patch` and
 # `vendor/gpui-pre/frame-observer.patch` applied; see `vendor/gpui-pre/VENDOR.md`
 # for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
-# `gpui-base` and `gpui-component` are the published 0.6.1 crates with local
-# editor patches; see their `VENDOR.md` files. `gpui-pre-macos` is the published 0.3.5
-# crate with `vendor/gpui-pre-macos/release-accesskit-adapter.patch`, which frees a
-# closed window's renderer on macOS; see `vendor/gpui-pre-macos/VENDOR.md`.
+# `gpui-base` and `gpui-component` are the published 0.7.3 crates with local
+# editor patches; see their `VENDOR.md` files.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
-gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 gpui-base = { path = "vendor/gpui-base" }
 gpui-component = { path = "vendor/gpui-component" }
 
