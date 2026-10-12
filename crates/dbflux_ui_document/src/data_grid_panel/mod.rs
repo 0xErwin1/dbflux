@@ -827,6 +827,10 @@ pub struct DataGridPanel {
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
     pk_details_pending: bool,
+    /// The key arrived after the first page and the table is being read again
+    /// in key order. The rows on screen were built without the key, so the
+    /// banner waits for the reordered page instead of flashing until it lands.
+    pk_requery_pending: bool,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
@@ -1124,6 +1128,12 @@ impl DataGridPanel {
         .detach();
     }
 
+    /// Whether the "no primary key" banner has to wait: the key is still being
+    /// fetched, or the table is being read again now that it is known.
+    pub(super) fn primary_key_still_resolving(&self) -> bool {
+        self.pk_details_pending || self.pk_requery_pending
+    }
+
     fn primary_key_names(columns: &[dbflux_core::ColumnInfo]) -> Vec<String> {
         columns
             .iter()
@@ -1226,6 +1236,7 @@ impl DataGridPanel {
             order_by: order_by.clone(),
             total_rows,
         };
+        self.pk_requery_pending = true;
         self.pending.requery = Some(PendingRequery {
             profile_id,
             database,
@@ -1653,6 +1664,7 @@ impl DataGridPanel {
             panel_origin: Point::default(),
             panel_size: Size::default(),
             pk_details_pending: false,
+            pk_requery_pending: false,
             view_config,
             context_menu: None,
             is_active_tab: true,
@@ -8925,6 +8937,34 @@ mod tests {
         assert!(
             !fetch_pending,
             "a cache hit must not leave the panel waiting for a fetch"
+        );
+
+        // The key arrived after the first page, so the table is read again in
+        // key order. Until that page lands the rows on screen were built
+        // without the key, and the banner must not flash over them.
+        let resolving = window.update(|_, app| fetch_panel.read(app).primary_key_still_resolving());
+        assert!(
+            resolving,
+            "the no-primary-key banner must wait for the page read in key order"
+        );
+
+        let resolving_after_page = window.update(|_, app| {
+            fetch_panel.update(app, |panel, cx| {
+                panel.apply_table_result(
+                    profile_id,
+                    users.clone(),
+                    Pagination::default(),
+                    Vec::new(),
+                    None,
+                    id_result(),
+                    cx,
+                );
+            });
+            fetch_panel.read(app).primary_key_still_resolving()
+        });
+        assert!(
+            !resolving_after_page,
+            "the page read in key order ends the wait"
         );
     }
 
