@@ -401,7 +401,7 @@ mod tests {
     use gpui::{
         AppContext as _, Context, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
         ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window,
-        div, point, px, size,
+        div, point, prelude::FluentBuilder as _, px, size,
     };
 
     use super::{ResizableState, h_resizable, resizable_panel};
@@ -625,6 +625,60 @@ mod tests {
             assert_eq!(state.sizes(), &vec![px(220.), px(180.)]);
         });
         assert_eq!(resizes.get(), 1);
+    }
+
+    struct OpeningHarness {
+        open: bool,
+        widths: Rc<std::cell::RefCell<Vec<Pixels>>>,
+    }
+
+    impl Render for OpeningHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let widths = self.widths.clone();
+            let probe = gpui::canvas(
+                move |bounds, _, _| widths.borrow_mut().push(bounds.size.width),
+                |_, _, _, _| {},
+            )
+            .size_full();
+
+            div().w(px(1600.)).h(px(100.)).when(self.open, |this| {
+                this.child(
+                    h_resizable("opening")
+                        .child(resizable_panel().size(px(200.)).child(div().size_full()))
+                        .child(resizable_panel().size(px(200.)).child(probe)),
+                )
+            })
+        }
+    }
+
+    /// A group that appears with only sized panels, as a split does when its
+    /// second pane is shown, fills the container on its very first frame
+    /// instead of flashing at the raw initial sizes.
+    #[gpui::test]
+    fn sized_panels_fill_the_container_on_the_first_frame(cx: &mut TestAppContext) {
+        let widths = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (view, cx) = cx.add_window_view({
+            let widths = widths.clone();
+            move |_, _| OpeningHarness {
+                open: false,
+                widths,
+            }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        view.update(cx, |view, cx| {
+            view.open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let widths = widths.borrow();
+        assert!(!widths.is_empty());
+        assert!(
+            widths.iter().all(|width| *width == px(800.)),
+            "every frame must split the container evenly: {widths:?}"
+        );
     }
 
     struct SizedGroupHarness;
