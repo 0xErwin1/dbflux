@@ -381,6 +381,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
+                            panel.pk_requery_pending = false;
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
                                 message: crate::labels::query_failed_error(&e.to_string()),
@@ -838,6 +839,8 @@ impl DataGridPanel {
         result: QueryResult,
         cx: &mut Context<Self>,
     ) {
+        self.pk_requery_pending = false;
+
         // Determine sort state from order_by for visual indicator
         let initial_sort = order_by.first().and_then(|col| {
             let pos = result
