@@ -252,9 +252,12 @@ indexing_slicing = "warn"
 # `vendor/gpui-pre/frame-observer.patch` applied; see `vendor/gpui-pre/VENDOR.md`
 # for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
 # `gpui-base` and `gpui-component` are the published 0.6.1 crates with local
-# editor patches; see their `VENDOR.md` files.
+# editor patches; see their `VENDOR.md` files. `gpui-pre-macos` is the published 0.3.5
+# crate with `vendor/gpui-pre-macos/release-accesskit-adapter.patch`, which frees a
+# closed window's renderer on macOS; see `vendor/gpui-pre-macos/VENDOR.md`.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 gpui-base = { path = "vendor/gpui-base" }
 gpui-component = { path = "vendor/gpui-component" }
 

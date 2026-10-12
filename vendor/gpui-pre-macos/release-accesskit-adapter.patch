@@ -1,0 +1,13 @@
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -1387,6 +1387,10 @@
+             this.native_window.setDelegate_(nil);
+         }
+         this.input_handler.take();
++        // The AccessKit adapter retains the window's content view, whose GPUIView subview
++        // holds this state through its ivar. Left in place, the cycle keeps the state, the
++        // Metal renderer and every texture it owns alive after the window closes.
++        drop(this.accesskit_adapter.take());
+         // A delivery task queued by `report_visibility` may still run after the
+         // GPUI window is gone; without a callback it has nothing to notify.
+         this.visibility_callback.take();
