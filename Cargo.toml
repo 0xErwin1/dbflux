@@ -125,7 +125,7 @@ mysql = "28"
 petgraph = "0.7"
 
 gpui = { package = "gpui-pre", version = "=0.3.9" }
-gpui-component = { version = "=0.6.1", features = ["tree-sitter"] }
+gpui-component = { version = "=0.7.3", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.9", default-features = false, features = ["font-kit", "wayland", "x11"] }
 gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }
 # Grammars for the code-editor highlighter (gpui-component's highlighter::LanguageRegistry).
@@ -251,7 +251,7 @@ indexing_slicing = "warn"
 # source with `vendor/gpui-pre/element-transform.patch` and
 # `vendor/gpui-pre/frame-observer.patch` applied; see `vendor/gpui-pre/VENDOR.md`
 # for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
-# `gpui-base` and `gpui-component` are the published 0.6.1 crates with local
+# `gpui-base` and `gpui-component` are the published 0.7.3 crates with local
 # editor patches; see their `VENDOR.md` files.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }

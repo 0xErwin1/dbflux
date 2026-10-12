@@ -4,10 +4,11 @@ use fuzzy_matcher::FuzzyMatcher as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
-    Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
-    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
-    deferred, div, prelude::FluentBuilder, px, relative,
+    Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
+    RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window, deferred, div,
+    prelude::FluentBuilder, px, relative,
 };
+use gpui_base::TestSupportExt as _;
 use lsp_types::CompletionItem;
 use std::ops::Range;
 
@@ -18,7 +19,7 @@ use crate::{
     ActiveTheme, IndexPath, Selectable, actions, h_flex,
     input::{
         self, EditorState,
-        popovers::{editor_popover, render_markdown},
+        popovers::{CaretAnchoredPopup, editor_popover, render_markdown},
     },
     label::Label,
     list::{List, ListDelegate, ListEvent, ListState},
@@ -233,7 +234,7 @@ impl CompletionMenu {
                     cx.subscribe(&list, |this: &mut Self, _, ev: &ListEvent, cx| {
                         match ev {
                             ListEvent::Confirm(_) => {
-                                this.hide(cx);
+                                this.dismiss(cx);
                             }
                             _ => {}
                         }
@@ -266,7 +267,7 @@ impl CompletionMenu {
         })
         .detach();
 
-        self.hide(cx);
+        self.dismiss(cx);
     }
 
     pub(crate) fn handle_action(
@@ -303,7 +304,7 @@ impl CompletionMenu {
     }
 
     fn on_action_escape(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.hide(cx);
+        self.dismiss(cx);
     }
 
     fn on_action_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -318,16 +319,21 @@ impl CompletionMenu {
         });
     }
 
-    /// Hide the completion menu and reset the trigger start offset.
+    /// Synchronize a hidden editor menu without dismissing a newer response.
     pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
         self.open = false;
         self.trigger_start_offset = None;
+        cx.notify();
+    }
+
+    /// Dismiss the menu in response to a user action.
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.hide(cx);
         let editor = self.editor.clone();
         cx.spawn(async move |_, cx| {
             let _ = editor.update(cx, |editor, cx| editor.dismiss_completion_overlay(cx));
         })
         .detach();
-        cx.notify();
     }
 
     /// Sets the trigger start offset if it is not already set.
@@ -366,26 +372,10 @@ impl CompletionMenu {
 
         cx.notify();
     }
-
-    fn origin(&self, cx: &App) -> Option<Point<Pixels>> {
-        let editor = self.editor.upgrade()?;
-        let editor = editor.read(cx);
-        let Some((cursor_bounds, line_height)) = editor.cursor_layout() else {
-            return None;
-        };
-        let cursor_origin = cursor_bounds.origin;
-
-        let scroll_origin = editor.scroll_offset();
-
-        Some(
-            scroll_origin + cursor_origin - editor.input_bounds().origin
-                + Point::new(-px(4.), line_height + px(4.)),
-        )
-    }
 }
 
 impl Render for CompletionMenu {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.open {
             return Empty.into_any_element();
         }
@@ -395,65 +385,127 @@ impl Render for CompletionMenu {
             return Empty.into_any_element();
         }
 
-        let Some(pos) = self.origin(cx) else {
-            return Empty.into_any_element();
-        };
-
-        let selected_documentation = self
-            .list
-            .read(cx)
-            .delegate()
-            .selected_item()
-            .and_then(|item| item.documentation.clone());
-
         let Some(editor) = self.editor.upgrade() else {
             return Empty.into_any_element();
         };
+        // The anchor is resolved in the popup's deferred prepaint from the
+        // input's current-frame geometry; the content below is built there.
         let configured_max = editor.read(cx).lsp().completion_menu.max_width;
-        let max_width = configured_max.min(window.bounds().size.width - pos.x);
-        let abs_pos = editor.read(cx).input_bounds().origin + pos;
-        let vertical_layout =
-            abs_pos.x + configured_max + POPOVER_GAP + configured_max + POPOVER_GAP
-                > window.bounds().size.width;
+        let list = self.list.clone();
+        let menu = cx.weak_entity();
 
-        deferred(
-            div()
-                .absolute()
-                .left(pos.x)
-                .top(pos.y)
-                .flex()
-                .flex_row()
-                .gap(POPOVER_GAP)
-                .items_start()
-                .when(vertical_layout, |this| this.flex_col())
-                .child(
-                    editor_popover("completion-menu", cx)
-                        .max_w(max_width)
-                        .min_w(px(120.))
-                        .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT)),
-                )
-                .when_some(selected_documentation, |this, documentation| {
-                    let mut doc = match documentation {
-                        lsp_types::Documentation::String(s) => s.clone(),
-                        lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
-                    };
-                    if vertical_layout {
-                        doc = doc.split("\n").next().unwrap_or_default().to_string();
-                    }
+        deferred(CaretAnchoredPopup::new(
+            self.editor.clone(),
+            move |anchor, window, cx| {
+                // `anchor` is in window coordinates, from the current frame.
+                let max_width = configured_max.min(window.bounds().size.width - anchor.x);
+                let vertical_layout =
+                    anchor.x + configured_max + POPOVER_GAP + configured_max + POPOVER_GAP
+                        > window.bounds().size.width;
 
-                    this.child(
-                        div().child(
-                            editor_popover("completion-menu", cx)
-                                .w(configured_max)
-                                .px_2()
-                                .child(render_markdown("doc", doc, window, cx)),
-                        ),
+                let selected_documentation = list
+                    .read(cx)
+                    .delegate()
+                    .selected_item()
+                    .and_then(|item| item.documentation.clone());
+
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(POPOVER_GAP)
+                    .items_start()
+                    .when(vertical_layout, |this| this.flex_col())
+                    .child(
+                        editor_popover("completion-menu", cx)
+                            .test_support()
+                            .max_w(max_width)
+                            .min_w(px(120.))
+                            .child(List::new(&list).max_h(MAX_MENU_HEIGHT)),
                     )
-                })
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.hide(cx);
-                })),
-        )
+                    .when_some(selected_documentation, |this, documentation| {
+                        let mut doc = match documentation {
+                            lsp_types::Documentation::String(s) => s.clone(),
+                            lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
+                        };
+                        if vertical_layout {
+                            doc = doc.split("\n").next().unwrap_or_default().to_string();
+                        }
+
+                        this.child(
+                            div().child(
+                                editor_popover("completion-menu", cx)
+                                    .w(configured_max)
+                                    .px_2()
+                                    .child(render_markdown("doc", doc, window, cx)),
+                            ),
+                        )
+                    })
+                    .on_mouse_down_out({
+                        let menu = menu.clone();
+                        move |_, _, cx: &mut App| {
+                            if let Some(menu) = menu.upgrade() {
+                                menu.update(cx, |menu, cx| menu.dismiss(cx));
+                            }
+                        }
+                    })
+                    .into_any_element()
+            },
+        ))
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn hiding_an_old_menu_does_not_dismiss_a_new_completion_response(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::init);
+        let window = cx.add_empty_window();
+        let (editor, menu) = window.update(|window, cx| {
+            let editor = cx.new(|cx| EditorState::new(window, cx).default_value("co"));
+            let menu = CompletionMenu::new(editor.clone(), window, cx);
+            let old_items = vec![CompletionItem {
+                label: "const".into(),
+                ..Default::default()
+            }];
+            editor.update(cx, |editor, cx| {
+                editor.present_completion_items(0, "c", old_items.clone(), cx);
+            });
+            menu.update(cx, |menu, cx| {
+                menu.update_query(0, "c");
+                menu.show(1, old_items, window, cx);
+                // The overlay observes the old request being hidden while a
+                // replacement request is pending. Its deferred dismissal must
+                // not act on the replacement response that arrives next.
+                menu.hide(cx);
+            });
+            editor.update(cx, |editor, cx| {
+                editor.present_completion_items(
+                    0,
+                    "co",
+                    vec![CompletionItem {
+                        label: "const".into(),
+                        ..Default::default()
+                    }],
+                    cx,
+                );
+            });
+            (editor, menu)
+        });
+
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let completion = editor.read(cx).completion_menu_state();
+            assert!(completion.open, "an old menu dismissed the new response");
+            assert_eq!(completion.query, "co");
+            assert_eq!(completion.items.len(), 1);
+            assert_eq!(completion.items[0].label, "const");
+        });
+        drop(menu);
     }
 }

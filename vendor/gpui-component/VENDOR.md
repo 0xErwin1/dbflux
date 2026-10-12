@@ -1,10 +1,10 @@
 # Vendored `gpui-component`
 
-This directory starts from the complete published `gpui-component` 0.6.1 crate. It is vendored so DBFlux can adapt the editor's find/replace panel and the component key bindings to its keyboard-first navigation.
+This directory starts from the complete published `gpui-component` 0.7.3 crate. It is vendored so DBFlux can adapt the editor's find/replace panel and the component key bindings to its keyboard-first navigation.
 
-- Upstream: [`gpui-component` 0.6.1 on crates.io](https://crates.io/crates/gpui-component/0.6.1), from the crates.io registry archive `gpui-component-0.6.1.crate`.
+- Upstream: [`gpui-component` 0.7.3 on crates.io](https://crates.io/crates/gpui-component/0.7.3), from the crates.io registry archive `gpui-component-0.7.3.crate`.
 - License: Apache-2.0; see `LICENSE-APACHE` and the published `Cargo.toml`.
-- Archive SHA-256: `52b7ab4921dc9d2624648fb40580067bfe0f47dd14f5f8f6e070d40c6d4246d4` (the registry checksum recorded in the root `Cargo.lock` before vendoring).
+- Archive SHA-256: `465a363235cd4062ef5f0953fc096fc764ed6f53dfbd9f409f669f93ea3b1ff9` (the checksum the crates.io index records for 0.7.3).
 
 ## Local patch list
 
@@ -15,7 +15,7 @@ Every local change is listed here with the file it touches and the behaviour it 
 - `Cargo.toml`: the `[package.metadata.cargo-machete]` `ignored` list adds `log`. CI runs `cargo machete` over the whole directory tree, so it analyses this crate too, and the published crate declares `log` without using it (it logs through `tracing`). Removing the dependency would change the published manifest more than exempting it.
 - `src/highlighter/registry.rs` and `src/highlighter/wasm_stub.rs`: `SyntaxColors` gains the slots `field`, `namespace`, `type.alias`, `variable.alias` and `variable.column_alias`, each with its arm in `SyntaxColors::style`. DBFlux's SQL highlight query captures columns, schemas, alias qualifiers, declared table aliases and column aliases under these names, and the palette styles them. Upstream has no slot for them, so the captures fell back to their prefix (`type`, `variable`) or to no style at all. Covered by `sql_captures_give_each_identifier_its_role` in `crates/dbflux_components/src/highlighting.rs` and `syntax_roles_are_styled_in_both_variants` in `crates/dbflux_components/src/theme.rs`.
 - `src/input/popovers/completion_menu.rs` and `Cargo.toml`: the completion menu highlights the characters of each label that fuzzy-match the item's `filter_text` (fzf-style, through `fuzzy-matcher`'s skim matcher, case-insensitive), instead of the first `filter_text.len()` characters. DBFlux's SQL completion offers fuzzy matches such as `alarm_message` for `messa`, where a leading-prefix highlight marks the wrong letters. Prefix matches highlight exactly as before. The manifest adds the `fuzzy-matcher` 0.3 dependency the workspace already uses.
-- `src/inspector.rs`: `init` registers the div inspector with the factory form of `App::register_inspector_element`, which gpui-pre 0.3.9 requires: the factory creates the `DivInspector` entity once per inspector and returns the render closure, replacing the `OnceCell` that the closure filled on first use. This is the form gpui-component 0.7.3 uses. Drop this entry when the crate moves to a release built against gpui-pre 0.3.9 or later.
+- `src/select.rs`: the trigger shows the committed selection's title rather than the item under the list cursor, so moving the cursor through a filtered search does not change the shown value until Enter. While the list is open and has rows but no highlighted row, the first match is highlighted (`highlight_first_match_if_unset`), so Enter picks a match right after a query that went from no matches to some; the list decides the highlight from the rows it last drew, which are none after an empty result. 0.7.3 itself now clears the query and resolves the committed value in the full list on every close, which the 0.6.1 copy patched locally.
 
 ## Refresh
 

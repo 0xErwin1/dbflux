@@ -404,12 +404,19 @@ impl super::KeyValueDocument {
                 true
             }
             Command::ResultsAddRow => {
+                // Open the dialog here rather than deferring to render: a
+                // modal made visible during this document's render would be
+                // seen by the window root one frame late, when the root has
+                // already computed the key context for the frame, so Tab on
+                // the very next keystroke would fall through to the root.
                 if self.focus_mode == KeyValueFocusMode::ValuePanel && self.is_structured_type() {
                     if let Some(key_type) = self.selected_key_type() {
-                        self.pending_open_add_member_modal = Some(key_type);
+                        self.add_member_modal
+                            .update(cx, |modal, cx| modal.open(key_type, window, cx));
                     }
                 } else {
-                    self.pending_open_new_key_modal = true;
+                    self.new_key_modal
+                        .update(cx, |modal, cx| modal.open(window, cx));
                 }
                 cx.notify();
                 true
