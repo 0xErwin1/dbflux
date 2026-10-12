@@ -6,7 +6,7 @@ use std::{
 use gpui::{
     Along, AnyElement, App, AppContext, Axis, Bounds, Context, Element, ElementId, Empty, Entity,
     EventEmitter, InteractiveElement as _, IntoElement, IsZero as _, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Render, RenderOnce, Style, StyleRefinement, Styled, Window, div,
+    ParentElement, Pixels, Render, RenderOnce, Style, StyleRefinement, Styled, Window, div, px,
     prelude::FluentBuilder,
 };
 
@@ -151,6 +151,17 @@ impl RenderOnce for ResizablePanelGroup {
             state.sync_panels_count(self.axis, panels_count, cx);
         });
 
+        // A group that has never been measured would lay its sized panels out
+        // at their raw initial sizes for one frame, leaving the rest of the
+        // container empty, before `adjust_to_container_size` scales them to
+        // fill it. When every panel has an initial size, that scaling is a
+        // pure ratio, so flex can produce it on the first frame directly.
+        let fill_by_ratio = state.read(cx).container_size().is_zero()
+            && self
+                .children
+                .iter()
+                .all(|panel| panel.initial_size.is_some_and(|size| !size.is_zero()));
+
         container
             .id(self.id)
             .size_full()
@@ -169,6 +180,7 @@ impl RenderOnce for ResizablePanelGroup {
                         panel.axis = self.axis;
                         panel.state = Some(state.clone());
                         panel.handle_appearance = self.handle_appearance.clone();
+                        panel.fill_by_ratio = fill_by_ratio;
                         panel
                     }),
             )
@@ -247,6 +259,9 @@ pub struct ResizablePanel {
     visible: bool,
     style: StyleRefinement,
     handle_appearance: Option<ResizeHandleRenderer>,
+    /// Set by the group for its first, unmeasured frame: share the container
+    /// in proportion to the initial sizes instead of taking them literally.
+    fill_by_ratio: bool,
 }
 
 impl ResizablePanel {
@@ -262,6 +277,7 @@ impl ResizablePanel {
             visible: true,
             style: StyleRefinement::default(),
             handle_appearance: None,
+            fill_by_ratio: false,
         }
     }
 
@@ -339,6 +355,17 @@ impl RenderOnce for ResizablePanel {
             // 3. initial_size is Some and size is Some, use `size`.
             .when(self.initial_size.is_none(), |this| this.flex_shrink_1())
             .when_some(self.initial_size, |this, initial_size| {
+                if self.fill_by_ratio && panel_state.size.is_none() {
+                    // Grow factors proportional to the initial sizes from a
+                    // zero basis split the container in exactly the ratio
+                    // `adjust_to_container_size` settles on afterwards.
+                    return this.flex_basis(px(0.)).map(|mut this| {
+                        this.style().flex_grow = Some(initial_size.as_f32());
+                        this.style().flex_shrink = Some(1.);
+                        this
+                    });
+                }
+
                 // The `self.size` is None, that mean the initial size for the panel,
                 // so we need set `flex_shrink_0` To let it keep the initial size.
                 this.when(
