@@ -110,20 +110,6 @@ jobs:
 
           sudo apt-get install -y gettext imagemagick
 
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
-        with:
-          prefix-key: "v0-rust"
-          shared-key: linux-jammy-${{ matrix.arch }}
-          cache-targets: true
-          cache-on-failure: true
-          # A release runs on a tag ref, and a cache saved there is scoped to
-          # that tag: no later run can read it, yet it still counts toward the
-          # repository's 10 GB limit and evicts the caches main relies on.
-          # Only the nightly, which runs on main, writes; releases restore from
-          # main through the shared-key fallback.
-          save-if: ${{ inputs.channel == 'nightly' }}
-
       - name: Stamp workspace version
         env:
           VERSION: ${{ inputs.version }}
@@ -577,20 +563,6 @@ jobs:
         # native arm64 target.
         run: rustup target add ${{ matrix.target }}
 
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
-        with:
-          prefix-key: "v0-rust"
-          shared-key: macos-${{ matrix.arch }}
-          cache-targets: true
-          cache-on-failure: true
-          # A release runs on a tag ref, and a cache saved there is scoped to
-          # that tag: no later run can read it, yet it still counts toward the
-          # repository's 10 GB limit and evicts the caches main relies on.
-          # Only the nightly, which runs on main, writes; releases restore from
-          # main through the shared-key fallback.
-          save-if: ${{ inputs.channel == 'nightly' }}
-
       - name: Stamp workspace version
         env:
           VERSION: ${{ inputs.version }}
@@ -811,7 +783,8 @@ jobs:
   build-windows:
     name: Build Windows amd64
     runs-on: windows-latest
-    timeout-minutes: 60
+    # A cold release build takes 40-60 minutes on the hosted runner.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -846,6 +819,12 @@ jobs:
           # repository's 10 GB limit and evicts the caches main relies on.
           # Only the nightly, which runs on main, writes; releases restore from
           # main through the shared-key fallback.
+          #
+          # Windows is the only release build that caches. The Linux and macOS
+          # builds finish cold well inside their timeout, and with their caches
+          # the total exceeded the 10 GB limit: every nightly cache was evicted
+          # before the next nightly could read it, and the CI caches in
+          # tests.yml went with them.
           save-if: ${{ inputs.channel == 'nightly' }}
 
       - name: Stamp workspace version
