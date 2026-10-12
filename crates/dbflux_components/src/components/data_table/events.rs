@@ -189,4 +189,9 @@ pub enum DataTableEvent {
         pending_inserts: Vec<usize>,
         dirty_rows: Vec<usize>,
     },
+
+    /// The last row came into view, by scrolling to the bottom or moving the
+    /// cursor onto it. Emitted once per row count, so a host that appends
+    /// rows hears about the new end again.
+    ReachedEnd,
 }
