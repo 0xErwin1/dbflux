@@ -1,8 +1,8 @@
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index 533b6005..05a10ebe 100644
+index db480f3..b2e8784 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
-@@ -3084,6 +3084,10 @@ impl Interactivity {
+@@ -3088,6 +3088,10 @@ impl Interactivity {
                  });
  
                  if is_focused {
@@ -14,7 +14,7 @@ index 533b6005..05a10ebe 100644
                      // down event happened on this element. The next key up
                      // event will be mapped to a click event if both of the
 diff --git a/crates/gpui/src/key_dispatch.rs b/crates/gpui/src/key_dispatch.rs
-index f18bd0e9..e70c2edc 100644
+index 2f755b1..4ff7429 100644
 --- a/crates/gpui/src/key_dispatch.rs
 +++ b/crates/gpui/src/key_dispatch.rs
 @@ -86,6 +86,9 @@ pub(crate) struct DispatchNode {
@@ -47,18 +47,18 @@ index f18bd0e9..e70c2edc 100644
          self.active_node()
              .modifiers_changed_listeners
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 7e8577c1..4b670a63 100644
+index 86d6321..d7e223e 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -1336,6 +1336,7 @@ pub struct Window {
+@@ -1409,6 +1409,7 @@ pub struct Window {
      #[cfg(feature = "profiler")]
-     window_profiler: profiler::WindowProfiler,
+     pub(crate) window_profiler: profiler::WindowProfiler,
      last_input_modality: InputModality,
 +    keyboard_focus_visible: bool,
      touch_gestures: TouchGestureRecognizer,
      touch_prediction_enabled: bool,
      long_press_timer: Option<Task<()>>,
-@@ -1512,6 +1513,12 @@ pub(crate) enum DrawPhase {
+@@ -1585,6 +1586,12 @@ pub(crate) enum DrawPhase {
  
  pub(crate) const PENDING_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
  
@@ -71,7 +71,7 @@ index 7e8577c1..4b670a63 100644
  /// Pending input for a potential multi-stroke key binding.
  pub struct PendingInputStatus<'a> {
      keystrokes: &'a [Keystroke],
-@@ -2287,6 +2294,7 @@ impl Window {
+@@ -2399,6 +2406,7 @@ impl Window {
              #[cfg(feature = "profiler")]
              window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
              last_input_modality: InputModality::Mouse,
@@ -79,7 +79,7 @@ index 7e8577c1..4b670a63 100644
              touch_gestures: TouchGestureRecognizer::new(
                  cx.platform
                      .gestures()
-@@ -3473,6 +3481,14 @@ impl Window {
+@@ -3753,6 +3761,14 @@ impl Window {
          self.last_input_modality == InputModality::Touch
      }
  
@@ -94,7 +94,7 @@ index 7e8577c1..4b670a63 100644
      /// The current state of the keyboard's capslock
      pub fn capslock(&self) -> Capslock {
          self.capslock
-@@ -5864,6 +5880,16 @@ impl Window {
+@@ -6145,6 +6161,16 @@ impl Window {
              self.refresh();
          }
  
@@ -111,7 +111,7 @@ index 7e8577c1..4b670a63 100644
          // Handlers may set this to false by calling `stop_propagation`.
          cx.propagate_event = true;
          // Handlers may set this to true by calling `prevent_default`.
-@@ -6319,6 +6345,22 @@ impl Window {
+@@ -6642,6 +6668,29 @@ impl Window {
              return;
          }
  
@@ -127,14 +127,21 @@ index 7e8577c1..4b670a63 100644
 +                .node(node_id)
 +                .claims_activation_keys
 +        {
-+            self.finish_dispatch_key_event(event, dispatch_path, self.context_stack(), cx);
++            self.finish_dispatch_key_event(
++                event,
++                Some(&keystroke),
++                input_preference,
++                dispatch_path,
++                self.context_stack(),
++                cx,
++            );
 +            return;
 +        }
 +
          let mut currently_pending = self.pending_input.take().unwrap_or_default();
          if currently_pending.focus.is_some() && currently_pending.focus != self.focus {
              currently_pending = PendingInput::default();
-@@ -6409,6 +6451,14 @@ impl Window {
+@@ -6726,6 +6775,14 @@ impl Window {
          self.pending_input_changed(cx);
      }
  
@@ -149,7 +156,7 @@ index 7e8577c1..4b670a63 100644
      fn new_pending_input_timeout(&self, duration: Duration, cx: &App) -> PendingInputTimeout {
          let (started_at, task) = self.start_pending_input_timeout(duration, cx);
          PendingInputTimeout {
-@@ -6492,6 +6542,12 @@ impl Window {
+@@ -6813,6 +6870,12 @@ impl Window {
          dispatch_path: &SmallVec<[DispatchNodeId; 32]>,
          cx: &mut App,
      ) {

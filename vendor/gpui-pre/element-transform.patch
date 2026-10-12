@@ -1,8 +1,8 @@
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index f9208d04ad0f44..fdaceab977ce8b 100644
+index fc292f2..afaf5be 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
-@@ -2329,21 +2329,23 @@ impl Interactivity {
+@@ -2384,21 +2384,23 @@ impl Interactivity {
                  }
  
                  window.with_text_style(style.text_style().cloned(), |window| {
@@ -40,7 +40,7 @@ index f9208d04ad0f44..fdaceab977ce8b 100644
                  })
              },
          )
-@@ -2487,95 +2489,104 @@ impl Interactivity {
+@@ -2542,95 +2544,104 @@ impl Interactivity {
                  }
  
                  window.with_element_opacity(style.opacity, |window| {
@@ -179,8 +179,7 @@ index f9208d04ad0f44..fdaceab977ce8b 100644
 -                                        }
  
 -                                        f(&style, window, cx);
-+                                            f(&style, window, cx);
- 
+-
 -                                        if let Some(_hitbox) = hitbox {
 -                                            #[cfg(any(feature = "inspector", debug_assertions))]
 -                                            window.insert_inspector_hitbox(
@@ -188,6 +187,8 @@ index f9208d04ad0f44..fdaceab977ce8b 100644
 -                                                _inspector_id,
 -                                                cx,
 -                                            );
++                                            f(&style, window, cx);
++
 +                                            if let Some(_hitbox) = hitbox {
 +                                                #[cfg(any(
 +                                                    feature = "inspector",
@@ -220,7 +221,7 @@ index f9208d04ad0f44..fdaceab977ce8b 100644
  
                  ((), element_state)
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index ea0f5d7e31af43..d33bd7f42ef511 100644
+index be37813..c640f26 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
 @@ -42,6 +42,7 @@ pub struct Scene {
@@ -699,7 +700,7 @@ index ea0f5d7e31af43..d33bd7f42ef511 100644
  #[repr(C)]
  #[expect(missing_docs)]
 diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
-index 9150fdded91b81..35411c366fabf0 100644
+index 9150fdd..35411c3 100644
 --- a/crates/gpui/src/style.rs
 +++ b/crates/gpui/src/style.rs
 @@ -8,8 +8,8 @@ use crate::{
@@ -795,7 +796,7 @@ index 9150fdded91b81..35411c366fabf0 100644
              grid_cols: None,
              grid_location: None,
 diff --git a/crates/gpui/src/styled.rs b/crates/gpui/src/styled.rs
-index a24982a6acb607..3e0fcff5f0917e 100644
+index a24982a..3e0fcff 100644
 --- a/crates/gpui/src/styled.rs
 +++ b/crates/gpui/src/styled.rs
 @@ -1,8 +1,8 @@
@@ -824,21 +825,21 @@ index a24982a6acb607..3e0fcff5f0917e 100644
      fn border_dashed(mut self) -> Self {
          self.style().border_style = Some(BorderStyle::Dashed);
 diff --git a/crates/gpui/src/text_system/line.rs b/crates/gpui/src/text_system/line.rs
-index 15101e6a2f39b5..25f7c8b3cf1809 100644
+index f521005..f03214d 100644
 --- a/crates/gpui/src/text_system/line.rs
 +++ b/crates/gpui/src/text_system/line.rs
 @@ -1,7 +1,8 @@
  use crate::{
      App, Bounds, DevicePixels, Half, Hsla, LineLayout, Pixels, Point, RenderGlyphParams, Result,
 -    SharedString, StrikethroughStyle, TextAlign, UnderlineStyle, Window, WrapBoundary,
--    WrappedLineLayout, black, fill, point, px, size,
-+    ScaledPixels, SharedString, StrikethroughStyle, TextAlign,
-+    TransformationMatrix, UnderlineStyle, Window, WrapBoundary, WrappedLineLayout, black, fill,
-+    point, px, size,
+-    WrappedLineLayout, black, fill, point, px, size, underline_y_offset,
++    ScaledPixels, SharedString, StrikethroughStyle, TextAlign, TransformationMatrix,
++    UnderlineStyle, Window, WrapBoundary, WrappedLineLayout, black, fill, point, px, size,
++    underline_y_offset,
  };
  use derive_more::{Deref, DerefMut};
  use smallvec::SmallVec;
-@@ -532,7 +533,12 @@ fn paint_line(
+@@ -729,7 +730,12 @@ fn paint_line(
                  };
  
                  let content_mask = window.content_mask();
@@ -852,7 +853,7 @@ index 15101e6a2f39b5..25f7c8b3cf1809 100644
                      let vertical_offset = point(px(0.0), glyph.position.y);
                      if glyph.is_emoji {
                          window.paint_emoji(
-@@ -759,6 +765,22 @@ fn aligned_origin_x(
+@@ -1006,6 +1012,22 @@ fn aligned_origin_x(
      }
  }
  
@@ -875,9 +876,9 @@ index 15101e6a2f39b5..25f7c8b3cf1809 100644
  #[cfg(test)]
  mod tests {
      use super::*;
-@@ -1022,4 +1044,33 @@ mod tests {
-         assert_eq!(right.decoration_runs[1].len, 1);
-         assert_eq!(right.decoration_runs[1].color, blue);
+@@ -1976,4 +1998,33 @@ mod tests {
+             .is_err()
+         );
      }
 +
 +    #[test]
@@ -910,20 +911,19 @@ index 15101e6a2f39b5..25f7c8b3cf1809 100644
 +    }
  }
 diff --git a/crates/gpui/src/view.rs b/crates/gpui/src/view.rs
-index f8343be29a09d4..a2fc148dc3c429 100644
+index 081edd9..84853e1 100644
 --- a/crates/gpui/src/view.rs
 +++ b/crates/gpui/src/view.rs
-@@ -1,7 +1,8 @@
- use crate::{
-     AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
-     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
--    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
-+    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle,
-+    TransformationMatrix, WeakEntity,
+@@ -2,7 +2,7 @@ use crate::{
+     AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
+     Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
+     LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style,
+-    StyleRefinement, TextStyle, WeakEntity,
++    StyleRefinement, TextStyle, TransformationMatrix, WeakEntity,
  };
  use crate::{Empty, Window};
  use anyhow::Result;
-@@ -100,6 +101,58 @@ impl<V: 'static + Render> IntoElement for Entity<V> {
+@@ -114,6 +114,58 @@ impl<V: 'static + Render> IntoElement for Entity<V> {
      }
  }
  
@@ -982,7 +982,7 @@ index f8343be29a09d4..a2fc148dc3c429 100644
  impl IntoElement for AnyView {
      type Element = ViewElement<AnyView>;
  
-@@ -289,10 +342,12 @@ struct ViewElementState {
+@@ -319,10 +371,12 @@ struct ViewElementState {
      accessed_entities: FxHashSet<EntityId>,
  }
  
@@ -995,71 +995,45 @@ index f8343be29a09d4..a2fc148dc3c429 100644
  }
  
  impl<V: View> Element for ViewElement<V> {
-@@ -382,11 +437,13 @@ impl<V: View> Element for ViewElement<V> {
-                     |element_state, window| {
-                         let content_mask = window.content_mask();
-                         let text_style = window.text_style();
-+                        let transform = window.current_transform();
+@@ -526,11 +580,13 @@ fn prepaint_view(
+             |element_state, window| {
+                 let content_mask = window.content_mask();
+                 let text_style = window.text_style();
++                let transform = window.current_transform();
  
-                         if let Some(mut element_state) = element_state
-                             && element_state.cache_key.bounds == bounds
-                             && element_state.cache_key.content_mask == content_mask
-                             && element_state.cache_key.text_style == text_style
-+                            && element_state.cache_key.transform == transform
-                             && !window.dirty_views.contains(&entity_id)
-                             && !window.refreshing
-                         {
-@@ -427,6 +484,7 @@ impl<V: View> Element for ViewElement<V> {
-                                     bounds,
-                                     content_mask,
-                                     text_style,
-+                                    transform,
-                                 },
-                             },
-                         )
+                 if let Some(mut element_state) = element_state
+                     && element_state.cache_key.bounds == bounds
+                     && element_state.cache_key.content_mask == content_mask
+                     && element_state.cache_key.text_style == text_style
++                    && element_state.cache_key.transform == transform
+                     && !window.dirty_views.contains(&entity_id)
+                     && !window.refreshing
+                 {
+@@ -566,6 +622,7 @@ fn prepaint_view(
+                             bounds,
+                             content_mask,
+                             text_style,
++                            transform,
+                         },
+                     },
+                 )
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index cf8eded704ca0e..339b68c72c5785 100644
+index 1214b03..3b07284 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -8,21 +8,22 @@ use crate::{
+@@ -8,8 +8,9 @@ use crate::{
      Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
      AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
 -    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
 -    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
--    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
--    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
--    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
--    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
--    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
--    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
--    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
--    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
--    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
--    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
--    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
--    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
--    point, prelude::*, px, rems, size, transparent_black,
 +    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
-+    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global,
-+    GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext,
-+    KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers,
-+    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
-+    Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
-+    PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
-+    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
-+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow,
-+    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
-+    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
-+    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
-+    TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
-+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-+    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
-+    transparent_black,
- };
- 
- use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
-@@ -77,6 +78,87 @@ use crate::util::{
++    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId,
++    Global, GlobalElementId, GlyphId, GpuSpecs,
+     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
+     Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
+     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
+@@ -79,6 +80,87 @@ use crate::util::{
  };
  pub use prompts::*;
  
@@ -1147,7 +1121,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
  /// Default window size used when no explicit size is provided.
  pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
  
-@@ -832,6 +914,14 @@ pub struct Hitbox {
+@@ -842,6 +924,14 @@ pub struct Hitbox {
      pub behavior: HitboxBehavior,
  }
  
@@ -1162,7 +1136,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
  impl Hitbox {
      /// Checks if the hitbox is currently hovered. Returns `false` during keyboard input modality
      /// so that keyboard navigation suppresses hover highlights. Except when handling
-@@ -970,6 +1060,7 @@ pub(crate) struct DeferredDraw {
+@@ -1028,6 +1118,7 @@ pub(crate) struct DeferredDraw {
      text_style_stack: Vec<TextStyleRefinement>,
      content_mask: Option<ContentMask<Pixels>>,
      rem_size: Pixels,
@@ -1170,7 +1144,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      element: Option<AnyElement>,
      absolute_offset: Point<Pixels>,
      prepaint_range: Range<PrepaintStateIndex>,
-@@ -985,6 +1076,7 @@ pub(crate) struct Frame {
+@@ -1043,6 +1134,7 @@ pub(crate) struct Frame {
      pub(crate) dispatch_tree: DispatchTree,
      pub(crate) scene: Scene,
      pub(crate) hitboxes: Vec<Hitbox>,
@@ -1178,7 +1152,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      pub(crate) window_control_hitboxes: Vec<(WindowControlArea, Hitbox)>,
      pub(crate) deferred_draws: Vec<DeferredDraw>,
      pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
-@@ -1002,6 +1094,7 @@ pub(crate) struct Frame {
+@@ -1062,6 +1154,7 @@ pub(crate) struct Frame {
  #[derive(Clone, Default)]
  pub(crate) struct PrepaintStateIndex {
      hitboxes_index: usize,
@@ -1186,7 +1160,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      tooltips_index: usize,
      deferred_draws_index: usize,
      dispatch_tree_index: usize,
-@@ -1031,6 +1124,7 @@ impl Frame {
+@@ -1099,6 +1192,7 @@ impl Frame {
              dispatch_tree,
              scene: Scene::default(),
              hitboxes: Vec::new(),
@@ -1194,7 +1168,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              window_control_hitboxes: Vec::new(),
              deferred_draws: Vec::new(),
              input_handlers: Vec::new(),
-@@ -1059,6 +1153,7 @@ impl Frame {
+@@ -1129,6 +1223,7 @@ impl Frame {
          self.tooltip_requests.clear();
          self.cursor_styles.clear();
          self.hitboxes.clear();
@@ -1202,7 +1176,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          self.window_control_hitboxes.clear();
          self.deferred_draws.clear();
          self.tab_stops.clear();
-@@ -1095,8 +1190,7 @@ impl Frame {
+@@ -1166,8 +1261,7 @@ impl Frame {
          let mut set_hover_hitbox_count = false;
          let mut hit_test = HitTest::default();
          for hitbox in self.hitboxes.iter().rev() {
@@ -1212,7 +1186,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                  hit_test.ids.push(hitbox.id);
                  if !set_hover_hitbox_count
                      && hitbox.behavior == HitboxBehavior::BlockMouseExceptScroll
-@@ -1115,6 +1209,31 @@ impl Frame {
+@@ -1186,6 +1280,31 @@ impl Frame {
          hit_test
      }
  
@@ -1244,7 +1218,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      pub(crate) fn focus_path(&self) -> SmallVec<[FocusId; 8]> {
          self.focus
              .map(|focus_id| self.dispatch_tree.focus_path(focus_id))
-@@ -1167,6 +1286,7 @@ pub struct Window {
+@@ -1239,6 +1358,7 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -1252,7 +1226,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1994,6 +2114,7 @@ impl Window {
+@@ -2142,6 +2262,7 @@ impl Window {
              text_style_stack: Vec::new(),
              rendered_entity_stack: Vec::new(),
              element_offset_stack: Vec::new(),
@@ -1260,7 +1234,32 @@ index cf8eded704ca0e..339b68c72c5785 100644
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
              requested_autoscroll: None,
-@@ -3479,7 +3600,16 @@ impl Window {
+@@ -3224,7 +3345,7 @@ impl Window {
+         self.invalidator.debug_assert_paint();
+         let underline = self.underline(origin, width, style);
+         if exclusions.is_empty() {
+-            self.next_frame.scene.insert_primitive(underline);
++            self.insert_primitive(underline);
+             return;
+         }
+ 
+@@ -3242,13 +3363,13 @@ impl Window {
+             })
+             .collect::<SmallVec<[_; 4]>>();
+         if exclusions.is_empty() {
+-            self.next_frame.scene.insert_primitive(underline);
++            self.insert_primitive(underline);
+             return;
+         }
+         exclusions.sort_unstable_by_key(|span| span.start);
+ 
+         let mut paint_span = |start, end| {
+-            self.next_frame.scene.insert_primitive(Underline {
++            self.insert_primitive(Underline {
+                 content_mask: ContentMask {
+                     bounds: Bounds::from_corners(
+                         point(start, bounds.top()),
+@@ -3895,7 +4016,16 @@ impl Window {
              traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
  
              for deferred_draw_ix in traversal_order {
@@ -1278,7 +1277,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                      let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                      self.element_id_stack
                          .clone_from(&deferred_draw.element_id_stack);
-@@ -3492,6 +3622,8 @@ impl Window {
+@@ -3908,6 +4038,8 @@ impl Window {
                          deferred_draw.rem_size,
                          deferred_draw.absolute_offset,
                          deferred_draw.prepaint_range.clone(),
@@ -1287,7 +1286,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                      )
                  };
                  self.next_frame.dispatch_tree.set_active_node(parent_node);
-@@ -3499,9 +3631,16 @@ impl Window {
+@@ -3915,9 +4047,16 @@ impl Window {
                  let prepaint_start = self.prepaint_index();
                  if let Some(mut element) = element {
                      self.with_rendered_view(current_view, |window| {
@@ -1307,7 +1306,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                              });
                          });
                      });
-@@ -3541,11 +3680,14 @@ impl Window {
+@@ -3957,11 +4096,14 @@ impl Window {
  
              let paint_start = self.paint_index();
              let content_mask = deferred_draw.content_mask;
@@ -1325,7 +1324,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                          });
                      })
                  })
-@@ -3569,6 +3711,7 @@ impl Window {
+@@ -3985,6 +4127,7 @@ impl Window {
      pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
          PrepaintStateIndex {
              hitboxes_index: self.next_frame.hitboxes.len(),
@@ -1333,7 +1332,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              tooltips_index: self.next_frame.tooltip_requests.len(),
              deferred_draws_index: self.next_frame.deferred_draws.len(),
              dispatch_tree_index: self.next_frame.dispatch_tree.len(),
-@@ -3583,6 +3726,14 @@ impl Window {
+@@ -3999,6 +4142,14 @@ impl Window {
                  .iter()
                  .cloned(),
          );
@@ -1348,7 +1347,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          self.next_frame.tooltip_requests.extend(
              self.rendered_frame.tooltip_requests
                  [range.start.tooltips_index..range.end.tooltips_index]
-@@ -3619,6 +3770,7 @@ impl Window {
+@@ -4035,6 +4186,7 @@ impl Window {
                      text_style_stack: deferred_draw.text_style_stack.clone(),
                      content_mask: deferred_draw.content_mask,
                      rem_size: deferred_draw.rem_size,
@@ -1356,7 +1355,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                      priority: deferred_draw.priority,
                      element: None,
                      absolute_offset: deferred_draw.absolute_offset,
-@@ -3741,7 +3893,9 @@ impl Window {
+@@ -4167,7 +4319,9 @@ impl Window {
      ) -> R {
          self.invalidator.debug_assert_paint_or_prepaint();
          if let Some(mask) = mask {
@@ -1367,7 +1366,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              self.content_mask_stack.push(mask);
              let result = f(self);
              self.content_mask_stack.pop();
-@@ -3751,6 +3905,72 @@ impl Window {
+@@ -4177,6 +4331,72 @@ impl Window {
          }
      }
  
@@ -1440,7 +1439,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      /// Updates the global element offset relative to the current offset. This is used to implement
      /// scrolling. This method should only be called during the prepaint phase of element drawing.
      pub fn with_element_offset<R>(
-@@ -4118,6 +4338,7 @@ impl Window {
+@@ -4517,6 +4737,7 @@ impl Window {
              text_style_stack: self.text_style_stack.clone(),
              content_mask,
              rem_size: self.rem_size(),
@@ -1448,7 +1447,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              priority,
              element: Some(element),
              absolute_offset,
-@@ -4135,11 +4356,11 @@ impl Window {
+@@ -4534,11 +4755,11 @@ impl Window {
          self.invalidator.debug_assert_paint();
  
          let content_mask = self.content_mask();
@@ -1464,7 +1463,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          }
  
          let result = f(self);
-@@ -4174,7 +4395,7 @@ impl Window {
+@@ -4573,7 +4794,7 @@ impl Window {
                  continue;
              }
              let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
@@ -1473,7 +1472,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                  order: 0,
                  blur_radius: shadow.blur_radius.scale(scale_factor),
                  bounds: self.cover_bounds(shadow_bounds),
-@@ -4300,7 +4521,7 @@ impl Window {
+@@ -4699,7 +4920,7 @@ impl Window {
          };
  
          if !quad.background.is_transparent() {
@@ -1482,7 +1481,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              return;
          }
  
-@@ -4310,7 +4531,7 @@ impl Window {
+@@ -4709,7 +4930,7 @@ impl Window {
          let inner_bounds = Self::largest_border_interior(&quad);
  
          if inner_bounds.is_empty() {
@@ -1491,7 +1490,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              return;
          }
  
-@@ -4340,7 +4561,7 @@ impl Window {
+@@ -4739,7 +4960,7 @@ impl Window {
          for strip in strips {
              let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
              if !content_mask_bounds.is_empty() {
@@ -1500,7 +1499,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                      content_mask: ContentMask {
                          bounds: content_mask_bounds,
                      },
-@@ -4362,9 +4583,7 @@ impl Window {
+@@ -4761,9 +4982,7 @@ impl Window {
          path.content_mask = content_mask;
          let color: Background = color.into();
          path.color = color.opacity(opacity);
@@ -1511,16 +1510,16 @@ index cf8eded704ca0e..339b68c72c5785 100644
      }
  
      /// Paint an underline into the scene for the next frame at the current z-index.
-@@ -4391,7 +4610,7 @@ impl Window {
-         };
-         let element_opacity = self.element_opacity();
+@@ -4777,7 +4996,7 @@ impl Window {
+     ) {
+         self.invalidator.debug_assert_paint();
+         let underline = self.underline(origin, width, style);
+-        self.next_frame.scene.insert_primitive(underline);
++        self.insert_primitive(underline);
+     }
  
--        self.next_frame.scene.insert_primitive(Underline {
-+        self.insert_primitive(Underline {
-             order: 0,
-             pad: 0,
-             bounds,
-@@ -4421,7 +4640,7 @@ impl Window {
+     /// Paint a strikethrough into the scene for the next frame at the current z-index.
+@@ -4799,7 +5018,7 @@ impl Window {
          };
          let opacity = self.element_opacity();
  
@@ -1529,7 +1528,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              order: 0,
              pad: 0,
              bounds,
-@@ -4452,6 +4671,9 @@ impl Window {
+@@ -4830,6 +5049,9 @@ impl Window {
  
          let element_opacity = self.element_opacity();
          let scale_factor = self.scale_factor();
@@ -1539,7 +1538,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          let glyph_origin = origin.scale(scale_factor);
  
          let quantized_origin = Point::new(
-@@ -4472,7 +4694,7 @@ impl Window {
+@@ -4850,7 +5072,7 @@ impl Window {
              glyph_id,
              font_size,
              subpixel_variant,
@@ -1548,7 +1547,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              is_emoji: false,
              subpixel_rendering,
              dilation,
-@@ -4487,14 +4709,21 @@ impl Window {
+@@ -4865,14 +5087,21 @@ impl Window {
                      Ok(Some((size, Cow::Owned(bytes))))
                  })?
                  .expect("Callback above only errors or returns Some");
@@ -1573,7 +1572,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                      order: 0,
                      pad: 0,
                      bounds,
-@@ -4504,7 +4733,7 @@ impl Window {
+@@ -4882,7 +5111,7 @@ impl Window {
                      transformation: TransformationMatrix::unit(),
                  });
              } else {
@@ -1582,7 +1581,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                      order: 0,
                      pad: 0,
                      bounds,
-@@ -4527,6 +4756,10 @@ impl Window {
+@@ -4905,6 +5134,10 @@ impl Window {
              return false;
          }
  
@@ -1593,7 +1592,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          let mode = match self.text_rendering_mode.get() {
              TextRenderingMode::PlatformDefault => self
                  .text_system()
-@@ -4555,6 +4788,9 @@ impl Window {
+@@ -4933,6 +5166,9 @@ impl Window {
          self.invalidator.debug_assert_paint();
  
          let scale_factor = self.scale_factor();
@@ -1603,7 +1602,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          let glyph_origin = origin.scale(scale_factor);
          let integer_origin = glyph_origin.map(|c| ScaledPixels(round_half_toward_zero(c.0)));
          let params = RenderGlyphParams {
-@@ -4562,7 +4798,7 @@ impl Window {
+@@ -4940,7 +5176,7 @@ impl Window {
              glyph_id,
              font_size,
              subpixel_variant: Default::default(),
@@ -1612,7 +1611,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              is_emoji: true,
              subpixel_rendering: false,
              dilation: 0,
-@@ -4578,14 +4814,21 @@ impl Window {
+@@ -4956,14 +5192,21 @@ impl Window {
                  })?
                  .expect("Callback above only errors or returns Some");
  
@@ -1637,7 +1636,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
                  order: 0,
                  pad: 0,
                  grayscale: false.into(),
-@@ -4651,7 +4894,7 @@ impl Window {
+@@ -5029,7 +5272,7 @@ impl Window {
              .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
              .map_size(|size| size.ceil());
  
@@ -1646,7 +1645,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              order: 0,
              pad: 0,
              bounds: final_bounds,
-@@ -4757,7 +5000,7 @@ impl Window {
+@@ -5135,7 +5378,7 @@ impl Window {
              .scale(self.scale_factor());
          let opacity = self.element_opacity();
  
@@ -1655,7 +1654,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              order: 0,
              pad: 0,
              grayscale: grayscale.into(),
-@@ -4781,7 +5024,7 @@ impl Window {
+@@ -5163,7 +5406,7 @@ impl Window {
  
          let bounds = self.snap_bounds(bounds);
          let content_mask = self.snapped_content_mask();
@@ -1664,7 +1663,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
              order: 0,
              bounds,
              content_mask,
-@@ -4914,14 +5157,28 @@ impl Window {
+@@ -5296,14 +5539,28 @@ impl Window {
          self.invalidator.debug_assert_prepaint();
  
          let content_mask = self.content_mask();
@@ -1694,7 +1693,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
          self.next_frame.hitboxes.push(hitbox.clone());
          hitbox
      }
-@@ -7378,6 +7635,7 @@ pub fn outline(
+@@ -7871,6 +8128,7 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
  
  #[cfg(test)]
  mod tests {
@@ -1702,7 +1701,7 @@ index cf8eded704ca0e..339b68c72c5785 100644
      use std::{
          cell::{Cell, RefCell},
          path::PathBuf,
-@@ -8094,6 +8352,828 @@ mod tests {
+@@ -9078,6 +9336,828 @@ mod tests {
          assert_eq!(b_focus_count.get(), 1);
      }
  

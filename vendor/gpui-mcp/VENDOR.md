@@ -25,7 +25,7 @@ The bridge is written against the frame-observer hooks that `vendor/gpui-pre` ca
 `frame-observer.patch` (see `vendor/gpui-pre/VENDOR.md`). No published crate provides it,
 and a git dependency on the upstream repository would put `main` on a personal git source
 and pull in its own patched copy of Zed's gpui. Vendoring builds the crates against
-DBFlux's own `gpui` (`gpui-pre` 0.3.5 with both patches applied), so the app links one
+DBFlux's own `gpui` (`gpui-pre` 0.3.9 with its local patches applied), so the app links one
 gpui. The server and capture crates come from the same commit so the server speaks the
 bridge's exact protocol version.
 
@@ -60,9 +60,9 @@ files. `text-input-automation.patch`, `screenshot-freshness.patch` and
 - Dependencies. Upstream's `x.workspace = true` entries are replaced with the requirement
   and features its workspace root declares, copied verbatim.
 - `gpui` stays `gpui.workspace = true` in `gpui-mcp`, as upstream wrote it. In DBFlux that
-  resolves to `gpui = { package = "gpui-pre", version = "=0.3.5" }` from the root
+  resolves to `gpui = { package = "gpui-pre", version = "=0.3.9" }` from the root
   `Cargo.toml`, which `[patch.crates-io]` points at `vendor/gpui-pre`. No API fixups were
-  needed: the frame-observer patch gives gpui-pre 0.3.5 the API this commit expects.
+  needed: the frame-observer patch gives gpui-pre 0.3.9 the API this commit expects.
 - `gpui-mcp-server` sets `autotests = false` and declares only `tests/cache_hints.rs`.
   Its other two integration tests, `tests/disabled_state.rs` and `tests/region_capture.rs`,
   launch upstream's `examples/demo` application, which is not vendored (it depends on a

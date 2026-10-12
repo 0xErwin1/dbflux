@@ -1,8 +1,8 @@
 diff --git a/crates/gpui/src/elements/text.rs b/crates/gpui/src/elements/text.rs
-index d35ca41c..eec9095a 100644
+index 0e73d03..b0a89d0 100644
 --- a/crates/gpui/src/elements/text.rs
 +++ b/crates/gpui/src/elements/text.rs
-@@ -731,7 +731,14 @@ impl TextLayout {
+@@ -738,7 +738,14 @@ impl TextLayout {
                          )
                      } else if let Some(unclipped) = window
                          .text_system()
@@ -18,7 +18,7 @@ index d35ca41c..eec9095a 100644
                          .log_err()
                          && unclipped
                              .iter()
-@@ -760,12 +767,13 @@ impl TextLayout {
+@@ -767,12 +774,13 @@ impl TextLayout {
  
                  let Some(lines) = window
                      .text_system()
@@ -34,7 +34,7 @@ index d35ca41c..eec9095a 100644
                      .log_err()
                  else {
 diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
-index 35411c36..15266f84 100644
+index 35411c3..15266f8 100644
 --- a/crates/gpui/src/style.rs
 +++ b/crates/gpui/src/style.rs
 @@ -539,6 +539,9 @@ pub struct TextStyle {
@@ -56,7 +56,7 @@ index 35411c36..15266f84 100644
      }
  }
 diff --git a/crates/gpui/src/styled.rs b/crates/gpui/src/styled.rs
-index 3e0fcff5..774245b8 100644
+index 3e0fcff..774245b 100644
 --- a/crates/gpui/src/styled.rs
 +++ b/crates/gpui/src/styled.rs
 @@ -2,7 +2,7 @@ use crate::{
@@ -83,10 +83,10 @@ index 3e0fcff5..774245b8 100644
      fn font_features(mut self, features: FontFeatures) -> Self {
          self.text_style().font_features = Some(features);
 diff --git a/crates/gpui/src/text_system.rs b/crates/gpui/src/text_system.rs
-index de4a795d..ef60e289 100644
+index cf6bb10..d79908b 100644
 --- a/crates/gpui/src/text_system.rs
 +++ b/crates/gpui/src/text_system.rs
-@@ -525,6 +525,27 @@ impl WindowTextSystem {
+@@ -754,6 +754,27 @@ impl WindowTextSystem {
          runs: &[TextRun],
          wrap_width: Option<Pixels>,
          line_clamp: Option<usize>,
@@ -114,7 +114,7 @@ index de4a795d..ef60e289 100644
      ) -> Result<SmallVec<[WrappedLine; 1]>> {
          let mut runs = runs.iter().filter(|run| run.len > 0).cloned().peekable();
          let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
-@@ -592,6 +613,7 @@ impl WindowTextSystem {
+@@ -821,6 +842,7 @@ impl WindowTextSystem {
                  &font_runs,
                  wrap_width,
                  max_wrap_lines.map(|max| max.saturating_sub(wrapped_lines)),
@@ -123,10 +123,10 @@ index de4a795d..ef60e289 100644
              wrapped_lines += layout.wrap_boundaries.len();
  
 diff --git a/crates/gpui/src/text_system/line_layout.rs b/crates/gpui/src/text_system/line_layout.rs
-index e7362f71..afe15b4f 100644
+index f0bf121..b5a5c40 100644
 --- a/crates/gpui/src/text_system/line_layout.rs
 +++ b/crates/gpui/src/text_system/line_layout.rs
-@@ -578,6 +578,7 @@ impl LineLayoutCache {
+@@ -606,6 +606,7 @@ impl LineLayoutCache {
          runs: &[FontRun],
          wrap_width: Option<Pixels>,
          max_lines: Option<usize>,
@@ -134,7 +134,7 @@ index e7362f71..afe15b4f 100644
      ) -> Arc<WrappedLineLayout>
      where
          Text: AsRef<str>,
-@@ -589,6 +590,7 @@ impl LineLayoutCache {
+@@ -618,6 +619,7 @@ impl LineLayoutCache {
              runs,
              wrap_width,
              force_width: None,
@@ -142,7 +142,7 @@ index e7362f71..afe15b4f 100644
          } as &dyn AsCacheKeyRef;
  
          let current_frame = self.current_frame.upgradable_read();
-@@ -607,7 +609,15 @@ impl LineLayoutCache {
+@@ -636,7 +638,15 @@ impl LineLayoutCache {
          } else {
              drop(current_frame);
              let text = SharedString::from(text);
@@ -159,7 +159,7 @@ index e7362f71..afe15b4f 100644
              let wrap_boundaries = if let Some(wrap_width) = wrap_width {
                  unwrapped_layout.compute_wrap_boundaries(text.as_ref(), wrap_width, max_lines)
              } else {
-@@ -624,6 +634,7 @@ impl LineLayoutCache {
+@@ -653,6 +663,7 @@ impl LineLayoutCache {
                  runs: SmallVec::from(runs),
                  wrap_width,
                  force_width: None,
@@ -167,7 +167,7 @@ index e7362f71..afe15b4f 100644
              });
  
              let mut current_frame = self.current_frame.write();
-@@ -653,6 +664,7 @@ impl LineLayoutCache {
+@@ -683,6 +694,7 @@ impl LineLayoutCache {
              runs,
              wrap_width: None,
              force_width,
@@ -175,7 +175,7 @@ index e7362f71..afe15b4f 100644
          } as &dyn AsCacheKeyRef;
  
          let current_frame = self.current_frame.upgradable_read();
-@@ -681,6 +693,7 @@ impl LineLayoutCache {
+@@ -711,6 +723,7 @@ impl LineLayoutCache {
                  runs: SmallVec::from(runs),
                  wrap_width: None,
                  force_width,
@@ -183,7 +183,7 @@ index e7362f71..afe15b4f 100644
              });
              let layout = Arc::new(layout);
              current_frame.lines.insert(key.clone(), layout.clone());
-@@ -871,6 +884,44 @@ fn apply_force_width_to_layout(layout: &mut LineLayout, force_width: Pixels) {
+@@ -921,6 +934,44 @@ fn apply_force_width_to_layout(layout: &mut LineLayout, force_width: Pixels) {
      }
  }
  
@@ -228,7 +228,7 @@ index e7362f71..afe15b4f 100644
  /// A run of text with a single font.
  #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
  #[expect(missing_docs)]
-@@ -890,6 +941,7 @@ struct CacheKey {
+@@ -940,6 +991,7 @@ struct CacheKey {
      runs: SmallVec<[FontRun; 1]>,
      wrap_width: Option<Pixels>,
      force_width: Option<Pixels>,
@@ -236,7 +236,7 @@ index e7362f71..afe15b4f 100644
  }
  
  #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-@@ -899,6 +951,7 @@ struct CacheKeyRef<'a> {
+@@ -949,6 +1001,7 @@ struct CacheKeyRef<'a> {
      runs: &'a [FontRun],
      wrap_width: Option<Pixels>,
      force_width: Option<Pixels>,
@@ -244,7 +244,7 @@ index e7362f71..afe15b4f 100644
  }
  
  #[derive(Clone, Debug)]
-@@ -991,6 +1044,7 @@ impl AsCacheKeyRef for CacheKey {
+@@ -1041,6 +1094,7 @@ impl AsCacheKeyRef for CacheKey {
              runs: self.runs.as_slice(),
              wrap_width: self.wrap_width,
              force_width: self.force_width,
@@ -252,7 +252,7 @@ index e7362f71..afe15b4f 100644
          }
      }
  }
-@@ -1137,4 +1191,24 @@ mod tests {
+@@ -1187,4 +1241,24 @@ mod tests {
          let positions = glyph_x_positions(&layout);
          assert_eq!(positions, vec![0.5, 0.5]);
      }

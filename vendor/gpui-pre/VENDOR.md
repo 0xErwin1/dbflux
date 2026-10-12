@@ -23,7 +23,7 @@ let diagram_transform = ElementTransform::default()
 
 `ElementTransform` is a visual parent transform whose hit testing, culling and glyph
 rasterization stay coherent with the transformed subtree. Upstream gpui does not have it:
-`gpui-pre` 0.3.5 only wires `TransformationMatrix` into sprite primitives, so `div` cannot
+`gpui-pre` 0.3.9 only wires `TransformationMatrix` into sprite primitives, so `div` cannot
 be transformed and zooming text would either not render or scale a low-resolution glyph
 atlas. The feature is proposed upstream in
 [zed-industries/zed#53306](https://github.com/zed-industries/zed/discussions/53306) and
@@ -179,20 +179,20 @@ delta to this directory.
 
 ## Provenance
 
-- Base: the `gpui-pre` 0.3.5 crate published on crates.io (a snapshot of Zed's
-  `crates/gpui` at `zed@d89e9c2`), trimmed of `examples/`, `docs/`, `tests/` and their
+- Base: the `gpui-pre` 0.3.9 crate published on crates.io (a snapshot of Zed's
+  `crates/gpui` at `zed@93d7456`), trimmed of `examples/`, `docs/`, `tests/` and their
   target tables.
 - Patch 1: `element-transform.patch`, the diff of
   `0xErwin1/zed@978c6b45cb966f2d02bfc11cd8c1c4696b7c3fd8` (branch
   `feature/53306-gpui-transforms`) against Zed's `main` at its merge base — 14 commits over
-  seven files, 2533 diff lines.
+  seven files, rebased onto gpui-pre 0.3.9, 2532 diff lines.
 - Patch 2: `frame-observer.patch`, the GPUI delta of
   `themixednuts/gpui-mcp@7b834c1705cb3353650dfc681f29eaa29e4cf308` (`vendor/gpui`, licensed
   Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
   `zed@16c9aa7ea6d897a8044d9501cde1b295256722f2`, rebased onto this directory with patch 1
-  already applied — eight files, 1585 diff lines.
+  already applied — eight files, 1596 diff lines.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
-  patches 1 and 2 applied — three files, 166 diff lines. It has no upstream counterpart.
+  patches 1 and 2 applied — three files, 168 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
   patches 1 to 3 applied — one file, 105 diff lines. It has no upstream counterpart.
 - Patch 5: `read-only-accessibility.patch`, written for DBFlux against this directory with
@@ -200,18 +200,20 @@ delta to this directory.
 - Patch 6: `letter-spacing.patch`, written for DBFlux against this directory with
   patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
 - Patch 7: `keyboard-dispatch.patch`, written for DBFlux against this directory with
-  patches 1 to 6 applied — three files, 164 diff lines. It has no upstream counterpart.
+  patches 1 to 6 applied — three files, 171 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
 The patches are applied in that order, and each one is written against the tree the
-previous ones produce. All use the same path layout (`a/crates/gpui/src/...`, applied with
+previous ones produce. They were regenerated against 0.3.9 when the base moved from 0.3.5, so
+`refresh.sh 0.3.9` applies all seven without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
 `-p3`).
 
 ### Manual merges
 
-A refresh needs a human edit in two places, both in `src/window.rs`. **Re-check them after
-every refresh.**
+A refresh to a newer base usually needs a human edit in these places, all in `src/window.rs`.
+**Re-check them after every refresh**, then regenerate each patch from the merged tree so the
+next refresh starts clean again.
 
 1. The `use crate::{...}` import list. Upstream reorders it by rustfmt, so both patches
    reject their hunk there. Add `ElementTransform` (patch 1) and `FrameBuilder`,
@@ -222,6 +224,14 @@ every refresh.**
    hand when patch 2 was rebased. Patch 2 now carries the merged form and applies cleanly
    on top of patch 1, but if patch 1 changes that loop, patch 2 rejects there and needs the
    same merge again.
+3. `Window::draw`, where patch 2 moves the AccessKit `end_frame` before painting so frame
+   observers receive the tree, and sends the platform update only when the platform
+   accessibility flag was active for the whole frame. Upstream edits that block often (0.3.9
+   added draw-phase profiling around it), so its hunks are ported by hand.
+4. The activation-key branch of `Window::dispatch_key_event` (patch 7). It calls
+   `finish_dispatch_key_event`, whose signature follows upstream: 0.3.9 added
+   `recognized_keystroke` and `input_preference`, which the branch passes as the other
+   early returns there do.
 
 ### Deliberate deviations
 
