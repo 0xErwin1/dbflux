@@ -29,11 +29,12 @@ use dbflux_core::observability::{
     EventRecord, EventSeverity, EventSourceId,
 };
 use dbflux_core::{
-    DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic,
-    EditorLanguageProfile, ExecutionContext, ExecutionSourceContext, HistoryEntry, OutputReceiver,
-    QueryLanguage, QueryRequest, QueryResult, ReadOnlyEnforcement, RefreshPolicy,
-    SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult, check_schema_drift,
+    Connection, DangerousAction, DangerousQueryKind, DbError,
+    DiagnosticSeverity as CoreDiagnosticSeverity, DriftOutcome, DriverCapabilities,
+    EditorDiagnostic as CoreEditorDiagnostic, EditorLanguageProfile, ExecutionContext,
+    ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
+    ReadOnlyEnforcement, RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget,
+    ValidationResult, check_schema_drift,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -292,12 +293,33 @@ fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(
 /// Caps an editor query at `editor_row_limit` rows unless the request already
 /// carries its own limit, which wins even when it is zero. A limit beyond
 /// `u32::MAX` saturates because `QueryRequest::limit` is a `u32`.
-fn apply_editor_row_limit(mut request: QueryRequest, editor_row_limit: usize) -> QueryRequest {
-    if request.limit.is_none() {
+///
+/// `None` leaves the request as it is: the connection cannot enforce a row
+/// budget, and a driver that cannot enforce one refuses the whole request
+/// instead of running it unbounded (see [`enforces_request_row_limit`]).
+fn apply_editor_row_limit(
+    mut request: QueryRequest,
+    editor_row_limit: Option<usize>,
+) -> QueryRequest {
+    if let (Some(editor_row_limit), None) = (editor_row_limit, request.limit) {
         request.limit = Some(u32::try_from(editor_row_limit).unwrap_or(u32::MAX));
     }
 
     request
+}
+
+/// Whether `connection` enforces [`QueryRequest::limit`] itself: it stops
+/// reading rows at the cap and marks the result truncated, instead of refusing
+/// a request that carries one.
+///
+/// A request goes out with the editor row limit only when this holds. The limit
+/// is a budget the driver has to enforce, so sending it to a driver that cannot
+/// enforce it turns the query away without running anything; the native console
+/// gates its commands on the same flag.
+pub(crate) fn enforces_request_row_limit(connection: &dyn Connection) -> bool {
+    connection
+        .metadata()
+        .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
 }
 
 fn query_request_for_execution(
@@ -305,7 +327,7 @@ fn query_request_for_execution(
     active_database: Option<String>,
     exec_ctx: &ExecutionContext,
     query_language: QueryLanguage,
-    editor_row_limit: usize,
+    editor_row_limit: Option<usize>,
 ) -> QueryRequest {
     let window = match &exec_ctx.source {
         Some(ExecutionSourceContext::CollectionWindow {
