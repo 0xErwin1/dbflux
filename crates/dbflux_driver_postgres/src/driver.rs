@@ -2618,9 +2618,8 @@ impl Connection for PostgresConnection {
         (sql, values.to_vec())
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(truncate_table_statement(table))
     }
 
     fn build_drop_index_sql(
@@ -2628,17 +2627,12 @@ impl Connection for PostgresConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
-        let quoted_index = POSTGRES_DIALECT.quote_identifier(index_name);
-        if if_exists {
-            format!("DROP INDEX IF EXISTS {} CASCADE", quoted_index)
-        } else {
-            format!("DROP INDEX {} CASCADE", quoted_index)
-        }
+    ) -> Result<String, DbError> {
+        Ok(drop_index_statement(index_name, if_exists))
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -2687,6 +2681,58 @@ impl Connection for PostgresConnection {
 }
 
 impl RelationalConnection for PostgresConnection {}
+
+/// SQL text of `build_truncate_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn truncate_table_statement(table: &str) -> String {
+    let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+    format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
+}
+
+/// SQL text of `build_drop_index_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn drop_index_statement(index_name: &str, if_exists: bool) -> String {
+    let quoted_index = POSTGRES_DIALECT.quote_identifier(index_name);
+    if if_exists {
+        format!("DROP INDEX IF EXISTS {} CASCADE", quoted_index)
+    } else {
+        format!("DROP INDEX {} CASCADE", quoted_index)
+    }
+}
+
+/// SQL text of `version_query`, kept as a constant so the exact query is
+/// testable without a live server.
+const VERSION_QUERY: &str = "SELECT version()";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn truncate_table_statement_matches_the_driver_contract() {
+        assert_eq!(
+            truncate_table_statement("users"),
+            "TRUNCATE \"users\" RESTART IDENTITY CASCADE"
+        );
+    }
+
+    #[test]
+    fn drop_index_statement_matches_the_driver_contract() {
+        assert_eq!(
+            drop_index_statement("idx_users_email", false),
+            "DROP INDEX \"idx_users_email\" CASCADE"
+        );
+        assert_eq!(
+            drop_index_statement("idx_users_email", true),
+            "DROP INDEX IF EXISTS \"idx_users_email\" CASCADE"
+        );
+    }
+
+    #[test]
+    fn version_query_is_the_postgres_version_select() {
+        assert_eq!(VERSION_QUERY, "SELECT version()");
+    }
+}
 
 impl ConnectionExt for PostgresConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {

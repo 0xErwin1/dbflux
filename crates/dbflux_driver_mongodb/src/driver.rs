@@ -3212,9 +3212,9 @@ impl Connection for MongoConnection {
         )
     }
 
-    fn build_truncate_sql(&self, _table: &str) -> String {
+    fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "TRUNCATE TABLE table".to_string()
+        Ok("TRUNCATE TABLE table".to_string())
     }
 
     fn build_drop_index_sql(
@@ -3222,14 +3222,14 @@ impl Connection for MongoConnection {
         _index_name: &str,
         _table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "DROP INDEX index_name".to_string()
+        Ok("DROP INDEX index_name".to_string())
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         // MongoDB uses db.version() shell command, not SQL
-        "db.version()"
+        Ok("db.version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -4461,6 +4461,48 @@ mod tests {
         DatabaseCategory, DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind,
         SemanticRequest, Value, WhereOperator,
     };
+
+    /// The placeholder SQL texts emitted for truncate, drop-index and the
+    /// version probe must stay byte-for-byte identical while the trait
+    /// defaults move to `Result`. The client points at a closed local port;
+    /// building it contacts no server and these builders only format text.
+    #[test]
+    fn truncate_drop_index_and_version_texts_match_the_driver_contract() {
+        let uri = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200&connectTimeoutMS=200";
+        let client = Client::with_uri_str(uri).expect("client options parse without a server");
+        let connection = MongoConnection {
+            client: Arc::new(Mutex::new(client)),
+            default_database: Some("testdb".to_string()),
+            schema_settings: MongoSchemaSettings {
+                schema_sample_size: 100,
+                show_system_databases: false,
+            },
+            ssh_tunnel: None,
+            connection_uri: uri.to_string(),
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            _tls_pem_guard: None,
+        };
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("the MongoDB placeholder always builds"),
+            "TRUNCATE TABLE table"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx", Some("users"), false)
+                .expect("the MongoDB placeholder always builds"),
+            "DROP INDEX index_name"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("the MongoDB version probe is a constant"),
+            "db.version()"
+        );
+    }
 
     #[test]
     fn json_to_bson_reads_extended_json_dates() {

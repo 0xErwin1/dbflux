@@ -1413,9 +1413,9 @@ impl Connection for SqliteConnection {
         (sql, values.to_vec())
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        format!("DELETE FROM {}", quoted_table)
+        Ok(format!("DELETE FROM {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -1423,17 +1423,17 @@ impl Connection for SqliteConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = SQLITE_DIALECT.quote_identifier(index_name);
         if if_exists {
-            format!("DROP INDEX IF EXISTS {}", quoted_index)
+            Ok(format!("DROP INDEX IF EXISTS {}", quoted_index))
         } else {
-            format!("DROP INDEX {}", quoted_index)
+            Ok(format!("DROP INDEX {}", quoted_index))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT sqlite_version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT sqlite_version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -2881,7 +2881,7 @@ fn resolve_relation_name(conn: &RusqliteConnection, table: &str) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        RusqliteConnection, SqliteDialect, SqliteDriver, kind_from_decltype,
+        RusqliteConnection, SqliteConnectionState, SqliteDialect, SqliteDriver, kind_from_decltype,
         plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
@@ -2890,6 +2890,45 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
         WhereOperator,
     };
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use super::SqliteConnection;
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let connection = SqliteConnection::for_test(state);
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("SQLite supports truncate"),
+            "DELETE FROM \"users\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), false)
+                .expect("SQLite supports drop index"),
+            "DROP INDEX \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), true)
+                .expect("SQLite supports drop index"),
+            "DROP INDEX IF EXISTS \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("SQLite has a version query"),
+            "SELECT sqlite_version()"
+        );
+    }
 
     /// `table_details` declares `rowid`, `oid` and `_rowid_` only for rowid
     /// tables (<https://www.sqlite.org/lang_createtable.html#rowid>).

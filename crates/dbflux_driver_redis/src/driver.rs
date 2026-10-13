@@ -1768,9 +1768,9 @@ impl Connection for RedisConnection {
         ("SET key value".to_string(), Vec::new())
     }
 
-    fn build_truncate_sql(&self, _table: &str) -> String {
+    fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {
         // Redis doesn't support TRUNCATE - use FLUSHDB with caution
-        "FLUSHDB".to_string()
+        Ok(TRUNCATE_STATEMENT.to_string())
     }
 
     fn build_drop_index_sql(
@@ -1778,14 +1778,14 @@ impl Connection for RedisConnection {
         _index_name: &str,
         _table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         // Redis doesn't have named indexes like SQL databases
-        "DROP INDEX not_applicable".to_string()
+        Ok(DROP_INDEX_STATEMENT.to_string())
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         // Redis uses INFO command, not SQL
-        "INFO server | grep redis_version"
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -1794,6 +1794,30 @@ impl Connection for RedisConnection {
 }
 
 impl KeyValueConnection for RedisConnection {}
+
+/// SQL/command text of `build_truncate_sql`, kept as a constant so the exact
+/// text is testable without a live server.
+const TRUNCATE_STATEMENT: &str = "FLUSHDB";
+
+/// SQL/command text of `build_drop_index_sql`, kept as a constant so the
+/// exact text is testable without a live server.
+const DROP_INDEX_STATEMENT: &str = "DROP INDEX not_applicable";
+
+/// Command text of `version_query`, kept as a constant so the exact text is
+/// testable without a live server.
+const VERSION_QUERY: &str = "INFO server | grep redis_version";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn sql_builder_constants_match_the_driver_contract() {
+        assert_eq!(TRUNCATE_STATEMENT, "FLUSHDB");
+        assert_eq!(DROP_INDEX_STATEMENT, "DROP INDEX not_applicable");
+        assert_eq!(VERSION_QUERY, "INFO server | grep redis_version");
+    }
+}
 
 impl ConnectionExt for RedisConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {

@@ -36,6 +36,7 @@ use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
 mod core_flows;
+mod default_method_contracts;
 mod not_found_hints;
 mod select_data_column_check;
 mod select_data_joins;
@@ -469,7 +470,7 @@ struct HintConnection {
 }
 
 impl HintDriver {
-    fn with_databases(databases: &[&str]) -> Arc<dyn DbDriver> {
+    fn with_databases(databases: &[&str]) -> Arc<Self> {
         use dbflux_core::{DatabaseInfo, DbKind, DbSchemaInfo, RelationalSchema, SchemaSnapshot};
 
         let tables = ["users", "orders"]

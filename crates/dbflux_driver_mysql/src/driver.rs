@@ -2950,9 +2950,8 @@ impl Connection for MysqlConnection {
         (sql, values.to_vec())
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(truncate_table_statement(table))
     }
 
     fn build_drop_index_sql(
@@ -2960,19 +2959,12 @@ impl Connection for MysqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
-        let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
-        let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
-
-        if let Some(table) = quoted_table {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
-        } else {
-            format!("DROP INDEX {} ", quoted_index)
-        }
+    ) -> Result<String, DbError> {
+        Ok(drop_index_statement(index_name, table_name))
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT VERSION()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -2981,6 +2973,59 @@ impl Connection for MysqlConnection {
 }
 
 impl RelationalConnection for MysqlConnection {}
+
+/// SQL text of `build_truncate_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn truncate_table_statement(table: &str) -> String {
+    let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+    format!("TRUNCATE TABLE {}", quoted_table)
+}
+
+/// SQL text of `build_drop_index_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn drop_index_statement(index_name: &str, table_name: Option<&str>) -> String {
+    let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
+    let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
+
+    if let Some(table) = quoted_table {
+        format!("DROP INDEX {} ON {}", quoted_index, table)
+    } else {
+        format!("DROP INDEX {} ", quoted_index)
+    }
+}
+
+/// SQL text of `version_query`, kept as a constant so the exact query is
+/// testable without a live server.
+const VERSION_QUERY: &str = "SELECT VERSION()";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn truncate_table_statement_matches_the_driver_contract() {
+        assert_eq!(truncate_table_statement("users"), "TRUNCATE TABLE `users`");
+    }
+
+    #[test]
+    fn drop_index_statement_matches_the_driver_contract() {
+        assert_eq!(
+            drop_index_statement("idx_users_email", Some("users")),
+            "DROP INDEX `idx_users_email` ON `users`"
+        );
+        // The historical statement keeps its trailing space when no table is
+        // given; it is preserved byte-for-byte.
+        assert_eq!(
+            drop_index_statement("idx_users_email", None),
+            "DROP INDEX `idx_users_email` "
+        );
+    }
+
+    #[test]
+    fn version_query_is_the_mysql_version_select() {
+        assert_eq!(VERSION_QUERY, "SELECT VERSION()");
+    }
+}
 
 impl ConnectionExt for MysqlConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {

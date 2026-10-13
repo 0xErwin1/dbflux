@@ -2048,14 +2048,15 @@ pub trait Connection: Send + Sync {
     /// * `table` - The table name to truncate
     ///
     /// # Returns
-    /// A SQL string for TRUNCATE TABLE
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_truncate_sql(&self, table: &str) -> String {
+    /// A SQL string for TRUNCATE TABLE.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let _ = table;
-        unimplemented!("build_truncate_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_truncate_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Build a DROP INDEX statement.
@@ -2066,28 +2067,30 @@ pub trait Connection: Send + Sync {
     /// * `if_exists` - Whether to add IF EXISTS clause
     ///
     /// # Returns
-    /// A SQL string for DROP INDEX
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
+    /// A SQL string for DROP INDEX.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
     fn build_drop_index_sql(
         &self,
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let _ = (index_name, table_name, if_exists);
-        unimplemented!("build_drop_index_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_drop_index_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns the SQL query to get the server version.
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn version_query(&self) -> &'static str {
-        unimplemented!("version_query not implemented for this driver")
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no version query.
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Err(DbError::NotSupported(
+            "version_query not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns whether this driver supports transactional DDL.

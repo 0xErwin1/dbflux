@@ -3189,9 +3189,9 @@ impl Connection for MssqlConnection {
         sql
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+        Ok(format!("TRUNCATE TABLE {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -3199,21 +3199,24 @@ impl Connection for MssqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = MSSQL_DIALECT.quote_identifier(index_name);
         let table = table_name
             .map(|t| MSSQL_DIALECT.quote_identifier(t))
             .unwrap_or_else(|| "[table_name]".to_string());
 
         if if_exists {
-            format!("DROP INDEX IF EXISTS {} ON {}", quoted_index, table)
+            Ok(format!(
+                "DROP INDEX IF EXISTS {} ON {}",
+                quoted_index, table
+            ))
         } else {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
+            Ok(format!("DROP INDEX {} ON {}", quoted_index, table))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT @@VERSION"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT @@VERSION")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -6887,6 +6890,48 @@ mod query_safety_tests {
         assert!(
             matches!(outcome, Err(DbError::NotSupported(_))),
             "expected NotSupported, got {outcome:?}"
+        );
+    }
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    /// The lockless connection never opens a client, and these builders only
+    /// format text.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use dbflux_core::Connection;
+
+        let connection = lockless_connection();
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("dbo.users")
+                .expect("MSSQL supports truncate"),
+            "TRUNCATE TABLE [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), true)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX IF EXISTS [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", None, false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [table_name]"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("MSSQL has a version query"),
+            "SELECT @@VERSION"
         );
     }
 

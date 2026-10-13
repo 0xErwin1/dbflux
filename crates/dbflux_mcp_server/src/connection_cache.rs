@@ -281,7 +281,7 @@ impl Connection for CachedConnection {
             .build_upsert_sql(table, columns, values, conflict_columns, update_columns)
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         self.connection.build_truncate_sql(table)
     }
 
@@ -290,12 +290,12 @@ impl Connection for CachedConnection {
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         self.connection
             .build_drop_index_sql(index_name, table_name, if_exists)
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         self.connection.version_query()
     }
 

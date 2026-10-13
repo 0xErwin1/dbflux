@@ -1102,8 +1102,8 @@ impl Connection for TursoConnection {
         )
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
-        format!("DELETE FROM {}", quote_ident(table))
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(format!("DELETE FROM {}", quote_ident(table)))
     }
 
     fn build_drop_index_sql(
@@ -1111,16 +1111,16 @@ impl Connection for TursoConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         if if_exists {
-            format!("DROP INDEX IF EXISTS {}", quote_ident(index_name))
+            Ok(format!("DROP INDEX IF EXISTS {}", quote_ident(index_name)))
         } else {
-            format!("DROP INDEX {}", quote_ident(index_name))
+            Ok(format!("DROP INDEX {}", quote_ident(index_name)))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT sqlite_version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT sqlite_version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -1351,6 +1351,42 @@ fn classify_sql_message(message: &str, formatted: FormattedError) -> DbError {
 mod tests {
     use super::*;
     use turso_serverless::Error as E;
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    /// `open_root` performs no I/O against a never-contacted local URL, and
+    /// these builders only format text.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        let builder = turso_serverless::Builder::new_remote("wss://127.0.0.1:1");
+        let connection = TursoConnection::open_root(builder)
+            .expect("open_root performs no I/O against a closed local URL");
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("Turso supports truncate"),
+            "DELETE FROM \"users\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), false)
+                .expect("Turso supports drop index"),
+            "DROP INDEX \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), true)
+                .expect("Turso supports drop index"),
+            "DROP INDEX IF EXISTS \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("Turso has a version query"),
+            "SELECT sqlite_version()"
+        );
+    }
 
     #[test]
     fn sdk_errors_map_to_ui_facing_variants() {
