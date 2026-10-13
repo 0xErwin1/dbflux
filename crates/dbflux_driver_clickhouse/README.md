@@ -25,7 +25,7 @@ the endpoint is a URL and not a host/port pair.
 ## Features
 
 - Blocking HTTP(S) transport built on rustls, authenticating with HTTP Basic.
-- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver refuses request row limits, so console commands run without one.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Arbitrary single-statement SQL, with responses forced to `JSONCompact` so column
   names and types arrive alongside the rows.
 - Row width is checked against the declared column count on every response, so a
@@ -71,9 +71,11 @@ arrives fully structured rather than as raw text:
 ## Limitations
 
 - No SSH tunnels.
-- No transactions, prepared statements, or query cancellation. Explicit
-  `QueryRequest` row limits (including zero) and statement timeouts are refused
-  before dispatch. The configured default HTTP transport timeout remains in
+- No transactions, prepared statements, or query cancellation. Statement
+  timeouts, and row limits on instance metric or inspector queries, are refused
+  before dispatch. The request row limit is enforced client-side after the full
+  response is parsed, so the response byte cap still applies: a very large
+  result can fail with a too-large error instead of returning truncated. The configured default HTTP transport timeout remains in
   effect, but does not guarantee that server work or mutations stop. Unbounded
   queries can allocate a whole result (within the HTTP response-body cap). The
   driver reports no lock-timeout support.

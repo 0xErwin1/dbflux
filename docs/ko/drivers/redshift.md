@@ -13,7 +13,7 @@ Amazon Redshift 드라이버(읽기 전용 v1)로, `dbflux_driver_postgres` 위�
 ## 기능
 
 - Redshift 클러스터 또는 Redshift Serverless 엔드포인트에 대해 PostgreSQL 와이어 프로토콜로 통신하는 관계형 드라이버(`DatabaseCategory::Relational`, `QueryLanguage::Sql`)입니다.
-- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL을 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 요청 단위 행 제한을 거부하므로 콘솔 명령은 행 제한 없이 실행됩니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL을 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - 호스트, 포트(기본값 `5439`), 데이터베이스, 사용자, 비밀번호, SSL/`sslmode`(`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`), 연결 URI 모드(`redshift://...`, 내부적으로 `postgresql://...`로 정규화), SSH 터널링을 갖춘 연결 폼입니다.
 - 사용자 지정 TLS 신뢰와 상호 TLS: TLS가 활성화된 모드에서는 고정된 private 루트 CA(PEM)가 시스템 루트 위에 신뢰 저장소에 추가되고, 클라이언트 인증서 + 개인 키(PEM/PKCS#8)가 상호 TLS를 활성화합니다. 인증서 자료는 폼에서 구성된 경로에서 연결별로 로드되며, 검증은 절대 약화되지 않습니다(`verify-ca`/`verify-full`은 여전히 신뢰할 수 없는 인증서를 거부합니다). 누락되었거나 읽을 수 없거나 형식이 잘못된 인증서/키 파일은 시스템 신뢰 저장소로 조용히 대체되는 대신 명확한 연결 오류로 표면화되며, 개인 키 내용은 절대 로깅되지 않습니다.
 - 데이터베이스, 스키마, 테이블, 뷰, 열에 대한 `information_schema` 기반 스키마 인트로스펙션. 표준 PostgreSQL OID를 따르는 `ColumnKind` 분류(timestamp/integer/float/text)를 포함합니다.
@@ -25,7 +25,7 @@ Amazon Redshift 드라이버(읽기 전용 v1)로, `dbflux_driver_postgres` 위�
 
 ## 제한 사항
 
-- 요청한 행 제한(0 포함)과 문 실행 시간 제한은 읽기 전용 검증 및 쿼리 준비 전에 거부됩니다. 이 드라이버는 실행 전에 이를 보장할 수 없습니다. 두 옵션이 없으면 기존 쿼리 동작이 유지되고 전체 결과가 버퍼링될 수 있습니다. 서버 작업량이나 메모리 사용량을 제한하지 않습니다. 조기 거부 회귀 테스트는 Redshift 클러스터가 아닌 일회용 PostgreSQL 16으로 와이어 프로토콜 호환 경로만 검증합니다.
+- 문 실행 시간 제한은 읽기 전용 검증 및 쿼리 준비 전에 거부됩니다. 요청 행 제한은 PostgreSQL 드라이버처럼 행을 스트리밍하며 예산 안의 행만 유지하지만, 결과는 여전히 끝까지 읽습니다. 서버 작업량을 제한하지 않습니다. 조기 거부 회귀 테스트는 Redshift 클러스터가 아닌 일회용 PostgreSQL 16으로 와이어 프로토콜 호환 경로만 검증합니다.
 
 - 읽기 전용: `DriverMetadata.capabilities`는 `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, `BULK_INSERT`, `TRUNCATE_TABLE`, 모든 DDL/트랜잭션 DDL 플래그를 생략합니다. 이 드라이버에는 인라인 그리드 편집과 변경/시각적 쿼리 빌더가 없습니다. `Connection::execute`는 추가로 와이어 계층에서 읽기가 아닌 모든 문을 명시적인 오류로 거부하므로, 쓰기 시도가 조용한 no-op이 되는 일은 없습니다.
 - 단일 문 전용: `Connection::execute`는 한 번에 하나의 읽기 전용 문을 실행합니다. 다중 문 입력(예: `SELECT 1; SELECT 2`)은 와이어에 도달하기 전에 명시적인 오류로 거부됩니다. 선택적인 단일 후행 `;`은 허용되며, 문자열 리터럴, 인용된 식별자, 주석 내부의 `;`는 구분자로 취급되지 않습니다.

@@ -42,7 +42,8 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
         .union(DriverCapabilities::METRIC_CATALOG)
         .union(DriverCapabilities::DASHBOARD_IMPORT)
         .union(DriverCapabilities::DASHBOARD_SYNC)
-        .union(DriverCapabilities::CHART_AUTHORING),
+        .union(DriverCapabilities::CHART_AUTHORING)
+        .union(DriverCapabilities::REQUEST_ROW_LIMIT),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -275,9 +276,9 @@ impl Connection for CloudWatchConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "CloudWatch query row limits and statement timeouts are not supported".to_string(),
+                "CloudWatch query statement timeouts are not supported".to_string(),
             ));
         }
         req.refuse_read_only_enforcement("CloudWatch")?;
@@ -306,6 +307,9 @@ impl Connection for CloudWatchConnection {
                 start_ms,
                 end_ms,
             } => {
+                if req.limit.is_some() {
+                    return Err(DbError::NotSupported("CloudWatch: row limits on metric queries are unsupported; rejected before execution".to_string()));
+                }
                 return execute_metric_query(
                     &self.metrics_client,
                     series,
@@ -384,7 +388,12 @@ impl Connection for CloudWatchConnection {
                     let mut seen = HashSet::new();
                     let mut row_maps = Vec::new();
 
-                    for result_row in output.results() {
+                    // Bound before building columns so a dropped row cannot add
+                    // an all-null column to the retained ones.
+                    let (result_rows, rows_truncated) =
+                        retain_within_row_limit(output.results().iter().collect(), req.limit);
+
+                    for result_row in result_rows {
                         let mut row_map = HashMap::new();
 
                         for field in result_row {
@@ -428,7 +437,9 @@ impl Connection for CloudWatchConnection {
                         })
                         .collect::<Vec<_>>();
 
-                    return Ok(QueryResult::table(columns, rows, None, started.elapsed()));
+                    let mut result = QueryResult::table(columns, rows, None, started.elapsed());
+                    result.set_rows_truncated(rows_truncated);
+                    return Ok(result);
                 }
                 "Scheduled" | "Running" => {
                     if attempts >= MAX_QUERY_WAIT_ATTEMPTS {
@@ -1254,6 +1265,18 @@ pub(crate) fn check_period_nonzero(period_s: u32) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Logs Insights returns one materialized result set per request, so the whole
+/// request budget applies to it. The flag is set only when the budget dropped rows.
+fn retain_within_row_limit<T>(mut rows: Vec<T>, limit: Option<u32>) -> (Vec<T>, bool) {
+    match limit.map(|limit| usize::try_from(limit).unwrap_or(usize::MAX)) {
+        Some(limit) if rows.len() > limit => {
+            rows.truncate(limit);
+            (rows, true)
+        }
+        _ => (rows, false),
+    }
+}
+
 /// Execute a CloudWatch GetMetricData call batching every requested series
 /// and return a `QueryResult` with one timestamp column plus one numeric
 /// column per series.
@@ -1873,7 +1896,7 @@ mod tests {
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchConnection,
         CloudWatchDriver, CloudWatchProfileConfig, build_clients, classify_cw,
         cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
-        metric_data_output_to_multi_series_result,
+        metric_data_output_to_multi_series_result, retain_within_row_limit,
     };
     use crate::dashboard_import::CloudWatchDashboardImporter;
     use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
@@ -1956,7 +1979,7 @@ mod tests {
                         } else if metric {
                             r#"{"MetricDataResults":[],"Messages":[]} "#
                         } else {
-                            r#"{"status":"Complete","results":[]}"#
+                            r#"{"status":"Complete","results":[[{"field":"@message","value":"a"}],[{"field":"@message","value":"b"}],[{"field":"@message","value":"c"}]]}"#
                         };
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/x-amz-json-1.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2004,14 +2027,6 @@ mod tests {
         };
         let mut failures = Vec::new();
         for context in [log_context.clone(), metric_context.clone()] {
-            for limit in [Some(0), Some(5)] {
-                let mut request = QueryRequest::new("fields @message".to_string())
-                    .with_execution_context(Some(context.clone()));
-                request.limit = limit;
-                if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
-                    failures.push(format!("limit {limit:?} was not refused"));
-                }
-            }
             for timeout in [Duration::ZERO, Duration::from_secs(1)] {
                 let mut request = QueryRequest::new("fields @message".to_string())
                     .with_execution_context(Some(context.clone()));
@@ -2030,25 +2045,84 @@ mod tests {
                 failures.push("read-only enforcement was not refused".to_string());
             }
         }
+        for limit in [Some(0), Some(5)] {
+            let mut request = QueryRequest::new("fields @message".to_string())
+                .with_execution_context(Some(metric_context.clone()));
+            request.limit = limit;
+            if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
+                failures.push(format!("metric limit {limit:?} was not refused"));
+            }
+        }
         let healthy = connection.execute(
             &QueryRequest::new("fields @message".to_string())
-                .with_execution_context(Some(log_context)),
+                .with_execution_context(Some(log_context.clone())),
         );
+        let mut limited = QueryRequest::new("fields @message".to_string())
+            .with_execution_context(Some(log_context));
+        limited.limit = Some(2);
+        let limited = connection.execute(&limited);
         sender.send(()).expect("stop fixture");
         let requests = server.join().expect("fixture thread");
         assert!(
             healthy.is_ok(),
             "unprotected log request failed: {healthy:?}; requests: {requests:?}"
         );
+        let healthy = healthy.expect("unprotected log request");
+        assert_eq!(healthy.rows.len(), 3);
+        assert!(!healthy.rows_truncated());
+        let limited = limited.unwrap_or_else(|error| {
+            panic!("row-limited log request failed: {error:?}; requests: {requests:?}")
+        });
+        assert_eq!(limited.rows.len(), 2);
+        assert!(limited.rows_truncated());
         assert_eq!(
             requests,
-            vec![(true, false), (false, false)],
+            vec![(true, false), (false, false), (true, false), (false, false)],
             "protected request reached fixture"
         );
         assert!(
             failures.is_empty(),
             "{}; observed requests: {requests:?}",
             failures.join("; ")
+        );
+    }
+
+    #[test]
+    fn retain_within_row_limit_bounds_rows_and_flags_only_dropped_rows() {
+        let rows = vec![1, 2, 3];
+
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), None),
+            (vec![1, 2, 3], false)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(5)),
+            (vec![1, 2, 3], false)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(3)),
+            (vec![1, 2, 3], false)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(2)),
+            (vec![1, 2], true)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(0)),
+            (Vec::new(), true)
+        );
+        assert_eq!(
+            retain_within_row_limit(Vec::<i32>::new(), Some(0)),
+            (Vec::new(), false)
+        );
+    }
+
+    #[test]
+    fn cloudwatch_metadata_advertises_request_row_limit() {
+        assert!(
+            CLOUDWATCH_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
         );
     }
 

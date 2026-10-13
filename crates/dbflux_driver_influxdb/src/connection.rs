@@ -285,6 +285,20 @@ impl InfluxConnection {
     }
 }
 
+/// Applies the request row budget to a parsed response. Both parsers flatten
+/// every InfluxQL statement and every Flux table into one result set, so the
+/// single budget is shared across all of them by construction.
+fn apply_row_budget(result: &mut QueryResult, limit: Option<u32>) {
+    let Some(limit) = limit else {
+        return;
+    };
+    let budget = usize::try_from(limit).unwrap_or(usize::MAX);
+    if result.rows.len() > budget {
+        result.rows.truncate(budget);
+        result.set_rows_truncated(true);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Connection trait
 // ---------------------------------------------------------------------------
@@ -353,11 +367,22 @@ impl Connection for InfluxConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "InfluxDB execute cannot enforce a requested row limit or statement timeout"
+                "InfluxDB: requested statement timeout is unsupported; rejected before execution"
                     .to_string(),
             ));
+        }
+        if req.limit.is_some()
+            && let Some(
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                | ExecutionSourceContext::InstanceInspectorQuery { .. },
+            ) = req
+                .execution_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref())
+        {
+            return Err(DbError::NotSupported("InfluxDB: row limits on instance catalog queries are unsupported; rejected before execution".to_string()));
         }
         req.refuse_read_only_enforcement("InfluxDB")?;
 
@@ -487,6 +512,9 @@ impl Connection for InfluxConnection {
         // Attach audit fields to the result so the generic runner can forward them
         // into details_json without any driver-id branching.
         result.metadata_extra = Some(Self::build_metadata_extra_fields(&meta));
+        // Runs after the audit fields replace `metadata_extra`, which would
+        // otherwise erase the truncation flag.
+        apply_row_budget(&mut result, req.limit);
 
         match self.last_metadata.write() {
             Ok(mut guard) => *guard = Some(meta),
@@ -1160,11 +1188,16 @@ mod tests {
             }),
         ];
         for context in contexts {
+            let is_editor_query = context.is_none();
             for (limit, timeout) in [
                 (Some(0), None),
                 (Some(12), None),
                 (None, Some(Duration::from_secs(1))),
             ] {
+                // Editor queries enforce a row limit; they are covered below.
+                if is_editor_query && limit.is_some() {
+                    continue;
+                }
                 let mut req = QueryRequest::new("SELECT * FROM cpu");
                 req.limit = limit;
                 req.statement_timeout = timeout;
@@ -1197,7 +1230,74 @@ mod tests {
             .expect("unprotected dispatch");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(received.load(Ordering::SeqCst), 1);
+
+        let mut zero_limit = QueryRequest::new("SELECT * FROM cpu");
+        zero_limit.limit = Some(0);
+        let result = conn
+            .execute(&zero_limit)
+            .expect("an editor query enforces a row limit");
+        assert!(result.rows.is_empty());
+        assert!(result.rows_truncated());
+        assert_eq!(received.load(Ordering::SeqCst), 2);
+
+        let mut roomy_limit = QueryRequest::new("SELECT * FROM cpu");
+        roomy_limit.limit = Some(12);
+        let result = conn
+            .execute(&roomy_limit)
+            .expect("an editor query enforces a row limit");
+        assert_eq!(result.rows.len(), 1);
+        assert!(!result.rows_truncated());
+        assert_eq!(received.load(Ordering::SeqCst), 3);
         server.join().expect("server thread");
+    }
+
+    fn result_with_rows(count: usize) -> QueryResult {
+        let rows = (0..count)
+            .map(|index| vec![dbflux_core::Value::Int(index as i64)])
+            .collect();
+        QueryResult::table(Vec::new(), rows, None, std::time::Duration::ZERO)
+    }
+
+    #[test]
+    fn row_budget_keeps_rows_within_the_limit_and_marks_only_dropped_rows() {
+        let mut unlimited = result_with_rows(5);
+        apply_row_budget(&mut unlimited, None);
+        assert_eq!(unlimited.rows.len(), 5);
+        assert!(!unlimited.rows_truncated());
+
+        let mut exact = result_with_rows(5);
+        apply_row_budget(&mut exact, Some(5));
+        assert_eq!(exact.rows.len(), 5);
+        assert!(!exact.rows_truncated());
+
+        let mut over = result_with_rows(5);
+        apply_row_budget(&mut over, Some(3));
+        assert_eq!(over.rows.len(), 3);
+        assert_eq!(over.rows[2], vec![dbflux_core::Value::Int(2)]);
+        assert!(over.rows_truncated());
+
+        let mut zero = result_with_rows(5);
+        apply_row_budget(&mut zero, Some(0));
+        assert!(zero.rows.is_empty());
+        assert!(zero.rows_truncated());
+
+        let mut empty = result_with_rows(0);
+        apply_row_budget(&mut empty, Some(0));
+        assert!(empty.rows.is_empty());
+        assert!(!empty.rows_truncated());
+    }
+
+    #[test]
+    fn row_budget_is_shared_across_every_statement_of_one_influxql_response() {
+        let body = r#"{"results":[
+            {"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[[1,1],[2,2]]}]},
+            {"statement_id":1,"series":[{"name":"cpu","columns":["time","value"],"values":[[3,3],[4,4]]}]}
+        ]}"#;
+        let mut result = parse_influxql_json(body).expect("parse");
+        assert_eq!(result.rows.len(), 4);
+        apply_row_budget(&mut result, Some(3));
+        assert_eq!(result.rows.len(), 3);
+        assert!(result.rows_truncated());
     }
 
     #[test]

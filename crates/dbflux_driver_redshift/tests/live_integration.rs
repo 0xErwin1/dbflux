@@ -67,15 +67,31 @@ fn redshift_query_safety_refuses_protected_requests_before_prepare() -> Result<(
             Ok(connection)
         })?;
 
-        for limit in [Some(0), Some(1)] {
-            let mut request = QueryRequest::new("SELECT 42");
-            request.limit = limit;
-            let result = connection.execute(&request);
-            assert!(
-                matches!(result, Err(DbError::NotSupported(_))),
-                "limit {limit:?}: expected early NotSupported, got {result:?}"
-            );
-        }
+        let series = "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3";
+
+        let mut capped = QueryRequest::new(series);
+        capped.limit = Some(2);
+        let capped_result = connection.execute(&capped)?;
+        assert_eq!(capped_result.rows.len(), 2);
+        assert!(capped_result.rows_truncated());
+
+        let mut exact = QueryRequest::new(series);
+        exact.limit = Some(3);
+        let exact_result = connection.execute(&exact)?;
+        assert_eq!(exact_result.rows.len(), 3);
+        assert!(!exact_result.rows_truncated());
+
+        let mut zero = QueryRequest::new("SELECT 42");
+        zero.limit = Some(0);
+        let zero_result = connection.execute(&zero)?;
+        assert!(zero_result.rows.is_empty());
+        assert!(zero_result.rows_truncated());
+
+        let mut user_limited = QueryRequest::new(format!("SELECT * FROM ({series}) AS s LIMIT 1"));
+        user_limited.limit = Some(5);
+        let user_limited_result = connection.execute(&user_limited)?;
+        assert_eq!(user_limited_result.rows.len(), 1);
+        assert!(!user_limited_result.rows_truncated());
 
         let mut timed = QueryRequest::new("SELECT 42");
         timed.statement_timeout = Some(Duration::from_secs(1));
@@ -84,10 +100,10 @@ fn redshift_query_safety_refuses_protected_requests_before_prepare() -> Result<(
             Err(DbError::NotSupported(_))
         ));
 
-        let mut invalid = QueryRequest::new("SELECT FROM");
-        invalid.limit = Some(1);
+        let mut write = QueryRequest::new("DELETE FROM missing_table");
+        write.limit = Some(1);
         assert!(matches!(
-            connection.execute(&invalid),
+            connection.execute(&write),
             Err(DbError::NotSupported(_))
         ));
 

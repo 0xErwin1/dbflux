@@ -144,11 +144,13 @@ the limit is one budget shared by all of its result sets, and every statement
 still runs.
 
 The limit reaches only a driver whose `execute` enforces it: PostgreSQL,
-MySQL/MariaDB, SQL Server, SQLite and DuckDB. A driver that cannot enforce a row
-budget refuses a request that carries one rather than ignore the cap, so the
-editor sends it no limit at all and the query runs uncapped on MongoDB, Redis,
-Turso, InfluxDB, ClickHouse, Redshift, CloudWatch, DynamoDB and external RPC
-drivers. A result that carried no limit shows its full row count, because
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch and DynamoDB. Some of them still read the
+whole response before cutting it, and Redis bounds only replies shown as a
+table; each driver's page lists its limits. External RPC drivers refuse a
+request that carries a row budget rather than ignore the cap, so the editor
+sends them no limit at all and the query runs uncapped. A result that carried
+no limit shows its full row count, because
 nothing was left out, and its footer offers neither Count rows nor Load all
 rows; put a `LIMIT` or a `.limit()` in the statement when the result may be
 large. The limit adds no timeout and does not apply to Lua, Python, or Bash

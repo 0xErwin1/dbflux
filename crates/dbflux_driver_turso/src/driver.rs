@@ -63,7 +63,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
-            | DriverCapabilities::BULK_INSERT.bits(),
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: None,
     uri_scheme: "libsql".into(),
@@ -318,6 +319,15 @@ pub(crate) fn validate_url(url: &str) -> Result<&str, DbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declares_request_row_limit() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
 
     #[test]
     fn url_validation_accepts_remote_and_local_endpoints() {

@@ -17,7 +17,7 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - Connection modes: manual (host/port/user/password/database) and URI mode. URI mode accepts `redis://` and `rediss://` connection strings.
 - Multiple logical databases via `SELECT <db>` (`MULTIPLE_DATABASES`). The active database index is tracked on the connection.
 - Authentication with optional username + password (`AUTHENTICATION`).
-- Native command console (`NATIVE_CONSOLE`): the key browser docks a console, and a database's sidebar menu opens one in its own tab, that runs one command at a time through `Connection::execute` against the open database, with the language service's validation and dangerous-command detection, the audit rows and the query history the editor uses.
+- Native command console (`NATIVE_CONSOLE`): the key browser docks a console, and a database's sidebar menu opens one in its own tab, that runs one command at a time through `Connection::execute` against the open database, with the language service's validation and dangerous-command detection, the audit rows and the query history the editor uses. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Reports its client identity to the server via `CLIENT SETNAME` on connect (`dbflux/<version>`, visible in `CLIENT LIST`); best-effort, since some managed providers restrict `CLIENT` commands.
 - Best-effort write-privilege probe on connect (`probe_write_privilege`): tries `ACL WHOAMI` + `ACL DRYRUN` first, and falls back to a short-TTL namespaced `SET ... NX` / `DEL` when `ACL` is unavailable (older server or restricted managed provider); a replica's `READONLY` reply or a `NOPERM` denial resolves to a read-only connection.
 - TLS/SSL with three modes (`off`, `on`, `verify`):
@@ -83,7 +83,8 @@ Sensitive fields (`addr`, `laddr`, `name`) are redacted to `[redacted]` to avoid
 
 ## Limitations
 
-- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before dispatching a command. Unprotected commands remain available; the default editor cannot promise these protections.
+- `execute()` rejects a requested statement timeout, and a row limit on instance metric or inspector queries, with `NotSupported` before dispatching a command.
+- The editor row limit bounds only replies shown as a table (an array, set or push reply of scalar values). Nested arrays and map replies render as text and are not bounded; the full reply is still read from the server before it is cut.
 
 - SQL is not supported; queries must be written as Redis commands.
 

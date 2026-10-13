@@ -30,8 +30,9 @@ así que el endpoint es una URL y no un par host/port.
   de una base de datos en la barra lateral abre una en su propia pestaña, que
   ejecuta una línea SQL a la vez mediante `Connection::execute` con la
   validación del editor, la confirmación de queries peligrosas, las filas de
-  auditoría y el historial de consultas. El driver rechaza los límites de filas
-  por request, así que los comandos de la consola se ejecutan sin límite.
+  auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - SQL arbitrario de un solo statement, con respuestas forzadas a `JSONCompact`
   para que los nombres y tipos de columna lleguen junto con las filas.
 - El ancho de fila se verifica contra el número de columnas declaradas en cada
@@ -98,9 +99,13 @@ texto crudo:
 ## Limitaciones
 
 - Sin túneles SSH.
-- Sin transacciones, prepared statements ni cancelación de query. Los límites
-  de filas explícitos de `QueryRequest` (incluido cero) y los timeouts de
-  statement explícitos se rechazan antes del despacho. El timeout HTTP de
+- Sin transacciones, prepared statements ni cancelación de query. Los timeouts
+  de statement explícitos, y los límites de filas en queries de métricas o
+  inspectores de instancia, se rechazan antes del despacho. El límite de filas
+  del request se aplica del lado del cliente después de parsear la respuesta
+  completa, así que el límite de bytes de la respuesta sigue vigente: un
+  resultado muy grande puede fallar con un error de tamaño excesivo en lugar de
+  devolverse truncado. El timeout HTTP de
   transporte configurado sigue vigente, pero no garantiza detener el trabajo
   ni las mutaciones en el servidor. Una query sin límite puede alojar todo el
   resultado en memoria (dentro del límite del cuerpo HTTP). El driver no

@@ -270,10 +270,9 @@ impl Connection for ClickHouseConnection {
     }
 
     fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
-        if request.limit.is_some() || request.statement_timeout.is_some() {
+        if request.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "ClickHouse HTTP queries do not support explicit row limits or statement timeouts"
-                    .to_string(),
+                "ClickHouse HTTP queries do not support statement timeouts".to_string(),
             ));
         }
 
@@ -281,6 +280,20 @@ impl Connection for ClickHouseConnection {
             .execution_context
             .as_ref()
             .and_then(|context| context.source.as_ref());
+        if request.limit.is_some()
+            && matches!(
+                source,
+                Some(
+                    ExecutionSourceContext::InstanceMetricQuery { .. }
+                        | ExecutionSourceContext::InstanceInspectorQuery { .. }
+                )
+            )
+        {
+            return Err(DbError::NotSupported(
+                "ClickHouse: row limits on instance catalog queries are unsupported; rejected before execution"
+                    .to_string(),
+            ));
+        }
         request.refuse_read_only_for_instance_catalog("ClickHouse")?;
 
         if let Some(source) = source {
@@ -308,22 +321,25 @@ impl Connection for ClickHouseConnection {
         }
         let active_database = self.current_database()?;
         let database = request.database.as_deref().unwrap_or(&active_database);
-        if request.read_only.is_required() {
-            return self.execute_sql_read_only(
+        let mut result = if request.read_only.is_required() {
+            self.execute_sql_read_only(
                 &request.sql,
                 Some(database),
                 request.statement_timeout,
-                request.limit,
+                None,
                 request.offset,
-            );
-        }
-        self.execute_sql(
-            &request.sql,
-            Some(database),
-            request.statement_timeout,
-            request.limit,
-            request.offset,
-        )
+            )?
+        } else {
+            self.execute_sql(
+                &request.sql,
+                Some(database),
+                request.statement_timeout,
+                None,
+                request.offset,
+            )?
+        };
+        apply_row_budget(&mut result, request.limit);
+        Ok(result)
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -562,11 +578,26 @@ pub(crate) fn parse_response(
     Ok(QueryResult::table(columns, rows, None, execution_time))
 }
 
+/// Enforces the request row budget on a parsed result. The budget is applied
+/// here rather than through the server `limit` setting because that setting
+/// gives no signal that rows were dropped. One HTTP request runs a single
+/// statement, so the budget never spans more than this one result set.
+pub(crate) fn apply_row_budget(result: &mut QueryResult, row_budget: Option<u32>) {
+    let Some(row_budget) = row_budget else {
+        return;
+    };
+    let row_budget = usize::try_from(row_budget).unwrap_or(usize::MAX);
+    if result.rows.len() > row_budget {
+        result.rows.truncate(row_budget);
+        result.set_rows_truncated(true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ClickHouseGrantRow, classify_clickhouse_grant_row, classify_clickhouse_grants,
-        parse_response, resolve_clickhouse_write_privilege,
+        ClickHouseGrantRow, apply_row_budget, classify_clickhouse_grant_row,
+        classify_clickhouse_grants, parse_response, resolve_clickhouse_write_privilege,
     };
     use crate::http::HttpResponse;
     use dbflux_core::{ColumnKind, Value, WritePrivilege};
@@ -710,5 +741,58 @@ mod tests {
             Value::Decimal("18446744073709551615".to_string())
         );
         assert_eq!(result.affected_rows, None);
+    }
+
+    fn three_row_response() -> HttpResponse {
+        HttpResponse {
+            body: br#"{"meta":[{"name":"n","type":"UInt8"}],"data":[[1],[2],[3]],"rows":3}"#
+                .to_vec(),
+            headers: HeaderMap::new(),
+        }
+    }
+
+    #[test]
+    fn row_budget_drops_excess_rows_and_marks_truncation() {
+        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
+        apply_row_budget(&mut result, Some(2));
+        assert_eq!(result.rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        assert!(result.rows_truncated());
+    }
+
+    #[test]
+    fn row_budget_equal_to_row_count_is_not_truncation() {
+        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
+        apply_row_budget(&mut result, Some(3));
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn row_budget_zero_keeps_columns_and_drops_every_row() {
+        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
+        apply_row_budget(&mut result, Some(0));
+        assert!(result.rows.is_empty());
+        assert_eq!(result.columns.len(), 1);
+        assert!(result.rows_truncated());
+    }
+
+    #[test]
+    fn row_budget_zero_on_rowless_result_is_not_truncation() {
+        let response = HttpResponse {
+            body: Vec::new(),
+            headers: HeaderMap::new(),
+        };
+        let mut result = parse_response(response, Duration::ZERO).expect("valid");
+        apply_row_budget(&mut result, Some(0));
+        assert!(result.rows.is_empty());
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn absent_row_budget_keeps_every_row() {
+        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
+        apply_row_budget(&mut result, None);
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
     }
 }

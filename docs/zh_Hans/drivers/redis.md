@@ -17,7 +17,7 @@
 - 连接模式：手动（主机/端口/用户/密码/数据库）与 URI 模式。URI 模式接受 `redis://` 与 `rediss://` 连接串。
 - 通过 `SELECT <db>` 支持多个逻辑数据库（`MULTIPLE_DATABASES`）。当前数据库索引由连接记录。
 - 支持可选用户名 + 密码的身份认证（`AUTHENTICATION`）。
-- 原生命令控制台（`NATIVE_CONSOLE`）：键浏览器会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 针对当前打开的数据库一次运行一条命令，并使用与编辑器相同的语言服务校验与危险命令检测、审计记录和查询历史。
+- 原生命令控制台（`NATIVE_CONSOLE`）：键浏览器会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 针对当前打开的数据库一次运行一条命令，并使用与编辑器相同的语言服务校验与危险命令检测、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 连接时通过 `CLIENT SETNAME` 把客户端身份上报给服务器（`dbflux/<version>`，可在 `CLIENT LIST` 中看到）；这是尽力而为的行为，因为部分托管服务商会限制 `CLIENT` 命令。
 - 连接时进行尽力而为的写入权限探测（`probe_write_privilege`）：先尝试 `ACL WHOAMI` + `ACL DRYRUN`，当 `ACL` 不可用时（旧版服务器或受限的托管服务）回退到一次带命名空间的短 TTL `SET ... NX` / `DEL`；副本返回的 `READONLY` 或 `NOPERM` 拒绝会判定为只读连接。
 - TLS/SSL 支持三种模式（`off`、`on`、`verify`）：
@@ -83,7 +83,8 @@ Schema 探查会为每个逻辑数据库报告键数；`INFO keyspace` 中没有
 
 ## 限制
 
-- `execute()` 对任何请求的行数限制（包括零）或语句超时，在发送命令前返回 `NotSupported`。未请求这些保护的命令仍可执行；默认编辑器无法保证这些保护。
+- `execute()` 对请求的语句超时，以及实例指标或检查器查询上的行数上限，在发送命令前返回 `NotSupported`。
+- 编辑器行数上限只约束以表格显示的回复（由标量值组成的 array、set 或 push 回复）。嵌套数组和 map 回复以文本显示，不受约束；完整回复仍会先从服务器读取，然后才截断。
 
 - 不支持 SQL；查询必须以 Redis 命令的形式书写。
 
