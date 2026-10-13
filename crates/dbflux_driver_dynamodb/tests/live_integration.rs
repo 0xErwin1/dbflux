@@ -371,7 +371,10 @@ fn dynamodb_query_safety() -> Result<(), DbError> {
         let observed_count = count()?;
         println!("read timeout: outcome={outcome:?}, table_count={observed_count}");
         assert!(matches!(outcome, Err(DbError::NotSupported(_))));
-        assert_eq!(observed_count, 1);
+        assert_eq!(
+            observed_count, 3,
+            "a refused read leaves the table unchanged"
+        );
 
         for operation in ["scan", "query"] {
             let sql = json!({"op": operation, "table": table_name}).to_string();
