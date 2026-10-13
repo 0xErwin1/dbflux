@@ -17,7 +17,9 @@ Driver de InfluxDB para DBFlux.
 - **Categoría de series temporales** — clasificado como
   `DatabaseCategory::TimeSeries` con `QueryLanguage::InfluxQuery` como lenguaje
   de editor por defecto. Las capacidades declaradas son `AUTHENTICATION`,
-  `MULTIPLE_DATABASES`, `PAGINATION`, `EXPORT_CSV` y `EXPORT_JSON`. Las
+  `MULTIPLE_DATABASES`, `PAGINATION`, `EXPORT_CSV`, `EXPORT_JSON`,
+  `CHART_AUTHORING`, `INSTANCE_METRICS`, `INSTANCE_INSPECTOR` y
+  `REQUEST_ROW_LIMIT`. Las
   conexiones usan el esquema de URI `http` en el puerto por defecto 8086, con
   TLS provisto por el cliente HTTP basado en rustls.
 - **InfluxDB v1 y v2** — ambas versiones de la API se soportan en un único crate

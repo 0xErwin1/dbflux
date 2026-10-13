@@ -12,7 +12,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 
 ## Features
 
-- Log-streaming driver classified as `DatabaseCategory::LogStream`; `deployment_class` is `CloudManaged`. The declared capabilities are `AUTHENTICATION` and `METRIC_SERIES`.
+- Log-streaming driver classified as `DatabaseCategory::LogStream`; `deployment_class` is `CloudManaged`. The declared capabilities are `AUTHENTICATION`, `METRIC_SERIES`, `METRIC_CATALOG`, `DASHBOARD_IMPORT`, `DASHBOARD_SYNC`, `CHART_AUTHORING`, and `REQUEST_ROW_LIMIT`.
 - AWS connection configuration via region, named profile, and optional endpoint override, aligned with the DynamoDB AWS connection flow.
 - Query execution through `StartQuery` + polling `GetQueryResults` (poll interval 500 ms, up to 120 attempts), with an editor-managed source context that supplies the target log groups and time range. Logs queries use the fixed SDK `StartQuery` limit of 1000 results.
 - `execute` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) on Logs Insights results, so editor queries carry the editor row limit.

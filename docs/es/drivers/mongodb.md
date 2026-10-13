@@ -68,8 +68,10 @@ Driver de documentos MongoDB para DBFlux.
   peligroso confirmado lleva el techo confirmado, así que un script escrito en
   la consola sigue las mismas reglas de techo que uno ejecutado desde el editor.
   El driver aplica
-  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
-  consola llevan el límite de filas del editor.
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que el límite de filas del
+  editor acota los resultados de Find, Aggregate y los listados de colecciones
+  de los comandos de la consola; las demás respuestas de comandos se devuelven
+  completas.
 
 ### Instance Metrics
 

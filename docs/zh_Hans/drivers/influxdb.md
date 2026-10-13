@@ -13,7 +13,7 @@
 
 ## 功能
 
-- **时序类别** —— 归类为 `DatabaseCategory::TimeSeries`，默认编辑器语言为 `QueryLanguage::InfluxQuery`。声明的能力包括 `AUTHENTICATION`、`MULTIPLE_DATABASES`、`PAGINATION`、`EXPORT_CSV`、`EXPORT_JSON`、`CHART_AUTHORING`、`INSTANCE_METRICS` 与 `INSTANCE_INSPECTOR`。连接使用 `http` URI 方案、默认端口 8086，TLS 由基于 rustls 的 HTTP 客户端提供。
+- **时序类别** —— 归类为 `DatabaseCategory::TimeSeries`，默认编辑器语言为 `QueryLanguage::InfluxQuery`。声明的能力包括 `AUTHENTICATION`、`MULTIPLE_DATABASES`、`PAGINATION`、`EXPORT_CSV`、`EXPORT_JSON`、`CHART_AUTHORING`、`INSTANCE_METRICS`、`INSTANCE_INSPECTOR` 与 `REQUEST_ROW_LIMIT`。连接使用 `http` URI 方案、默认端口 8086，TLS 由基于 rustls 的 HTTP 客户端提供。
 - **InfluxDB v1 与 v2** —— 两个 API 版本在同一个驱动 crate 中均受支持。
 - **两个版本都支持 InfluxQL** —— v1 的查询语言在 v1 上可用，在 v2 上则经由 v2 的兼容端点使用。
 - **v2 上的 Flux** —— 当连接配置为 v2 时，可以使用 Flux 查询。

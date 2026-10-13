@@ -12,7 +12,7 @@ AWS CloudWatch Logs Insights 查询，源上下文由编辑器管理。
 
 ## 功能
 
-- 归类为 `DatabaseCategory::LogStream` 的日志流驱动程序；`deployment_class` 为 `CloudManaged`。声明的能力为 `AUTHENTICATION` 与 `METRIC_SERIES`。
+- 归类为 `DatabaseCategory::LogStream` 的日志流驱动程序；`deployment_class` 为 `CloudManaged`。声明的能力为 `AUTHENTICATION`、`METRIC_SERIES`、`METRIC_CATALOG`、`DASHBOARD_IMPORT`、`DASHBOARD_SYNC`、`CHART_AUTHORING` 与 `REQUEST_ROW_LIMIT`。
 - 通过区域、具名配置文件以及可选的端点覆盖完成 AWS 连接配置，与 DynamoDB 的 AWS 连接流程保持一致。
 - 查询通过 `StartQuery` + 轮询 `GetQueryResults` 执行（轮询间隔 500 毫秒，最多 120 次），源上下文由编辑器管理，提供目标日志组与时间范围。Logs 查询使用 SDK 固定的 `StartQuery` 结果上限 1000。
 - `execute` 对 Logs Insights 结果执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此编辑器查询会带上编辑器的行数上限。

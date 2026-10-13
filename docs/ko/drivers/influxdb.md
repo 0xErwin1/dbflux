@@ -13,7 +13,7 @@ DBFlux용 InfluxDB 드라이버입니다.
 
 ## 기능
 
-- **시계열 카테고리** — `DatabaseCategory::TimeSeries`로 분류되며 기본 에디터 언어는 `QueryLanguage::InfluxQuery`입니다. 선언된 기능은 `AUTHENTICATION`, `MULTIPLE_DATABASES`, `PAGINATION`, `EXPORT_CSV`, `EXPORT_JSON`, `CHART_AUTHORING`, `INSTANCE_METRICS`, `INSTANCE_INSPECTOR`입니다. 연결은 기본 포트 8086에서 `http` URI 스킴을 사용하며, TLS는 rustls 기반 HTTP 클라이언트가 제공합니다.
+- **시계열 카테고리** — `DatabaseCategory::TimeSeries`로 분류되며 기본 에디터 언어는 `QueryLanguage::InfluxQuery`입니다. 선언된 기능은 `AUTHENTICATION`, `MULTIPLE_DATABASES`, `PAGINATION`, `EXPORT_CSV`, `EXPORT_JSON`, `CHART_AUTHORING`, `INSTANCE_METRICS`, `INSTANCE_INSPECTOR`, `REQUEST_ROW_LIMIT`입니다. 연결은 기본 포트 8086에서 `http` URI 스킴을 사용하며, TLS는 rustls 기반 HTTP 클라이언트가 제공합니다.
 - **InfluxDB v1과 v2** — 두 API 버전 모두 하나의 드라이버 크레이트에서 지원됩니다.
 - **두 버전 모두에서 InfluxQL** — v1 쿼리 언어는 v1에서와 v2 호환성 엔드포인트를 통해 동작합니다.
 - **v2에서 Flux** — 연결이 v2로 구성된 경우 Flux 쿼리를 사용할 수 있습니다.

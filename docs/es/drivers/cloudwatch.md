@@ -16,7 +16,8 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 
 - Driver de log-streaming clasificado como `DatabaseCategory::LogStream`;
   `deployment_class` es `CloudManaged`. Las capacidades declaradas son
-  `AUTHENTICATION` y `METRIC_SERIES`.
+  `AUTHENTICATION`, `METRIC_SERIES`, `METRIC_CATALOG`, `DASHBOARD_IMPORT`,
+  `DASHBOARD_SYNC`, `CHART_AUTHORING` y `REQUEST_ROW_LIMIT`.
 - Configuración de conexión AWS vía región, perfil con nombre y override de
   endpoint opcional, alineado con el flujo de conexión AWS de DynamoDB.
 - Ejecución de queries a través de `StartQuery` + polling de `GetQueryResults`

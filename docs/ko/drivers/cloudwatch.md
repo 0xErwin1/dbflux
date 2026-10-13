@@ -11,7 +11,7 @@
 
 ## 기능
 
-- `DatabaseCategory::LogStream`으로 분류되는 로그 스트리밍 드라이버입니다. `deployment_class`는 `CloudManaged`이며, 선언된 기능은 `AUTHENTICATION`과 `METRIC_SERIES`입니다.
+- `DatabaseCategory::LogStream`으로 분류되는 로그 스트리밍 드라이버입니다. `deployment_class`는 `CloudManaged`이며, 선언된 기능은 `AUTHENTICATION`, `METRIC_SERIES`, `METRIC_CATALOG`, `DASHBOARD_IMPORT`, `DASHBOARD_SYNC`, `CHART_AUTHORING`, `REQUEST_ROW_LIMIT`입니다.
 - 리전, 이름이 지정된 프로필, 선택적 엔드포인트 재정의를 통한 AWS 연결 구성으로, DynamoDB의 AWS 연결 흐름과 일치합니다.
 - 대상 로그 그룹과 시간 범위를 공급하는 편집기 관리 소스 컨텍스트와 함께, `StartQuery` + 폴링 `GetQueryResults`(폴링 간격 500 ms, 최대 120회 시도)를 통한 쿼리 실행. Logs 쿼리는 SDK의 고정 `StartQuery` 결과 제한 1000을 사용합니다.
 - `execute`는 Logs Insights 결과에 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 편집기 쿼리에도 편집기의 행 제한이 적용됩니다.
