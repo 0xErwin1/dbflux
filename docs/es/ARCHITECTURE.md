@@ -249,7 +249,7 @@ crates/
         file_ops.rs         # Auto-save, scratch/shadow file management
         focus.rs            # Internal focus management
         live_output.rs      # Document-owned streamed script output buffer
-        render.rs           # Toolbar, editor, and live output rendering
+        render.rs           # Action strip, editor, and live output rendering
       console/              # NativeConsole: reusable command console docked under a document
         mod.rs              # Entity, execution, audit, history recall, render
         format.rs           # Dangerous-command gate, result formatting, recall list
@@ -710,7 +710,7 @@ entradas en un menú dibujado sobre el área de documents. Mientras está abiert
 el workspace reporta `ContextId::ContextMenu`, así que las teclas del menú
 contextual lo manejan. El workspace nunca conoce el tipo de document, y un
 document se suma desde su propio `pane.rs` sin cambios en `workspace/mod.rs`,
-`tab_manager.rs` ni `tab_bar.rs`. `CodeDocument` lista toda su toolbar; la tabla
+`tab_manager.rs` ni `tab_bar.rs`. `CodeDocument` lista toda su barra de acciones y el botón Refresh de sus resultados; la tabla
 de datos conserva `m` para su propio menú contextual, que funciona como su menú
 de acciones.
 

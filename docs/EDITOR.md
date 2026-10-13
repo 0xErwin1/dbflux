@@ -93,8 +93,9 @@ runtime.
 
 DBFlux keeps a history of completed queries and lets you save named queries.
 
-- `Alt+h` (in the editor), or the toolbar's History button, opens and closes the
-  query history panel beside the editor.
+- `Alt+h` (in the editor), or the History button in the action strip on the
+  editor's left edge, opens and closes the query history panel beside the
+  editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** the current query.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, in the editor) — open the saved-queries browser.

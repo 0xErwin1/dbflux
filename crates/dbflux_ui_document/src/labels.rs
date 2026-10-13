@@ -4258,7 +4258,7 @@ mod tests {
             "document.code.toolbar.checking",
             "document.code.toolbar.run",
             "document.code.toolbar.last_run",
-            "document.code.toolbar.new_tab",
+            "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
             "document.code.toolbar.save",

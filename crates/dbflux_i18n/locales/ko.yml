@@ -1260,7 +1260,6 @@ document:
       checking: "확인 중…"
       run: 실행
       last_run: "마지막 실행 %{seconds}초"
-      new_tab: 새 탭
       read_only: 읽기 전용
       saved: 저장됨
       save: 저장

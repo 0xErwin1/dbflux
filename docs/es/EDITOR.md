@@ -102,8 +102,9 @@ Ver `docs/LUA.md` para el runtime de Lua embebido.
 DBFlux mantiene un historial de las queries completadas y te permite guardar
 queries con nombre.
 
-- `Alt+h` (en el editor), o el botón History de la barra de herramientas, abre y
-  cierra el panel de historial de queries junto al editor.
+- `Alt+h` (en el editor), o el botón History de la barra de acciones en el borde
+  izquierdo del editor, abre y cierra el panel de historial de queries junto al
+  editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** la query actual.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, en el editor) — abre el explorador de queries guardadas.

@@ -19,15 +19,6 @@ use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::KeyContext;
 use gpui_component::scroll::ScrollableElement;
 
-/// Vertical line between two groups of the toolbar.
-fn toolbar_divider(theme: &gpui_component::theme::Theme) -> impl IntoElement {
-    div()
-        .w(px(1.0))
-        .h(TableViewMetrics::DIVIDER_HEIGHT)
-        .mx(EditorMetrics::TOOLBAR_DIVIDER_MARGIN_X)
-        .bg(theme.border)
-}
-
 impl CodeDocument {
     /// The toolbar as pane actions (see [`crate::pane::PaneAction`]): the
     /// same buttons, under the same conditions, so the whole toolbar is
@@ -136,7 +127,23 @@ impl CodeDocument {
             .icon(AppIcon::ChartColumnBig),
         );
 
-        if is_db_language {
+        actions.extend(self.results_pane_actions());
+
+        actions
+    }
+
+    /// The results header as pane actions, while there are results to show:
+    /// Refresh and the auto-refresh interval, the result tabs (switch, close)
+    /// and the maximize and hide buttons.
+    fn results_pane_actions(&self) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+
+        let mut actions = Vec::new();
+        let tab_count = self.result_tabs.result_tabs.len();
+
+        // The interval dropdown lives in the results header, so it can only
+        // take focus while the header is drawn.
+        if self.shows_results_header() && self.supports_connection_context() {
             let refresh_command = if self.runner.is_primary_active() {
                 Command::CancelQuery
             } else {
@@ -148,7 +155,7 @@ impl CodeDocument {
                     "refresh",
                     dbflux_i18n::t!("document.code.toolbar.refresh"),
                     refresh_command,
-                    context,
+                    ContextId::Editor,
                 )
                 .icon(AppIcon::RefreshCcw),
             );
@@ -165,19 +172,6 @@ impl CodeDocument {
                 .icon(AppIcon::Clock),
             );
         }
-
-        actions.extend(self.results_pane_actions());
-
-        actions
-    }
-
-    /// The results header as pane actions: the result tabs (switch, close)
-    /// and the maximize and hide buttons, while there are results to show.
-    fn results_pane_actions(&self) -> Vec<crate::pane::PaneAction> {
-        use crate::pane::PaneAction;
-
-        let mut actions = Vec::new();
-        let tab_count = self.result_tabs.result_tabs.len();
 
         if tab_count > 0 {
             actions.push(
@@ -274,26 +268,20 @@ impl CodeDocument {
         actions
     }
 
-    fn render_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The editor action strip (IslEditor): a column of icon buttons on the
+    /// editor's left edge, with Run first and set apart by a short line. The
+    /// buttons keep the ids the toolbar row had. A read-only document has no
+    /// strip.
+    fn render_action_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.read_only {
+            return None;
+        }
+
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift.preflight_running;
         let is_db_language = self.supports_connection_context();
-        let is_read_only = self.read_only;
-
-        let auto_refresh_enabled = self.refresh.refresh_policy.is_auto();
-        let refresh_label = if auto_refresh_enabled {
-            crate::labels::refresh_policy_label(self.refresh.refresh_policy)
-        } else {
-            dbflux_i18n::t!("document.code.toolbar.refresh")
-        };
-        let refresh_icon = if is_executing {
-            AppIcon::Loader
-        } else if auto_refresh_enabled {
-            AppIcon::Clock
-        } else {
-            AppIcon::RefreshCcw
-        };
+        let history_open = self.history.history_panel.read(cx).is_visible();
 
         let (run_icon, run_label, run_enabled) = if is_executing {
             (
@@ -315,15 +303,6 @@ impl CodeDocument {
             )
         };
 
-        let execution_time = self
-            .execution
-            .active_execution_index
-            .and_then(|i| self.execution.execution_history.get(i))
-            .and_then(|r| {
-                r.finished_at
-                    .map(|finished| finished.duration_since(r.started_at))
-            });
-
         // Keep this shortcut in sync with the RunQuery binding (Cmd+Enter on
         // macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
         #[cfg(target_os = "macos")]
@@ -331,197 +310,121 @@ impl CodeDocument {
         #[cfg(not(target_os = "macos"))]
         let run_shortcut = "Ctrl \u{21B5}";
 
-        let show_run_group = !is_read_only && is_db_language && !is_executing;
-        let refresh_menu_focused = self.refresh.refresh_dropdown.read(cx).is_focused(window);
+        let run_tooltip: SharedString = if is_executing || is_preflight {
+            run_label.clone().into()
+        } else {
+            format!("{run_label} ({run_shortcut})").into()
+        };
 
-        let run_summary = super::statements::run_summary_label(
-            self.statement_count().filter(|_| is_db_language),
-            execution_time.map(|duration| duration.as_secs_f64()),
-        );
-
-        div()
-            .id("sql-toolbar")
+        let strip = div()
+            .id("editor-action-strip")
+            .debug_selector(|| "editor-action-strip".to_string())
             .flex()
+            .flex_col()
             .flex_shrink_0()
             .items_center()
-            .gap(EditorMetrics::TOOLBAR_GAP)
-            .h(EditorMetrics::BAR_HEIGHT)
-            .px(EditorMetrics::BAR_PADDING_X)
-            .border_b_1()
+            .w(EditorMetrics::ACTION_STRIP_WIDTH)
+            .h_full()
+            // The editor pane can be dragged shorter than the strip.
+            .overflow_y_scroll()
+            .pt(EditorMetrics::ACTION_STRIP_PADDING_TOP)
+            .gap(EditorMetrics::ACTION_STRIP_GAP)
+            .border_r_1()
             .border_color(theme.border)
-            .bg(theme.popover)
-            .when(!is_read_only, |el| {
-                el.child(
-                    Button::new("run-query-btn", run_label)
-                        .icon(run_icon)
-                        .variant(if is_executing {
-                            ButtonVariant::Danger
+            .child(
+                Button::new("run-query-btn", run_label)
+                    .icon(run_icon)
+                    .icon_only()
+                    .inline()
+                    .tooltip(run_tooltip)
+                    .variant(if is_executing {
+                        ButtonVariant::Danger
+                    } else {
+                        ButtonVariant::Primary
+                    })
+                    .disabled(!run_enabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.state == DocumentState::Executing {
+                            this.cancel_query(cx);
                         } else {
-                            ButtonVariant::Primary
-                        })
-                        .disabled(!run_enabled)
-                        .when(!is_executing, |button| button.kbd(run_shortcut))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if this.state == DocumentState::Executing {
-                                this.cancel_query(cx);
-                            } else {
-                                this.run_query(window, cx);
-                            }
-                        })),
-                )
-            })
-            .when(show_run_group, |el| {
+                            this.run_query(window, cx);
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .w(EditorMetrics::ACTION_STRIP_SEPARATOR_WIDTH)
+                    .h(px(1.0))
+                    .my(EditorMetrics::ACTION_STRIP_SEPARATOR_MARGIN_Y)
+                    .bg(theme.border),
+            )
+            .when(is_db_language && !is_executing, |el| {
                 el.child(
                     Button::new(
                         "run-in-new-tab-btn",
-                        dbflux_i18n::t!("document.code.toolbar.new_tab"),
+                        dbflux_i18n::t!("document.code.toolbar.run_in_new_tab"),
                     )
                     .icon(AppIcon::SquarePlay)
+                    .icon_only()
+                    .inline()
+                    .ghost()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.run_query_in_new_tab(window, cx);
                     })),
                 )
             })
-            .when(is_read_only, |el| {
-                el.child(
-                    Text::caption(dbflux_i18n::t!("document.code.toolbar.read_only"))
-                        .muted_foreground(),
+            .child(
+                Button::new(
+                    "toolbar-save-btn",
+                    dbflux_i18n::t!("document.code.toolbar.save"),
                 )
-            })
-            .when(!is_read_only, |el| {
-                el.child(toolbar_divider(&theme))
-                    .child(self.render_secondary_actions(is_read_only, cx))
-            })
-            .when(!is_read_only && is_db_language, |el| {
-                el.child(toolbar_divider(&theme)).child(
-                    SplitButton::new(
-                        "sql-refresh-split",
-                        Button::new("sql-refresh-action", refresh_label)
-                            .icon(refresh_icon)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.cancel_query(cx);
-                                } else {
-                                    this.run_query(window, cx);
-                                }
-                            })),
-                        self.refresh.refresh_dropdown.clone(),
-                    )
-                    .menu_focused(refresh_menu_focused),
+                .icon(AppIcon::Save)
+                .icon_only()
+                .inline()
+                .ghost()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.is_file_backed() {
+                        this.save_file(window, cx);
+                    } else {
+                        this.save_file_as(window, cx);
+                    }
+                })),
+            )
+            .child(
+                Button::new(
+                    "toolbar-format-btn",
+                    dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
                 )
-            })
-            .child(div().flex_1())
-            .when_some(run_summary, |el, summary| {
-                el.child(
-                    div()
-                        .id("toolbar-run-summary")
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(EditorMetrics::LAST_RUN_GAP)
-                        .font_family(dbflux_components::fonts::editor_family(cx))
-                        .text_size(EditorMetrics::LAST_RUN_FONT)
-                        .text_color(theme.muted_foreground)
-                        .child(
-                            Icon::new(AppIcon::History)
-                                .size(EditorMetrics::LAST_RUN_ICON)
-                                .color(theme.muted_foreground),
-                        )
-                        .child(summary),
+                .icon(AppIcon::Zap)
+                .icon_only()
+                .inline()
+                .ghost()
+                .disabled(true),
+            )
+            .child(
+                Button::new(
+                    "toolbar-history-btn",
+                    dbflux_i18n::t!("document.code.toolbar.query_history"),
                 )
-            })
-            // A query buffer shows its file state in the context bar.
-            .when(self.session.show_saved_label && !is_db_language, |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(EditorMetrics::LAST_RUN_GAP)
-                        .font_family(dbflux_components::fonts::editor_family(cx))
-                        .text_size(EditorMetrics::LAST_RUN_FONT)
-                        .text_color(theme.success)
-                        .child(
-                            Icon::new(AppIcon::Check)
-                                .size(EditorMetrics::LAST_RUN_ICON)
-                                .color(theme.success),
-                        )
-                        .child(dbflux_i18n::t!("document.code.toolbar.saved")),
-                )
-            })
-    }
-
-    /// Renders the icon group: Save, Format, History, Explain, Chart.
-    ///
-    /// All mutating or execution buttons are hidden when `is_read_only` is true.
-    fn render_secondary_actions(
-        &self,
-        is_read_only: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let history_open = self.history.history_panel.read(cx).is_visible();
-        let is_db_language = self.supports_connection_context();
-
-        div()
-            .flex()
-            .items_center()
-            .gap(EditorMetrics::TOOLBAR_GAP)
-            // Save button — hidden for read-only documents
-            .when(!is_read_only, |el| {
-                el.child(
-                    Button::new(
-                        "toolbar-save-btn",
-                        dbflux_i18n::t!("document.code.toolbar.save"),
-                    )
-                    .icon(AppIcon::Save)
-                    .icon_only()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.is_file_backed() {
-                            this.save_file(window, cx);
-                        } else {
-                            this.save_file_as(window, cx);
-                        }
-                    })),
-                )
-            })
-            // Format button — hidden for read-only documents (no formatter available)
-            .when(!is_read_only, |el| {
-                el.child(
-                    Button::new(
-                        "toolbar-format-btn",
-                        dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
-                    )
-                    .icon(AppIcon::Zap)
-                    .icon_only()
-                    .disabled(true),
-                )
-            })
-            // History button — hidden for read-only documents
-            .when(!is_read_only, |el| {
-                el.child(
-                    Button::new(
-                        "toolbar-history-btn",
-                        dbflux_i18n::t!("document.code.toolbar.query_history"),
-                    )
-                    .icon(AppIcon::History)
-                    .icon_only()
-                    .selected(history_open)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let is_open = this.history.history_panel.read(cx).is_visible();
-                        if is_open {
-                            this.history
-                                .history_panel
-                                .update(cx, |panel, cx| panel.close(cx));
-                        } else {
-                            this.history
-                                .history_panel
-                                .update(cx, |panel, cx| panel.open(window, cx));
-                        }
-                    })),
-                )
-            })
-            // Explain button — hidden for read-only documents
-            .when(!is_read_only && is_db_language, |el| {
+                .icon(AppIcon::History)
+                .icon_only()
+                .inline()
+                .ghost()
+                .selected(history_open)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let is_open = this.history.history_panel.read(cx).is_visible();
+                    if is_open {
+                        this.history
+                            .history_panel
+                            .update(cx, |panel, cx| panel.close(cx));
+                    } else {
+                        this.history
+                            .history_panel
+                            .update(cx, |panel, cx| panel.open(window, cx));
+                    }
+                })),
+            )
+            .when(is_db_language, |el| {
                 el.child(
                     Button::new(
                         "toolbar-explain-btn",
@@ -529,25 +432,65 @@ impl CodeDocument {
                     )
                     .icon(AppIcon::Info)
                     .icon_only()
+                    .inline()
+                    .ghost()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.run_explain(window, cx);
                     })),
                 )
             })
-            // Chart button — hidden for read-only documents
-            .when(!is_read_only, |el| {
-                el.child(
-                    Button::new(
-                        "toolbar-chart-btn",
-                        dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
-                    )
-                    .icon(AppIcon::ChartColumnBig)
-                    .icon_only()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.emit_chart_this_query(cx);
-                    })),
+            .child(
+                Button::new(
+                    "toolbar-chart-btn",
+                    dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
                 )
-            })
+                .icon(AppIcon::ChartColumnBig)
+                .icon_only()
+                .inline()
+                .ghost()
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.emit_chart_this_query(cx);
+                })),
+            );
+
+        Some(strip.into_any_element())
+    }
+
+    /// The Refresh split button at the end of the results header: run the
+    /// query again (cancel while it runs) and pick an auto-refresh interval.
+    fn render_results_refresh(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let is_executing = self.state == DocumentState::Executing;
+        let auto_refresh_enabled = self.refresh.refresh_policy.is_auto();
+
+        let refresh_label = if auto_refresh_enabled {
+            crate::labels::refresh_policy_label(self.refresh.refresh_policy)
+        } else {
+            dbflux_i18n::t!("document.code.toolbar.refresh")
+        };
+        let refresh_icon = if is_executing {
+            AppIcon::Loader
+        } else if auto_refresh_enabled {
+            AppIcon::Clock
+        } else {
+            AppIcon::RefreshCcw
+        };
+        let refresh_menu_focused = self.refresh.refresh_dropdown.read(cx).is_focused(window);
+
+        SplitButton::new(
+            "sql-refresh-split",
+            Button::new("sql-refresh-action", refresh_label)
+                .icon(refresh_icon)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.runner.is_primary_active() {
+                        this.cancel_query(cx);
+                    } else {
+                        this.run_query(window, cx);
+                    }
+                })),
+            self.refresh.refresh_dropdown.clone(),
+        )
+        .menu_focused(refresh_menu_focused)
+        .into_any_element()
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -635,7 +578,26 @@ impl CodeDocument {
             .children(self.vim.render_indicator(cx))
     }
 
-    fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Whether the results draw their header (result tabs, Refresh, maximize
+    /// and hide): there are result tabs and no script output replaces them.
+    fn has_results_header(&self) -> bool {
+        let has_error = self
+            .execution
+            .active_execution_index
+            .and_then(|index| self.execution.execution_history.get(index))
+            .is_some_and(|record| record.error.is_some());
+        let has_live_output = self.execution.live_output.is_some() && !has_error;
+
+        !has_live_output && !self.result_tabs.result_tabs.is_empty()
+    }
+
+    /// Whether the results header is on screen: it exists and the results
+    /// are not hidden.
+    fn shows_results_header(&self) -> bool {
+        self.has_results_header() && self.layout != SqlQueryLayout::EditorOnly
+    }
+
+    fn render_results(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().background;
         let is_executing = self.state == DocumentState::Executing;
 
@@ -649,7 +611,7 @@ impl CodeDocument {
         let has_live_output = self.execution.live_output.is_some() && !has_error;
         let active_panel = self.active_result_panel();
         let has_panel = active_panel.is_some();
-        let has_tabs = !has_live_output && !self.result_tabs.result_tabs.is_empty();
+        let has_tabs = self.has_results_header();
 
         // The results show focus through their own grid cursor and tabs.
         div()
@@ -658,7 +620,9 @@ impl CodeDocument {
             .flex_col()
             .min_h_0()
             .bg(bg)
-            .when(has_tabs, |el| el.child(self.render_results_header(cx)))
+            .when(has_tabs, |el| {
+                el.child(self.render_results_header(window, cx))
+            })
             .child(
                 div()
                     .flex_1()
@@ -738,11 +702,13 @@ impl CodeDocument {
             })
     }
 
-    /// Result tabs strip (AppByzEditor): one tab per result with its row
-    /// count and a close button, then the maximize and hide controls.
-    fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Result tabs strip (IslEditor): one tab per result with its row count
+    /// and a close button, then Refresh and the maximize and hide controls.
+    fn render_results_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_index = self.result_tabs.active_result_index;
         let muted = cx.theme().muted_foreground;
+        let refresh = (!self.read_only && self.supports_connection_context())
+            .then(|| self.render_results_refresh(window, cx));
 
         let tabs: Vec<AnyElement> = self
             .result_tabs
@@ -801,7 +767,9 @@ impl CodeDocument {
                 div()
                     .flex()
                     .items_center()
+                    .gap(Spacing::SM)
                     .h_full()
+                    .children(refresh)
                     .child(self.render_results_controls(cx)),
             )
     }
@@ -1223,12 +1191,24 @@ impl Render for CodeDocument {
 
         let context_bar = self.render_context_bar(cx).into_any_element();
         let production_banner = self.render_production_banner(cx);
-        let toolbar = self.render_toolbar(window, cx).into_any_element();
 
         let editor_view = if self.routine_definition_pending {
             self.render_awaiting_connection(cx).into_any_element()
         } else {
-            self.render_editor(window, cx).into_any_element()
+            div()
+                .size_full()
+                .flex()
+                .min_h_0()
+                .children(self.render_action_strip(cx))
+                .child(
+                    div()
+                        .debug_selector(|| "code-editor-area".to_string())
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(self.render_editor(window, cx)),
+                )
+                .into_any_element()
         };
         let results_view = self.render_results(window, cx).into_any_element();
 
@@ -1247,7 +1227,6 @@ impl Render for CodeDocument {
             .track_focus(&self.focus_handle)
             .child(context_bar)
             .when_some(production_banner, |el, banner| el.child(banner))
-            .child(toolbar)
             .child(
                 div()
                     .flex_1()

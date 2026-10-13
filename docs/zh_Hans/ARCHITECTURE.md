@@ -224,7 +224,7 @@ crates/
         file_ops.rs         # 自动保存、临时/影子文件管理
         focus.rs            # 内部焦点管理
         live_output.rs      # 文档自有的流式脚本输出缓冲区
-        render.rs           # 工具栏、编辑器与实时输出渲染
+        render.rs           # 操作栏、编辑器与实时输出渲染
       console/              # NativeConsole：停靠在文档下方的可复用命令控制台
         mod.rs              # 实体、执行、审计、历史回溯、渲染
         format.rs           # 危险命令关卡、结果格式化、回溯列表
@@ -600,7 +600,7 @@ crates/
 
 **面板操作**
 
-文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个工具栏；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
+文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个操作栏以及结果的刷新按钮；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
 
 **文档类型**
 

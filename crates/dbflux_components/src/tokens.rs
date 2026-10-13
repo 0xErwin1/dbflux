@@ -1189,7 +1189,7 @@ impl CollectionMetrics {
 pub struct EditorMetrics;
 
 impl EditorMetrics {
-    /// Context bar and toolbar: 46 px tall, 14 px side padding.
+    /// Context bar: 46 px tall, 14 px side padding.
     pub const BAR_HEIGHT: Rems = ui(46.0);
     pub const BAR_PADDING_X: Pixels = px(14.0);
     /// Gap between the context bar's selectors and separators. (8 px)
@@ -1206,14 +1206,20 @@ impl EditorMetrics {
     pub const BANNER_ICON: Rems = ui(15.0);
     pub const BANNER_FILL_ALPHA: f32 = 0.08;
     pub const BANNER_LINE_ALPHA: f32 = 0.25;
-    /// Toolbar: 6 px between buttons, 6 px on each side of a group divider.
-    pub const TOOLBAR_GAP: Pixels = px(6.0);
-    pub const TOOLBAR_DIVIDER_MARGIN_X: Pixels = px(6.0);
-    /// Last-run summary at the end of the toolbar: 12 px mono text, 13 px
-    /// icon, 6 px gap.
+    /// Editor action strip (IslEditor): a 32 px column on the editor's left
+    /// edge, 6 px above the first button, 2 px between buttons, and a 14 px
+    /// line with 3 px above and below it after Run.
+    pub const ACTION_STRIP_WIDTH: Pixels = px(32.0);
+    pub const ACTION_STRIP_PADDING_TOP: Pixels = px(6.0);
+    pub const ACTION_STRIP_GAP: Pixels = px(2.0);
+    pub const ACTION_STRIP_SEPARATOR_WIDTH: Pixels = px(14.0);
+    pub const ACTION_STRIP_SEPARATOR_MARGIN_Y: Pixels = px(3.0);
+    /// Run summary in the context bar, before the file path: 12 px mono text,
+    /// 13 px icon, 6 px gap, 10 px before the path.
     pub const LAST_RUN_FONT: Rems = ui(12.0);
     pub const LAST_RUN_ICON: Rems = ui(13.0);
     pub const LAST_RUN_GAP: Pixels = px(6.0);
+    pub const LAST_RUN_MARGIN_RIGHT: Pixels = px(10.0);
     /// Code text: 13 px JetBrains Mono on 22 px rows.
     pub const CODE_FONT: Pixels = px(13.0);
     pub const CODE_LINE_HEIGHT: Pixels = px(22.0);

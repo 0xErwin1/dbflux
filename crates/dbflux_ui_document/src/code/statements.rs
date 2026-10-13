@@ -69,7 +69,7 @@ pub(super) fn statement_at_cursor(ranges: &[Range<usize>], cursor: usize) -> Opt
         .cloned()
 }
 
-/// The toolbar's run summary (AppByzEditor): "3 statements · last run
+/// The context bar's run summary (IslEditor): "3 statements · last run
 /// 0.32 s", either part alone when the other is unknown, `None` when both
 /// are.
 pub(super) fn run_summary_label(

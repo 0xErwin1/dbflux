@@ -121,22 +121,22 @@ búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
 reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
 entre paneles, igual que fuera del editor.
 
-La toolbar del editor también es un menú. `Shift+F10` abre el menú de **acciones
+La barra de acciones del borde izquierdo del editor también es un menú. `Shift+F10` abre el menú de **acciones
 del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 `Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
 `Shift+F10`) también lo abre. Un editor de scripts (Lua, Python, Bash) no tiene
 controles de conexión, así que su barra de contexto solo contiene un botón
 **Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
 menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
-una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar, Gráfico,
-Actualizar y el intervalo de actualización automática, cada una con su atajo
-cuando lo tiene. Muévete con `j` / `k` y elige con `Enter`, como en cualquier
-[menú contextual](#menú-contextual); `Escape` lo cierra. La entrada de
+una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar y
+Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
+`Enter`, como en cualquier [menú contextual](#menú-contextual); `Escape` lo
+cierra. Mientras la consulta tiene resultados, el menú sigue con la cabecera de
+resultados: Actualizar y el intervalo de actualización automática, Pestaña de
+resultados siguiente y anterior, Cerrar pestaña de resultados, Maximizar
+(Restaurar) resultados y Ocultar (Mostrar) resultados. La entrada de
 actualización automática abre la lista de intervalos con el foco del teclado (ver
-[Desplegables](#desplegables)). Mientras la consulta tiene resultados, el menú
-sigue con la cabecera de resultados: Pestaña de resultados siguiente y anterior,
-Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
-(Mostrar) resultados. El menú también está en la command palette como
+[Desplegables](#desplegables)). El menú también está en la command palette como
 **Abrir acciones del panel**.
 
 ## Modo Vim (opcional)
