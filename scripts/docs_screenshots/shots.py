@@ -392,6 +392,22 @@ def run_query(sql: str, check: Step) -> Step:
     )
 
 
+def run_script(sql: str, check: Step) -> Step:
+    """Types `sql` into the query tab and runs the whole buffer until `check` passes.
+
+    Without a selection Ctrl+Enter runs only the statement under the cursor,
+    so the buffer is selected first.
+    """
+
+    return ensure(
+        check,
+        call("focus_element", label="Enter SQL here", exact=False),
+        call("set_text", label="Enter SQL here", exact=False, text=sql),
+        key("ctrl-a"),
+        key("ctrl-enter"),
+    )
+
+
 SHOTS = (
     Shot(
         page="getting-started",
@@ -447,8 +463,8 @@ SHOTS = (
         name="multi-statement",
         steps=(
             *open_query_tab(),
-            run_query(MULTI_STATEMENT_SQL, wait_visible("script-confirm-run-btn")),
-            ensure(wait_for("Result 3"), click("script-confirm-run-btn")),
+            # A selection runs as-is, without the script confirmation.
+            run_script(MULTI_STATEMENT_SQL, wait_for("Result 3")),
         ),
     ),
     Shot(
