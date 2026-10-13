@@ -134,7 +134,7 @@ cargo nextest run --workspace _covered
 - `Checkbox` 以 `.label(...)` 命名，用于它画在方框旁的文本；以 `.aria_label(...)` 命名，用于外层行绘制的文本。
 - 手工绘制的控件自行声明语义：复选框使用 `.role(Role::CheckBox)`、`.aria_label(...)` 和 `.aria_toggled(...)`；开关使用 `.role(Role::Switch)` 和 `.aria_toggled(...)`；展开箭头使用 `.aria_expanded(...)`。
 
-请按用户在该控件旁看到的文本来命名，使朗读出的名称与可见标签一致。唯一的例外是启用覆盖的复选框：它以被覆盖的字段命名（“覆盖刷新策略”，而不是“刷新策略”），因为同一行上的值控件已经带有字段标签，而两个朗读完全相同的控件与一个没有名称的控件一样不可用。每个界面用一个渲染测试来证明：用 `dbflux_components::accessibility::FrameCapture` 捕获帧，再用 `accessible_name`、`accessibility_node` 或 `unnamed_clickables` 进行断言。
+请按用户在该控件旁看到的文本来命名，使朗读出的名称与可见标签一致。唯一的例外是启用覆盖的复选框：它以被覆盖的字段命名（“覆盖刷新策略”，而不是“刷新策略”）。这类复选框旁边的文本命名的是字段，而不是复选框的作用；当字段自身的控件带有同一个标签时，读屏软件无法区分两者。每个界面用一个渲染测试来证明：用 `dbflux_components::accessibility::FrameCapture` 捕获帧，再用 `accessible_name`、`accessibility_node` 或 `unnamed_clickables` 进行断言。
 
 ```bash
 cargo nextest run -p dbflux_components accessibility

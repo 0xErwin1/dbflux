@@ -170,7 +170,7 @@ cargo nextest run --workspace _covered
 - `Checkbox`는 `.label(...)`(상자 옆에 그리는 텍스트) 또는 `.aria_label(...)`(주변 행이 그리는 텍스트)으로 이름이 정해집니다.
 - 손으로 그린 컨트롤은 스스로 의미를 선언합니다: 상자는 `.role(Role::CheckBox)`, `.aria_label(...)`, `.aria_toggled(...)`; 켜짐/꺼짐 토글은 `.role(Role::Switch)`와 `.aria_toggled(...)`; 펼치는 화살표는 `.aria_expanded(...)`.
 
-사용자가 그 컨트롤 옆에서 보는 텍스트로 이름을 붙여, 읽히는 이름과 보이는 라벨이 일치하게 하세요. 유일한 예외는 재정의를 켜는 체크박스입니다: 재정의하는 필드로 이름을 붙입니다("새로고침 정책"이 아니라 "새로고침 정책 재정의"). 같은 행의 값 컨트롤이 이미 필드 라벨을 가지고 있고, 똑같이 읽히는 두 컨트롤은 이름 없는 컨트롤만큼 쓸모가 없기 때문입니다. 표면마다 렌더링 테스트가 그것을 증명합니다: `dbflux_components::accessibility::FrameCapture`로 프레임을 캡처하고 `accessible_name`, `accessibility_node`, `unnamed_clickables`로 검사합니다.
+사용자가 그 컨트롤 옆에서 보는 텍스트로 이름을 붙여, 읽히는 이름과 보이는 라벨이 일치하게 하세요. 유일한 예외는 재정의를 켜는 체크박스입니다: 재정의하는 필드로 이름을 붙입니다("새로고침 정책"이 아니라 "새로고침 정책 재정의"). 이런 체크박스 옆의 텍스트는 필드를 가리킬 뿐 체크박스가 하는 일을 말해 주지 않고, 필드 자체의 컨트롤이 같은 라벨을 가지면 화면 낭독기가 둘을 구분할 수 없습니다. 표면마다 렌더링 테스트가 그것을 증명합니다: `dbflux_components::accessibility::FrameCapture`로 프레임을 캡처하고 `accessible_name`, `accessibility_node`, `unnamed_clickables`로 검사합니다.
 
 ```bash
 cargo nextest run -p dbflux_components accessibility
