@@ -306,7 +306,7 @@ pub(crate) fn read_limited_rows<R: BufRead>(
 
     let mut rows = Vec::new();
     while rows.len() < row_limit {
-        if !read_line(&mut reader, &mut line, &mut consumed, max_bytes)? {
+        if !read_row_line(&mut reader, &mut line, &mut consumed, max_bytes)? {
             return Ok(LimitedResponse {
                 names,
                 types,
@@ -320,7 +320,7 @@ pub(crate) fn read_limited_rows<R: BufRead>(
         rows.push(row);
     }
 
-    let truncated = has_more_content(&mut reader)?;
+    let truncated = has_more_rows(&mut reader)?;
     Ok(LimitedResponse {
         names,
         types,
@@ -339,24 +339,49 @@ fn read_line<R: BufRead>(
     max_bytes: u64,
 ) -> Result<bool, ClickHouseHttpError> {
     loop {
-        line.clear();
-        let remaining = max_bytes.saturating_sub(*consumed);
-        let read = reader
-            .by_ref()
-            .take(remaining.saturating_add(1))
-            .read_until(b'\n', line)
-            .map_err(|error| ClickHouseHttpError::Body(error.to_string()))?;
-        *consumed = consumed.saturating_add(read as u64);
-        if *consumed > max_bytes {
-            return Err(ClickHouseHttpError::ResponseTooLarge { limit: max_bytes });
-        }
-        if read == 0 {
+        if read_raw_line(reader, line, consumed, max_bytes)? == 0 {
             return Ok(false);
         }
-        if !line.iter().all(u8::is_ascii_whitespace) {
+        if !is_blank(line) {
             return Ok(true);
         }
     }
+}
+
+/// Reads the next data row into `line`, returning `false` at the end of the
+/// body or at a blank line: ClickHouse writes the `WITH TOTALS` row and the
+/// extremes after one, and the buffered path does not return them as rows.
+fn read_row_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    consumed: &mut u64,
+    max_bytes: u64,
+) -> Result<bool, ClickHouseHttpError> {
+    Ok(read_raw_line(reader, line, consumed, max_bytes)? > 0 && !is_blank(line))
+}
+
+fn read_raw_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    consumed: &mut u64,
+    max_bytes: u64,
+) -> Result<usize, ClickHouseHttpError> {
+    line.clear();
+    let remaining = max_bytes.saturating_sub(*consumed);
+    let read = reader
+        .by_ref()
+        .take(remaining.saturating_add(1))
+        .read_until(b'\n', line)
+        .map_err(|error| ClickHouseHttpError::Body(error.to_string()))?;
+    *consumed = consumed.saturating_add(read as u64);
+    if *consumed > max_bytes {
+        return Err(ClickHouseHttpError::ResponseTooLarge { limit: max_bytes });
+    }
+    Ok(read)
+}
+
+fn is_blank(line: &[u8]) -> bool {
+    line.iter().all(u8::is_ascii_whitespace)
 }
 
 fn parse_header_line<R: BufRead>(
@@ -392,21 +417,29 @@ fn in_band_error<R: BufRead>(reader: &mut R, line: &[u8]) -> ClickHouseHttpError
     }
 }
 
-/// Reports whether any non-blank byte follows, consuming only whitespace and
-/// the buffered chunk that holds that byte.
-fn has_more_content<R: BufRead>(reader: &mut R) -> Result<bool, ClickHouseHttpError> {
+/// Reports whether another data row follows the last kept one. The body
+/// ending, or a blank line (which precedes the `WITH TOTALS` row and the
+/// extremes), means no row was left out. Only spaces and tabs are consumed,
+/// so nothing past the start of the next line is read.
+fn has_more_rows<R: BufRead>(reader: &mut R) -> Result<bool, ClickHouseHttpError> {
     loop {
         let buffer = reader
             .fill_buf()
             .map_err(|error| ClickHouseHttpError::Body(error.to_string()))?;
-        if buffer.is_empty() {
+        let Some(&first) = buffer.first() else {
             return Ok(false);
+        };
+        match first {
+            b' ' | b'\t' => {
+                let spaces = buffer
+                    .iter()
+                    .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                    .count();
+                reader.consume(spaces);
+            }
+            b'\n' | b'\r' => return Ok(false),
+            _ => return Ok(true),
         }
-        if buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
-            return Ok(true);
-        }
-        let length = buffer.len();
-        reader.consume(length);
     }
 }
 
@@ -744,6 +777,60 @@ mod tests {
         assert!(
             remaining > 1024 * 1024 - 64,
             "read {remaining} bytes too many"
+        );
+    }
+
+    /// ClickHouse writes the `WITH TOTALS` row (and extremes) after a blank
+    /// line; the buffered path drops them, so the limited path must too.
+    #[test]
+    fn limited_reader_ends_the_data_at_a_blank_line() {
+        let body = stream("[1]\n[2]\n\n[3]\n");
+        let response = read_limited_rows(body.as_slice(), 10, 1024).expect("totals ignored");
+        assert_eq!(
+            response.rows,
+            vec![vec![serde_json::json!(1)], vec![serde_json::json!(2)]]
+        );
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_exact_fit_before_totals_is_not_truncated() {
+        let body = stream("[1]\n[2]\n\n[3]\n");
+        let response = read_limited_rows(body.as_slice(), 2, 1024).expect("exact fit");
+        assert_eq!(response.rows.len(), 2);
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_reports_a_json_exception_object_before_the_cut() {
+        let body = stream("[1]\n{\"exception\":\"Code: 241. DB::Exception: memory\"}\n");
+        assert!(read_limited_rows(body.as_slice(), 10, 1024).is_err());
+    }
+
+    #[test]
+    fn limited_reader_rejects_a_body_with_only_the_names_line() {
+        let result = read_limited_rows(b"[\"n\"]\n".as_slice(), 5, 1024);
+        assert!(
+            matches!(result, Err(ClickHouseHttpError::Body(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn limited_reader_accepts_crlf_and_a_missing_final_newline() {
+        let body = b"[\"n\"]\r\n[\"UInt8\"]\r\n[1]\r\n[2]";
+        let response = read_limited_rows(body.as_slice(), 2, 1024).expect("crlf body");
+        assert_eq!(response.rows.len(), 2);
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_reports_an_exception_in_place_of_the_header() {
+        let body = b"Code: 60. DB::Exception: __exception__ Unknown table\n";
+        let result = read_limited_rows(body.as_slice(), 5, 1024);
+        assert!(
+            matches!(result, Err(ClickHouseHttpError::Server { .. })),
+            "{result:?}"
         );
     }
 
