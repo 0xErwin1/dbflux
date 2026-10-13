@@ -403,6 +403,104 @@ fn mssql_browse_and_count() -> Result<(), DbError> {
 }
 
 // ---------------------------------------------------------------------------
+// Browsing a table that lives outside the session's database (issue #1048)
+// ---------------------------------------------------------------------------
+
+const OTHER_DATABASE: &str = "dbflux_browse_other";
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_browse_uses_the_source_database_without_switching_sessions() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        // Both tables live in databases the session is moved out of below, which
+        // is the reported shape of the bug: the table is listed in the sidebar,
+        // its metadata loads, and reading its rows fails. Removing the database
+        // from either request brings back `Invalid object name`, so these
+        // assertions are the regression test for it.
+        connection.execute(&QueryRequest::new(format!(
+            "IF DB_ID('{OTHER_DATABASE}') IS NULL CREATE DATABASE [{OTHER_DATABASE}]"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS [{OTHER_DATABASE}].dbo.other_browse"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS [{TEST_DATABASE}].dbo.browse_target"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE [{OTHER_DATABASE}].dbo.other_browse (\
+             id INT NOT NULL, name NVARCHAR(20) NOT NULL)"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE [{TEST_DATABASE}].dbo.browse_target (\
+             id INT IDENTITY(1,1) NOT NULL, name NVARCHAR(20) NOT NULL)"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "INSERT INTO [{OTHER_DATABASE}].dbo.other_browse (id, name) \
+             VALUES (1, N'other'), (2, N'second')"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "INSERT INTO [{TEST_DATABASE}].dbo.browse_target (name) VALUES (N'target')"
+        )))?;
+
+        // `connect_mssql` leaves the session in TEST_DATABASE. Move it out so
+        // the reads below cannot pass by accident, and so the final assertion
+        // has something to prove.
+        connection.set_active_database(Some("master"))?;
+
+        let browsed = connection.browse_table(
+            &TableBrowseRequest::new(TableRef::with_schema("dbo", "browse_target"))
+                .with_database(Some(TEST_DATABASE.to_string()))
+                .with_pagination(Pagination::Offset {
+                    limit: 10,
+                    offset: 0,
+                }),
+        )?;
+        assert_eq!(browsed.rows.len(), 1);
+
+        let other = connection.browse_table(
+            &TableBrowseRequest::new(TableRef::with_schema("dbo", "other_browse"))
+                .with_database(Some(OTHER_DATABASE.to_string()))
+                .with_order_by(vec![OrderByColumn::asc("id")]),
+        )?;
+        assert_eq!(other.rows.len(), 2);
+
+        let counted = connection.count_table(
+            &TableCountRequest::new(TableRef::with_schema("dbo", "other_browse"))
+                .with_database(Some(OTHER_DATABASE.to_string())),
+        )?;
+        assert_eq!(counted, 2);
+
+        let row = connection.fetch_row_by_pk(
+            TEST_DATABASE,
+            "dbo",
+            "browse_target",
+            "id",
+            &Value::Int(1),
+        )?;
+        assert!(row.is_some(), "the row lookup after an edit must find it");
+
+        assert_eq!(
+            connection.active_database().as_deref(),
+            Some("master"),
+            "reading a table must not move the session's database"
+        );
+
+        connection.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS [{OTHER_DATABASE}].dbo.other_browse"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS [{TEST_DATABASE}].dbo.browse_target"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "DROP DATABASE IF EXISTS [{OTHER_DATABASE}]"
+        )))?;
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Row limiting without an explicit sort
 // ---------------------------------------------------------------------------
 

@@ -253,6 +253,7 @@ impl DataGridPanel {
         let keep_edits = std::mem::take(&mut self.grid_table.keep_edits_on_reload);
 
         let mut request = TableBrowseRequest::new(table.clone())
+            .with_database(database.clone())
             .with_pagination(pagination.clone())
             .with_order_by(order_by.clone())
             .with_columns(self.table_projection_columns());
@@ -922,7 +923,7 @@ impl DataGridPanel {
             }
         };
 
-        let mut count_request = TableCountRequest::new(table.clone());
+        let mut count_request = TableCountRequest::new(table.clone()).with_database(database);
         if let Some(f) = filter {
             count_request = count_request.with_filter(f);
         }
