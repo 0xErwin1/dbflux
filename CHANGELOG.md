@@ -36,6 +36,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **Query editor actions in a strip beside the editor** — The toolbar row above the query editor is gone. Run, Run in new tab, Save, Format, History, Explain and Chart sit in a narrow column on the editor's left edge, each named in a tooltip (Run also with its shortcut), so the context bar is the only row above the editor and its results. The statement count and last run time moved into the context bar, before the file path, and a long path is truncated instead of wrapping onto a row of its own. Refresh and the auto-refresh interval moved into the results header, and the pane actions menu (`Shift+F10`) lists them while results are shown. See Running Queries.
 * **Active statement highlighted in the gutter only** — The statement under the cursor in the code editor is now marked only in the gutter, with its bar, fill and bold line numbers. The text area behind it keeps the editor background, so the line you are editing is no longer tinted; the cursor line shows the theme's regular active-line color.
 
 ### Fixed

@@ -4137,6 +4137,97 @@ mod result_tab_keyboard_tests {
             checked.iter().any(|id| id.starts_with("result-tab-")),
             "{checked:?}"
         );
+        assert!(
+            checked.iter().any(|id| id == "sql-refresh-action"),
+            "Refresh sits in the results header: {checked:?}"
+        );
+    }
+
+    /// Refresh and its interval sit in the results header, so the pane
+    /// actions list them while the header is drawn, and the interval entry
+    /// opens the header's dropdown with keyboard focus.
+    #[gpui::test]
+    fn the_auto_refresh_entry_hands_the_keyboard_to_its_dropdown(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+        init_keyboard_runtime(cx);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+                });
+                document.update(cx, |document, cx| {
+                    document.setup_data_grid(
+                        one_row_result(),
+                        "SELECT 1".to_string(),
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
+                    document.layout = SqlQueryLayout::Split;
+                });
+                document
+            },
+            |document, cx| document.active_context(cx),
+            |document, command, window, cx| document.dispatch_command(command, window, cx),
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.focus_handle.focus(window, cx));
+        });
+        window.run_until_parked();
+
+        let actions = window.update(|_, cx| document.read(cx).pane_actions(&document));
+        let refresh = actions
+            .iter()
+            .find(|action| action.id == "refresh")
+            .expect("a refresh entry while the results show");
+        assert!(matches!(
+            refresh.run,
+            PaneActionRun::Command(Command::RunQuery)
+        ));
+
+        let auto_refresh = actions
+            .into_iter()
+            .find(|action| action.id == "auto-refresh")
+            .expect("an auto-refresh entry while the results show");
+        let PaneActionRun::Callback(open_interval) = auto_refresh.run else {
+            panic!("the auto-refresh entry runs a callback");
+        };
+
+        window.update(|window, cx| open_interval(window, cx));
+        window.run_until_parked();
+
+        let dropdown = window.update(|_, cx| document.read(cx).refresh.refresh_dropdown.clone());
+        let (open, focused) = window.update(|window, cx| {
+            let dropdown = dropdown.read(cx);
+            (dropdown.is_open(), dropdown.is_focused(window))
+        });
+        assert!(open && focused, "the interval dropdown opens with focus");
+
+        window.simulate_keystrokes("j escape");
+        window.run_until_parked();
+
+        let (open, document_focused) = window.update(|window, cx| {
+            (
+                dropdown.read(cx).is_open(),
+                document.read(cx).focus_handle.is_focused(window),
+            )
+        });
+        assert!(!open, "Escape closes the interval list");
+        assert!(document_focused, "focus returns to the editor pane");
     }
 }
 

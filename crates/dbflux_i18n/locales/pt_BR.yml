@@ -1260,7 +1260,6 @@ document:
       checking: "Verificando…"
       run: Executar
       last_run: "última execução %{seconds} s"
-      new_tab: Nova aba
       read_only: Somente leitura
       saved: Salvo
       save: Salvar

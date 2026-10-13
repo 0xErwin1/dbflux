@@ -1260,7 +1260,6 @@ document:
       checking: 正在检查…
       run: 执行
       last_run: "上次运行 %{seconds} 秒"
-      new_tab: 新建标签页
       read_only: 只读
       saved: 已保存
       save: 保存

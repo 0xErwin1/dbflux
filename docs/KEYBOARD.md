@@ -118,19 +118,19 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
 
-The editor's toolbar is also a menu. `Shift+F10` opens the **pane actions** menu
+The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
 editor (Lua, Python, Bash) has no connection controls, so its context bar holds
 only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
 presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
-history, Explain, Chart, Refresh and the auto-refresh interval, each with its
-shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
-[context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
-the interval list with keyboard focus (see [Dropdowns](#dropdowns)). While the
-query has results, the menu goes on with the results header: Next and Previous
-result tab, Close result tab, Maximize (Restore) results and Hide (Show)
-results. The menu is also in the command palette as **Open pane actions**.
+history, Explain and Chart, each with its shortcut when it has one. Move with
+`j` / `k` and choose with `Enter`, as in any [context menu](#context-menu);
+`Escape` closes it. While the query has results, the menu goes on with the
+results header: Refresh and the auto-refresh interval, Next and Previous result
+tab, Close result tab, Maximize (Restore) results and Hide (Show)
+results. The auto-refresh entry opens the interval list with keyboard focus (see
+[Dropdowns](#dropdowns)). The menu is also in the command palette as **Open pane actions**.
 
 ## Vim mode (opt-in)
 

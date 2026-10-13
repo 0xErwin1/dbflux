@@ -224,7 +224,7 @@ crates/
         file_ops.rs         # Auto-save, scratch/shadow file management
         focus.rs            # Internal focus management
         live_output.rs      # Document-owned streamed script output buffer
-        render.rs           # Toolbar, editor, and live output rendering
+        render.rs           # Action strip, editor, and live output rendering
       console/              # NativeConsole: reusable command console docked under a document
         mod.rs              # Entity, execution, audit, history recall, render
         format.rs           # Dangerous-command gate, result formatting, recall list
@@ -600,7 +600,7 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 **Pane actions**
 
-A document lists the actions it otherwise offers only to the pointer (its toolbar buttons and similar controls) by filling the optional `PaneHandle::pane_actions` closure with `PaneAction` entries: a label, an optional icon, the shortcut the effective keymap gives the same command, an enabled flag, and what running it does (`PaneActionRun::Command`, run through the workspace exactly as its key binding, or `PaneActionRun::Callback` for an action without a command). `Command::OpenPaneActions` goes to the active document first, so a pane with a menu of its own can answer it; otherwise the workspace (`views/workspace/pane_actions.rs`) snapshots the entries into a menu drawn over the document area. While it is open the workspace reports `ContextId::ContextMenu`, so the context-menu keys drive it. The workspace never knows the document type, and a document opts in from its own `pane.rs` without changes to `workspace/mod.rs`, `tab_manager.rs` or `tab_bar.rs`. `CodeDocument` lists its whole toolbar; the data table keeps `m` for its own context menu, which serves as its actions menu.
+A document lists the actions it otherwise offers only to the pointer (its toolbar buttons and similar controls) by filling the optional `PaneHandle::pane_actions` closure with `PaneAction` entries: a label, an optional icon, the shortcut the effective keymap gives the same command, an enabled flag, and what running it does (`PaneActionRun::Command`, run through the workspace exactly as its key binding, or `PaneActionRun::Callback` for an action without a command). `Command::OpenPaneActions` goes to the active document first, so a pane with a menu of its own can answer it; otherwise the workspace (`views/workspace/pane_actions.rs`) snapshots the entries into a menu drawn over the document area. While it is open the workspace reports `ContextId::ContextMenu`, so the context-menu keys drive it. The workspace never knows the document type, and a document opts in from its own `pane.rs` without changes to `workspace/mod.rs`, `tab_manager.rs` or `tab_bar.rs`. `CodeDocument` lists its whole action strip and the Refresh button of its results; the data table keeps `m` for its own context menu, which serves as its actions menu.
 
 **The document types**
 

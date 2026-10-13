@@ -185,8 +185,8 @@ There are four entry points.
 
 ### Chart button in the query editor
 
-Any query that produces tabular results can be charted. In the query editor
-toolbar, click the chart button (tooltip: "Open current query in a chart
+Any query that produces tabular results can be charted. In the action strip on
+the query editor's left edge, click the chart button (tooltip: "Open current query in a chart
 document") to open the current query in a chart document.
 
 ### Chart this query
