@@ -1908,19 +1908,7 @@ impl MongoConnection {
         let mut statement_results: Vec<QueryResult> = outcome
             .statements
             .iter()
-            .map(|stmt| {
-                let mut internal = documents_to_json_result(&stmt.documents);
-                let truncated = budget.retain(&mut internal.rows);
-                let mut qr = QueryResult::json(internal.columns, internal.rows, query_time);
-                qr.set_rows_truncated(truncated);
-                let mut metadata_extra = HashMap::new();
-                metadata_extra.insert(
-                    "script_statement_index".to_string(),
-                    serde_json::json!(stmt.index),
-                );
-                qr.metadata_extra = Some(metadata_extra);
-                qr
-            })
+            .map(|statement| script_statement_result(statement, &mut budget, query_time))
             .collect();
 
         let mut primary = if statement_results.is_empty() {
@@ -2138,6 +2126,26 @@ fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_j
 /// per union key (`_id` first, matching the BSON path); a non-object result
 /// (a scalar `count`, a collection-name string) gets a single `value`
 /// column instead.
+fn script_statement_result(
+    statement: &dbflux_js::ScriptStatementResult,
+    budget: &mut RowBudget,
+    query_time: std::time::Duration,
+) -> QueryResult {
+    let mut internal = documents_to_json_result(&statement.documents);
+    let truncated = budget.retain(&mut internal.rows);
+    let mut result = QueryResult::json(internal.columns, internal.rows, query_time);
+    let mut metadata_extra = HashMap::new();
+    metadata_extra.insert(
+        "script_statement_index".to_string(),
+        serde_json::json!(statement.index),
+    );
+    result.metadata_extra = Some(metadata_extra);
+    // The flag lives in `metadata_extra`, so it is set after the map is
+    // replaced or the replacement would erase it.
+    result.set_rows_truncated(truncated);
+    result
+}
+
 fn documents_to_json_result(documents: &[serde_json::Value]) -> QueryResultInternal {
     if documents.is_empty() {
         return QueryResultInternal {
@@ -6211,6 +6219,28 @@ mod row_budget_tests {
             MONGODB_METADATA
                 .capabilities
                 .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
+    fn script_statement_result_keeps_the_truncation_flag_beside_its_index() {
+        let statement = dbflux_js::ScriptStatementResult {
+            index: 1,
+            documents: vec![serde_json::json!({"_id": 1}), serde_json::json!({"_id": 2})],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(1));
+
+        let result = script_statement_result(&statement, &mut budget, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows_truncated());
+        assert_eq!(
+            result
+                .metadata_extra
+                .as_ref()
+                .and_then(|metadata| metadata.get("script_statement_index")),
+            Some(&serde_json::json!(1))
         );
     }
 }
