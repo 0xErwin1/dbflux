@@ -14,7 +14,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 ## 功能
 
 - 关系型驱动程序（`DatabaseCategory::Relational`、`QueryLanguage::Sql`），针对 Redshift 集群或 Redshift Serverless 端点使用 PostgreSQL 线协议通信。
-- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会拒绝请求级的行数上限，因此控制台命令不带上限运行。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 连接表单包含主机、端口（默认 `5439`）、数据库、用户、密码、SSL/`sslmode`（`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`）、连接 URI 模式（`redshift://...`，内部被规范化为 `postgresql://...`），以及 SSH 隧道。
 - 自定义 TLS 信任与双向 TLS：在启用 TLS 的模式下，会把固定的私有根 CA（PEM）叠加到系统根证书之上加入信任库；客户端证书 + 私钥（PEM/PKCS#8）可启用双向 TLS。证书材料按连接从表单中配置的路径加载；校验强度绝不会被削弱（`verify-ca`/`verify-full` 仍会拒绝不受信的证书）。证书/私钥文件缺失、不可读或格式错误会呈现为清晰的连接错误，而不是静默回退到系统信任库；私钥内容从不被记录到日志。
 - 基于 `information_schema` 的 Schema 探查，覆盖数据库、schema、表、视图与列，并用 `ColumnKind` 分类（时间戳/整数/浮点/文本），与标准 PostgreSQL 的 OID 对应。
@@ -27,7 +27,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 
 ## 限制
 
-- 请求的行数上限（包括零）和语句超时会在只读校验或查询准备之前被拒绝：此驱动无法在执行前保证这些限制。未设置这两项时，查询保持原有行为，仍可能缓冲完整结果；这并不限制服务器工作量或内存。提前拒绝的回归测试使用一次性 PostgreSQL 16 验证线协议兼容路径，并不验证 Redshift 集群行为。
+- 语句超时会在只读校验或查询准备之前被拒绝。请求行数上限会像 PostgreSQL 驱动一样流式读取行，并只保留预算内的行，但结果仍会读到末尾；这并不限制服务器工作量。提前拒绝的回归测试使用一次性 PostgreSQL 16 验证线协议兼容路径，并不验证 Redshift 集群行为。
 
 - 只读：`DriverMetadata.capabilities` 不含 `INSERT`、`UPDATE`、`DELETE`、`RETURNING`、`BULK_INSERT`、`TRUNCATE_TABLE`，以及所有 DDL/事务性 DDL 标志。该驱动程序没有内联的网格编辑，也没有变更/可视化查询构建器。`Connection::execute` 还会在���协议层拒绝任何非读取语句并给出明确错误，因此写入尝试永远不会变成静默的空操作。
 - 仅支持单语句：`Connection::execute` 一次只运行一条只读语句。多语句输入（例如 `SELECT 1; SELECT 2`）在到达线协议之前就会被明确拒绝；允许单个可选的结尾 `;`，而字符串字面量、带引号标识符或注释中的 `;` 不被当作分隔符。

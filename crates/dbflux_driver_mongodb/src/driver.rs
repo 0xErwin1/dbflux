@@ -121,7 +121,8 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
             | DriverCapabilities::CHART_AUTHORING.bits()
             | DriverCapabilities::SCRIPT_EXECUTION.bits()
-            | DriverCapabilities::NATIVE_CONSOLE.bits(),
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
@@ -1902,19 +1903,17 @@ impl MongoConnection {
             outcome.ledger.len()
         );
 
+        let mut budget = RowBudget::new(req.limit);
         let mut statement_results: Vec<QueryResult> = outcome
             .statements
             .iter()
-            .map(|stmt| {
-                let internal = documents_to_json_result(&stmt.documents);
-                let mut qr = QueryResult::json(internal.columns, internal.rows, query_time);
-                let mut metadata_extra = HashMap::new();
-                metadata_extra.insert(
-                    "script_statement_index".to_string(),
-                    serde_json::json!(stmt.index),
-                );
-                qr.metadata_extra = Some(metadata_extra);
-                qr
+            .map(|statement| {
+                let returns_rows = outcome
+                    .ledger
+                    .iter()
+                    .find(|entry| entry.index == statement.index)
+                    .is_some_and(|entry| script_method_returns_rows(&entry.method));
+                script_statement_result(statement, &mut budget, returns_rows, query_time)
             })
             .collect();
 
@@ -2127,6 +2126,37 @@ fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_j
         .collect()
 }
 
+/// Builds the result set of one script statement. Only statements that read
+/// documents (`returns_rows`) spend the request row budget; counts, write
+/// acknowledgements and command replies are kept whole, as in the
+/// single-statement path.
+fn script_statement_result(
+    statement: &dbflux_js::ScriptStatementResult,
+    budget: &mut RowBudget,
+    returns_rows: bool,
+    query_time: std::time::Duration,
+) -> QueryResult {
+    let (kept, truncated) = if returns_rows {
+        budget.admit(statement.documents.len())
+    } else {
+        (statement.documents.len(), false)
+    };
+    // Cut before conversion: the columns are the union of every converted
+    // document's keys, so a dropped document must not reach it.
+    let internal = documents_to_json_result(statement.documents.get(..kept).unwrap_or_default());
+    let mut result = QueryResult::json(internal.columns, internal.rows, query_time);
+    let mut metadata_extra = HashMap::new();
+    metadata_extra.insert(
+        "script_statement_index".to_string(),
+        serde_json::json!(statement.index),
+    );
+    result.metadata_extra = Some(metadata_extra);
+    // The flag lives in `metadata_extra`, so it is set after the map is
+    // replaced or the replacement would erase it.
+    result.set_rows_truncated(truncated);
+    result
+}
+
 /// Converts one statement's JSON documents into the tabular shape the UI's
 /// JSON grid renders, mirroring `documents_to_result`'s BSON path but keyed
 /// on `serde_json::Value`. Documents that are JSON objects get one column
@@ -2284,10 +2314,9 @@ impl Connection for MongoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "MongoDB execute cannot enforce a requested row limit or statement timeout"
-                    .to_string(),
+                "MongoDB execute cannot enforce a requested statement timeout".to_string(),
             ));
         }
         self.cancelled.store(false, Ordering::SeqCst);
@@ -2297,6 +2326,19 @@ impl Connection for MongoConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
         {
+            if req.limit.is_some()
+                && matches!(
+                    source,
+                    ExecutionSourceContext::InstanceMetricQuery { .. }
+                        | ExecutionSourceContext::InstanceInspectorQuery { .. }
+                )
+            {
+                return Err(DbError::NotSupported(
+                    "MongoDB instance metric and inspector queries cannot enforce a requested row limit"
+                        .to_string(),
+                ));
+            }
+
             match source {
                 ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
                     let client = self.client.lock().map_err(|_| {
@@ -2359,7 +2401,16 @@ impl Connection for MongoConnection {
 
                 let db = client.database(db_name);
 
-                let result = execute_mongo_query(&client, &db, &query, self.cancelled.clone())?;
+                let mut budget = RowBudget::new(req.limit);
+                let mut result =
+                    execute_mongo_query(&client, &db, &query, self.cancelled.clone(), &mut budget)?;
+                // Find and Aggregate spend the budget before their columns are
+                // built. Collection listings have fixed columns, so they are cut
+                // here. Counts, writes and command replies are not result rows.
+                if operation_lists_collections(&query.operation) {
+                    budget.retain(&mut result.rows);
+                }
+                let truncated = budget.dropped_rows();
 
                 let query_time = start.elapsed();
 
@@ -2371,6 +2422,7 @@ impl Connection for MongoConnection {
 
                 let mut qr = QueryResult::json(result.columns, result.rows, query_time);
                 qr.affected_rows = result.affected_rows;
+                qr.set_rows_truncated(truncated);
                 Ok(qr)
             }
             Err(e) if e.to_string() == crate::query_parser::SCRIPT_UNSUPPORTED_MESSAGE => {
@@ -2891,7 +2943,7 @@ impl Connection for MongoConnection {
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
 
-        let docs = collect_cursor_documents(cursor, &self.cancelled)?;
+        let docs = collect_cursor_documents(cursor, &self.cancelled, None)?;
 
         let internal = documents_to_result(docs)?;
         let query_time = start.elapsed();
@@ -2999,7 +3051,7 @@ impl Connection for MongoConnection {
             .aggregate(pipeline)
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
-        let documents = collect_cursor_documents(cursor, &self.cancelled)?;
+        let documents = collect_cursor_documents(cursor, &self.cancelled, None)?;
 
         let mut accumulator = SchemaSampleAccumulator::new();
         for document in &documents {
@@ -3053,7 +3105,7 @@ impl Connection for MongoConnection {
             .allow_disk_use(request.allow_disk_use)
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
-        let mut documents = collect_cursor_documents(cursor, &self.cancelled)?;
+        let mut documents = collect_cursor_documents(cursor, &self.cancelled, None)?;
 
         let truncated = documents.len() > limit;
         documents.truncate(limit);
@@ -3434,11 +3486,95 @@ struct QueryResultInternal {
     affected_rows: Option<u64>,
 }
 
+/// The `QueryRequest::limit` budget, spent once across every result set a
+/// request produces.
+struct RowBudget {
+    remaining: Option<usize>,
+    dropped_rows: bool,
+}
+
+impl RowBudget {
+    fn new(limit: Option<u32>) -> Self {
+        Self {
+            remaining: limit.map(|limit| limit as usize),
+            dropped_rows: false,
+        }
+    }
+
+    /// Charges `available` rows against the budget and returns how many of
+    /// them to keep and whether any were dropped.
+    fn admit(&mut self, available: usize) -> (usize, bool) {
+        let Some(remaining) = self.remaining.as_mut() else {
+            return (available, false);
+        };
+        let kept = available.min(*remaining);
+        *remaining -= kept;
+        let truncated = kept < available;
+        self.dropped_rows |= truncated;
+        (kept, truncated)
+    }
+
+    /// Whether any `admit` or `retain` call on this budget dropped rows.
+    fn dropped_rows(&self) -> bool {
+        self.dropped_rows
+    }
+
+    /// How many documents to pull from a cursor: one past the remaining
+    /// budget, so `retain` can tell a dropped row from an exact fit.
+    fn collect_cap(&self) -> Option<usize> {
+        self.remaining.map(|remaining| remaining.saturating_add(1))
+    }
+
+    /// Keeps the rows the budget still allows and reports whether any were dropped.
+    fn retain<T>(&mut self, rows: &mut Vec<T>) -> bool {
+        let (kept, truncated) = self.admit(rows.len());
+        rows.truncate(kept);
+        truncated
+    }
+}
+
+/// Converts the documents of a Find or Aggregate cursor, keeping only those
+/// the budget allows.
+fn bounded_documents_to_result(
+    documents: Vec<Document>,
+    budget: &mut RowBudget,
+) -> Result<QueryResultInternal, DbError> {
+    // Cut before conversion: the columns are the union of every converted
+    // document's keys, so a dropped document must not reach it.
+    let mut documents = documents;
+    budget.retain(&mut documents);
+    documents_to_result(documents)
+}
+
+/// Only document reads and collection listings produce result rows, so only
+/// they spend the budget in a script, as in the single-statement path.
+fn script_method_returns_rows(method: &str) -> bool {
+    matches!(
+        dbflux_core::ScriptMethod::from_js_name(method),
+        Some(
+            dbflux_core::ScriptMethod::FindDocuments
+                | dbflux_core::ScriptMethod::AggregateDocuments
+                | dbflux_core::ScriptMethod::ListContainers
+        )
+    )
+}
+
+fn operation_lists_collections(operation: &MongoOperation) -> bool {
+    matches!(
+        operation,
+        MongoOperation::GetCollectionNames | MongoOperation::GetCollectionInfos
+    )
+}
+
 fn collect_cursor_documents(
     cursor: mongodb::sync::Cursor<Document>,
     cancelled: &Arc<AtomicBool>,
+    cap: Option<usize>,
 ) -> Result<Vec<Document>, DbError> {
     let mut documents = Vec::new();
+    if cap == Some(0) {
+        return Ok(documents);
+    }
     for result in cursor {
         if cancelled.load(Ordering::SeqCst) {
             log::info!("[QUERY] MongoDB query cancelled during cursor iteration");
@@ -3446,6 +3582,9 @@ fn collect_cursor_documents(
         }
         let doc = result.map_err(|e| format_mongo_query_error(&e))?;
         documents.push(doc);
+        if cap.is_some_and(|cap| documents.len() >= cap) {
+            break;
+        }
     }
     Ok(documents)
 }
@@ -3455,6 +3594,7 @@ fn execute_mongo_query(
     db: &Database,
     query: &MongoQuery,
     cancelled: Arc<AtomicBool>,
+    budget: &mut RowBudget,
 ) -> Result<QueryResultInternal, DbError> {
     if query.collection.is_none() {
         return execute_db_operation(client, db, &query.operation);
@@ -3483,9 +3623,9 @@ fn execute_mongo_query(
                 .run()
                 .map_err(|e| format_mongo_query_error(&e))?;
 
-            let documents = collect_cursor_documents(cursor, &cancelled)?;
+            let documents = collect_cursor_documents(cursor, &cancelled, budget.collect_cap())?;
 
-            documents_to_result(documents)
+            bounded_documents_to_result(documents, budget)
         }
 
         MongoOperation::Aggregate { pipeline } => {
@@ -3494,9 +3634,9 @@ fn execute_mongo_query(
                 .run()
                 .map_err(|e| format_mongo_query_error(&e))?;
 
-            let documents = collect_cursor_documents(cursor, &cancelled)?;
+            let documents = collect_cursor_documents(cursor, &cancelled, budget.collect_cap())?;
 
-            documents_to_result(documents)
+            bounded_documents_to_result(documents, budget)
         }
 
         MongoOperation::Count { filter } => {
@@ -6082,6 +6222,172 @@ mod tests {
                     "{script}: a read must pass the ceiling and reach for the server: {message}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod row_budget_tests {
+    use super::*;
+
+    #[test]
+    fn unlimited_budget_keeps_every_row() {
+        let mut budget = RowBudget::new(None);
+        let mut rows = vec![1, 2, 3];
+        assert!(!budget.retain(&mut rows));
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert_eq!(budget.collect_cap(), None);
+    }
+
+    #[test]
+    fn budget_is_shared_across_result_sets() {
+        let mut budget = RowBudget::new(Some(3));
+        let mut first = vec![1, 2];
+        let mut second = vec![3, 4];
+        let mut third = vec![5];
+        assert!(!budget.retain(&mut first));
+        assert!(budget.retain(&mut second));
+        assert!(budget.retain(&mut third));
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(second, vec![3]);
+        assert!(third.is_empty());
+    }
+
+    #[test]
+    fn exact_fit_is_not_truncated() {
+        let mut budget = RowBudget::new(Some(2));
+        let mut rows = vec![1, 2];
+        assert!(!budget.retain(&mut rows));
+        let mut empty: Vec<i32> = Vec::new();
+        assert!(!budget.retain(&mut empty));
+    }
+
+    #[test]
+    fn zero_budget_drops_every_row_and_flags_only_non_empty_sets() {
+        let mut budget = RowBudget::new(Some(0));
+        let mut rows = vec![1];
+        assert!(budget.retain(&mut rows));
+        assert!(rows.is_empty());
+        let mut empty: Vec<i32> = Vec::new();
+        assert!(!budget.retain(&mut empty));
+    }
+
+    #[test]
+    fn collect_cap_peeks_one_row_past_the_remaining_budget() {
+        let mut budget = RowBudget::new(Some(5));
+        assert_eq!(budget.collect_cap(), Some(6));
+        let mut rows = vec![1, 2];
+        budget.retain(&mut rows);
+        assert_eq!(budget.collect_cap(), Some(4));
+    }
+
+    #[test]
+    fn metadata_declares_request_row_limit() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
+    fn script_statement_result_keeps_the_truncation_flag_beside_its_index() {
+        let statement = dbflux_js::ScriptStatementResult {
+            index: 1,
+            documents: vec![serde_json::json!({"_id": 1}), serde_json::json!({"_id": 2})],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(1));
+
+        let result =
+            script_statement_result(&statement, &mut budget, true, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows_truncated());
+        assert_eq!(
+            result
+                .metadata_extra
+                .as_ref()
+                .and_then(|metadata| metadata.get("script_statement_index")),
+            Some(&serde_json::json!(1))
+        );
+    }
+
+    #[test]
+    fn script_scalar_replies_survive_an_exhausted_budget() {
+        let count = dbflux_js::ScriptStatementResult {
+            index: 2,
+            documents: vec![serde_json::json!(42)],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(0));
+
+        let result = script_statement_result(&count, &mut budget, false, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn dropped_documents_do_not_add_columns() {
+        let documents = vec![doc! { "_id": 1 }, doc! { "_id": 2, "extra": 1 }];
+        let mut budget = RowBudget::new(Some(1));
+
+        let result =
+            bounded_documents_to_result(documents, &mut budget).expect("documents convert");
+
+        assert_eq!(result.rows.len(), 1);
+        let names: Vec<&str> = result
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["_id"]);
+        assert!(budget.dropped_rows());
+    }
+
+    #[test]
+    fn dropped_script_documents_do_not_add_columns() {
+        let statement = dbflux_js::ScriptStatementResult {
+            index: 0,
+            documents: vec![
+                serde_json::json!({"_id": 1}),
+                serde_json::json!({"_id": 2, "extra": 1}),
+            ],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(1));
+
+        let result =
+            script_statement_result(&statement, &mut budget, true, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows_truncated());
+        let names: Vec<&str> = result
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["_id"]);
+    }
+
+    #[test]
+    fn only_script_reads_and_listings_return_rows() {
+        for method in ["find", "aggregate", "getCollectionNames", "listCollections"] {
+            assert!(script_method_returns_rows(method), "{method}");
+        }
+        for method in [
+            "countDocuments",
+            "insertOne",
+            "insertMany",
+            "updateMany",
+            "deleteOne",
+            "runCommand",
+            "stats",
+            "serverStatus",
+            "unknownMethod",
+        ] {
+            assert!(!script_method_returns_rows(method), "{method}");
         }
     }
 }

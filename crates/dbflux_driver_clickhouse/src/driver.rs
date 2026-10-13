@@ -40,7 +40,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_CSV.bits()
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: Some(8123),
     uri_scheme: "http".to_string(),
@@ -361,6 +362,15 @@ mod tests {
         Comparator, DbConfig, DbDriver, DriverCapabilities, FilterNode, FormValues, LiteralValue,
         Predicate, PredicateValue, Projection, QueryGenerator, SourceTable, VisualQuerySpec,
     };
+
+    #[test]
+    fn metadata_declares_request_row_limit() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
 
     #[test]
     fn metadata_is_conservative_and_has_no_mutation_contract() {

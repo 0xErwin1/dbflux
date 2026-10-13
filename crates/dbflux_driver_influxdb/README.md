@@ -13,12 +13,13 @@ InfluxDB driver for DBFlux.
 
 ## Features
 
-- **Time-series category** — classified as `DatabaseCategory::TimeSeries` with `QueryLanguage::InfluxQuery` as the default editor language. Declared capabilities are `AUTHENTICATION`, `MULTIPLE_DATABASES`, `PAGINATION`, `EXPORT_CSV`, `EXPORT_JSON`, `CHART_AUTHORING`, `INSTANCE_METRICS`, and `INSTANCE_INSPECTOR`. Connections use the `http` URI scheme on default port 8086, with TLS provided by the rustls-backed HTTP client.
+- **Time-series category** — classified as `DatabaseCategory::TimeSeries` with `QueryLanguage::InfluxQuery` as the default editor language. Declared capabilities are `AUTHENTICATION`, `MULTIPLE_DATABASES`, `PAGINATION`, `EXPORT_CSV`, `EXPORT_JSON`, `CHART_AUTHORING`, `INSTANCE_METRICS`, `INSTANCE_INSPECTOR`, and `REQUEST_ROW_LIMIT`. Connections use the `http` URI scheme on default port 8086, with TLS provided by the rustls-backed HTTP client.
 - **InfluxDB v1 and v2** — both API versions are supported in a single driver crate.
 - **InfluxQL on both versions** — the v1 query language works on v1 and via the v2 compatibility endpoint.
 - **Flux on v2** — Flux queries are available when the connection is configured for v2.
 - **Optional default bucket** — the connection profile's bucket (v2) or database (v1) field is optional. A v2 API token gives access to all buckets in the organisation; a v1 user gives access to all databases on the server. Leaving the field blank lets the user select a bucket per-query from the source-context dropdown in the editor. Setting it pre-selects that bucket without restricting access to others.
 - **Per-query bucket routing** — the bucket used for each InfluxQL query comes from the source-context dropdown selection, not the connection profile. For Flux queries the bucket is embedded in the query text itself (`from(bucket: "...")`).
+- **Request row limit** — `execute()` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so editor queries carry the editor row limit.
 - **Bucket-free ping** — the connection liveness check does not require a bucket: v1 uses `SHOW DATABASES` against the internal database; v2 fetches `/api/v2/buckets?limit=1`.
 - **Time range macros** — InfluxQL and Flux queries support Grafana-compatible macro tokens that are substituted with the bound time-range window before the query is sent to the driver:
 
@@ -80,7 +81,7 @@ InfluxDB driver for DBFlux.
 
 ## Limitations
 
-- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before HTTP or instance-context dispatch. Unprotected queries remain available; the default editor cannot promise these protections.
+- `execute()` enforces `QueryRequest::limit` as one budget over the flattened result, but only after the whole HTTP response is read. It rejects a statement timeout, and a row limit on instance metric or inspector queries, with `NotSupported` before dispatch.
 
 - **No query cancellation** — `cancel()` returns `NotSupported`; in-flight queries cannot be aborted from the UI (`QUERY_CANCELLATION` is not declared).
 - **No mutation generation** — `QueryGenerator::generate_mutation` always returns `None`; only read templates are generated, consistent with the read-only query API.

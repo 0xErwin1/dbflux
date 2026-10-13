@@ -50,6 +50,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::QUERY_CANCELLATION.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::PREPARED_STATEMENTS.bits()
             | DriverCapabilities::VIEWS.bits()
             | DriverCapabilities::PAGINATION.bits()
@@ -721,6 +722,15 @@ mod tests {
         DatabaseCategory, DbConfig, DbDriver, DbError, DriverCapabilities, FormValues,
         QueryLanguage, TransferFamily,
     };
+
+    #[test]
+    fn metadata_declares_request_row_limit_enforcement() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
 
     #[test]
     fn metadata_declares_relational_sql_read_only_contract() {
