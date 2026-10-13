@@ -366,6 +366,11 @@ impl From<&str> for ColumnRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableBrowseRequest {
     pub table: TableRef,
+    /// The database the table lives in, when the caller knows it. Drivers that
+    /// separate the database from the schema qualify with it (SQL Server);
+    /// drivers whose `TableRef.schema` already names the database ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
     pub pagination: Pagination,
     pub order_by: Vec<OrderByColumn>,
     pub filter: Option<String>,
@@ -382,12 +387,18 @@ impl TableBrowseRequest {
     pub fn new(table: TableRef) -> Self {
         Self {
             table,
+            database: None,
             pagination: Pagination::default(),
             order_by: Vec::new(),
             filter: None,
             semantic_filter: None,
             columns: Vec::new(),
         }
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
     }
 
     pub fn with_columns(mut self, columns: Vec<String>) -> Self {
@@ -534,6 +545,10 @@ impl CollectionBrowseRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCountRequest {
     pub table: TableRef,
+    /// The database the table lives in, when the caller knows it. See
+    /// [`TableBrowseRequest::database`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
     pub filter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_filter: Option<SemanticFilter>,
@@ -543,9 +558,15 @@ impl TableCountRequest {
     pub fn new(table: TableRef) -> Self {
         Self {
             table,
+            database: None,
             filter: None,
             semantic_filter: None,
         }
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
     }
 
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
@@ -729,6 +750,36 @@ mod tests {
         let round_trip: TableBrowseRequest =
             serde_json::from_value(serde_json::to_value(&projected).unwrap()).unwrap();
         assert_eq!(round_trip.columns, vec!["ts".to_string()]);
+    }
+
+    #[test]
+    fn a_request_without_a_database_serializes_as_before_and_old_payloads_parse() {
+        // The field crosses the driver IPC boundary: a host payload written
+        // before the field existed must still parse, and a request that does
+        // not carry a database must not grow the wire shape.
+        let request = TableBrowseRequest::new(TableRef::new("events"));
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("database").is_none());
+
+        let parsed: TableBrowseRequest = serde_json::from_value(json).unwrap();
+        assert!(parsed.database.is_none());
+
+        let scoped = request.with_database(Some("reporting".to_string()));
+        let round_trip: TableBrowseRequest =
+            serde_json::from_value(serde_json::to_value(&scoped).unwrap()).unwrap();
+        assert_eq!(round_trip.database.as_deref(), Some("reporting"));
+
+        let count = TableCountRequest::new(TableRef::new("events"));
+        assert!(
+            serde_json::to_value(&count)
+                .unwrap()
+                .get("database")
+                .is_none()
+        );
+        let count_scoped = count.with_database(Some("reporting".to_string()));
+        let count_round_trip: TableCountRequest =
+            serde_json::from_value(serde_json::to_value(&count_scoped).unwrap()).unwrap();
+        assert_eq!(count_round_trip.database.as_deref(), Some("reporting"));
     }
 
     #[test]
