@@ -3970,6 +3970,7 @@ settings:
       error: 更新共享数据库设置失败
       hint: 下次启动时生效。共享稳定数据库（dbflux.db），而非此 nightly 构建的 dbflux-nightly.db。
     override_value_header: 覆盖值
+    override_field: "覆盖%{field}"
     placeholder:
       refresh_policy: 刷新策略
     save:

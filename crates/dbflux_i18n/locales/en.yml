@@ -3970,6 +3970,7 @@ settings:
       error: Failed to update the shared-database setting
       hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
     override_value_header: Override Value
+    override_field: "Override %{field}"
     placeholder:
       refresh_policy: Refresh policy
     save:
