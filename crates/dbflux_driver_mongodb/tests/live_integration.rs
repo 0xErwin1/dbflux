@@ -128,7 +128,9 @@ fn mongodb_row_limit_accepts_writes_and_bounds_reads() -> Result<(), DbError> {
             assert!(result.rows_truncated(), "{marker} read dropped rows");
         }
 
-        let mut exact = QueryRequest::new("db.row_limit.find({\"marker\": \"positive\"}).limit(2)");
+        let mut exact = QueryRequest::new(
+            r#"{"collection": "row_limit", "filter": {"marker": "positive"}, "limit": 2}"#,
+        );
         exact.limit = Some(3);
         let result = connection.execute(&exact)?;
         assert_eq!(result.rows.len(), 2);
