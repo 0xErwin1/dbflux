@@ -83,7 +83,8 @@ Sensitive fields (`addr`, `laddr`, `name`) are redacted to `[redacted]` to avoid
 
 ## Limitations
 
-- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before dispatching a command. Unprotected commands remain available; the default editor cannot promise these protections.
+- `execute()` rejects a requested statement timeout, and a row limit on instance metric or inspector queries, with `NotSupported` before dispatching a command.
+- The editor row limit bounds only replies shown as a table (an array, set or push reply of scalar values). Nested arrays and map replies render as text and are not bounded; the full reply is still read from the server before it is cut.
 
 - SQL is not supported; queries must be written as Redis commands.
 
