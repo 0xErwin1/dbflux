@@ -366,6 +366,19 @@ impl From<&str> for ColumnRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableBrowseRequest {
     pub table: TableRef,
+    /// The database the table lives in, when the caller knows it. Drivers that
+    /// separate the database from the schema qualify with it (SQL Server);
+    /// drivers whose `TableRef.schema` already names the database ignore it.
+    ///
+    /// Read in-process only. These requests also cross the driver RPC wire,
+    /// whose frames are postcard and positional, so a field in the middle would
+    /// shift every field after it for a peer that expects the layout without
+    /// it, and a minor protocol bump does not separate the two layouts
+    /// (`ProtocolVersion::is_compatible_with` compares the major only). An
+    /// external driver that needs the database needs a protocol change of its
+    /// own, not this field.
+    #[serde(skip)]
+    pub database: Option<String>,
     pub pagination: Pagination,
     pub order_by: Vec<OrderByColumn>,
     pub filter: Option<String>,
@@ -377,11 +390,17 @@ impl TableBrowseRequest {
     pub fn new(table: TableRef) -> Self {
         Self {
             table,
+            database: None,
             pagination: Pagination::default(),
             order_by: Vec::new(),
             filter: None,
             semantic_filter: None,
         }
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
     }
 
     pub fn with_pagination(mut self, pagination: Pagination) -> Self {
@@ -505,6 +524,11 @@ impl CollectionBrowseRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCountRequest {
     pub table: TableRef,
+    /// The database the table lives in, when the caller knows it. See
+    /// [`TableBrowseRequest::database`] for why it never reaches the driver RPC
+    /// wire.
+    #[serde(skip)]
+    pub database: Option<String>,
     pub filter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_filter: Option<SemanticFilter>,
@@ -514,9 +538,15 @@ impl TableCountRequest {
     pub fn new(table: TableRef) -> Self {
         Self {
             table,
+            database: None,
             filter: None,
             semantic_filter: None,
         }
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
     }
 
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
@@ -668,6 +698,41 @@ mod tests {
         assert_eq!(
             req.build_sql_with(&DefaultSqlDialect),
             "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" DESC LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn a_request_database_is_read_in_process_and_never_reaches_the_wire() {
+        // The driver RPC frames are postcard, which is positional: a field in
+        // the middle of these requests would shift every field after it for a
+        // peer that expects the layout without it. The field is therefore
+        // skipped in both directions, so a request that carries a database
+        // encodes exactly like one that does not. The postcard half of this
+        // lives in the `dbflux_ipc` layout test.
+        let request = TableBrowseRequest::new(TableRef::new("events"));
+        let scoped = request.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::to_value(&scoped).unwrap(),
+            "the database must not change the serialized request"
+        );
+        assert!(
+            serde_json::to_value(&scoped)
+                .unwrap()
+                .get("database")
+                .is_none()
+        );
+
+        let parsed: TableBrowseRequest =
+            serde_json::from_value(serde_json::to_value(&scoped).unwrap()).unwrap();
+        assert!(parsed.database.is_none());
+
+        let count = TableCountRequest::new(TableRef::new("events"));
+        let count_scoped = count.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            serde_json::to_value(&count).unwrap(),
+            serde_json::to_value(&count_scoped).unwrap(),
+            "the database must not change the serialized count"
         );
     }
 

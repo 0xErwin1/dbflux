@@ -2234,6 +2234,7 @@ impl DataGridPanel {
                         schema: schema.clone(),
                         name: reference.target_table.clone(),
                     })
+                    .with_database(Some(database.clone()))
                     .with_semantic_filter(
                         dbflux_core::SemanticFilter::compare(
                             reference.column.as_str(),

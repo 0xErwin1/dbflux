@@ -628,6 +628,124 @@ mod tests {
     use std::time::Duration;
     use uuid::Uuid;
 
+    /// `TableBrowseRequest` and `TableCountRequest` cross the driver RPC wire,
+    /// and `framing.rs` encodes every frame with postcard, which is positional.
+    /// A field that is skipped is absent from the bytes while the decoder still
+    /// consumes the next field's bytes as that field, shifting everything after
+    /// it, so a field that is only read in-process has to be skipped on both
+    /// sides of the encoding. Then a request carrying it encodes exactly like
+    /// one that does not and every other field keeps its place.
+    #[test]
+    fn browse_and_count_database_never_shifts_the_wire_layout() {
+        use dbflux_core::{
+            Pagination, SemanticFilter, TableBrowseRequest, TableCountRequest, TableRef, Value,
+            WhereOperator,
+        };
+
+        let filter = SemanticFilter::compare("id", WhereOperator::Eq, Value::Int(1));
+
+        // The shape an external driver RPC actually sends for a browse: no
+        // projection at all. Only the encoded bytes are compared here, because
+        // an empty projection has a pre-existing trailing-skip hazard of its
+        // own that the last assertion in this test does not touch.
+        let bare = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"));
+        let bare_scoped = bare.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
+                .expect("serialize bare browse"),
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: bare_scoped,
+            })
+            .expect("serialize scoped bare browse"),
+            "the database must be zero-width even with no projection"
+        );
+
+        // A count with a string filter and no semantic filter, which is also a
+        // pre-existing undecodable shape, so again bytes only.
+        let plain_count =
+            TableCountRequest::new(TableRef::with_schema("dbo", "events")).with_filter("id = 1");
+        let plain_count_scoped = plain_count
+            .clone()
+            .with_database(Some("reporting".to_string()));
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: plain_count,
+            })
+            .expect("serialize plain count"),
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: plain_count_scoped,
+            })
+            .expect("serialize scoped plain count"),
+            "the database must be zero-width with no semantic filter"
+        );
+
+        // A projection is part of the fixture because an empty one carries a
+        // postcard hazard of its own, independent of this field: `columns` has
+        // `skip_serializing_if`, so an empty vector shifts whatever follows it.
+        let browse = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"))
+            .with_pagination(Pagination::Offset {
+                limit: 10,
+                offset: 20,
+            })
+            .with_semantic_filter(filter.clone());
+        let browse_scoped = browse.clone().with_database(Some("reporting".to_string()));
+
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: browse.clone(),
+            })
+            .expect("serialize browse"),
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: browse_scoped,
+            })
+            .expect("serialize scoped browse"),
+            "a database on the request must not change the encoded bytes"
+        );
+
+        let bytes = postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+            request: browse.clone(),
+        })
+        .expect("serialize browse");
+        let decoded: DriverRequestBody = postcard::from_bytes(&bytes).expect("decode browse");
+        let DriverRequestBody::BrowseTable { request } = decoded else {
+            panic!("expected BrowseTable");
+        };
+        assert_eq!(request.table, browse.table);
+        assert_eq!(request.pagination, browse.pagination);
+        assert_eq!(request.semantic_filter, browse.semantic_filter);
+
+        let count = TableCountRequest::new(TableRef::with_schema("dbo", "events"))
+            .with_filter("id = 1")
+            .with_semantic_filter(filter.clone());
+        let count_scoped = count.clone().with_database(Some("reporting".to_string()));
+
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: count.clone(),
+            })
+            .expect("serialize count"),
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: count_scoped,
+            })
+            .expect("serialize scoped count"),
+            "a database on the count must not change the encoded bytes"
+        );
+
+        let bytes = postcard::to_allocvec(&DriverRequestBody::CountTable {
+            request: count.clone(),
+        })
+        .expect("serialize count");
+        let decoded: DriverRequestBody = postcard::from_bytes(&bytes).expect("decode count");
+        let DriverRequestBody::CountTable { request } = decoded else {
+            panic!("expected CountTable");
+        };
+        assert_eq!(request.filter, count.filter);
+        assert_eq!(
+            request.semantic_filter, count.semantic_filter,
+            "the count's filter must survive the wire"
+        );
+    }
+
     #[test]
     fn request_envelope_uses_explicit_protocol_version() {
         let envelope =
