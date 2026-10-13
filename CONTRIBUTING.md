@@ -135,7 +135,7 @@ A clickable element is named by its `aria_label` when it sets one, otherwise by 
 - `Checkbox` names itself from `.label(...)`, for the label it draws beside the box, or from `.aria_label(...)`, for text drawn by the row around it.
 - A hand-drawn control sets its own semantics: `.role(Role::CheckBox)`, `.aria_label(...)`, and `.aria_toggled(...)` for a box, `.role(Role::Switch)` and `.aria_toggled(...)` for an on/off toggle, `.aria_expanded(...)` for a disclosure arrow.
 
-Name the control after the text the user sees next to it, so the spoken name and the visible label agree. A render test per surface proves it: capture the frame with `dbflux_components::accessibility::FrameCapture` and assert on it with `accessible_name`, `accessibility_node` or `unnamed_clickables`.
+Name the control after the text the user sees next to it, so the spoken name and the visible label agree. The one exception is the checkbox that enables an override: it names the field it overrides ("Override refresh policy", not "Refresh policy"), because the value control on the same row already carries the field label, and two controls announced identically are as unusable as an unnamed one. A render test per surface proves it: capture the frame with `dbflux_components::accessibility::FrameCapture` and assert on it with `accessible_name`, `accessibility_node` or `unnamed_clickables`.
 
 ```bash
 cargo nextest run -p dbflux_components accessibility

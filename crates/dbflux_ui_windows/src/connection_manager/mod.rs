@@ -4842,7 +4842,7 @@ mod keyboard_coverage_tests {
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
 
-    fn open_manager(
+    pub(super) fn open_manager(
         cx: &mut TestAppContext,
     ) -> (
         gpui::Entity<ConnectionManagerWindow>,
@@ -5001,5 +5001,80 @@ mod keyboard_coverage_tests {
             window.run_until_parked();
             check(window, expected);
         }
+    }
+}
+
+/// The names the Connection Manager announces. A row that pairs a checkbox
+/// with a value control names the checkbox after what it overrides, because
+/// the value control beside it already carries the plain field label.
+#[cfg(test)]
+mod accessible_name_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::keyboard_coverage_tests::open_manager;
+    use super::{ActiveTab, ConnectionManagerWindow};
+    use dbflux_components::accessibility::accessible_name;
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+
+    fn open_settings_tab(
+        cx: &mut TestAppContext,
+    ) -> (Entity<ConnectionManagerWindow>, &mut VisualTestContext) {
+        let (manager, window) = open_manager(cx);
+        window.update(|window, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.select_driver("postgres", window, cx)
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.active_tab = ActiveTab::Settings;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        (manager, window)
+    }
+
+    fn override_name(field: &str) -> String {
+        dbflux_i18n::t!("settings.general.override_field", field = field)
+    }
+
+    /// The refresh policy and refresh interval rows each hold a checkbox and a
+    /// value control the user can act on separately, so the checkbox says it
+    /// overrides the field instead of repeating the field label.
+    #[gpui::test]
+    fn the_override_checkboxes_are_named_after_what_they_override(cx: &mut TestAppContext) {
+        let (_manager, window) = open_settings_tab(cx);
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+
+        let template = dbflux_i18n::t!("settings.general.override_field");
+        assert!(
+            template.contains("%{field}"),
+            "the catalogue must carry the override name template, got {template}"
+        );
+
+        let policy = dbflux_i18n::t!("connection_manager.overrides.refresh_policy");
+        let interval = dbflux_i18n::t!("connection_manager.overrides.refresh_interval");
+
+        assert_eq!(
+            accessible_name(&frame, "conn-override-refresh-policy"),
+            Some(override_name(&policy)),
+            "the checkbox that enables the refresh policy override"
+        );
+        assert_eq!(
+            accessible_name(&frame, "conn-override-refresh-interval"),
+            Some(override_name(&interval)),
+            "the checkbox that enables the refresh interval override"
+        );
+        assert_ne!(
+            accessible_name(&frame, "conn-override-refresh-policy"),
+            Some(policy),
+            "the checkbox must not repeat the field label it overrides"
+        );
     }
 }

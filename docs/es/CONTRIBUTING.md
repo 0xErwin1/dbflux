@@ -175,7 +175,7 @@ Un elemento clickeable se nombra con su `aria_label` cuando la define, y si no, 
 - `Checkbox` se nombra con `.label(...)`, para el texto que dibuja junto a la casilla, o con `.aria_label(...)`, para el texto que dibuja la fila que la rodea.
 - Un control dibujado a mano define su propia semántica: `.role(Role::CheckBox)`, `.aria_label(...)` y `.aria_toggled(...)` para una casilla; `.role(Role::Switch)` y `.aria_toggled(...)` para un interruptor de encendido/apagado; `.aria_expanded(...)` para una flecha que despliega.
 
-Nombra el control con el texto que la persona usuaria ve junto a él, para que el nombre hablado y la etiqueta visible coincidan. Un test de render por superficie lo demuestra: captura el frame con `dbflux_components::accessibility::FrameCapture` y compruébalo con `accessible_name`, `accessibility_node` o `unnamed_clickables`.
+Nombra el control con el texto que la persona usuaria ve junto a él, para que el nombre hablado y la etiqueta visible coincidan. La única excepción es la casilla que activa una anulación: nombra el campo que anula («Anular política de actualización», no «Política de actualización»), porque el control de valor de la misma fila ya lleva la etiqueta del campo y dos controles anunciados igual son tan inutilizables como uno sin nombre. Un test de render por superficie lo demuestra: captura el frame con `dbflux_components::accessibility::FrameCapture` y compruébalo con `accessible_name`, `accessibility_node` o `unnamed_clickables`.
 
 ```bash
 cargo nextest run -p dbflux_components accessibility

@@ -148,6 +148,14 @@ pub(crate) fn override_default_seconds_caption(seconds: u32) -> String {
     )
 }
 
+/// Names the checkbox that enables an override, so it is not announced as the
+/// field that checkbox swaps: the value control on the same row already carries
+/// the field label, and two controls announced identically are as unusable as an
+/// unnamed one.
+pub(crate) fn override_control_name(field: &str) -> String {
+    dbflux_i18n::t!("settings.general.override_field", field = field)
+}
+
 /// Formats the "<name> (disabled)" label shown for a disabled proxy in the proxy dropdown.
 pub(crate) fn access_proxy_disabled_label(name: &str) -> String {
     dbflux_i18n::t!("access.proxy_disabled_label", name = name)
@@ -1337,6 +1345,20 @@ mod tests {
                 locale = "es"
             )
         );
+    }
+
+    #[test]
+    fn override_control_name_embeds_the_field_it_overrides() {
+        let field = dbflux_i18n::t!("connection_manager.overrides.refresh_policy", locale = "en");
+        let template = dbflux_i18n::t!("settings.general.override_field", locale = "en");
+        let name = super::override_control_name(&field);
+
+        assert!(
+            template.contains("%{field}"),
+            "the catalogue must carry the override name template, got {template}"
+        );
+        assert_eq!(name, template.replace("%{field}", &field));
+        assert_ne!(name, field, "the checkbox must not repeat the field label");
     }
 
     #[test]
