@@ -644,6 +644,42 @@ mod tests {
 
         let filter = SemanticFilter::compare("id", WhereOperator::Eq, Value::Int(1));
 
+        // The shape an external driver RPC actually sends for a browse: no
+        // projection at all. Only the encoded bytes are compared here, because
+        // an empty projection has a pre-existing trailing-skip hazard of its
+        // own that the last assertion in this test does not touch.
+        let bare = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"));
+        let bare_scoped = bare.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: bare,
+            })
+            .expect("serialize bare browse"),
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: bare_scoped,
+            })
+            .expect("serialize scoped bare browse"),
+            "the database must be zero-width even with no projection"
+        );
+
+        // A count with a string filter and no semantic filter, which is also a
+        // pre-existing undecodable shape, so again bytes only.
+        let plain_count = TableCountRequest::new(TableRef::with_schema("dbo", "events"))
+            .with_filter("id = 1");
+        let plain_count_scoped =
+            plain_count.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: plain_count,
+            })
+            .expect("serialize plain count"),
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: plain_count_scoped,
+            })
+            .expect("serialize scoped plain count"),
+            "the database must be zero-width with no semantic filter"
+        );
+
         // A projection is part of the fixture because an empty one carries a
         // postcard hazard of its own, independent of this field: `columns` has
         // `skip_serializing_if`, so an empty vector shifts whatever follows it.
@@ -681,6 +717,7 @@ mod tests {
         assert_eq!(request.semantic_filter, browse.semantic_filter);
 
         let count = TableCountRequest::new(TableRef::with_schema("dbo", "events"))
+            .with_filter("id = 1")
             .with_semantic_filter(filter.clone());
         let count_scoped = count.clone().with_database(Some("reporting".to_string()));
 
