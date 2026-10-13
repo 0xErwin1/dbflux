@@ -2961,18 +2961,18 @@ impl ConnectionErrorFormatter for RedisErrorFormatter {
 /// Rejects request options `execute` cannot honor before any command runs.
 /// Instance metric and inspector sources build their own results, so they
 /// cannot apply a row budget.
-fn refuse_unsupported_request_options(req: &QueryRequest) -> Result<(), DbError> {
-    if req.statement_timeout.is_some() {
+fn refuse_unsupported_request_options(request: &QueryRequest) -> Result<(), DbError> {
+    if request.statement_timeout.is_some() {
         return Err(DbError::NotSupported(
             "Redis: requested statement timeout is unsupported; rejected before execution"
                 .to_string(),
         ));
     }
-    if req.limit.is_some()
+    if request.limit.is_some()
         && let Some(
             ExecutionSourceContext::InstanceMetricQuery { .. }
             | ExecutionSourceContext::InstanceInspectorQuery { .. },
-        ) = req
+        ) = request
             .execution_context
             .as_ref()
             .and_then(|context| context.source.as_ref())

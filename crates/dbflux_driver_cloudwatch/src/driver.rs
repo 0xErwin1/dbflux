@@ -320,8 +320,6 @@ impl Connection for CloudWatchConnection {
                 );
             }
             ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
-                // Unconditional refusal: these sources are rejected with or
-                // without a row limit.
                 return Err(DbError::NotSupported(format!(
                     "CloudWatch does not support instance metrics (metric_id: {metric_id})"
                 )));
