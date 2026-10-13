@@ -1908,7 +1908,14 @@ impl MongoConnection {
         let mut statement_results: Vec<QueryResult> = outcome
             .statements
             .iter()
-            .map(|statement| script_statement_result(statement, &mut budget, query_time))
+            .map(|statement| {
+                let returns_rows = outcome
+                    .ledger
+                    .iter()
+                    .find(|entry| entry.index == statement.index)
+                    .is_some_and(|entry| script_method_returns_rows(&entry.method));
+                script_statement_result(statement, &mut budget, returns_rows, query_time)
+            })
             .collect();
 
         let mut primary = if statement_results.is_empty() {
@@ -2120,19 +2127,18 @@ fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_j
         .collect()
 }
 
-/// Converts one statement's JSON documents into the tabular shape the UI's
-/// JSON grid renders, mirroring `documents_to_result`'s BSON path but keyed
-/// on `serde_json::Value`. Documents that are JSON objects get one column
-/// per union key (`_id` first, matching the BSON path); a non-object result
-/// (a scalar `count`, a collection-name string) gets a single `value`
-/// column instead.
+/// Builds the result set of one script statement. Only statements that read
+/// documents (`returns_rows`) spend the request row budget; counts, write
+/// acknowledgements and command replies are kept whole, as in the
+/// single-statement path.
 fn script_statement_result(
     statement: &dbflux_js::ScriptStatementResult,
     budget: &mut RowBudget,
+    returns_rows: bool,
     query_time: std::time::Duration,
 ) -> QueryResult {
     let mut internal = documents_to_json_result(&statement.documents);
-    let truncated = budget.retain(&mut internal.rows);
+    let truncated = returns_rows && budget.retain(&mut internal.rows);
     let mut result = QueryResult::json(internal.columns, internal.rows, query_time);
     let mut metadata_extra = HashMap::new();
     metadata_extra.insert(
@@ -2146,6 +2152,12 @@ fn script_statement_result(
     result
 }
 
+/// Converts one statement's JSON documents into the tabular shape the UI's
+/// JSON grid renders, mirroring `documents_to_result`'s BSON path but keyed
+/// on `serde_json::Value`. Documents that are JSON objects get one column
+/// per union key (`_id` first, matching the BSON path); a non-object result
+/// (a scalar `count`, a collection-name string) gets a single `value`
+/// column instead.
 fn documents_to_json_result(documents: &[serde_json::Value]) -> QueryResultInternal {
     if documents.is_empty() {
         return QueryResultInternal {
@@ -3528,6 +3540,19 @@ impl RowBudget {
         *remaining -= rows.len();
         truncated
     }
+}
+
+/// The script counterpart of [`operation_returns_rows`]: only document reads
+/// and collection listings produce result rows.
+fn script_method_returns_rows(method: &str) -> bool {
+    matches!(
+        dbflux_core::ScriptMethod::from_js_name(method),
+        Some(
+            dbflux_core::ScriptMethod::FindDocuments
+                | dbflux_core::ScriptMethod::AggregateDocuments
+                | dbflux_core::ScriptMethod::ListContainers
+        )
+    )
 }
 
 fn operation_returns_rows(operation: &MongoOperation) -> bool {
@@ -6231,7 +6256,8 @@ mod row_budget_tests {
         };
         let mut budget = RowBudget::new(Some(1));
 
-        let result = script_statement_result(&statement, &mut budget, std::time::Duration::ZERO);
+        let result =
+            script_statement_result(&statement, &mut budget, true, std::time::Duration::ZERO);
 
         assert_eq!(result.rows.len(), 1);
         assert!(result.rows_truncated());
@@ -6242,5 +6268,40 @@ mod row_budget_tests {
                 .and_then(|metadata| metadata.get("script_statement_index")),
             Some(&serde_json::json!(1))
         );
+    }
+
+    #[test]
+    fn script_scalar_replies_survive_an_exhausted_budget() {
+        let count = dbflux_js::ScriptStatementResult {
+            index: 2,
+            documents: vec![serde_json::json!(42)],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(0));
+
+        let result = script_statement_result(&count, &mut budget, false, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn only_script_reads_and_listings_return_rows() {
+        for method in ["find", "aggregate", "getCollectionNames", "listCollections"] {
+            assert!(script_method_returns_rows(method), "{method}");
+        }
+        for method in [
+            "countDocuments",
+            "insertOne",
+            "insertMany",
+            "updateMany",
+            "deleteOne",
+            "runCommand",
+            "stats",
+            "serverStatus",
+            "unknownMethod",
+        ] {
+            assert!(!script_method_returns_rows(method), "{method}");
+        }
     }
 }
