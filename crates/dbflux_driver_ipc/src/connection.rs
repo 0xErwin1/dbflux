@@ -48,8 +48,8 @@ impl IpcConnection {
             client,
             session_id,
             kind,
-            metadata: without_read_only_enforcement(metadata),
-            capabilities,
+            metadata: without_uncertifiable_enforcement(metadata),
+            capabilities: without_request_row_limit(capabilities),
             schema_loading_strategy,
             schema_features,
             code_gen_capabilities,
@@ -558,17 +558,33 @@ fn reject_protected_query(request: &QueryRequest) -> Result<(), DbError> {
     request.refuse_read_only_enforcement("IPC driver")
 }
 
-/// Clears `supports_read_only` from metadata a driver host reported.
+/// Clears from metadata a driver host reported what an IPC connection refuses
+/// to honour.
 ///
-/// The request DTO has no read-only field and the handshake certifies no
-/// enforcement, so an IPC connection refuses every request that requires it
-/// and must not advertise otherwise, whatever the remote driver declares.
-pub(crate) fn without_read_only_enforcement(mut metadata: DriverMetadata) -> DriverMetadata {
+/// `reject_protected_query` refuses every request that asks for read-only
+/// enforcement or carries a row limit, so an IPC connection must not advertise
+/// either, whatever the remote driver declares: a consumer that trusted the
+/// claim would build exactly the requests this connection turns away. The
+/// remote driver keeps its own metadata for its own clients.
+pub(crate) fn without_uncertifiable_enforcement(mut metadata: DriverMetadata) -> DriverMetadata {
+    metadata.capabilities = without_request_row_limit(metadata.capabilities);
     if let Some(transactions) = metadata.transactions.as_mut() {
         transactions.supports_read_only = false;
     }
 
     metadata
+}
+
+/// Clears [`DriverCapabilities::REQUEST_ROW_LIMIT`], the claim that
+/// `Connection::execute` enforces `QueryRequest::limit`.
+///
+/// An IPC connection refuses any request that carries a limit, so it enforces
+/// nothing and cannot claim otherwise. A consumer that sends the editor row
+/// limit only to drivers advertising this bit then builds a limit-less request,
+/// the one a remote driver that refuses limits can still run.
+fn without_request_row_limit(mut capabilities: DriverCapabilities) -> DriverCapabilities {
+    capabilities.remove(DriverCapabilities::REQUEST_ROW_LIMIT);
+    capabilities
 }
 
 /// Whether bulk schema column loads (`SchemaColumns`) are available on the
@@ -621,8 +637,8 @@ mod tests {
     use super::{IpcConnection, ensure_bulk_schema_columns_supported, ensure_key_count_supported};
     use crate::transport::RpcClient;
     use dbflux_core::{
-        Connection, DatabaseCategory, DbError, DbKind, DriverMetadataBuilder, KeyValueApi,
-        QueryLanguage, QueryRequest,
+        Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities, DriverMetadataBuilder,
+        KeyValueApi, QueryLanguage, QueryRequest,
     };
     use dbflux_ipc::ProtocolVersion;
     use dbflux_ipc::driver_socket_name;
@@ -681,22 +697,70 @@ mod tests {
     }
 
     #[test]
-    fn ipc_metadata_never_claims_read_only_enforcement() {
+    fn ipc_metadata_never_claims_enforcement_it_refuses() {
         let mut metadata = DriverMetadataBuilder::new(
             "test",
             "Test",
             DatabaseCategory::Relational,
             QueryLanguage::Sql,
         )
+        .capabilities(DriverCapabilities::REQUEST_ROW_LIMIT)
         .build();
         metadata.transactions = Some(dbflux_core::TransactionCapabilities {
             supports_read_only: true,
             ..dbflux_core::TransactionCapabilities::default()
         });
 
-        let sanitized = super::without_read_only_enforcement(metadata);
+        let sanitized = super::without_uncertifiable_enforcement(metadata);
 
         assert!(!sanitized.enforces_read_only());
+        assert!(!sanitized.supports(DriverCapabilities::REQUEST_ROW_LIMIT));
+    }
+
+    /// A remote driver that declares it enforces a row limit still cannot be
+    /// sent one through this connection, so the connection must not repeat the
+    /// claim: a consumer that reads it back builds a request the connection
+    /// refuses, and the editor query never reaches the driver.
+    #[test]
+    fn ipc_connection_never_advertises_row_limit_enforcement() {
+        let socket_id = format!("row-limit-ipc-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id).with_actions(vec![FakeDriverAction::Pong]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = IpcConnection::new(
+            client,
+            Uuid::nil(),
+            DbKind::SQLite,
+            DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .capabilities(DriverCapabilities::REQUEST_ROW_LIMIT)
+            .build(),
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase,
+            dbflux_core::SchemaFeatures::empty(),
+            dbflux_core::CodeGenCapabilities::empty(),
+        );
+
+        assert!(
+            !connection
+                .metadata()
+                .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+        assert!(!connection.supports(DriverCapabilities::REQUEST_ROW_LIMIT));
+        assert!(matches!(
+            connection.execute(&QueryRequest::new("SELECT 1").with_limit(500)),
+            Err(DbError::NotSupported(_))
+        ));
+        // The refusal stayed local: the scripted pong is still available.
+        assert!(connection.ping().is_ok());
+        server.wait().expect("server completed");
     }
 
     #[test]

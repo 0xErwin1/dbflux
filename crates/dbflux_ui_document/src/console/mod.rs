@@ -30,9 +30,8 @@ use dbflux_core::observability::{
     EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
 };
 use dbflux_core::{
-    Connection, DangerousQueryKind, DbError, DriverCapabilities, ExecutionClassification,
-    HistoryEntry, NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult,
-    classify_query_for_language,
+    Connection, DangerousQueryKind, DbError, ExecutionClassification, HistoryEntry,
+    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult, classify_query_for_language,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -558,10 +557,7 @@ impl NativeConsole {
 
         // Drivers that cannot enforce a row limit refuse a request carrying
         // one, so the editor's cap only goes to drivers that honour it.
-        if connection
-            .metadata()
-            .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
-        {
+        if crate::code::enforces_request_row_limit(connection.as_ref()) {
             let limit = self.app_state.read(cx).general_settings().editor_row_limit;
             request = request.with_limit(u32::try_from(limit).unwrap_or(u32::MAX));
         }
