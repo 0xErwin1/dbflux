@@ -331,25 +331,38 @@ fn dynamodb_query_safety() -> Result<(), DbError> {
         let count =
             || connection.count_collection(&CollectionCountRequest::new(collection.clone()));
 
-        for (label, limit, timeout) in [
-            ("write limit zero", Some(0), None),
-            ("write limit positive", Some(2), None),
-            ("write timeout", None, Some(Duration::from_secs(10))),
-        ] {
-            let mut request = QueryRequest::new(
+        let mut timed_write = QueryRequest::new(
+            json!({"op": "put", "table": table_name, "items": [{"pk": "write timeout"}]})
+                .to_string(),
+        );
+        timed_write.statement_timeout = Some(Duration::from_secs(10));
+        let outcome = connection.execute(&timed_write);
+        let observed_count = count()?;
+        println!("write timeout: outcome={outcome:?}, table_count={observed_count}");
+        assert_eq!(
+            observed_count, 1,
+            "write timeout: write must not take effect"
+        );
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "write timeout: expected refusal"
+        );
+
+        // Writes return no rows, so the row budget is accepted and ignored.
+        for (label, limit) in [("write limit zero", 0), ("write limit positive", 2)] {
+            let request = QueryRequest::new(
                 json!({"op": "put", "table": table_name, "items": [{"pk": label}]}).to_string(),
-            );
-            request.limit = limit;
-            request.statement_timeout = timeout;
+            )
+            .with_limit(limit);
             let outcome = connection.execute(&request);
-            let observed_count = count()?;
-            println!("{label}: outcome={outcome:?}, table_count={observed_count}");
-            assert_eq!(observed_count, 1, "{label}: write must not take effect");
+            println!("{label}: outcome={outcome:?}, table_count={}", count()?);
+            let result = outcome?;
             assert!(
-                matches!(outcome, Err(DbError::NotSupported(_))),
-                "{label}: expected refusal"
+                !result.rows_truncated(),
+                "{label}: write result is not truncated"
             );
         }
+        assert_eq!(count()?, 3, "both bounded writes must take effect");
 
         let scan = json!({"op": "scan", "table": table_name}).to_string();
         let mut timed_read = QueryRequest::new(&scan);
@@ -362,7 +375,12 @@ fn dynamodb_query_safety() -> Result<(), DbError> {
 
         for operation in ["scan", "query"] {
             let sql = json!({"op": operation, "table": table_name}).to_string();
-            for limit in [Some(0), None] {
+            for (limit, expected_rows, expected_truncated) in [
+                (Some(0), 0, true),
+                (Some(2), 2, true),
+                (Some(3), 3, false),
+                (None, 3, false),
+            ] {
                 let mut request = QueryRequest::new(&sql);
                 request.limit = limit;
                 let outcome = connection.execute(&request);
@@ -371,7 +389,16 @@ fn dynamodb_query_safety() -> Result<(), DbError> {
                     count()?
                 );
                 let result = outcome?;
-                assert_eq!(result.row_count(), if limit == Some(0) { 0 } else { 1 });
+                assert_eq!(
+                    result.row_count(),
+                    expected_rows,
+                    "{operation} limit={limit:?}"
+                );
+                assert_eq!(
+                    result.rows_truncated(),
+                    expected_truncated,
+                    "{operation} limit={limit:?}"
+                );
             }
         }
         Ok(())
@@ -386,32 +413,37 @@ fn dynamodb_query_safety_envelope_limit_cannot_override_caller() -> Result<(), D
         create_table(&endpoint, table_name)?;
         seed_items(&endpoint, table_name, 3)?;
         let connection = connect_dynamodb(&endpoint)?;
-        let mut violations = Vec::new();
         for operation in ["scan", "query"] {
-            let mut request = QueryRequest::new(
-                json!({"op": operation, "table": table_name, "limit": 2}).to_string(),
-            );
-            request.limit = Some(0);
-            let outcome = connection.execute(&request);
-            let count = connection.count_collection(&CollectionCountRequest::new(
-                CollectionRef::new("dynamodb", table_name),
-            ))?;
-            println!("{operation} envelope=2 caller=0: outcome={outcome:?}, table_count={count}");
-            if count != 3 {
-                violations.push(format!(
-                    "{operation}: read changed fixture count to {count}"
-                ));
-            }
-            match outcome {
-                Ok(result) if result.row_count() == 0 => {}
-                Ok(result) => {
-                    violations.push(format!("{operation}: returned {} rows", result.row_count()))
-                }
-                Err(DbError::NotSupported(_)) => {}
-                Err(error) => violations.push(format!("{operation}: unexpected refusal: {error}")),
+            // The envelope's own limit still applies; only rows the caller's
+            // budget dropped mark the result truncated.
+            for (caller_limit, expected_rows, expected_truncated) in
+                [(0, 0, true), (1, 1, true), (2, 2, false), (5, 2, false)]
+            {
+                let request = QueryRequest::new(
+                    json!({"op": operation, "table": table_name, "limit": 2}).to_string(),
+                )
+                .with_limit(caller_limit);
+                let outcome = connection.execute(&request);
+                let count = connection.count_collection(&CollectionCountRequest::new(
+                    CollectionRef::new("dynamodb", table_name),
+                ))?;
+                println!(
+                    "{operation} envelope=2 caller={caller_limit}: outcome={outcome:?}, table_count={count}"
+                );
+                assert_eq!(count, 3, "{operation}: read must not change the fixture");
+                let result = outcome?;
+                assert_eq!(
+                    result.row_count(),
+                    expected_rows,
+                    "{operation} caller={caller_limit}"
+                );
+                assert_eq!(
+                    result.rows_truncated(),
+                    expected_truncated,
+                    "{operation} caller={caller_limit}"
+                );
             }
         }
-        assert!(violations.is_empty(), "{}", violations.join("; "));
         Ok(())
     })
 }
@@ -432,34 +464,36 @@ fn dynamodb_query_safety_partiql_insert_limit() -> Result<(), DbError> {
             CollectionRef::new("dynamodb", table_name),
         ))?;
         println!("PartiQL INSERT limit=1: outcome={outcome:?}, table_count={count}");
-        assert_eq!(count, 0, "INSERT must not take effect");
-        assert!(
-            matches!(outcome, Err(DbError::NotSupported(_))),
-            "expected pre-effect refusal"
-        );
+        let result = outcome?;
+        assert_eq!(count, 1, "INSERT accepts and ignores the row budget");
+        assert!(!result.rows_truncated());
         Ok(())
     })
 }
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn dynamodb_query_safety_partiql_select_zero_limit() -> Result<(), DbError> {
+fn dynamodb_query_safety_partiql_select_row_limit() -> Result<(), DbError> {
     containers::with_dynamodb_endpoint(|endpoint| {
         let table_name = "dbflux_query_safety_partiql_select";
         create_table(&endpoint, table_name)?;
-        seed_items(&endpoint, table_name, 1)?;
+        seed_items(&endpoint, table_name, 2)?;
         let connection = connect_dynamodb(&endpoint)?;
-        let request = QueryRequest::new(format!("SELECT * FROM \"{table_name}\"")).with_limit(0);
-        let outcome = connection.execute(&request);
+        for (limit, expected_rows, expected_truncated) in
+            [(0, 0, true), (1, 1, true), (2, 2, false), (10, 2, false)]
+        {
+            let request =
+                QueryRequest::new(format!("SELECT * FROM \"{table_name}\"")).with_limit(limit);
+            let outcome = connection.execute(&request);
+            println!("PartiQL SELECT limit={limit}: outcome={outcome:?}");
+            let result = outcome?;
+            assert_eq!(result.row_count(), expected_rows, "limit={limit}");
+            assert_eq!(result.rows_truncated(), expected_truncated, "limit={limit}");
+        }
         let count = connection.count_collection(&CollectionCountRequest::new(
             CollectionRef::new("dynamodb", table_name),
         ))?;
-        println!("PartiQL SELECT limit=0: outcome={outcome:?}, table_count={count}");
-        assert_eq!(count, 1);
-        assert!(
-            matches!(outcome, Err(DbError::NotSupported(_))),
-            "zero limit must be refused before SDK request"
-        );
+        assert_eq!(count, 2);
         Ok(())
     })
 }

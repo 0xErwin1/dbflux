@@ -296,7 +296,8 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
             | DriverCapabilities::UPDATE.bits()
             | DriverCapabilities::DELETE.bits()
             | DriverCapabilities::NESTED_DOCUMENTS.bits()
-            | DriverCapabilities::ARRAYS.bits(),
+            | DriverCapabilities::ARRAYS.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: None,
     uri_scheme: "dynamodb".into(),
@@ -587,17 +588,7 @@ impl Connection for DynamoConnection {
         }
         req.refuse_read_only_enforcement("DynamoDB")?;
 
-        if let Some(verb) = partiql_verb(&req.sql) {
-            if req.limit.is_some() && verb != PartiqlVerb::Select {
-                return Err(DbError::NotSupported(
-                    "DynamoDB PartiQL writes do not support query row limits".to_string(),
-                ));
-            }
-            if req.limit == Some(0) {
-                return Err(DbError::NotSupported(
-                    "DynamoDB PartiQL SELECT does not support a zero row limit".to_string(),
-                ));
-            }
+        if partiql_verb(&req.sql).is_some() {
             let mut result = self.execute_partiql(req)?;
             result.execution_time = started.elapsed();
             return Ok(result);
@@ -627,13 +618,7 @@ impl Connection for DynamoConnection {
                     .unwrap_or_else(|| DYNAMODB_DEFAULT_DATABASE.to_string());
 
                 let pagination = Pagination::Offset {
-                    limit: match (limit, req.limit) {
-                        (Some(envelope_limit), Some(request_limit)) => {
-                            envelope_limit.min(request_limit)
-                        }
-                        (Some(limit), None) | (None, Some(limit)) => limit,
-                        (None, None) => 100,
-                    },
+                    limit: envelope_read_limit(limit, req.limit),
                     offset: offset.or(req.offset.map(u64::from)).unwrap_or(0),
                 };
 
@@ -646,18 +631,13 @@ impl Connection for DynamoConnection {
                     sort: None,
                 };
 
-                self.browse_collection_with_read_options(&request, &read_options)?
+                self.browse_collection_with_read_options(&request, &read_options, req.limit)?
             }
             DynamoCommandEnvelope::Put {
                 database,
                 table,
                 items,
             } => {
-                if req.limit.is_some() {
-                    return Err(DbError::NotSupported(
-                        "DynamoDB writes do not support query row limits".to_string(),
-                    ));
-                }
                 let insert = DocumentInsert {
                     collection: table,
                     database: Some(
@@ -678,11 +658,6 @@ impl Connection for DynamoConnection {
                 many,
                 upsert,
             } => {
-                if req.limit.is_some() {
-                    return Err(DbError::NotSupported(
-                        "DynamoDB writes do not support query row limits".to_string(),
-                    ));
-                }
                 let update_request = DocumentUpdate {
                     collection: table,
                     database: Some(
@@ -704,11 +679,6 @@ impl Connection for DynamoConnection {
                 key,
                 many,
             } => {
-                if req.limit.is_some() {
-                    return Err(DbError::NotSupported(
-                        "DynamoDB writes do not support query row limits".to_string(),
-                    ));
-                }
                 let delete_request = DocumentDelete {
                     collection: table,
                     database: Some(
@@ -899,7 +869,7 @@ impl Connection for DynamoConnection {
             request.semantic_filter.as_ref(),
         )?;
 
-        self.browse_collection_with_read_options(&request, &read_options)
+        self.browse_collection_with_read_options(&request, &read_options, None)
     }
 
     fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
@@ -1259,9 +1229,9 @@ impl DynamoConnection {
     ///
     /// `SELECT` statements map their returned items into a `QueryResult` (the
     /// SDK pagination token is carried as `next_page_token`); write statements
-    /// (`INSERT`/`UPDATE`/`DELETE`) report an affected-row count. Row limiting
-    /// rides on the SDK `set_limit` argument because PartiQL has no `LIMIT`
-    /// keyword. Only single statements are supported here; the JSON command
+    /// (`INSERT`/`UPDATE`/`DELETE`) report an affected-row count. The request
+    /// row budget is enforced on the returned items, never through the SDK
+    /// `Limit`, which counts evaluated items rather than returned ones. Only single statements are supported here; the JSON command
     /// envelope remains the escape hatch for everything PartiQL cannot express.
     fn execute_partiql(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let config = DynamoProfileConfig {
@@ -1276,14 +1246,7 @@ impl DynamoConnection {
         // limitation: PartiQL pagination beyond page 1 needs an inbound page-token
         // seam on QueryRequest (deferred to the UI batch); only the first page is
         // returned and next_page_token is surfaced but cannot yet be fed back in.
-        let request = self
-            .client
-            .execute_statement()
-            .statement(req.sql.trim())
-            .set_limit(
-                req.limit
-                    .map(|limit| i32::try_from(limit).unwrap_or(i32::MAX)),
-            );
+        let request = self.client.execute_statement().statement(req.sql.trim());
 
         let output = runtime.block_on(request.send()).map_err(|error| {
             let formatted = DYNAMO_ERROR_FORMATTER.format_execute_statement_error(&error, &config);
@@ -1292,9 +1255,10 @@ impl DynamoConnection {
 
         if partiql_verb(&req.sql) == Some(PartiqlVerb::Select) {
             let next_page_token = output.next_token().map(|token| token.to_string());
-            Ok(partiql_items_to_query_result(
-                output.items(),
+            Ok(bounded_partiql_query_result(
+                output.items().to_vec(),
                 next_page_token,
+                req.limit,
             ))
         } else {
             // ExecuteStatement returns no affected-row count for writes, so the
@@ -1310,6 +1274,7 @@ impl DynamoConnection {
         &self,
         request: &CollectionBrowseRequest,
         read_options: &DynamoReadOptions,
+        row_budget: Option<u32>,
     ) -> Result<QueryResult, DbError> {
         if request.collection.database != DYNAMODB_DEFAULT_DATABASE {
             return Err(DbError::object_not_found(format!(
@@ -1353,10 +1318,11 @@ impl DynamoConnection {
             })
             .transpose()?;
 
-        Ok(items_to_query_result(
-            &page.items,
+        Ok(bounded_items_to_query_result(
+            page.items,
             &key_schema,
             next_page_token,
+            row_budget,
         ))
     }
 
@@ -3063,6 +3029,58 @@ fn fetch_count_page(
     }
 }
 
+/// Number of items an envelope Scan/Query reads. When the request row budget is
+/// tighter than the envelope's own limit, one extra item is read so a dropped row
+/// can be told apart from a result that fits the budget exactly.
+fn envelope_read_limit(envelope_limit: Option<u32>, row_budget: Option<u32>) -> u32 {
+    match (envelope_limit, row_budget) {
+        (Some(limit), Some(budget)) if budget < limit => budget.saturating_add(1),
+        (Some(limit), _) => limit,
+        (None, Some(budget)) => budget.saturating_add(1),
+        (None, None) => 100,
+    }
+}
+
+/// Truncates `items` to the request row budget and reports whether any item was dropped.
+fn retain_within_row_budget<T>(items: &mut Vec<T>, row_budget: Option<u32>) -> bool {
+    let Some(budget) = row_budget else {
+        return false;
+    };
+    let budget = usize::try_from(budget).unwrap_or(usize::MAX);
+    if items.len() <= budget {
+        return false;
+    }
+    items.truncate(budget);
+    true
+}
+
+// A pagination token taken after the budget dropped rows would resume past
+// those rows, so a truncated result carries no token.
+fn bounded_items_to_query_result(
+    mut items: Vec<HashMap<String, AttributeValue>>,
+    key_schema: &DynamoTableKeySchema,
+    next_page_token: Option<String>,
+    row_budget: Option<u32>,
+) -> QueryResult {
+    let truncated = retain_within_row_budget(&mut items, row_budget);
+    let next_page_token = next_page_token.filter(|_| !truncated);
+    let mut result = items_to_query_result(&items, key_schema, next_page_token);
+    result.set_rows_truncated(truncated);
+    result
+}
+
+fn bounded_partiql_query_result(
+    mut items: Vec<HashMap<String, AttributeValue>>,
+    next_page_token: Option<String>,
+    row_budget: Option<u32>,
+) -> QueryResult {
+    let truncated = retain_within_row_budget(&mut items, row_budget);
+    let next_page_token = next_page_token.filter(|_| !truncated);
+    let mut result = partiql_items_to_query_result(&items, next_page_token);
+    result.set_rows_truncated(truncated);
+    result
+}
+
 fn items_to_query_result(
     items: &[HashMap<String, AttributeValue>],
     key_schema: &DynamoTableKeySchema,
@@ -4538,13 +4556,14 @@ mod tests {
         DynamoErrorFormatter, DynamoFilterFallbackPolicy, DynamoIndexKind, DynamoKeyComponent,
         DynamoKeyRole, DynamoLanguageService, DynamoProfileConfig, DynamoReadStrategy,
         DynamoTableKeySchema, append_window_items, apply_item_filter, attribute_value_to_value,
-        build_item_batches, build_table_info_from_description, build_update_expression_from_json,
+        bounded_items_to_query_result, bounded_partiql_query_result, build_item_batches,
+        build_table_info_from_description, build_update_expression_from_json,
         classify_connection_error, classify_query_error, decide_read_strategy,
         dynamo_filter_json_from_semantic, ensure_default_database,
-        ensure_item_contains_required_keys, extract_key_map_from_filter,
+        ensure_item_contains_required_keys, envelope_read_limit, extract_key_map_from_filter,
         extract_non_key_update_attributes, infer_field_kind, json_value_to_attribute_value,
         key_components_to_fields, key_components_to_indexes, normalize_table_names,
-        plan_dynamo_semantic_request, resolve_upsert_key_map, runtime,
+        plan_dynamo_semantic_request, resolve_upsert_key_map, retain_within_row_budget, runtime,
         strip_key_fields_from_update_payload, unsupported_operation, validate_read_options,
     };
     use crate::query_parser::{DynamoFilterFallback, DynamoReadOptions};
@@ -4682,6 +4701,117 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::ARRAYS)
         );
+    }
+
+    #[test]
+    fn metadata_declares_request_row_limit() {
+        assert!(
+            DYNAMODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
+    fn envelope_read_limit_never_exceeds_envelope_and_overfetches_one_past_budget() {
+        assert_eq!(envelope_read_limit(None, None), 100);
+        assert_eq!(envelope_read_limit(Some(7), None), 7);
+        assert_eq!(envelope_read_limit(None, Some(5)), 6);
+        assert_eq!(envelope_read_limit(None, Some(0)), 1);
+        assert_eq!(envelope_read_limit(Some(10), Some(3)), 4);
+        assert_eq!(envelope_read_limit(Some(2), Some(0)), 1);
+        // The envelope's own limit binds first, so no extra row is needed to
+        // detect a budget truncation that cannot happen.
+        assert_eq!(envelope_read_limit(Some(3), Some(3)), 3);
+        assert_eq!(envelope_read_limit(Some(2), Some(5)), 2);
+        assert_eq!(envelope_read_limit(Some(0), Some(0)), 0);
+        assert_eq!(envelope_read_limit(None, Some(u32::MAX)), u32::MAX);
+    }
+
+    #[test]
+    fn retain_within_row_budget_flags_only_rows_the_budget_dropped() {
+        let mut items = vec![1, 2, 3];
+        assert!(!retain_within_row_budget(&mut items, None));
+        assert_eq!(items, vec![1, 2, 3]);
+
+        let mut items = vec![1, 2, 3];
+        assert!(!retain_within_row_budget(&mut items, Some(3)));
+        assert_eq!(items, vec![1, 2, 3]);
+
+        let mut items = vec![1, 2, 3];
+        assert!(retain_within_row_budget(&mut items, Some(2)));
+        assert_eq!(items, vec![1, 2]);
+
+        let mut items = vec![1];
+        assert!(retain_within_row_budget(&mut items, Some(0)));
+        assert!(items.is_empty());
+
+        let mut items: Vec<i32> = Vec::new();
+        assert!(!retain_within_row_budget(&mut items, Some(0)));
+    }
+
+    fn numbered_items(count: usize) -> Vec<HashMap<String, AttributeValue>> {
+        (0..count)
+            .map(|index| HashMap::from([("pk".to_string(), AttributeValue::S(index.to_string()))]))
+            .collect()
+    }
+
+    #[test]
+    fn bounded_envelope_result_flags_truncation_on_the_returned_result() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            ..Default::default()
+        };
+
+        let truncated = bounded_items_to_query_result(
+            numbered_items(3),
+            &key_schema,
+            Some("token".to_string()),
+            Some(2),
+        );
+        assert_eq!(truncated.row_count(), 2);
+        assert!(truncated.rows_truncated());
+        assert_eq!(truncated.next_page_token, None);
+
+        let exact = bounded_items_to_query_result(
+            numbered_items(2),
+            &key_schema,
+            Some("token".to_string()),
+            Some(2),
+        );
+        assert_eq!(exact.row_count(), 2);
+        assert!(!exact.rows_truncated());
+        assert_eq!(exact.next_page_token.as_deref(), Some("token"));
+
+        let zero = bounded_items_to_query_result(numbered_items(1), &key_schema, None, Some(0));
+        assert_eq!(zero.row_count(), 0);
+        assert!(zero.rows_truncated());
+
+        let unbounded = bounded_items_to_query_result(numbered_items(3), &key_schema, None, None);
+        assert_eq!(unbounded.row_count(), 3);
+        assert!(!unbounded.rows_truncated());
+    }
+
+    #[test]
+    fn bounded_partiql_result_flags_truncation_on_the_returned_result() {
+        let truncated =
+            bounded_partiql_query_result(numbered_items(3), Some("token".to_string()), Some(1));
+        assert_eq!(truncated.row_count(), 1);
+        assert!(truncated.rows_truncated());
+        assert_eq!(truncated.next_page_token, None);
+
+        // A continuation token alone is not a budget truncation: the page
+        // ended before the budget did.
+        let short_page =
+            bounded_partiql_query_result(numbered_items(2), Some("token".to_string()), Some(5));
+        assert_eq!(short_page.row_count(), 2);
+        assert!(!short_page.rows_truncated());
+        assert_eq!(short_page.next_page_token.as_deref(), Some("token"));
+
+        let zero = bounded_partiql_query_result(numbered_items(1), None, Some(0));
+        assert_eq!(zero.row_count(), 0);
+        assert!(zero.rows_truncated());
+        assert!(zero.columns.is_empty());
     }
 
     // DynamoDB's server-side metrics live in CloudWatch itself; an InstanceCatalog
