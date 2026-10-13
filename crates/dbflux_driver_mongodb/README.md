@@ -61,7 +61,7 @@ Exposes tabular snapshots of running server state:
 
 ## Limitations
 
-- `execute()` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) on Find, Aggregate and collection listings by stopping the cursor read at the budget; a script shares one budget across its statements, and a query's own `.limit(n)` still applies. Writes, counts and commands ignore the limit. A statement timeout, and a row limit on instance metric or inspector queries, are still rejected before dispatch.
+- `execute()` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) on Find, Aggregate and collection listings. Find and Aggregate stop reading the cursor one document past the budget; collection listings are cut after they are read, and script results after the script has run. A script shares one budget across its statements, and a query's own `.limit(n)` still applies. Writes, counts and commands ignore the limit. A statement timeout, and a row limit on instance metric or inspector queries, are still rejected before dispatch.
 - SQL is not supported; queries must use MongoDB shell-style syntax (or the JSON fallback).
 
 - Instance metrics return a single data point per call (current snapshot from `serverStatus`), not a historical time series. Operations counters (e.g. `mongo.opcounters_insert`) grow monotonically — interpret them as deltas between samples rather than absolute rates.

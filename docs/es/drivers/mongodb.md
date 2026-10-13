@@ -102,7 +102,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 ## Limitaciones
 
-- `execute()` aplica `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) a Find, Aggregate y los listados de colecciones dejando de leer el cursor al llegar al presupuesto; un script comparte un único presupuesto entre sus sentencias, y el `.limit(n)` propio de una query sigue aplicándose. Las escrituras, los conteos y los comandos ignoran el límite. Un tiempo de espera de sentencia, y un límite de filas en queries de métricas o inspectores de instancia, se siguen rechazando antes de ejecutarse.
+- `execute()` aplica `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) a Find, Aggregate y los listados de colecciones. Find y Aggregate dejan de leer el cursor un documento después del presupuesto; los listados de colecciones se recortan después de leerse, y los resultados de un script después de ejecutarlo. Un script comparte un único presupuesto entre sus sentencias, y el `.limit(n)` propio de una query sigue aplicándose. Las escrituras, los conteos y los comandos ignoran el límite. Un tiempo de espera de sentencia, y un límite de filas en queries de métricas o inspectores de instancia, se siguen rechazando antes de ejecutarse.
 
 - SQL no está soportado; las queries deben usar sintaxis estilo shell de MongoDB
   (o el fallback JSON).

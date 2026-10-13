@@ -60,7 +60,7 @@
 
 ## 限制
 
-- `execute()` 对 Find、Aggregate 和集合列表执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），达到预算时停止读取游标；脚本中的所有语句共享同一个预算，查询自身的 `.limit(n)` 仍然生效。写入、计数和命令会忽略该上限。语句超时以及实例指标或检查器查询上的行数上限仍会在分派前被拒绝。
+- `execute()` 对 Find、Aggregate 和集合列表执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`）。Find 和 Aggregate 在超出预算一个文档后停止读取游标；集合列表在读取完毕后截断，脚本结果在脚本运行后截断。脚本中的所有语句共享同一个预算，查询自身的 `.limit(n)` 仍然生效。写入、计数和命令会忽略该上限。语句超时以及实例指标或检查器查询上的行数上限仍会在分派前被拒绝。
 
 - 不支持 SQL；查询必须使用 MongoDB shell 风格语法（或 JSON 回退方式）。
 
