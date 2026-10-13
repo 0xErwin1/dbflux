@@ -15,7 +15,7 @@ The text below is exhaustive but dense; these three diagrams give the mental mod
 
 ### Layered crate map
 
-Dependencies point downward. `dbflux_core` is the dependency-free contract layer every other crate builds on; the UI never depends on a concrete driver crate (see [Driver/UI decoupling](#driver-system)).
+Dependencies point downward. `dbflux_core` is the shared contract layer the rest of the workspace builds on; it takes one narrow dependency of its own, `dbflux_policy`, for the execution-classification and schema-alter types it re-exports. The UI never depends on a concrete driver crate (see [Driver/UI decoupling](#driver-system)).
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["Supporting libraries"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["Policy — dbflux_policy"]
+        policy["ExecutionClassification,<br/>schema-alter classification"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "generic seams only" .-> core
@@ -247,8 +252,8 @@ crates/
         mod.rs              # AuditDocument entity
         pane.rs             # AuditDocument::into_pane constructor
         view.rs             # LogStreamView boundary struct
-        render.rs           # Extracted render code (~1300 LOC)
-        commands.rs         # Extracted command dispatch (~560 LOC)
+        render.rs           # Extracted render code
+        commands.rs         # Extracted command dispatch
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -310,7 +315,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # Per-profile hook bindings
-  dbflux_ui/                # Thin integrator (~13.5k LOC): wires the six UI crates together
+  dbflux_ui/                # Thin integrator: wires the six UI crates together
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
@@ -590,11 +595,11 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 1. **`Tab`** (`tab_manager.rs`) — `#[non_exhaustive]` enum with a single `Pane(Box<PaneHandle>)` variant. Kept as enum for forward-compatibility (e.g., future detachable pane variants). `TabManager` holds a `Vec<Tab>` plus MRU ordering.
 
-2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each operation (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers such as `resolve_close`, `save_for_close`, `flush_for_shutdown`, and `is_file_backed_empty`) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
+2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Every operation is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`: rendering and focus, command dispatch, pure metadata reads (title, close eligibility, connection and active context, change summary, refresh policy), mutations such as the active tab and refresh policy, dedup matching, event subscription, and optional document-specific helpers (close, save and quit policy, side panels, pane actions, status segments). `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
 
-3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication. Variants: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
+3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication; the variant list lives in `dedup.rs` and is the source of truth. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
-4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — unified event enum replacing four per-document event enums that were deleted. Variants: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — unified event enum replacing four per-document event enums that were deleted; the variant list lives in `handle.rs`.
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — universal chrome host. `ResultPanel` owns a chrome row and delegates body rendering to a `ViewHandle` (7 closures: render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode). The slot system (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`) lets views contribute arbitrary chrome: `ResultPanel` merges built-in segments (mode bar at Left/0 when `available_modes.len() >= 2`) and view-provided segments, sorts by `(position, index)`, and renders them in a `flex_wrap` row.
 
@@ -895,7 +900,7 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
 
 ### Supporting Components
 
-- Toast system: `crates/dbflux_ui_base/src/toast.rs` custom implementation with auto-dismiss (4s) for success/info/warning toasts. (Shim at `crates/dbflux_ui/src/ui/components/toast.rs`.)
+- Toast system: `crates/dbflux_ui_base/src/toast.rs` custom implementation with a configurable auto-dismiss for success/info/warning toasts (default 8 s, warning toasts after twice that; from Settings > General).
 - Tunnel infrastructure: `crates/dbflux_tunnel_core/` provides RAII `Tunnel` with `TunnelConnector` trait and `ForwardingConnection<R>` bidirectional forwarder.
 - Proxy tunneling: `crates/dbflux_proxy/` implements SOCKS5 and HTTP CONNECT proxy tunnels via `TunnelConnector`.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implements SSH tunnel via `TunnelConnector`, all operations serialized to one thread for libssh2 safety.
