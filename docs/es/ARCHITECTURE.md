@@ -28,9 +28,11 @@ las secciones siguientes.
 
 ### Mapa de crates en capas
 
-Las dependencias apuntan hacia abajo. `dbflux_core` es la capa de contratos sin
-dependencias sobre la que se construye el resto de crates; la UI nunca depende
-de un crate de driver concreto (ver [Desacoplamiento
+Las dependencias apuntan hacia abajo. `dbflux_core` es la capa de contratos
+compartida sobre la que se construye el resto del workspace; tiene una única
+dependencia propia, `dbflux_policy`, para los tipos de clasificación de
+ejecución y de alteración de esquema que reexporta. La UI nunca depende de un
+crate de driver concreto (ver [Desacoplamiento
 Driver/UI](#driver-system)).
 
 ```mermaid
@@ -62,12 +64,17 @@ flowchart TB
     end
 
     subgraph Support["Bibliotecas de soporte"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["Políticas — dbflux_policy"]
+        policy["ExecutionClassification,<br/>clasificación de alteraciones de esquema"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "solo seams genéricos" .-> core
@@ -272,8 +279,8 @@ crates/
         mod.rs              # AuditDocument entity
         pane.rs             # AuditDocument::into_pane constructor
         view.rs             # LogStreamView boundary struct
-        render.rs           # Extracted render code (~1300 LOC)
-        commands.rs         # Extracted command dispatch (~560 LOC)
+        render.rs           # Extracted render code
+        commands.rs         # Extracted command dispatch
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -335,7 +342,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # Per-profile hook bindings
-  dbflux_ui/                # Thin integrator (~13.5k LOC): wires the six UI crates together
+  dbflux_ui/                # Thin integrator: wires the six UI crates together
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
@@ -658,31 +665,29 @@ en tabs con cinco capas:
    mantiene un `Vec<Tab>` más el orden MRU.
 
 2. **`PaneHandle`** (`pane.rs`) — shell que borra closures y reemplaza al
-   antiguo enum cerrado `DocumentHandle`. Cada operación
-   (render, focus, dispatch_command, meta_snapshot, tab_title, can_close,
-   connection_id, active_context, change_summary, refresh_policy,
-   set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key,
-   subscribe, más helpers opcionales como `resolve_close`, `save_for_close`,
-   `flush_for_shutdown` e `is_file_backed_empty`) es un closure `Box<dyn Fn>`
-   que captura el `Entity<T>` tipado. `PaneHandle` es `!Clone`. Cada tipo de document provee
-   `XxxDocument::into_pane(entity, cx) -> PaneHandle` en su propio archivo
-   `pane.rs` (todos bajo `crates/dbflux_ui_document/src/`). Agregar un nuevo
-   tipo de document no requiere cambios en `workspace/mod.rs`, `tab_manager.rs`,
-   `tab_bar.rs` ni `handle.rs`.
+   antiguo enum cerrado `DocumentHandle`. Cada operación es un closure
+   `Box<dyn Fn>` que captura el `Entity<T>` tipado: renderizado y foco, envío
+   de comandos, lecturas puras de metadatos (título, posibilidad de cierre,
+   conexión y contexto activo, resumen de cambios, política de refresco),
+   mutaciones como la pestaña activa y la política de refresco, coincidencia de
+   deduplicación, suscripción a eventos, y helpers opcionales propios del
+   document (cierre, política de guardado y salida, paneles laterales, acciones
+   del panel, segmentos de la barra de estado). `PaneHandle` es `!Clone`. Cada
+   tipo de document provee `XxxDocument::into_pane(entity, cx) -> PaneHandle` en
+   su propio archivo `pane.rs` (todos bajo
+   `crates/dbflux_ui_document/src/`). Agregar un nuevo tipo de document no
+   requiere cambios en `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs` ni
+   `handle.rs`.
 
 3. **`DocumentKey`** (`dedup.rs`) — enum de identidad usado para la
-   deduplicación de tabs. Variantes: `Table`, `Collection`, `File`,
-   `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`,
-   `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`,
-   `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Reemplaza los
-   métodos `is_*` del antiguo `DocumentHandle`. Los call sites usan
+   deduplicación de tabs; la lista de variantes vive en `dedup.rs` y es la
+   fuente de verdad. Reemplaza los métodos `is_*` del antiguo `DocumentHandle`.
+   Los call sites usan
    `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
-4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — enum de eventos unificado que
-   reemplaza cuatro enums de eventos por-document que fueron eliminados.
-   Variantes: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`,
-   `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`,
-   `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — enum de eventos unificado que
+   reemplaza cuatro enums de eventos por-document que fueron eliminados; la
+   lista de variantes vive en `handle.rs`.
 
 5. **`ResultPanel` + `ViewHandle`**
    (`crates/dbflux_components/src/result_panel/mod.rs`) — host de chrome
@@ -1535,8 +1540,9 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
 ### Componentes de Soporte
 
 - Sistema de toasts: `crates/dbflux_ui_base/src/toast.rs` implementación
-  personalizada con auto-dismiss (4s) para toasts de success/info/warning. (Shim
-  en `crates/dbflux_ui/src/ui/components/toast.rs`.)
+  personalizada con auto-dismiss configurable para toasts de
+  success/info/warning (por defecto 8 s, y el doble para los de warning; se
+  ajusta en Settings > General).
 - Infraestructura de tunnels: `crates/dbflux_tunnel_core/` provee `Tunnel` RAII
   con el trait `TunnelConnector` y el forwarder bidireccional
   `ForwardingConnection<R>`.

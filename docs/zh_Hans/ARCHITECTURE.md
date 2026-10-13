@@ -15,7 +15,7 @@
 
 ### 分层的 crate 图谱
 
-依赖自上而下。`dbflux_core` 是每个 crate 都构建其上的无依赖契约层；界面从不依赖具体的驱动程序 crate（参见[驱动程序/界面解耦](#驱动程序体系)）。
+依赖自上而下。`dbflux_core` 是整个工作区共同构建其上的契约层；它自身仅有一项很窄的依赖 `dbflux_policy`，用于它再导出的执行分类与模式变更类型。界面从不依赖具体的驱动程序 crate（参见[驱动程序/界面解耦](#驱动程序体系)）。
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["支撑库"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["策略 — dbflux_policy"]
+        policy["ExecutionClassification、<br/>模式变更分类"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "仅通过通用接缝" .-> core
@@ -247,8 +252,8 @@ crates/
         mod.rs              # AuditDocument 实体
         pane.rs             # AuditDocument::into_pane 构造函数
         view.rs             # LogStreamView 边界结构体
-        render.rs           # 抽出的渲染代码（约 1300 行）
-        commands.rs         # 抽出的命令分发（约 560 行）
+        render.rs           # 抽出的渲染代码
+        commands.rs         # 抽出的命令分发
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -310,7 +315,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # 按配置文件的 Hook 绑定
-  dbflux_ui/                # 轻量集成层（约 13.5k 行）：把六个 UI crate 串联起来
+  dbflux_ui/                # 轻量集成层：把六个 UI crate 串联起来
     src/                    # 通过旧模块路径上的 pub use 垫片重新导出已迁移的子系统
       lib.rs                # crate 根；通过垫片模块重新导出
       app.rs                # GPUI 应用引导
@@ -590,11 +595,11 @@ crates/
 
 1. **`Tab`**（`tab_manager.rs`）—— `#[non_exhaustive]` 枚举，只有一个 `Pane(Box<PaneHandle>)` 变体。保留枚举形式是为了向前兼容（例如将来可能出现可分离的面板变体）。`TabManager` 持有一个 `Vec<Tab>` 以及 MRU 顺序。
 
-2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。它的各项操作（render、focus、dispatch_command、meta_snapshot、tab_title、can_close、connection_id、active_context、change_summary、refresh_policy、set_active_tab、set_refresh_policy、flush_auto_save、matches_dedup_key、subscribe，以及若干可选辅助方法，如 `resolve_close`、`save_for_close`、`flush_for_shutdown` 和 `is_file_backed_empty`）各自是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
+2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。每一项操作都是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包：渲染与焦点、命令分发、纯元数据读取（标题、是否可关闭、连接与活动上下文、变更摘要、刷新策略）、诸如活动标签页与刷新策略这类变更、去重匹配、事件订阅，以及可选的文档专属辅助方法（关闭、保存与退出策略、侧边面板、面板操作、状态栏片段）。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
 
-3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举。变体：`Table`、`Collection`、`File`、`KeyValueDb`、`Chart`、`Audit`、`EventStream`、`Routine`、`MetricChart`、`Dashboard`、`InstanceMetric`、`InstanceInspector`、`InstanceOverview`、`ObjectStoreBucketsRoot`、`ObjectBrowser`、`ObjectEditor`。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
+3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举；变体列表以 `dedup.rs` 为准。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
 
-4. **`DocumentEvent`**（`handle.rs`，约 30 行）—— 统一的事件枚举，取代了已被删除的四个按文档划分的事件枚举。变体：`MetaChanged`、`ExecutionStarted`、`ExecutionFinished`、`RequestClose`、`RequestFocus`、`RequestSqlPreview`、`OpenInspector`、`ChartThisQuery`。
+4. **`DocumentEvent`**（`handle.rs`）—— 统一的事件枚举，取代了已被删除的四个按文档划分的事件枚举；变体列表以 `handle.rs` 为准。
 
 5. **`ResultPanel` + `ViewHandle`**（`crates/dbflux_components/src/result_panel/mod.rs`）—— 通用框架宿主。`ResultPanel` 持有一行框架，并把主体渲染委托给 `ViewHandle`（7 个闭包：render、focus、focus_handle、toolbar_segments、available_modes、current_mode、set_mode）。槽位系统（`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`）让各视图可以贡献任意框架内容：`ResultPanel` 合并内置段（当 `available_modes.len() >= 2` 时，把模式栏放在 Left/0）与视图提供的段，按 `(position, index)` 排序，并在一个 `flex_wrap` 行中渲染。
 
@@ -886,7 +891,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 ### 支撑组件
 
-- Toast 提示系统：`crates/dbflux_ui_base/src/toast.rs` 自研实现，对成功/信息/警告类 Toast 提示自动消失（4 秒）。（`crates/dbflux_ui/src/ui/components/toast.rs` 处留有垫片。）
+- Toast 提示系统：`crates/dbflux_ui_base/src/toast.rs` 自研实现，对成功/信息/警告类 Toast 提示提供可配置的自动消失（默认 8 秒，警告类为其两倍；在 Settings > General 中调整）。
 - 隧道基础设施：`crates/dbflux_tunnel_core/` 提供 RAII `Tunnel`，带 `TunnelConnector` trait 与 `ForwardingConnection<R>` 双向转发器。
 - 代理隧道：`crates/dbflux_proxy/` 经由 `TunnelConnector` 实现 SOCKS5 与 HTTP CONNECT 代理隧道。
 - SSH 隧道：`crates/dbflux_ssh/src/lib.rs` 经由 `TunnelConnector` 实现 SSH 隧道，为保障 libssh2 安全，所有操作串行到单个线程上。
