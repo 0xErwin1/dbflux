@@ -23,11 +23,14 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 - Ejecución de queries a través de `StartQuery` + polling de `GetQueryResults`
   (intervalo de polling de 500 ms, hasta 120 intentos), con un source context
   gestionado por el editor que provee los log groups objetivo y el rango de
-  tiempo. Las queries de Logs usan el límite fijo de 1000 resultados de
-  `StartQuery` del SDK.
+  tiempo. Sin límite de filas, las queries de Logs piden 1000
+  resultados a `StartQuery`.
 - `execute` aplica `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) a los resultados
   de Logs Insights, así que las queries del editor llevan el límite de filas
-  del editor.
+  del editor. Una query con límite pide a `StartQuery` un resultado más que el
+  límite, hasta 10,000 (una página de `GetQueryResults`), y el resultado se
+  marca como truncado cuando el límite descartó filas, o cuando volvió una
+  página completa y Logs Insights encontró más registros de los que devolvió.
 - Tres sintaxis de query seleccionables desde el desplegable "Syntax" del source
   context:
   - CloudWatch Logs Insights QL (`cwli`, la opción por defecto) —
@@ -80,7 +83,7 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 
 ## Limitaciones
 
-- `execute` rechaza un timeout de sentencia, y un límite de filas en queries de métricas, con `NotSupported` antes del despacho. Los resultados de Logs Insights se recortan localmente al límite del request, pero la query sigue enviando el límite fijo de 1000 del servidor, así que un límite mayor a 1000 lo acota CloudWatch sin marca de truncamiento. No hay timeout por defecto ni garantía sobre el trabajo del servidor.
+- `execute` rechaza un timeout de sentencia, y un límite de filas en queries de métricas, con `NotSupported` antes del despacho. Un límite de filas de Logs Insights mayor a 10,000 conserva como máximo 10,000 filas, el tamaño de una página de `GetQueryResults`. Las queries sin límite de filas devuelven como máximo 1000 filas y nunca se marcan como truncadas. No hay timeout por defecto ni garantía sobre el trabajo del servidor.
 - `tests/live_integration.rs` ejecuta el data plane de Logs (descubrimiento de
   log groups/streams, navegación de eventos) contra un contenedor de LocalStack
   Community en CI. `DashboardImporter` es parseo puro de JSON y se verifica de

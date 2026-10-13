@@ -91,6 +91,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -179,6 +180,12 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `KvKeyCount { keyspace }` 请求某个键空间中的键数量（`None` 表示会话当前的键空间），并返回 `KvKeyCountResult { count }`。宿主进程将请求分派到连接的 `KeyValueApi::key_count` 接口；未实现它的驱动会以 trait 默认的 `NotSupported` 响应，客户端收到的是 `UnsupportedMethod`。
 
 出于上文所述的线路索引原因，这两个变体都追加在各自枚举中最后一个 v1.4 变体之后。客户端同样在本地进行版本拦截：当协商的次版本低于 1.5 时，`IpcConnection::key_count` 直接返回 `DbError::NotSupported` 而不发送任何内容。键浏览器将该错误视为“无总数”，只显示本页键数。
+
+### 请求行数上限（v1.6+）
+
+`Execute` 和 `ExecuteWithHandle` 可以携带编辑器行数上限 `QueryRequestDto::limit`。由于 `QueryResultDto` 无处容纳该标志，宿主以 `ExecuteResultWithTruncation { result, rows_truncated }` 和 `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }` 代替 `ExecuteResult` 和 `ExecuteWithHandleResult` 作答。仅当驱动为遵守上限而丢弃了行时，`rows_truncated` 才为 `true`。
+
+出于上文所述的线路索引原因，这两个响应变体都追加在 `KvKeyCountResult` 之后。宿主只在协商为 v1.6 或更高版本的会话中，对执行调用发送它们；更早的会话继续使用 v1.5 的响应。哪些请求会携带上限，见下文的**受保护的执行**。
 
 ## 认证提供程序 RPC 契约
 
@@ -286,7 +293,7 @@ DbConfig::External {
 
 该协议还支持浏览、CRUD、键值与代码生成类操作。完整的枚举集合参见 `crates/dbflux_ipc/src/driver_protocol.rs`。
 
-**受保护的执行：**目前没有任何协商能力可以让外部驱动证明它会执行行数限制或语句超时，因此受保护的查询会被拒绝。当 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）或 `statement_timeout` 为 `Some(...)` 时，`IpcConnection` 会在发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。宿主会话分发也会在调用插件连接之前，以 `UnsupportedMethod` 独立拒绝同样的请求。两个选项均为 `None` 的请求仍可运行，浏览和 CRUD 操作不受影响。
+**受保护的执行：**在协商为 v1.6 或更高版本的会话中，元数据声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动会收到 `QueryRequestDto::limit`。驱动必须在收集行时执行该上限（在所有结果集之间只计一次），并且仅在丢弃了行时设置 `rows_truncated`；否则必须在执行任何内容之前拒绝该请求。驱动未声明该能力时，宿主会话以 `UnsupportedMethod` 拒绝带上限的请求。低于 v1.6 时客户端从不发送上限：`IpcConnection` 不宣告 `REQUEST_ROW_LIMIT`，并在 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）时，于发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。在所有版本中，客户端都以同样方式拒绝 `statement_timeout` 或只读强制，宿主也会拒绝 `statement_timeout`。只有主结果集会通过线路传输，因此额外的结果集及其标志会被丢弃。客户端信任驱动的声明：声明了 `REQUEST_ROW_LIMIT` 却忽略上限的驱动，会返回未受限且标记为未截断的行。浏览和 CRUD 操作不受影响。
 
 ## 驱动的审计事件上报（v1.2+）
 

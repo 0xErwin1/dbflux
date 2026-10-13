@@ -91,6 +91,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -179,6 +180,12 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `KvKeyCount { keyspace }`는 키스페이스의 키 개수를 요청하며(`None`은 세션의 현재 키스페이스를 뜻합니다) `KvKeyCountResult { count }`로 응답합니다. 호스트는 요청을 연결의 `KeyValueApi::key_count` 시임으로 전달합니다; 이를 구현하지 않은 드라이버는 트레이트의 `NotSupported` 기본값으로 응답하며, 이는 클라이언트에 `UnsupportedMethod`로 전달됩니다.
 
 두 변형 모두 위에서 설명한 와이어 인덱스 이유로 각 열거형의 마지막 v1.4 변형 뒤에 덧붙여집니다. 클라이언트도 같은 방식으로 로컬에서 게이트합니다: 협상된 마이너가 1.5 미만이면 `IpcConnection::key_count`는 아무것도 보내지 않고 `DbError::NotSupported`를 반환합니다. 키 브라우저는 이 오류를 "전체 개수 없음"으로 취급하고 페이지 키 수만 표시합니다.
+
+### 요청 행 제한 (v1.6+)
+
+`Execute`와 `ExecuteWithHandle`은 편집기 행 제한인 `QueryRequestDto::limit`를 실을 수 있습니다. `QueryResultDto`에는 플래그를 담을 자리가 없으므로, 호스트는 `ExecuteResult`와 `ExecuteWithHandleResult` 대신 `ExecuteResultWithTruncation { result, rows_truncated }`와 `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }`로 응답합니다. `rows_truncated`는 드라이버가 제한을 지키기 위해 행을 버렸을 때만 `true`입니다.
+
+두 응답 변형 모두 위에서 설명한 와이어 인덱스 이유로 `KvKeyCountResult` 뒤에 덧붙여집니다. 호스트는 v1.6 이상을 협상한 세션의 실행 호출에서만 이 변형을 보내며, 이전 세션은 v1.5 응답을 그대로 사용합니다. 어떤 요청이 제한을 싣는지는 아래 **보호된 실행**을 참고하세요.
 
 ## 인증 프로바이더 RPC 계약
 
@@ -286,7 +293,7 @@ DbConfig::External {
 
 이 프로토콜은 탐색, CRUD, 키-값, 코드 생성 작업도 지원합니다. 전체 열거형 집합은 `crates/dbflux_ipc/src/driver_protocol.rs`를 참고하세요.
 
-**보호된 실행:** 외부 드라이버가 행 제한이나 문장 타임아웃을 적용한다고 보증할 수 있는 협상된 기능이 없으므로 보호된 쿼리는 거부됩니다. `IpcConnection`은 `QueryRequest.limit`가 `Some(n)`(`Some(0)` 포함)이거나 `statement_timeout`이 `Some(...)`이면 RPC를 보내기 전에 `Execute`와 `ExecuteWithHandle`을 `NotSupported`로 거부합니다. 호스트 세션 디스패치도 플러그인 연결을 호출하기 전에 같은 요청을 `UnsupportedMethod`로 독립적으로 거부합니다. 두 옵션이 모두 `None`인 요청은 계속 실행되며, 탐색 및 CRUD 작업은 영향을 받지 않습니다.
+**보호된 실행:** v1.6 이상을 협상한 세션에서는 메타데이터에 `DriverCapabilities::REQUEST_ROW_LIMIT`를 선언한 드라이버가 `QueryRequestDto::limit`를 받습니다. 드라이버는 행을 수집하는 동안 모든 결과 집합에 걸쳐 한 번만 세어 제한을 적용하고 행을 버렸을 때만 `rows_truncated`를 설정하거나, 아무것도 실행하기 전에 요청을 거부해야 합니다. 드라이버가 이 기능을 선언하지 않으면 호스트 세션이 제한이 있는 요청을 `UnsupportedMethod`로 거부합니다. v1.6 미만에서는 클라이언트가 제한을 보내지 않습니다: `IpcConnection`은 `REQUEST_ROW_LIMIT`를 알리지 않으며, `QueryRequest.limit`가 `Some(n)`(`Some(0)` 포함)이면 RPC를 보내기 전에 `Execute`와 `ExecuteWithHandle`을 `NotSupported`로 거부합니다. 모든 버전에서 클라이언트는 `statement_timeout`이나 읽기 전용 강제를 같은 방식으로 거부하고, 호스트는 `statement_timeout`을 거부합니다. 기본 결과 집합만 와이어를 건너므로 추가 결과 집합과 그 플래그는 버려집니다. 클라이언트는 드라이버의 선언을 신뢰합니다: `REQUEST_ROW_LIMIT`를 선언하고 제한을 무시하는 드라이버는 잘리지 않은 것으로 표시된 제한 없는 행을 반환합니다. 탐색 및 CRUD 작업은 영향을 받지 않습니다.
 
 ## 드라이버의 감사 이벤트 내보내기 (v1.2+)
 
