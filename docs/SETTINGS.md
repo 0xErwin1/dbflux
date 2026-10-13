@@ -147,9 +147,10 @@ The limit reaches only a driver whose `execute` enforces it: PostgreSQL,
 MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
 ClickHouse, Redshift, CloudWatch and DynamoDB. Some of them still read the
 whole response before cutting it, and Redis bounds only replies shown as a
-table; each driver's page lists its limits. External RPC drivers refuse a
-request that carries a row budget rather than ignore the cap, so the editor
-sends them no limit at all and the query runs uncapped. A result that carried
+table; each driver's page lists its limits. External RPC drivers receive the
+limit when DBFlux and the driver both speak driver RPC 1.6 or newer and the
+driver declares `REQUEST_ROW_LIMIT`; any other external driver gets no limit at
+all and the query runs uncapped. A result that carried
 no limit shows its full row count, because
 nothing was left out, and its footer offers neither Count rows nor Load all
 rows; put a `LIMIT` or a `.limit()` in the statement when the result may be

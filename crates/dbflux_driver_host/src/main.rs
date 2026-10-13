@@ -267,7 +267,11 @@ fn handle_connection(
             other => {
                 if let Some(sid) = session_id {
                     if let Some(conn) = sessions.get(&sid) {
-                        let body = session::dispatch(conn, other);
+                        let body = session::dispatch(
+                            conn,
+                            negotiated_version.expect("validated before dispatch"),
+                            other,
+                        );
                         DriverResponseEnvelope::ok(
                             negotiated_version.expect("validated before dispatch"),
                             request_id,

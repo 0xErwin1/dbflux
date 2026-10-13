@@ -14,7 +14,9 @@ use dbflux_core::{
     StreamAddRequest, StreamDeleteRequest, TableBrowseRequest, TableCountRequest, TableInfo,
     ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
 };
-use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
+use dbflux_ipc::driver_protocol::{
+    DriverRequestBody, DriverResponseBody, protocol_carries_request_row_limit,
+};
 use dbflux_ipc::{DRIVER_RPC_VERSION, ProtocolVersion};
 
 use crate::transport::RpcClient;
@@ -30,6 +32,8 @@ pub struct IpcConnection {
     schema_loading_strategy: SchemaLoadingStrategy,
     schema_features: SchemaFeatures,
     code_gen_capabilities: CodeGenCapabilities,
+    /// Whether `QueryRequest::limit` is sent to the host instead of refused.
+    forwards_row_limit: bool,
 }
 
 impl IpcConnection {
@@ -44,15 +48,28 @@ impl IpcConnection {
         schema_features: SchemaFeatures,
         code_gen_capabilities: CodeGenCapabilities,
     ) -> Self {
+        let forwards_row_limit = protocol_carries_request_row_limit(client.selected_version())
+            && metadata.supports(DriverCapabilities::REQUEST_ROW_LIMIT);
+
+        let mut metadata = without_uncertifiable_enforcement(metadata);
+        let mut capabilities = without_request_row_limit(capabilities);
+        if forwards_row_limit {
+            metadata
+                .capabilities
+                .insert(DriverCapabilities::REQUEST_ROW_LIMIT);
+            capabilities.insert(DriverCapabilities::REQUEST_ROW_LIMIT);
+        }
+
         Self {
             client,
             session_id,
             kind,
-            metadata: without_uncertifiable_enforcement(metadata),
-            capabilities: without_request_row_limit(capabilities),
+            metadata,
+            capabilities,
             schema_loading_strategy,
             schema_features,
             code_gen_capabilities,
+            forwards_row_limit,
         }
     }
 
@@ -116,7 +133,7 @@ impl Connection for IpcConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        reject_protected_query(req)?;
+        reject_protected_query(req, self.forwards_row_limit)?;
         self.client
             .execute(self.session_id, req)
             .map_err(DbError::from)
@@ -126,7 +143,7 @@ impl Connection for IpcConnection {
         &self,
         req: &QueryRequest,
     ) -> Result<(QueryHandle, QueryResult), DbError> {
-        reject_protected_query(req)?;
+        reject_protected_query(req, self.forwards_row_limit)?;
         let (handle_id, result) = self
             .client
             .execute_with_handle(self.session_id, req)
@@ -548,9 +565,13 @@ impl KeyValueApi for IpcConnection {
     }
 }
 
+/// Refuses, before anything is sent, what the remote driver cannot be trusted
+/// to enforce. A row limit passes only when `forwards_row_limit` holds: the
+/// session negotiated v1.6 or newer, which reports truncation back, and the
+/// remote driver declares `DriverCapabilities::REQUEST_ROW_LIMIT`.
 #[allow(clippy::result_large_err)]
-fn reject_protected_query(request: &QueryRequest) -> Result<(), DbError> {
-    if request.limit.is_some() || request.statement_timeout.is_some() {
+fn reject_protected_query(request: &QueryRequest, forwards_row_limit: bool) -> Result<(), DbError> {
+    if (request.limit.is_some() && !forwards_row_limit) || request.statement_timeout.is_some() {
         return Err(DbError::NotSupported(
             "IPC drivers cannot certify query limit or statement timeout enforcement".into(),
         ));
@@ -562,10 +583,12 @@ fn reject_protected_query(request: &QueryRequest) -> Result<(), DbError> {
 /// to honour.
 ///
 /// `reject_protected_query` refuses every request that asks for read-only
-/// enforcement or carries a row limit, so an IPC connection must not advertise
-/// either, whatever the remote driver declares: a consumer that trusted the
-/// claim would build exactly the requests this connection turns away. The
-/// remote driver keeps its own metadata for its own clients.
+/// enforcement, and a row limit unless the session can carry it, so this
+/// clears both claims whatever the remote driver declares: a consumer that
+/// trusted them would build exactly the requests this connection turns away.
+/// `IpcConnection::new` restores the row-limit claim once it knows the session
+/// carries the limit. The remote driver keeps its own metadata for its own
+/// clients.
 pub(crate) fn without_uncertifiable_enforcement(mut metadata: DriverMetadata) -> DriverMetadata {
     metadata.capabilities = without_request_row_limit(metadata.capabilities);
     if let Some(transactions) = metadata.transactions.as_mut() {
@@ -578,10 +601,11 @@ pub(crate) fn without_uncertifiable_enforcement(mut metadata: DriverMetadata) ->
 /// Clears [`DriverCapabilities::REQUEST_ROW_LIMIT`], the claim that
 /// `Connection::execute` enforces `QueryRequest::limit`.
 ///
-/// An IPC connection refuses any request that carries a limit, so it enforces
-/// nothing and cannot claim otherwise. A consumer that sends the editor row
-/// limit only to drivers advertising this bit then builds a limit-less request,
-/// the one a remote driver that refuses limits can still run.
+/// Unless the session carries the limit, an IPC connection refuses any request
+/// that sets one, so it enforces nothing and cannot claim otherwise. A consumer
+/// that sends the editor row limit only to drivers advertising this bit then
+/// builds a limit-less request, the one a remote driver that refuses limits can
+/// still run.
 fn without_request_row_limit(mut capabilities: DriverCapabilities) -> DriverCapabilities {
     capabilities.remove(DriverCapabilities::REQUEST_ROW_LIMIT);
     capabilities
@@ -638,9 +662,12 @@ mod tests {
     use crate::transport::RpcClient;
     use dbflux_core::{
         Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities, DriverMetadataBuilder,
-        KeyValueApi, QueryLanguage, QueryRequest,
+        KeyValueApi, QueryLanguage, QueryRequest, Value,
     };
     use dbflux_ipc::ProtocolVersion;
+    use dbflux_ipc::driver_protocol::{
+        DriverRequestBody, DriverResponseBody, QueryResultDto, QueryResultShapeDto,
+    };
     use dbflux_ipc::driver_socket_name;
     use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
     use std::{sync::Arc, time::Duration};
@@ -718,14 +745,17 @@ mod tests {
     }
 
     /// A remote driver that declares it enforces a row limit still cannot be
-    /// sent one through this connection, so the connection must not repeat the
-    /// claim: a consumer that reads it back builds a request the connection
-    /// refuses, and the editor query never reaches the driver.
+    /// sent one over a pre-1.6 session, which has no way to report truncation,
+    /// so the connection must not repeat the claim: a consumer that reads it
+    /// back builds a request the connection refuses, and the editor query never
+    /// reaches the driver.
     #[test]
-    fn ipc_connection_never_advertises_row_limit_enforcement() {
+    fn pre_v1_6_session_never_advertises_row_limit_enforcement() {
         let socket_id = format!("row-limit-ipc-{}", Uuid::new_v4());
         let server = FakeDriverRpcServer::start(
-            FakeDriverRpcConfig::new(&socket_id).with_actions(vec![FakeDriverAction::Pong]),
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_protocol_version(ProtocolVersion::new(1, 5))
+                .with_actions(vec![FakeDriverAction::Pong]),
         )
         .expect("start server");
         let socket_name = driver_socket_name(&socket_id).expect("socket name");
@@ -754,12 +784,192 @@ mod tests {
                 .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
         );
         assert!(!connection.supports(DriverCapabilities::REQUEST_ROW_LIMIT));
+        assert!(
+            !connection
+                .capabilities()
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
         assert!(matches!(
             connection.execute(&QueryRequest::new("SELECT 1").with_limit(500)),
             Err(DbError::NotSupported(_))
         ));
+        assert!(matches!(
+            connection.execute_with_handle(&QueryRequest::new("SELECT 1").with_limit(500)),
+            Err(DbError::NotSupported(_))
+        ));
         // The refusal stayed local: the scripted pong is still available.
         assert!(connection.ping().is_ok());
+        server.wait().expect("server completed");
+    }
+
+    fn connection_declaring(
+        client: Arc<RpcClient>,
+        metadata_capabilities: DriverCapabilities,
+        capabilities: DriverCapabilities,
+    ) -> IpcConnection {
+        IpcConnection::new(
+            client,
+            Uuid::nil(),
+            DbKind::SQLite,
+            DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .capabilities(metadata_capabilities)
+            .build(),
+            capabilities,
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase,
+            dbflux_core::SchemaFeatures::empty(),
+            dbflux_core::CodeGenCapabilities::empty(),
+        )
+    }
+
+    fn two_row_result() -> QueryResultDto {
+        QueryResultDto {
+            shape: QueryResultShapeDto::Table,
+            columns: Vec::new(),
+            rows: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+            affected_rows: None,
+            execution_time_ms: 1,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+        }
+    }
+
+    #[test]
+    fn v1_6_session_forwards_declared_row_limit_and_surfaces_truncation() {
+        let socket_id = format!("row-limit-v16-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_protocol_version(ProtocolVersion::new(1, 6))
+                .with_driver_capabilities(DriverCapabilities::REQUEST_ROW_LIMIT)
+                .with_actions(vec![
+                    FakeDriverAction::respond(DriverResponseBody::ExecuteResultWithTruncation {
+                        result: two_row_result(),
+                        rows_truncated: true,
+                    }),
+                    FakeDriverAction::respond(
+                        DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                            handle_id: Uuid::nil(),
+                            result: two_row_result(),
+                            rows_truncated: true,
+                        },
+                    ),
+                    FakeDriverAction::respond(DriverResponseBody::ExecuteResultWithTruncation {
+                        result: two_row_result(),
+                        rows_truncated: false,
+                    }),
+                    FakeDriverAction::Pong,
+                ]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = connection_declaring(
+            client,
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+        );
+
+        assert!(
+            connection
+                .metadata()
+                .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+        assert!(connection.supports(DriverCapabilities::REQUEST_ROW_LIMIT));
+        assert!(
+            connection
+                .capabilities()
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+
+        let limited = QueryRequest::new("SELECT 1").with_limit(2);
+        let result = connection.execute(&limited).expect("limited execute");
+        assert!(result.rows_truncated());
+        assert_eq!(result.rows.len(), 2);
+
+        let (_handle, result) = connection
+            .execute_with_handle(&limited)
+            .expect("limited execute with handle");
+        assert!(result.rows_truncated());
+
+        let result = connection.execute(&limited).expect("untruncated execute");
+        assert!(!result.rows_truncated());
+
+        // Timeout and read-only enforcement stay refused locally on 1.6.
+        let mut timed = QueryRequest::new("SELECT 1");
+        timed.statement_timeout = Some(Duration::ZERO);
+        for request in [
+            timed,
+            QueryRequest::new("SELECT 1")
+                .with_read_only(dbflux_core::ReadOnlyEnforcement::Required),
+        ] {
+            assert!(matches!(
+                connection.execute(&request),
+                Err(DbError::NotSupported(_))
+            ));
+            assert!(matches!(
+                connection.execute_with_handle(&request),
+                Err(DbError::NotSupported(_))
+            ));
+        }
+        assert!(connection.ping().is_ok());
+
+        let limits: Vec<Option<u32>> = server
+            .received_requests()
+            .into_iter()
+            .filter_map(|body| match body {
+                DriverRequestBody::Execute { request }
+                | DriverRequestBody::ExecuteWithHandle { request } => Some(request.limit),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(limits, vec![Some(2), Some(2), Some(2)]);
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn v1_6_session_without_declared_row_limit_refuses_limit_locally() {
+        let socket_id = format!("row-limit-undeclared-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_protocol_version(ProtocolVersion::new(1, 6))
+                .with_actions(vec![FakeDriverAction::Pong]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        // Metadata is the declaration; a capability bit without it is ignored.
+        let connection = connection_declaring(
+            client,
+            DriverCapabilities::empty(),
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+        );
+
+        assert!(
+            !connection
+                .metadata()
+                .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+        assert!(!connection.supports(DriverCapabilities::REQUEST_ROW_LIMIT));
+        assert!(matches!(
+            connection.execute(&QueryRequest::new("SELECT 1").with_limit(2)),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(matches!(
+            connection.execute_with_handle(&QueryRequest::new("SELECT 1").with_limit(2)),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(connection.ping().is_ok());
+        assert!(
+            server
+                .received_requests()
+                .iter()
+                .all(|body| matches!(body, DriverRequestBody::Ping))
+        );
         server.wait().expect("server completed");
     }
 

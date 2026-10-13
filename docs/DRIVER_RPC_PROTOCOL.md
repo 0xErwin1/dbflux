@@ -91,6 +91,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -179,6 +180,12 @@ Unlike the v1.3 fields above, this operation is not additive on the wire: frames
 `KvKeyCount { keyspace }` asks for the number of keys in a keyspace (`None` means the session's current one) and answers `KvKeyCountResult { count }`. The host dispatches the request to the connection's `KeyValueApi::key_count` seam; a driver that does not implement it answers with the trait's `NotSupported` default, which reaches the client as `UnsupportedMethod`.
 
 Both variants are appended after the last v1.4 variant of their enum, for the wire-index reason described above. The client gates locally in the same way: `IpcConnection::key_count` returns `DbError::NotSupported` without sending anything when the negotiated minor is below 1.5. The key browser treats that error as "no total" and shows only the page count.
+
+### Request row limit (v1.6+)
+
+`Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`, the editor row limit. A host answers them with `ExecuteResultWithTruncation { result, rows_truncated }` and `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }` instead of `ExecuteResult` and `ExecuteWithHandleResult`, because `QueryResultDto` has no room for the flag. `rows_truncated` is `true` only when the driver dropped rows to honour the limit.
+
+Both response variants are appended after `KvKeyCountResult`, for the wire-index reason described above. A host sends them for execute calls only on sessions that negotiated v1.6 or newer; older sessions keep the v1.5 responses. See **Protected execution** below for which requests carry a limit.
 
 ## Auth-provider RPC contract
 
@@ -286,7 +293,7 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 
-**Protected execution:** no negotiated capability lets an external driver certify that it enforces a row limit or a statement timeout, so protected queries are refused. `IpcConnection` rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`) or `statement_timeout` is `Some(...)`. Host session dispatch independently rejects the same requests with `UnsupportedMethod` before invoking the plugin connection. Requests with both options `None` still run, and browse and CRUD operations are unaffected.
+**Protected execution:** on a session that negotiated v1.6 or newer, a driver whose metadata declares `DriverCapabilities::REQUEST_ROW_LIMIT` receives `QueryRequestDto::limit`. It must either enforce the limit while it collects rows, counting it once across all result sets, and set `rows_truncated` only when rows were dropped, or refuse the request before running anything. The host session refuses a limited request with `UnsupportedMethod` when the driver does not declare the capability. Below v1.6 the client never sends a limit: `IpcConnection` does not advertise `REQUEST_ROW_LIMIT` and rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`). On every version the client refuses a `statement_timeout` or read-only enforcement the same way, and the host refuses a `statement_timeout`. Only the primary result set crosses the wire, so additional result sets and their flags are dropped. The client trusts the driver's declaration: a driver that declares `REQUEST_ROW_LIMIT` and ignores the limit returns uncapped rows marked as not truncated. Browse and CRUD operations are unaffected.
 
 ## Audit emission from drivers (v1.2+)
 

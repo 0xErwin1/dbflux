@@ -14,8 +14,8 @@ AWS CloudWatch Logs Insights 查询，源上下文由编辑器管理。
 
 - 归类为 `DatabaseCategory::LogStream` 的日志流驱动程序；`deployment_class` 为 `CloudManaged`。声明的能力为 `AUTHENTICATION`、`METRIC_SERIES`、`METRIC_CATALOG`、`DASHBOARD_IMPORT`、`DASHBOARD_SYNC`、`CHART_AUTHORING` 与 `REQUEST_ROW_LIMIT`。
 - 通过区域、具名配置文件以及可选的端点覆盖完成 AWS 连接配置，与 DynamoDB 的 AWS 连接流程保持一致。
-- 查询通过 `StartQuery` + 轮询 `GetQueryResults` 执行（轮询间隔 500 毫秒，最多 120 次），源上下文由编辑器管理，提供目标日志组与时间范围。Logs 查询使用 SDK 固定的 `StartQuery` 结果上限 1000。
-- `execute` 对 Logs Insights 结果执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此编辑器查询会带上编辑器的行数上限。
+- 查询通过 `StartQuery` + 轮询 `GetQueryResults` 执行（轮询间隔 500 毫秒，最多 120 次），源上下文由编辑器管理，提供目标日志组与时间范围。没有行数上限时，Logs 查询向 `StartQuery` 请求 1000 条结果。
+- `execute` 对 Logs Insights 结果执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此编辑器查询会带上编辑器的行数上限。带上限的查询向 `StartQuery` 请求比上限多一条的结果，最多 10,000 条（一页 `GetQueryResults`）；当上限丢弃了行，或返回了满页且 Logs Insights 匹配的记录多于返回的记录时，结果会被标记为已截断。
 - 可从源上下文的「Syntax」下拉框中选择三种查询语法：
   - CloudWatch Logs Insights QL（`cwli`，默认）—— `QueryLanguage::CloudWatchLogsInsightsQl`。
   - OpenSearch PPL（`ppl`）—— `QueryLanguage::OpenSearchPpl`。
@@ -34,7 +34,7 @@ AWS CloudWatch Logs Insights 查询，源上下文由编辑器管理。
 
 ## 限制
 
-- `execute` 在分派前，对语句超时以及指标查询上的行数上限返回 `NotSupported`。Logs Insights 结果会在本地按请求上限截断，但查询仍发送服务端固定上限 1000，因此大于 1000 的上限会被 CloudWatch 限制为 1000，且不带截断标记。没有默认超时，也不保证服务端工作量受到限制。
+- `execute` 在分派前，对语句超时以及指标查询上的行数上限返回 `NotSupported`。大于 10,000 的 Logs Insights 行数上限最多保留 10,000 行，即一页 `GetQueryResults` 的大小。不带行数上限的查询最多返回 1000 行，且从不标记为已截断。没有默认超时，也不保证服务端工作量受到限制。
 - `profile` 字段（AWS 具名配置文件）是一个 `AuthProfileRef` 表单字段。通用的可移植性接缝（`DbDriver::export_field_hint`）把所有 `AuthProfileRef` 字段映射为 `RequiredOnImport`，因此该字段值不会出现在任何导出的包中，接收方必须在导入时提供或创建匹配的认证配置文件。无需为此做针对特定驱动程序的覆盖。
 - 未实现查询取消；`cancel()` 返回 `NotSupported`。
 - OpenSearch SQL 模式不接收外部日志组：SQL 查询必须在其 SQL 文本中声明所查询的日志组，因为 CloudWatch API 不接受为 SQL 模式传入外部日志组参数（只有 CWLI 与 PPL 会走 `set_log_group_names`）。

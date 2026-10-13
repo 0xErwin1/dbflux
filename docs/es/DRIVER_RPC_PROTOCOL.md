@@ -113,6 +113,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -261,6 +262,22 @@ controla localmente de la misma forma: `IpcConnection::key_count` devuelve
 anterior a la 1.5. El explorador de claves trata ese error como "sin total" y
 muestra solo el conteo de la página.
 
+### Límite de filas de la solicitud (v1.6+)
+
+`Execute` y `ExecuteWithHandle` pueden llevar `QueryRequestDto::limit`, el
+límite de filas del editor. Un host las responde con
+`ExecuteResultWithTruncation { result, rows_truncated }` y
+`ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }`
+en lugar de `ExecuteResult` y `ExecuteWithHandleResult`, porque
+`QueryResultDto` no tiene lugar para la marca. `rows_truncated` es `true` solo
+cuando el driver descartó filas para respetar el límite.
+
+Ambas variantes de respuesta se agregan después de `KvKeyCountResult`, por la
+razón de índices en el wire descrita arriba. Un host las envía en las llamadas
+de ejecución solo en sesiones que negociaron v1.6 o posterior; las sesiones
+anteriores conservan las respuestas de v1.5. Consulta **Ejecución protegida**
+más abajo para saber qué solicitudes llevan un límite.
+
 ## Contrato RPC de auth-provider
 
 La familia activa de la API auth-provider RPC es `auth_provider_rpc` en `1.3`.
@@ -397,7 +414,7 @@ El protocolo también soporta operaciones de browse, CRUD, key-value y generaci�
 de código. Ver `crates/dbflux_ipc/src/driver_protocol.rs` para el conjunto
 completo de enums.
 
-**Ejecución protegida:** ninguna capacidad negociada permite que un driver externo certifique que aplica un límite de filas o un timeout de sentencia, así que las consultas protegidas se rechazan. `IpcConnection` rechaza `Execute` y `ExecuteWithHandle` con `NotSupported` antes de enviar el RPC cuando `QueryRequest.limit` es `Some(n)` (incluido `Some(0)`) o `statement_timeout` es `Some(...)`. El despacho de sesión del host rechaza de forma independiente esas mismas solicitudes con `UnsupportedMethod` antes de invocar la conexión del plugin. Las solicitudes con ambas opciones en `None` siguen funcionando, y las operaciones de exploración y CRUD no se ven afectadas.
+**Ejecución protegida:** en una sesión que negoció v1.6 o posterior, un driver cuyos metadatos declaran `DriverCapabilities::REQUEST_ROW_LIMIT` recibe `QueryRequestDto::limit`. Debe aplicar el límite mientras recolecta filas, contándolo una sola vez entre todos los conjuntos de resultados, y marcar `rows_truncated` solo cuando descartó filas, o bien rechazar la solicitud antes de ejecutar nada. La sesión del host rechaza una solicitud con límite con `UnsupportedMethod` cuando el driver no declara la capacidad. Por debajo de v1.6 el cliente nunca envía un límite: `IpcConnection` no anuncia `REQUEST_ROW_LIMIT` y rechaza `Execute` y `ExecuteWithHandle` con `NotSupported` antes de enviar el RPC cuando `QueryRequest.limit` es `Some(n)` (incluido `Some(0)`). En todas las versiones el cliente rechaza del mismo modo un `statement_timeout` o la aplicación de solo lectura, y el host rechaza un `statement_timeout`. Solo el conjunto de resultados principal cruza el wire, así que los conjuntos adicionales y sus marcas se descartan. El cliente confía en la declaración del driver: un driver que declara `REQUEST_ROW_LIMIT` e ignora el límite devuelve filas sin límite marcadas como no truncadas. Las operaciones de exploración y CRUD no se ven afectadas.
 
 ## Emisión de audit desde drivers (v1.2+)
 

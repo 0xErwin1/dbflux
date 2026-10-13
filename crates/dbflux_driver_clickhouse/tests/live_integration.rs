@@ -168,6 +168,23 @@ fn clickhouse_connects_and_decodes_types() -> Result<(), DbError> {
         assert_eq!(zero.columns.len(), 1);
         assert!(zero.rows_truncated());
 
+        // Far larger than the 128 MiB response cap that applies to unlimited
+        // requests; a row-limited request reads only past the limit.
+        let oversized = connection.execute(
+            &QueryRequest::new("SELECT number, repeat('x', 1000) FROM numbers(2000000)")
+                .with_limit(5),
+        )?;
+        assert_eq!(oversized.rows.len(), 5);
+        assert!(oversized.rows_truncated());
+
+        let read_only_oversized = connection.execute(
+            &QueryRequest::new("SELECT number, repeat('x', 1000) FROM numbers(2000000)")
+                .with_limit(5)
+                .with_read_only(ReadOnlyEnforcement::Required),
+        )?;
+        assert_eq!(read_only_oversized.rows.len(), 5);
+        assert!(read_only_oversized.rows_truncated());
+
         Ok(())
     })
 }

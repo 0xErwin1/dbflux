@@ -1,8 +1,8 @@
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::time::Duration;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{CONTENT_LENGTH, HeaderMap};
 use reqwest::{Url, redirect::Policy};
 use thiserror::Error;
@@ -30,6 +30,17 @@ pub(crate) enum ClickHouseHttpError {
 
 pub(crate) struct HttpResponse {
     pub body: Vec<u8>,
+    pub headers: HeaderMap,
+}
+
+/// A row-limited response read incrementally: at most `row_limit` rows are
+/// retained and `truncated` records whether the server had more to send.
+#[derive(Debug, Default)]
+pub(crate) struct LimitedResponse {
+    pub names: Vec<String>,
+    pub types: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub truncated: bool,
     pub headers: HeaderMap,
 }
 
@@ -107,37 +118,12 @@ impl ClickHouseHttpClient {
         offset: Option<u32>,
         settings: &[(&str, &str)],
     ) -> Result<HttpResponse, ClickHouseHttpError> {
-        let effective_timeout = timeout.unwrap_or(self.default_timeout);
-        let max_execution_time = effective_timeout
-            .as_secs()
-            .saturating_add(u64::from(effective_timeout.subsec_nanos() != 0))
-            .max(1)
-            .to_string();
         let max_result_bytes = MAX_RESPONSE_BYTES.to_string();
-        let database = database.unwrap_or(&self.default_database);
-        let mut request = self
-            .client
-            .post(self.endpoint.clone())
-            .basic_auth(
-                &self.user,
-                self.password.as_ref().map(ExposeSecret::expose_secret),
-            )
-            .header("X-ClickHouse-Format", "JSONCompact")
-            .query(&[
-                ("database", database),
-                ("wait_end_of_query", "1"),
-                ("date_time_output_format", "iso"),
-                ("output_format_json_quote_64bit_integers", "1"),
-                ("output_format_json_quote_64bit_floats", "1"),
-                ("output_format_json_quote_decimals", "1"),
-                ("output_format_json_quote_denormals", "1"),
-                ("output_format_json_named_tuples_as_objects", "0"),
-                ("output_format_json_validate_utf8", "1"),
-                ("result_overflow_mode", "throw"),
-                ("max_result_bytes", max_result_bytes.as_str()),
-                ("max_execution_time", max_execution_time.as_str()),
-            ])
-            .body(sql.to_string());
+        let mut request = self.request(sql, database, timeout, "JSONCompact").query(&[
+            ("wait_end_of_query", "1"),
+            ("result_overflow_mode", "throw"),
+            ("max_result_bytes", max_result_bytes.as_str()),
+        ]);
 
         if let Some(limit) = limit {
             request = request.query(&[("limit", limit)]);
@@ -149,12 +135,107 @@ impl ClickHouseHttpClient {
             request = request.query(settings);
         }
 
-        request = request.timeout(effective_timeout);
-
         let response = request
             .send()
             .map_err(|error| ClickHouseHttpError::Transport(error.to_string()))?;
         self.read_response(response)
+    }
+
+    /// Runs `sql` and keeps at most `row_limit` rows of its result, reading
+    /// the response as it streams in and dropping it one row past the limit.
+    ///
+    /// The server-side `max_result_rows` and `limit` settings are not used:
+    /// the first also applies to subqueries and the second gives no signal
+    /// that rows were dropped. `max_result_bytes` is left out as well, since
+    /// the client never reads more than the retained rows, and
+    /// `wait_end_of_query` is off so the server streams instead of buffering
+    /// the whole result before the first byte.
+    pub(crate) fn execute_row_limited(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        timeout: Option<Duration>,
+        row_limit: u32,
+        offset: Option<u32>,
+        settings: &[(&str, &str)],
+    ) -> Result<LimitedResponse, ClickHouseHttpError> {
+        let mut request = self
+            .request(
+                sql,
+                database,
+                timeout,
+                "JSONCompactEachRowWithNamesAndTypes",
+            )
+            // Lets the server stop a read-only query once the response is
+            // dropped at the cut. ClickHouse ignores it for queries that are
+            // not read-only.
+            .query(&[("cancel_http_readonly_queries_on_client_close", "1")]);
+        if let Some(offset) = offset {
+            request = request.query(&[("offset", offset)]);
+        }
+        if !settings.is_empty() {
+            request = request.query(settings);
+        }
+
+        let response = request
+            .send()
+            .map_err(|error| ClickHouseHttpError::Transport(error.to_string()))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        if !status.is_success() || exception_code(&headers).is_some() {
+            return Err(self.read_response(response).err().unwrap_or_else(|| {
+                ClickHouseHttpError::Server {
+                    status: status.as_u16(),
+                    code: exception_code(&headers),
+                    body: String::new(),
+                }
+            }));
+        }
+
+        let row_limit = usize::try_from(row_limit).unwrap_or(usize::MAX);
+        let mut limited = read_limited_rows(
+            std::io::BufReader::new(response),
+            row_limit,
+            MAX_RESPONSE_BYTES,
+        )?;
+        limited.headers = headers;
+        Ok(limited)
+    }
+
+    fn request(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        timeout: Option<Duration>,
+        format: &str,
+    ) -> RequestBuilder {
+        let effective_timeout = timeout.unwrap_or(self.default_timeout);
+        let max_execution_time = effective_timeout
+            .as_secs()
+            .saturating_add(u64::from(effective_timeout.subsec_nanos() != 0))
+            .max(1)
+            .to_string();
+        let database = database.unwrap_or(&self.default_database);
+        self.client
+            .post(self.endpoint.clone())
+            .basic_auth(
+                &self.user,
+                self.password.as_ref().map(ExposeSecret::expose_secret),
+            )
+            .header("X-ClickHouse-Format", format)
+            .query(&[
+                ("database", database),
+                ("date_time_output_format", "iso"),
+                ("output_format_json_quote_64bit_integers", "1"),
+                ("output_format_json_quote_64bit_floats", "1"),
+                ("output_format_json_quote_decimals", "1"),
+                ("output_format_json_quote_denormals", "1"),
+                ("output_format_json_named_tuples_as_objects", "0"),
+                ("output_format_json_validate_utf8", "1"),
+                ("max_execution_time", max_execution_time.as_str()),
+            ])
+            .body(sql.to_string())
+            .timeout(effective_timeout)
     }
 
     fn read_response(&self, response: Response) -> Result<HttpResponse, ClickHouseHttpError> {
@@ -196,6 +277,169 @@ impl ClickHouseHttpClient {
         }
 
         Ok(HttpResponse { body, headers })
+    }
+}
+
+/// Reads a `JSONCompactEachRowWithNamesAndTypes` body one line at a time,
+/// keeping at most `row_limit` rows. Once the limit is reached it only looks
+/// for one more non-blank byte to learn whether rows were dropped, so the
+/// bytes consumed stay bounded by the retained rows. `max_bytes` caps the
+/// retained lines, not the size of the whole result.
+pub(crate) fn read_limited_rows<R: BufRead>(
+    mut reader: R,
+    row_limit: usize,
+    max_bytes: u64,
+) -> Result<LimitedResponse, ClickHouseHttpError> {
+    let mut consumed = 0u64;
+    let mut line = Vec::new();
+
+    if !read_line(&mut reader, &mut line, &mut consumed, max_bytes)? {
+        return Ok(LimitedResponse::default());
+    }
+    let names = parse_header_line(&mut reader, &line)?;
+    if !read_line(&mut reader, &mut line, &mut consumed, max_bytes)? {
+        return Err(ClickHouseHttpError::Body(
+            "response ended before the column types line".to_string(),
+        ));
+    }
+    let types = parse_header_line(&mut reader, &line)?;
+
+    let mut rows = Vec::new();
+    while rows.len() < row_limit {
+        if !read_row_line(&mut reader, &mut line, &mut consumed, max_bytes)? {
+            return Ok(LimitedResponse {
+                names,
+                types,
+                rows,
+                truncated: false,
+                headers: HeaderMap::new(),
+            });
+        }
+        let row = serde_json::from_slice::<Vec<serde_json::Value>>(&line)
+            .map_err(|_| in_band_error(&mut reader, &line))?;
+        rows.push(row);
+    }
+
+    let truncated = has_more_rows(&mut reader)?;
+    Ok(LimitedResponse {
+        names,
+        types,
+        rows,
+        truncated,
+        headers: HeaderMap::new(),
+    })
+}
+
+/// Reads the next non-blank line into `line`, returning `false` at the end of
+/// the body.
+fn read_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    consumed: &mut u64,
+    max_bytes: u64,
+) -> Result<bool, ClickHouseHttpError> {
+    loop {
+        if read_raw_line(reader, line, consumed, max_bytes)? == 0 {
+            return Ok(false);
+        }
+        if !is_blank(line) {
+            return Ok(true);
+        }
+    }
+}
+
+/// Reads the next data row into `line`, returning `false` at the end of the
+/// body or at a blank line: ClickHouse writes the `WITH TOTALS` row and the
+/// extremes after one, and the buffered path does not return them as rows.
+fn read_row_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    consumed: &mut u64,
+    max_bytes: u64,
+) -> Result<bool, ClickHouseHttpError> {
+    Ok(read_raw_line(reader, line, consumed, max_bytes)? > 0 && !is_blank(line))
+}
+
+fn read_raw_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    consumed: &mut u64,
+    max_bytes: u64,
+) -> Result<usize, ClickHouseHttpError> {
+    line.clear();
+    let remaining = max_bytes.saturating_sub(*consumed);
+    let read = reader
+        .by_ref()
+        .take(remaining.saturating_add(1))
+        .read_until(b'\n', line)
+        .map_err(|error| ClickHouseHttpError::Body(error.to_string()))?;
+    *consumed = consumed.saturating_add(read as u64);
+    if *consumed > max_bytes {
+        return Err(ClickHouseHttpError::ResponseTooLarge { limit: max_bytes });
+    }
+    Ok(read)
+}
+
+fn is_blank(line: &[u8]) -> bool {
+    line.iter().all(u8::is_ascii_whitespace)
+}
+
+fn parse_header_line<R: BufRead>(
+    reader: &mut R,
+    line: &[u8],
+) -> Result<Vec<String>, ClickHouseHttpError> {
+    serde_json::from_slice::<Vec<String>>(line).map_err(|_| in_band_error(reader, line))
+}
+
+/// Without `wait_end_of_query` the server may already have sent a success
+/// status when the query fails, so the failure arrives as body text. A line
+/// that does not parse is reported as that exception when the marker is
+/// present, otherwise as a malformed body.
+fn in_band_error<R: BufRead>(reader: &mut R, line: &[u8]) -> ClickHouseHttpError {
+    let mut text = line.to_vec();
+    if let Err(error) = reader.by_ref().take(MAX_ERROR_BYTES).read_to_end(&mut text) {
+        log::debug!("ClickHouse error body could not be read completely: {error}");
+    }
+    let marker = b"__exception__";
+    match text
+        .windows(marker.len())
+        .position(|window| window == marker)
+    {
+        Some(offset) => ClickHouseHttpError::Server {
+            status: 200,
+            code: None,
+            body: error_excerpt(&text, offset),
+        },
+        None => ClickHouseHttpError::Body(format!(
+            "invalid JSONCompactEachRow line: {}",
+            error_excerpt(&text, 0)
+        )),
+    }
+}
+
+/// Reports whether another data row follows the last kept one. The body
+/// ending, or a blank line (which precedes the `WITH TOTALS` row and the
+/// extremes), means no row was left out. Only spaces and tabs are consumed,
+/// so nothing past the start of the next line is read.
+fn has_more_rows<R: BufRead>(reader: &mut R) -> Result<bool, ClickHouseHttpError> {
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .map_err(|error| ClickHouseHttpError::Body(error.to_string()))?;
+        let Some(&first) = buffer.first() else {
+            return Ok(false);
+        };
+        match first {
+            b' ' | b'\t' => {
+                let spaces = buffer
+                    .iter()
+                    .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                    .count();
+                reader.consume(spaces);
+            }
+            b'\n' | b'\r' => return Ok(false),
+            _ => return Ok(true),
+        }
     }
 }
 
@@ -279,7 +523,7 @@ fn content_length(headers: &HeaderMap) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickHouseHttpClient, ClickHouseHttpError, success_exception};
+    use super::{ClickHouseHttpClient, ClickHouseHttpError, read_limited_rows, success_exception};
     use dbflux_core::secrecy::SecretString;
     use reqwest::header::{HeaderMap, HeaderValue};
     use std::time::Duration;
@@ -446,5 +690,156 @@ mod tests {
 
         let request_line = server.join().expect("server thread");
         assert!(!request_line.contains("readonly="), "{request_line}");
+    }
+
+    const HEADER_LINES: &str = "[\"n\"]\n[\"UInt8\"]\n";
+
+    fn stream(rows: &str) -> Vec<u8> {
+        format!("{HEADER_LINES}{rows}").into_bytes()
+    }
+
+    #[test]
+    fn limited_reader_exact_fit_is_not_truncated() {
+        let body = stream("[1]\n[2]\n");
+        let response = read_limited_rows(body.as_slice(), 2, 1024).expect("valid stream");
+        assert_eq!(response.names, vec!["n".to_string()]);
+        assert_eq!(response.types, vec!["UInt8".to_string()]);
+        assert_eq!(
+            response.rows,
+            vec![vec![serde_json::json!(1)], vec![serde_json::json!(2)]]
+        );
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_one_row_past_the_limit_is_truncated() {
+        let body = stream("[1]\n[2]\n[3]\n");
+        let response = read_limited_rows(body.as_slice(), 2, 1024).expect("valid stream");
+        assert_eq!(
+            response.rows,
+            vec![vec![serde_json::json!(1)], vec![serde_json::json!(2)]]
+        );
+        assert!(response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_zero_limit_keeps_columns_and_marks_truncation() {
+        let body = stream("[1]\n");
+        let response = read_limited_rows(body.as_slice(), 0, 1024).expect("valid stream");
+        assert_eq!(response.names, vec!["n".to_string()]);
+        assert!(response.rows.is_empty());
+        assert!(response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_zero_limit_on_rowless_result_is_not_truncated() {
+        let body = stream("");
+        let response = read_limited_rows(body.as_slice(), 0, 1024).expect("valid stream");
+        assert_eq!(response.names, vec!["n".to_string()]);
+        assert!(response.rows.is_empty());
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_empty_body_has_no_columns() {
+        let response = read_limited_rows(b"".as_slice(), 5, 1024).expect("empty body");
+        assert!(response.names.is_empty());
+        assert!(response.rows.is_empty());
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_ignores_malformed_data_after_the_cut() {
+        let body = stream("[1]\nnot json\n__exception__\nCode: 241.");
+        let response = read_limited_rows(body.as_slice(), 1, 1024).expect("cut before garbage");
+        assert_eq!(response.rows, vec![vec![serde_json::json!(1)]]);
+        assert!(response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_reports_exception_before_the_cut() {
+        let body = stream("[1]\n__exception__\nCode: 241. DB::Exception: memory\n");
+        let result = read_limited_rows(body.as_slice(), 5, 1024);
+        let Err(ClickHouseHttpError::Server { body, .. }) = result else {
+            panic!("an exception before the cut must fail: {result:?}");
+        };
+        assert!(body.contains("Code: 241"), "{body}");
+    }
+
+    #[test]
+    fn limited_reader_does_not_read_past_the_cut() {
+        let mut body = stream("[1]\n[2]\n");
+        body.extend(std::iter::repeat_n(b'x', 1024 * 1024));
+        let mut reader = std::io::BufReader::with_capacity(16, body.as_slice());
+        let response = read_limited_rows(&mut reader, 1, 64).expect("bounded read");
+        assert!(response.truncated);
+        let remaining = std::io::Read::bytes(reader).count();
+        assert!(
+            remaining > 1024 * 1024 - 64,
+            "read {remaining} bytes too many"
+        );
+    }
+
+    /// ClickHouse writes the `WITH TOTALS` row (and extremes) after a blank
+    /// line; the buffered path drops them, so the limited path must too.
+    #[test]
+    fn limited_reader_ends_the_data_at_a_blank_line() {
+        let body = stream("[1]\n[2]\n\n[3]\n");
+        let response = read_limited_rows(body.as_slice(), 10, 1024).expect("totals ignored");
+        assert_eq!(
+            response.rows,
+            vec![vec![serde_json::json!(1)], vec![serde_json::json!(2)]]
+        );
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_exact_fit_before_totals_is_not_truncated() {
+        let body = stream("[1]\n[2]\n\n[3]\n");
+        let response = read_limited_rows(body.as_slice(), 2, 1024).expect("exact fit");
+        assert_eq!(response.rows.len(), 2);
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_reports_a_json_exception_object_before_the_cut() {
+        let body = stream("[1]\n{\"exception\":\"Code: 241. DB::Exception: memory\"}\n");
+        assert!(read_limited_rows(body.as_slice(), 10, 1024).is_err());
+    }
+
+    #[test]
+    fn limited_reader_rejects_a_body_with_only_the_names_line() {
+        let result = read_limited_rows(b"[\"n\"]\n".as_slice(), 5, 1024);
+        assert!(
+            matches!(result, Err(ClickHouseHttpError::Body(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn limited_reader_accepts_crlf_and_a_missing_final_newline() {
+        let body = b"[\"n\"]\r\n[\"UInt8\"]\r\n[1]\r\n[2]";
+        let response = read_limited_rows(body.as_slice(), 2, 1024).expect("crlf body");
+        assert_eq!(response.rows.len(), 2);
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn limited_reader_reports_an_exception_in_place_of_the_header() {
+        let body = b"Code: 60. DB::Exception: __exception__ Unknown table\n";
+        let result = read_limited_rows(body.as_slice(), 5, 1024);
+        assert!(
+            matches!(result, Err(ClickHouseHttpError::Server { .. })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn limited_reader_still_caps_the_retained_rows() {
+        let body = stream("[1]\n[2]\n");
+        assert!(matches!(
+            read_limited_rows(body.as_slice(), 5, 8),
+            Err(ClickHouseHttpError::ResponseTooLarge { limit: 8 })
+        ));
     }
 }
