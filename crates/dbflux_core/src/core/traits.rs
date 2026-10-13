@@ -30,7 +30,6 @@ use crate::{
         ZSetRangePage, ZSetRangeRequest,
     },
     query::generator::QueryGenerator,
-    query::table_browser::OrderByColumn,
     render_semantic_filter_sql,
 };
 
@@ -1986,76 +1985,21 @@ pub trait Connection: Send + Sync {
     // SQL Building Methods
     // =========================================================================
 
-    /// Build a SELECT query with optional filtering, ordering, and pagination.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to query
-    /// * `columns` - The columns to select
-    /// * `filter` - Optional WHERE clause expression
-    /// * `order_by` - Columns to order by
-    /// * `limit` - Maximum number of rows to return
-    /// * `offset` - Number of rows to skip
-    ///
-    /// # Returns
-    /// A SQL string for the SELECT query
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let _ = (table, columns, filter, order_by, limit, offset);
-        unimplemented!("build_select_sql not implemented for this driver")
-    }
-
-    /// Build an UPSERT (INSERT ON CONFLICT) query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name
-    /// * `columns` - The columns to insert/update
-    /// * `values` - The values
-    /// * `conflict_columns` - Columns that define uniqueness for conflict detection
-    /// * `update_columns` - Columns to update on conflict
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let _ = (table, columns, values, conflict_columns, update_columns);
-        unimplemented!("build_upsert_sql not implemented for this driver")
-    }
-
     /// Build a TRUNCATE TABLE statement.
     ///
     /// # Arguments
     /// * `table` - The table name to truncate
     ///
     /// # Returns
-    /// A SQL string for TRUNCATE TABLE
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_truncate_sql(&self, table: &str) -> String {
+    /// A SQL string for TRUNCATE TABLE.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let _ = table;
-        unimplemented!("build_truncate_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_truncate_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Build a DROP INDEX statement.
@@ -2066,28 +2010,30 @@ pub trait Connection: Send + Sync {
     /// * `if_exists` - Whether to add IF EXISTS clause
     ///
     /// # Returns
-    /// A SQL string for DROP INDEX
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
+    /// A SQL string for DROP INDEX.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
     fn build_drop_index_sql(
         &self,
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let _ = (index_name, table_name, if_exists);
-        unimplemented!("build_drop_index_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_drop_index_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns the SQL query to get the server version.
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn version_query(&self) -> &'static str {
-        unimplemented!("version_query not implemented for this driver")
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no version query.
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Err(DbError::NotSupported(
+            "version_query not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns whether this driver supports transactional DDL.

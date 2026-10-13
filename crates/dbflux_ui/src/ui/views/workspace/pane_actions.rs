@@ -529,8 +529,9 @@ mod tests {
         })
     }
 
-    /// `m` in the code editor's context bar lists the whole SQL toolbar, and
-    /// choosing an entry runs the command its toolbar button runs.
+    /// `m` in the code editor's context bar lists the editor's action strip,
+    /// and choosing an entry runs the command its button runs. A new tab has
+    /// no results header yet, so Refresh and its interval are not listed.
     #[gpui::test]
     fn m_in_the_editor_chrome_lists_the_toolbar_and_runs_the_chosen_entry(cx: &mut TestAppContext) {
         let (workspace, window) = open_workspace(cx);
@@ -553,8 +554,6 @@ mod tests {
                 "history",
                 "explain",
                 "chart",
-                "refresh",
-                "auto-refresh",
             ]
         );
         assert!(

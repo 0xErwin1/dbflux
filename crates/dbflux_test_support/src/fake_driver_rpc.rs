@@ -1,18 +1,23 @@
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use dbflux_core::{DatabaseCategory, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage};
+use dbflux_core::{
+    DatabaseCategory, DbKind, DriverCapabilities, DriverFormDef, DriverMetadataBuilder,
+    QueryLanguage,
+};
 use dbflux_ipc::audit::AuditEventEmitDto;
 use dbflux_ipc::{
     ProtocolVersion,
     driver_protocol::{
-        DriverCapability, DriverHelloResponse, DriverRequestEnvelope, DriverResponseBody,
-        DriverResponseEnvelope,
+        DriverCapability, DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope,
+        DriverResponseBody, DriverResponseEnvelope,
     },
     driver_socket_name, framing,
 };
 
-/// Protocol version the fake advertises in `Hello` and stamps on every frame.
+/// Protocol version the fake advertises in `Hello` and stamps on every frame,
+/// unless a test overrides it with [`FakeDriverRpcConfig::with_protocol_version`].
 ///
 /// Deliberately pinned to v1.3. `run_server` has no per-request dispatch: it
 /// reads one request per configured [`FakeDriverAction`] and replays the
@@ -33,6 +38,14 @@ pub enum FakeDriverAction {
     /// Emit N audit frames (all `done=false`) then a pong.
     /// Used to exercise the rate-limit drop path while verifying session continuity.
     EmitNAuditThenPong(u32, AuditEventEmitDto),
+    /// Reply with the given body, whatever the request was.
+    Respond(Box<DriverResponseBody>),
+}
+
+impl FakeDriverAction {
+    pub fn respond(body: DriverResponseBody) -> Self {
+        Self::Respond(Box::new(body))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +57,12 @@ pub struct FakeDriverRpcConfig {
     pub actions: Vec<FakeDriverAction>,
     /// Number of full connections (hello + actions) to serve before stopping.
     pub expected_connections: usize,
+    /// Version advertised in `Hello` and stamped on every frame.
+    pub protocol_version: ProtocolVersion,
+    /// Capabilities the advertised driver metadata declares.
+    pub driver_capabilities: DriverCapabilities,
+    /// Every request body received after hello, in arrival order.
+    pub received_requests: Arc<Mutex<Vec<DriverRequestBody>>>,
 }
 
 impl FakeDriverRpcConfig {
@@ -53,7 +72,23 @@ impl FakeDriverRpcConfig {
             audit_emit_capability: false,
             actions: vec![FakeDriverAction::Pong],
             expected_connections: 1,
+            protocol_version: FAKE_DRIVER_PROTOCOL_VERSION,
+            driver_capabilities: DriverCapabilities::empty(),
+            received_requests: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Advertises `version` instead of the pinned v1.3. The fake still has no
+    /// per-request dispatch, so a test that raises the version must script
+    /// every response the client expects on that version.
+    pub fn with_protocol_version(mut self, version: ProtocolVersion) -> Self {
+        self.protocol_version = version;
+        self
+    }
+
+    pub fn with_driver_capabilities(mut self, capabilities: DriverCapabilities) -> Self {
+        self.driver_capabilities = capabilities;
+        self
     }
 
     pub fn with_audit_emit_capability(mut self) -> Self {
@@ -74,6 +109,7 @@ impl FakeDriverRpcConfig {
 
 pub struct FakeDriverRpcServer {
     join_handle: Option<thread::JoinHandle<io::Result<()>>>,
+    received_requests: Arc<Mutex<Vec<DriverRequestBody>>>,
 }
 
 impl FakeDriverRpcServer {
@@ -84,11 +120,21 @@ impl FakeDriverRpcServer {
             .nonblocking(Neither)
             .create_sync()?;
 
+        let received_requests = Arc::clone(&config.received_requests);
         let join_handle = thread::spawn(move || run_server(listener, config));
 
         Ok(Self {
             join_handle: Some(join_handle),
+            received_requests,
         })
+    }
+
+    /// Request bodies the server has received after hello so far.
+    pub fn received_requests(&self) -> Vec<DriverRequestBody> {
+        match self.received_requests.lock() {
+            Ok(requests) => requests.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     pub fn wait(mut self) -> io::Result<()> {
@@ -121,13 +167,19 @@ fn run_server(
         let hello_response = build_hello_response(&config, hello_req.request_id);
         framing::send_msg(&mut stream, &hello_response)?;
 
+        let protocol_version = config.protocol_version;
+
         for action in &config.actions {
             let request: DriverRequestEnvelope = framing::recv_msg(&mut stream)?;
+            match config.received_requests.lock() {
+                Ok(mut requests) => requests.push(request.body.clone()),
+                Err(poisoned) => poisoned.into_inner().push(request.body.clone()),
+            }
 
             match action {
                 FakeDriverAction::Pong => {
                     let pong = DriverResponseEnvelope::ok(
-                        FAKE_DRIVER_PROTOCOL_VERSION,
+                        protocol_version,
                         request.request_id,
                         request.session_id,
                         DriverResponseBody::Pong,
@@ -137,7 +189,7 @@ fn run_server(
 
                 FakeDriverAction::EmitAuditThenPong(dto) => {
                     let audit_frame = DriverResponseEnvelope {
-                        protocol_version: FAKE_DRIVER_PROTOCOL_VERSION,
+                        protocol_version,
                         request_id: request.request_id,
                         session_id: request.session_id,
                         done: false,
@@ -146,7 +198,7 @@ fn run_server(
                     framing::send_msg(&mut stream, &audit_frame)?;
 
                     let pong = DriverResponseEnvelope::ok(
-                        FAKE_DRIVER_PROTOCOL_VERSION,
+                        protocol_version,
                         request.request_id,
                         request.session_id,
                         DriverResponseBody::Pong,
@@ -157,7 +209,7 @@ fn run_server(
                 FakeDriverAction::EmitNAuditThenPong(n, dto) => {
                     for _ in 0..*n {
                         let audit_frame = DriverResponseEnvelope {
-                            protocol_version: FAKE_DRIVER_PROTOCOL_VERSION,
+                            protocol_version,
                             request_id: request.request_id,
                             session_id: request.session_id,
                             done: false,
@@ -167,12 +219,22 @@ fn run_server(
                     }
 
                     let pong = DriverResponseEnvelope::ok(
-                        FAKE_DRIVER_PROTOCOL_VERSION,
+                        protocol_version,
                         request.request_id,
                         request.session_id,
                         DriverResponseBody::Pong,
                     );
                     framing::send_msg(&mut stream, &pong)?;
+                }
+
+                FakeDriverAction::Respond(body) => {
+                    let response = DriverResponseEnvelope::ok(
+                        protocol_version,
+                        request.request_id,
+                        request.session_id,
+                        body.as_ref().clone(),
+                    );
+                    framing::send_msg(&mut stream, &response)?;
                 }
             }
         }
@@ -188,6 +250,7 @@ fn build_hello_response(config: &FakeDriverRpcConfig, request_id: u64) -> Driver
         DatabaseCategory::Relational,
         QueryLanguage::Sql,
     )
+    .capabilities(config.driver_capabilities)
     .build();
 
     let mut capabilities = vec![DriverCapability::Cancellation];
@@ -198,7 +261,7 @@ fn build_hello_response(config: &FakeDriverRpcConfig, request_id: u64) -> Driver
     let hello = DriverHelloResponse {
         server_name: "fake-rpc-host".to_string(),
         server_version: "0.0.1".to_string(),
-        selected_version: FAKE_DRIVER_PROTOCOL_VERSION,
+        selected_version: config.protocol_version,
         capabilities,
         driver_kind: DbKind::SQLite,
         driver_metadata: metadata,
@@ -207,7 +270,7 @@ fn build_hello_response(config: &FakeDriverRpcConfig, request_id: u64) -> Driver
     };
 
     DriverResponseEnvelope::ok(
-        FAKE_DRIVER_PROTOCOL_VERSION,
+        config.protocol_version,
         request_id,
         None,
         DriverResponseBody::Hello(hello),

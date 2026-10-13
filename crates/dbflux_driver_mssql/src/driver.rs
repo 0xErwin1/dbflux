@@ -17,9 +17,9 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
     FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData, IndexInfo,
     InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
-    MissingCreationMetadata, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    MissingCreationMetadata, MutationCapabilities, PaginationStyle, PlaceholderStyle,
+    PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
     RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
     SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
@@ -3075,58 +3075,9 @@ impl Connection for MssqlConnection {
         Some(&GENERATOR)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        _filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MSSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        let order_by_clause = if order_by.is_empty() {
-            // OFFSET requires ORDER BY in SQL Server; an order-neutral constant keeps
-            // paginated reads valid for every column type when no order was supplied.
-            "ORDER BY (SELECT NULL)".to_string()
-        } else {
-            let parts: Vec<String> = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
-                })
-                .collect();
-            format!("ORDER BY {}", parts.join(", "))
-        };
-
-        sql.push(' ');
-        sql.push_str(&order_by_clause);
-        sql.push_str(&format!(
-            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            offset, limit
-        ));
-        sql
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+        Ok(format!("TRUNCATE TABLE {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -3134,21 +3085,24 @@ impl Connection for MssqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = MSSQL_DIALECT.quote_identifier(index_name);
         let table = table_name
             .map(|t| MSSQL_DIALECT.quote_identifier(t))
             .unwrap_or_else(|| "[table_name]".to_string());
 
         if if_exists {
-            format!("DROP INDEX IF EXISTS {} ON {}", quoted_index, table)
+            Ok(format!(
+                "DROP INDEX IF EXISTS {} ON {}",
+                quoted_index, table
+            ))
         } else {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
+            Ok(format!("DROP INDEX {} ON {}", quoted_index, table))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT @@VERSION"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT @@VERSION")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -6994,6 +6948,48 @@ mod query_safety_tests {
         assert!(
             matches!(outcome, Err(DbError::NotSupported(_))),
             "expected NotSupported, got {outcome:?}"
+        );
+    }
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    /// The lockless connection never opens a client, and these builders only
+    /// format text.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use dbflux_core::Connection;
+
+        let connection = lockless_connection();
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("dbo.users")
+                .expect("MSSQL supports truncate"),
+            "TRUNCATE TABLE [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), true)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX IF EXISTS [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", None, false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [table_name]"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("MSSQL has a version query"),
+            "SELECT @@VERSION"
         );
     }
 

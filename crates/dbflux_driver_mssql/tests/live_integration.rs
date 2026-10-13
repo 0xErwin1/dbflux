@@ -672,15 +672,6 @@ fn mssql_unsorted_limits_run_when_first_column_is_not_sortable() -> Result<(), D
         )?;
         assert_eq!(browsed.rows.len(), 2);
 
-        let select_sql = connection.build_select_sql("limit_xml_test", &[], None, &[], 2, 2);
-        assert_eq!(
-            connection
-                .execute(&QueryRequest::new(select_sql))?
-                .rows
-                .len(),
-            2
-        );
-
         let plan = connection.explain(&ExplainRequest::new(table_ref))?;
         assert!(!plan.rows.is_empty());
 

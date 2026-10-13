@@ -29,9 +29,9 @@ use dbflux_core::{
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
     EditorLanguageProfile, ExecutionClassification, FieldInfo, FormFieldKind, FormSection, FormTab,
     FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
-    LanguageService, MutationCapabilities, OrderByColumn, Pagination, PaginationStyle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryLanguage, QueryRequest,
-    QueryResult, RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
+    LanguageService, MutationCapabilities, Pagination, PaginationStyle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
     SemanticRequest, SqlDialect, TableInfo, TextPosition, TextPositionRange,
     TransactionCapabilities, TransferFamily, ValidationResult, Value, WhereOperator, field,
@@ -1157,34 +1157,9 @@ impl Connection for DynamoConnection {
         &dbflux_core::DefaultSqlDialect
     }
 
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
-        // DynamoDB doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
-    }
-
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // DynamoDB doesn't use SQL - this is for SQL-based drivers
-        ("PutItem".to_string(), Vec::new())
-    }
-
-    fn build_truncate_sql(&self, _table: &str) -> String {
+    fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {
         // DynamoDB doesn't support TRUNCATE - use Scan + BatchWriteItem
-        "Scan + BatchWriteItem(delete)".to_string()
+        Ok("Scan + BatchWriteItem(delete)".to_string())
     }
 
     fn build_drop_index_sql(
@@ -1192,14 +1167,14 @@ impl Connection for DynamoConnection {
         _index_name: &str,
         _table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         // DynamoDB uses UpdateTable to delete a GSI
-        "UpdateTable(delete GSI)".to_string()
+        Ok("UpdateTable(delete GSI)".to_string())
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         // DynamoDB local doesn't have a version query; use DescribeTable
-        "DescribeTable"
+        Ok("DescribeTable")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -4580,6 +4555,55 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::HashMap;
+
+    /// The placeholder texts emitted for truncate, drop-index and the version
+    /// probe must stay byte-for-byte identical while the trait defaults move
+    /// to `Result`. The SDK client points at a closed local port; building it
+    /// contacts no server and these builders only format text.
+    #[test]
+    fn truncate_drop_index_and_version_texts_match_the_driver_contract() {
+        use super::{
+            BehaviorVersion, Client, Credentials, DynamoConfigBuilder, DynamoConnection, Region,
+        };
+        use dbflux_core::Connection as _;
+
+        let config = DynamoConfigBuilder::new()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new(
+                "test",
+                "test",
+                None,
+                None,
+                "dynamodb-test",
+            ))
+            .endpoint_url("http://127.0.0.1:1")
+            .build();
+        let connection = DynamoConnection {
+            client: Client::from_conf(config),
+            default_region: "us-east-1".to_string(),
+            default_table: None,
+        };
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("the DynamoDB placeholder always builds"),
+            "Scan + BatchWriteItem(delete)"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx", Some("users"), false)
+                .expect("the DynamoDB placeholder always builds"),
+            "UpdateTable(delete GSI)"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("the DynamoDB version probe is a constant"),
+            "DescribeTable"
+        );
+    }
 
     #[test]
     fn infer_field_kind_cases() {

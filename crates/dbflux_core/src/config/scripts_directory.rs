@@ -283,8 +283,12 @@ impl ScriptsDirectory {
         Ok(hooks_dir)
     }
 
+    /// Whether there is nothing to list: no script in the managed root and no
+    /// external folder. An external folder is a node of its own in the
+    /// sidebar, so it counts even while it is scanning, unreadable or holds no
+    /// script yet.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.external.is_empty()
     }
 
     /// Registers external roots without scanning them.
@@ -1264,6 +1268,15 @@ mod tests {
 
     fn external_path(dir: &ScriptsDirectory, id: Uuid) -> PathBuf {
         dir.external_root(id).unwrap().path().to_path_buf()
+    }
+
+    #[test]
+    fn a_registered_external_folder_makes_the_directory_non_empty() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        assert!(!dir.is_empty());
+
+        dir.remove_external_root(id);
+        assert!(dir.is_empty(), "no scripts and no external folder");
     }
 
     #[test]

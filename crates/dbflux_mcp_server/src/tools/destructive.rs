@@ -307,7 +307,12 @@ impl DbFluxServer {
     ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        let sql = connection.build_truncate_sql(table);
+        let sql = connection.build_truncate_sql(table).map_err(|error| {
+            format!(
+                "Truncate is not supported by the {:?} driver: {error}",
+                connection.kind()
+            )
+        })?;
         let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);

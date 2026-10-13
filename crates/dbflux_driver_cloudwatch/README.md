@@ -14,8 +14,8 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 
 - Log-streaming driver classified as `DatabaseCategory::LogStream`; `deployment_class` is `CloudManaged`. The declared capabilities are `AUTHENTICATION`, `METRIC_SERIES`, `METRIC_CATALOG`, `DASHBOARD_IMPORT`, `DASHBOARD_SYNC`, `CHART_AUTHORING`, and `REQUEST_ROW_LIMIT`.
 - AWS connection configuration via region, named profile, and optional endpoint override, aligned with the DynamoDB AWS connection flow.
-- Query execution through `StartQuery` + polling `GetQueryResults` (poll interval 500 ms, up to 120 attempts), with an editor-managed source context that supplies the target log groups and time range. Logs queries use the fixed SDK `StartQuery` limit of 1000 results.
-- `execute` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) on Logs Insights results, so editor queries carry the editor row limit.
+- Query execution through `StartQuery` + polling `GetQueryResults` (poll interval 500 ms, up to 120 attempts), with an editor-managed source context that supplies the target log groups and time range. Without a row limit, Logs queries ask `StartQuery` for 1000 results.
+- `execute` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) on Logs Insights results, so editor queries carry the editor row limit. A limited query asks `StartQuery` for one result more than the limit, up to 10,000 (one `GetQueryResults` page), and the result is marked truncated when the limit dropped rows, or when a full page came back and Logs Insights matched more records than it returned.
 - Three query syntaxes selectable from the source-context "Syntax" dropdown:
   - CloudWatch Logs Insights QL (`cwli`, the default) — `QueryLanguage::CloudWatchLogsInsightsQl`.
   - OpenSearch PPL (`ppl`) — `QueryLanguage::OpenSearchPpl`.
@@ -34,7 +34,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 
 ## Limitations
 
-- `execute` rejects a statement timeout, and a row limit on metric queries, with `NotSupported` before dispatch. Logs Insights results are cut to the request limit locally, but the query still sends the fixed server-side limit of 1000, so a limit above 1000 is capped by CloudWatch without a truncation marker. There is no default timeout or guarantee on server-side work.
+- `execute` rejects a statement timeout, and a row limit on metric queries, with `NotSupported` before dispatch. A Logs Insights row limit above 10,000 keeps at most 10,000 rows, the size of one `GetQueryResults` page. Queries without a row limit return at most 1000 rows and are never marked truncated. There is no default timeout or guarantee on server-side work.
 - The `profile` field (AWS named profile) is an `AuthProfileRef` form field. The generic portability seam (`DbDriver::export_field_hint`) maps all `AuthProfileRef` fields to `RequiredOnImport`, so the field value is omitted from any exported bundle and recipients must supply or create a matching auth profile at import time. No driver-specific override is required.
 - Query cancellation is not implemented; `cancel()` returns `NotSupported`.
 - OpenSearch SQL mode does not receive external log groups: SQL queries must declare their queried log groups in the SQL text, because the CloudWatch API does not accept external log-group parameters for SQL mode (only CWLI and PPL get `set_log_group_names`).

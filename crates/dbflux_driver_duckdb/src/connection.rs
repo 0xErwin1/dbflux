@@ -999,8 +999,8 @@ impl Connection for DuckDbConnection {
         Some(&GENERATOR)
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -1376,6 +1376,19 @@ mod tests {
         DuckDbDriver::new()
             .connect(&ConnectionProfile::new("duck", DbConfig::default_duckdb()))
             .unwrap()
+    }
+
+    /// The version probe must stay byte-for-byte identical while the trait
+    /// default moves to `Result`. DuckDB runs locally, no server needed.
+    #[test]
+    fn version_query_matches_the_driver_contract() {
+        let connection = connect();
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("DuckDB has a version query"),
+            "SELECT version()"
+        );
     }
 
     #[test]

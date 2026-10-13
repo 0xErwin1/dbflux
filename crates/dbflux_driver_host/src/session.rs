@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use dbflux_core::{Connection, DbError, KeyValueApi};
+use dbflux_ipc::ProtocolVersion;
 use dbflux_ipc::driver_protocol::{
     DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto,
+    protocol_carries_request_row_limit,
 };
 use uuid::Uuid;
 
@@ -44,8 +46,14 @@ impl SessionManager {
 ///
 /// `Hello` and `OpenSession` are handled by the caller (main loop) since they
 /// don't operate on an existing session. This function handles everything else.
+/// `negotiated_version` is the version the connection settled on in `Hello`.
 #[allow(clippy::result_large_err)]
-pub(crate) fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverResponseBody {
+pub(crate) fn dispatch(
+    conn: &dyn Connection,
+    negotiated_version: ProtocolVersion,
+    body: DriverRequestBody,
+) -> DriverResponseBody {
+    let reports_truncation = protocol_carries_request_row_limit(negotiated_version);
     match body {
         DriverRequestBody::Ping => match conn.ping() {
             Ok(()) => DriverResponseBody::Pong,
@@ -59,10 +67,16 @@ pub(crate) fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> Driver
 
         DriverRequestBody::Execute { request } => {
             let req = request.into();
-            if let Err(error) = reject_protected_query(&req) {
+            if let Err(error) = reject_protected_query(&req, conn, reports_truncation) {
                 return db_error_to_response(error);
             }
             match conn.execute(&req) {
+                Ok(result) if reports_truncation => {
+                    DriverResponseBody::ExecuteResultWithTruncation {
+                        result: QueryResultDto::from(&result),
+                        rows_truncated: result.rows_truncated(),
+                    }
+                }
                 Ok(result) => DriverResponseBody::ExecuteResult {
                     result: QueryResultDto::from(&result),
                 },
@@ -72,10 +86,17 @@ pub(crate) fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> Driver
 
         DriverRequestBody::ExecuteWithHandle { request } => {
             let req = request.into();
-            if let Err(error) = reject_protected_query(&req) {
+            if let Err(error) = reject_protected_query(&req, conn, reports_truncation) {
                 return db_error_to_response(error);
             }
             match conn.execute_with_handle(&req) {
+                Ok((handle, result)) if reports_truncation => {
+                    DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                        handle_id: handle.id,
+                        result: QueryResultDto::from(&result),
+                        rows_truncated: result.rows_truncated(),
+                    }
+                }
                 Ok((handle, result)) => DriverResponseBody::ExecuteWithHandleResult {
                     handle_id: handle.id,
                     result: QueryResultDto::from(&result),
@@ -409,9 +430,21 @@ fn dispatch_kv(
     }
 }
 
+/// Refuses what the wrapped driver cannot be shown to enforce before it runs.
+/// A row limit passes only on a session that reports truncation back (v1.6+)
+/// and only to a driver whose metadata declares `REQUEST_ROW_LIMIT`.
 #[allow(clippy::result_large_err)]
-fn reject_protected_query(request: &dbflux_core::QueryRequest) -> Result<(), DbError> {
-    if request.limit.is_some() || request.statement_timeout.is_some() {
+fn reject_protected_query(
+    request: &dbflux_core::QueryRequest,
+    conn: &dyn Connection,
+    reports_truncation: bool,
+) -> Result<(), DbError> {
+    let limit_enforced = reports_truncation
+        && conn
+            .metadata()
+            .supports(dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT);
+
+    if (request.limit.is_some() && !limit_enforced) || request.statement_timeout.is_some() {
         return Err(DbError::NotSupported(
             "IPC drivers cannot certify query limit or statement timeout enforcement".into(),
         ));
@@ -451,9 +484,10 @@ mod tests {
         SemanticPlan, SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef,
     };
     use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
+    use dbflux_ipc::{DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_VERSION};
     use std::{
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
@@ -668,7 +702,7 @@ mod tests {
                     request: (&request).into(),
                 },
             ] {
-                match dispatch(&connection, body) {
+                match dispatch(&connection, DRIVER_RPC_V1_5, body) {
                     DriverResponseBody::Error(error) => {
                         assert_eq!(error.code, DriverRpcErrorCode::UnsupportedMethod);
                         assert!(!error.retriable);
@@ -683,6 +717,7 @@ mod tests {
         assert!(matches!(
             dispatch(
                 &connection,
+                DRIVER_RPC_V1_5,
                 DriverRequestBody::Execute {
                     request: (&QueryRequest::new("SELECT 1")).into()
                 }
@@ -692,6 +727,7 @@ mod tests {
         assert!(matches!(
             dispatch(
                 &connection,
+                DRIVER_RPC_V1_5,
                 DriverRequestBody::ExecuteWithHandle {
                     request: (&QueryRequest::new("SELECT 1")).into()
                 }
@@ -700,6 +736,184 @@ mod tests {
         ));
         assert_eq!(executes.load(Ordering::SeqCst), 1);
         assert_eq!(handles.load(Ordering::SeqCst), 1);
+    }
+
+    /// Driver that declares `REQUEST_ROW_LIMIT`, records every limit it
+    /// receives, and marks its result truncated whenever a limit was set.
+    struct LimitingConnection {
+        metadata: dbflux_core::DriverMetadata,
+        received_limits: Arc<Mutex<Vec<Option<u32>>>>,
+    }
+
+    impl LimitingConnection {
+        fn new(capabilities: dbflux_core::DriverCapabilities) -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .capabilities(capabilities)
+                .build(),
+                received_limits: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn run(&self, request: &QueryRequest) -> QueryResult {
+            self.received_limits
+                .lock()
+                .expect("limits lock")
+                .push(request.limit);
+            let mut result = QueryResult::empty();
+            result.set_rows_truncated(request.limit.is_some());
+            result
+        }
+
+        fn received_limits(&self) -> Vec<Option<u32>> {
+            self.received_limits.lock().expect("limits lock").clone()
+        }
+    }
+
+    impl Connection for LimitingConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Ok(self.run(req))
+        }
+        fn execute_with_handle(
+            &self,
+            req: &QueryRequest,
+        ) -> Result<(dbflux_core::QueryHandle, QueryResult), DbError> {
+            Ok((
+                dbflux_core::QueryHandle {
+                    id: uuid::Uuid::nil(),
+                },
+                self.run(req),
+            ))
+        }
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+    }
+
+    fn execute_bodies(request: &QueryRequest) -> [DriverRequestBody; 2] {
+        [
+            DriverRequestBody::Execute {
+                request: request.into(),
+            },
+            DriverRequestBody::ExecuteWithHandle {
+                request: request.into(),
+            },
+        ]
+    }
+
+    fn assert_refused(response: DriverResponseBody) {
+        match response {
+            DriverResponseBody::Error(error) => {
+                assert_eq!(error.code, DriverRpcErrorCode::UnsupportedMethod);
+                assert!(!error.retriable);
+                assert!(error.message.contains("cannot certify"));
+            }
+            other => panic!("expected protected request rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v1_6_host_forwards_limit_to_a_declaring_driver_and_reports_truncation() {
+        let connection =
+            LimitingConnection::new(dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT);
+
+        let [execute, execute_with_handle] =
+            execute_bodies(&QueryRequest::new("SELECT 1").with_limit(3));
+        match dispatch(&connection, DRIVER_RPC_V1_6, execute) {
+            DriverResponseBody::ExecuteResultWithTruncation { rows_truncated, .. } => {
+                assert!(rows_truncated);
+            }
+            other => panic!("expected a truncation-carrying result, got {other:?}"),
+        }
+        match dispatch(&connection, DRIVER_RPC_V1_6, execute_with_handle) {
+            DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                rows_truncated, ..
+            } => {
+                assert!(rows_truncated);
+            }
+            other => panic!("expected a truncation-carrying result, got {other:?}"),
+        }
+
+        let [execute, _] = execute_bodies(&QueryRequest::new("SELECT 1"));
+        match dispatch(&connection, DRIVER_RPC_V1_6, execute) {
+            DriverResponseBody::ExecuteResultWithTruncation { rows_truncated, .. } => {
+                assert!(!rows_truncated);
+            }
+            other => panic!("expected a truncation-carrying result, got {other:?}"),
+        }
+
+        assert_eq!(connection.received_limits(), vec![Some(3), Some(3), None]);
+    }
+
+    #[test]
+    fn v1_6_host_still_refuses_statement_timeout() {
+        let connection =
+            LimitingConnection::new(dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT);
+        let mut request = QueryRequest::new("SELECT 1").with_limit(3);
+        request.statement_timeout = Some(Duration::ZERO);
+
+        for body in execute_bodies(&request) {
+            assert_refused(dispatch(&connection, DRIVER_RPC_V1_6, body));
+        }
+        assert!(connection.received_limits().is_empty());
+    }
+
+    #[test]
+    fn v1_6_host_refuses_limit_for_a_driver_that_does_not_declare_it() {
+        let connection = LimitingConnection::new(dbflux_core::DriverCapabilities::empty());
+
+        for body in execute_bodies(&QueryRequest::new("SELECT 1").with_limit(3)) {
+            assert_refused(dispatch(&connection, DRIVER_RPC_V1_6, body));
+        }
+        assert!(connection.received_limits().is_empty());
+    }
+
+    #[test]
+    fn v1_5_host_refuses_limit_even_for_a_declaring_driver() {
+        let connection =
+            LimitingConnection::new(dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT);
+
+        for body in execute_bodies(&QueryRequest::new("SELECT 1").with_limit(3)) {
+            assert_refused(dispatch(&connection, DRIVER_RPC_V1_5, body));
+        }
+        assert!(connection.received_limits().is_empty());
+
+        // A 1.5 peer cannot decode the 1.6 variants, so it keeps the old ones.
+        let [execute, execute_with_handle] = execute_bodies(&QueryRequest::new("SELECT 1"));
+        assert!(matches!(
+            dispatch(&connection, DRIVER_RPC_V1_5, execute),
+            DriverResponseBody::ExecuteResult { .. }
+        ));
+        assert!(matches!(
+            dispatch(&connection, DRIVER_RPC_V1_5, execute_with_handle),
+            DriverResponseBody::ExecuteWithHandleResult { .. }
+        ));
     }
 
     #[test]
@@ -712,6 +926,7 @@ mod tests {
 
         let response = dispatch(
             &connection,
+            DRIVER_RPC_VERSION,
             DriverRequestBody::PlanSemantic {
                 request: SemanticRequest::TableBrowse(TableBrowseRequest::new(TableRef::new(
                     "users",
@@ -731,6 +946,7 @@ mod tests {
 
         let response = dispatch(
             &connection,
+            DRIVER_RPC_VERSION,
             DriverRequestBody::PlanSemantic {
                 request: SemanticRequest::TableBrowse(TableBrowseRequest::new(TableRef::new(
                     "users",
