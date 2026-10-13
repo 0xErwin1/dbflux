@@ -7,6 +7,9 @@ mod sections;
 mod tree_ops;
 mod view;
 
+#[cfg(test)]
+mod accessibility_tests;
+
 pub use events::BuilderEvent;
 pub use mutation_state::{AssignmentRow, BuilderMode, MutationBuilderState};
 pub use panel::{

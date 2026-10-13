@@ -148,6 +148,14 @@ pub(crate) fn override_default_seconds_caption(seconds: u32) -> String {
     )
 }
 
+/// Names the checkbox that enables an override, so it is announced as the
+/// override of a field rather than as the field itself: the text beside such a
+/// box names the field, not what the box does, and where the field's own control
+/// carries the same label a screen reader cannot tell the two apart.
+pub(crate) fn override_control_name(field: &str) -> String {
+    dbflux_i18n::t!("settings.general.override_field", field = field)
+}
+
 /// Formats the "<name> (disabled)" label shown for a disabled proxy in the proxy dropdown.
 pub(crate) fn access_proxy_disabled_label(name: &str) -> String {
     dbflux_i18n::t!("access.proxy_disabled_label", name = name)
@@ -1326,6 +1334,41 @@ mod tests {
                 locale = "es"
             )
         );
+    }
+
+    #[test]
+    fn override_control_name_embeds_the_field_it_overrides() {
+        let field = dbflux_i18n::t!("connection_manager.overrides.refresh_policy", locale = "en");
+        let template = dbflux_i18n::t!("settings.general.override_field", locale = "en");
+        let name = super::override_control_name(&field);
+
+        assert!(
+            template.contains("%{field}"),
+            "the catalogue must carry the override name template, got {template}"
+        );
+        assert_eq!(name, template.replace("%{field}", &field));
+        assert_ne!(name, field, "the checkbox must not repeat the field label");
+    }
+
+    /// Every shipped catalog composes the name from the field, so no language
+    /// leaves the placeholder in what a screen reader announces.
+    #[test]
+    fn override_control_name_substitutes_the_field_in_every_catalog() {
+        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+            let template = dbflux_i18n::translate_in(locale, "settings.general.override_field");
+            let field =
+                dbflux_i18n::translate_in(locale, "connection_manager.overrides.refresh_policy");
+            let name = template.replace("%{field}", &field);
+
+            assert!(
+                !name.contains("%{field}"),
+                "{locale}: placeholder left in {name:?}"
+            );
+            assert_ne!(
+                name, field,
+                "{locale}: the checkbox must not repeat the field label"
+            );
+        }
     }
 
     #[test]

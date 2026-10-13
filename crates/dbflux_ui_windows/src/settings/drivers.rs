@@ -994,7 +994,9 @@ impl DriversSection {
             self.editor_cursor_on(DriverEditorField::OverrideRefreshPolicy),
             Checkbox::new("drv-override-refresh-policy")
                 .checked(self.drv_override_refresh_policy)
-                .aria_label(dbflux_i18n::t!("settings.general.refresh_policy.label"))
+                .aria_label(crate::labels::override_control_name(&dbflux_i18n::t!(
+                    "settings.general.refresh_policy.label"
+                )))
                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                     this.drv_focus = DriversFocus::Editor;
                     this.drv_editor_field = DriverEditorField::OverrideRefreshPolicy;
@@ -1035,7 +1037,9 @@ impl DriversSection {
             self.editor_cursor_on(DriverEditorField::OverrideRefreshInterval),
             Checkbox::new("drv-override-refresh-interval")
                 .checked(self.drv_override_refresh_interval)
-                .aria_label(dbflux_i18n::t!("settings.general.refresh_interval.label"))
+                .aria_label(crate::labels::override_control_name(&dbflux_i18n::t!(
+                    "settings.general.refresh_interval.label"
+                )))
                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                     this.drv_focus = DriversFocus::Editor;
                     this.drv_editor_field = DriverEditorField::OverrideRefreshInterval;

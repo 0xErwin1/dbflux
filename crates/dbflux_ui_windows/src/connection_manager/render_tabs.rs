@@ -515,9 +515,9 @@ impl ConnectionManagerWindow {
                     .child(
                         Checkbox::new("conn-override-refresh-policy")
                             .checked(self.settings_tab.conn_override_refresh_policy)
-                            .aria_label(dbflux_i18n::t!(
+                            .aria_label(crate::labels::override_control_name(&dbflux_i18n::t!(
                                 "connection_manager.overrides.refresh_policy"
-                            ))
+                            )))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.settings_tab.conn_override_refresh_policy = *checked;
                                 cx.notify();
@@ -567,7 +567,9 @@ impl ConnectionManagerWindow {
                     .child(
                         Checkbox::new("conn-override-refresh-interval")
                             .checked(self.settings_tab.conn_override_refresh_interval)
-                            .aria_label(refresh_interval_label.clone())
+                            .aria_label(crate::labels::override_control_name(
+                                &refresh_interval_label,
+                            ))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.settings_tab.conn_override_refresh_interval = *checked;
                                 cx.notify();

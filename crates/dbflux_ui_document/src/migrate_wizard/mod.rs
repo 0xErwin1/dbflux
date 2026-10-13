@@ -2066,3 +2066,7 @@ mod lifecycle_tests {
         );
     }
 }
+
+/// Render naming test for the wizard's checkboxes (issue #807, S4/S7).
+#[cfg(test)]
+mod accessibility_tests;

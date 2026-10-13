@@ -3490,6 +3490,7 @@ settings:
       error: No se pudo actualizar la configuración de base de datos compartida
       hint: "Se aplica en el próximo inicio. Comparte la base de datos estable (dbflux.db) en lugar de la dbflux-nightly.db de esta compilación nightly."
     override_value_header: Valor de anulación
+    override_field: "Anular %{field}"
     placeholder:
       refresh_policy: Política de actualización
     save:
