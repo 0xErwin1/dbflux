@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["보조 라이브러리"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["정책 — dbflux_policy"]
+        policy["ExecutionClassification,<br/>스키마 변경 분류"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "일반적인 경계면만" .-> core

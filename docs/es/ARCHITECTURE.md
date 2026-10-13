@@ -64,12 +64,17 @@ flowchart TB
     end
 
     subgraph Support["Bibliotecas de soporte"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["Políticas — dbflux_policy"]
+        policy["ExecutionClassification,<br/>clasificación de alteraciones de esquema"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "solo seams genéricos" .-> core

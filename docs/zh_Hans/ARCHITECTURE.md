@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["支撑库"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["策略 — dbflux_policy"]
+        policy["ExecutionClassification、<br/>模式变更分类"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "仅通过通用接缝" .-> core
