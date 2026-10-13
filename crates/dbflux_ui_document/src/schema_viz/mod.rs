@@ -603,6 +603,14 @@ impl SchemaVizDocument {
         dbflux_i18n::t!("document.schema_viz.view.title", name = name)
     }
 
+    /// The database a diagram is opened for. An empty name means the same as
+    /// none, so the document normalizes it once: the connection it resolves,
+    /// the task target and the metadata calls the loader makes must agree on
+    /// which database this diagram belongs to.
+    fn normalized_database(database: Option<String>) -> Option<String> {
+        database.filter(|database| !database.is_empty())
+    }
+
     /// Creates a new SchemaVizDocument and starts async loading.
     /// NOTE: This must be called from within a `cx.new(|cx| ...)` closure
     /// where `cx` is `Context<Self>`. The caller is responsible for wrapping
@@ -617,6 +625,7 @@ impl SchemaVizDocument {
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let id = DocumentId::new();
+        let database = Self::normalized_database(database);
 
         // Get the correct per-database connection using TaskTarget.
         // This is critical for ConnectionPerDatabase drivers (e.g., PostgreSQL) where
@@ -1208,7 +1217,8 @@ impl SchemaVizDocument {
         // opened without a database. Its schema stands in for the database
         // name, which is how the sidebar's other consumers of those ids
         // resolve it (`database.as_deref().unwrap_or(schema)` when a table is
-        // dropped). Only a load with neither can fail.
+        // dropped). An empty name names nothing either, so the load only fails
+        // when neither input carries one.
         let db_name = database
             .filter(|database| !database.is_empty())
             .or_else(|| match &mode {

@@ -862,6 +862,9 @@ struct FakeCalls {
     schema_columns: Vec<Option<String>>,
     schema_indexes: Vec<Option<String>>,
     schema_foreign_keys: Vec<Option<String>>,
+    /// The database argument of every bulk metadata call, in call order. The
+    /// per-call schema vectors above record the other half of the same call.
+    bulk_databases: Vec<String>,
     schema_for_database: Vec<String>,
 }
 
@@ -936,7 +939,7 @@ impl MetadataSource for FakeSource {
     )]
     fn schema_columns(
         &self,
-        _database: &str,
+        database: &str,
         schema: Option<&str>,
     ) -> Result<Vec<SchemaColumnInfo>, DbError> {
         self.calls
@@ -944,6 +947,11 @@ impl MetadataSource for FakeSource {
             .expect("fake calls mutex")
             .schema_columns
             .push(schema.map(str::to_owned));
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .bulk_databases
+            .push(database.to_owned());
         self.columns
             .get(&schema.map(str::to_owned))
             .cloned()
@@ -956,7 +964,7 @@ impl MetadataSource for FakeSource {
     )]
     fn schema_indexes(
         &self,
-        _database: &str,
+        database: &str,
         schema: Option<&str>,
     ) -> Result<Vec<SchemaIndexInfo>, DbError> {
         self.calls
@@ -964,6 +972,11 @@ impl MetadataSource for FakeSource {
             .expect("fake calls mutex")
             .schema_indexes
             .push(schema.map(str::to_owned));
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .bulk_databases
+            .push(database.to_owned());
         if self.fail_indexes_and_fks {
             return Err(DbError::NotSupported("no bulk index path".to_owned()));
         }
@@ -980,7 +993,7 @@ impl MetadataSource for FakeSource {
     )]
     fn schema_foreign_keys(
         &self,
-        _database: &str,
+        database: &str,
         schema: Option<&str>,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
         self.calls
@@ -988,6 +1001,11 @@ impl MetadataSource for FakeSource {
             .expect("fake calls mutex")
             .schema_foreign_keys
             .push(schema.map(str::to_owned));
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .bulk_databases
+            .push(database.to_owned());
         if self.fail_indexes_and_fks {
             return Err(DbError::NotSupported("no bulk foreign key path".to_owned()));
         }
@@ -1240,6 +1258,14 @@ fn loader_uses_the_schema_when_no_database_was_passed() {
 
     assert_eq!(result.tables_loaded, 2);
     assert_eq!(result.tables.len(), 2);
+
+    // The fallback must reach the driver as the database name, not merely as
+    // some nonempty one: these are the calls the metadata comes from.
+    assert_eq!(
+        source.calls().bulk_databases,
+        vec!["main".to_owned(); 3],
+        "every bulk call must carry the schema as the database"
+    );
 }
 
 /// The database is still required when there is no schema to stand in for it:
@@ -1264,6 +1290,21 @@ fn loader_without_a_database_or_a_schema_still_reports_no_database() {
         error,
         dbflux_i18n::t!("document.schema_viz.error.no_database"),
         "the reported error must stay the translated no-database message"
+    );
+}
+
+/// An empty database name means the same as none: the task target, the tab
+/// title and the loader must not disagree about it.
+#[test]
+fn empty_database_names_are_normalized_to_none() {
+    assert_eq!(SchemaVizDocument::normalized_database(None), None);
+    assert_eq!(
+        SchemaVizDocument::normalized_database(Some(String::new())),
+        None
+    );
+    assert_eq!(
+        SchemaVizDocument::normalized_database(Some("main".to_owned())),
+        Some("main".to_owned())
     );
 }
 
