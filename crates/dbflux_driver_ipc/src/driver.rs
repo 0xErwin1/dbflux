@@ -132,7 +132,7 @@ impl IpcDriver {
         Self {
             socket_id,
             kind,
-            metadata: crate::connection::without_read_only_enforcement(metadata),
+            metadata: crate::connection::without_uncertifiable_enforcement(metadata),
             form_definition,
             settings_schema: settings_schema.map(Arc::new),
             launch: None,

@@ -268,6 +268,11 @@ mod tests {
         request_limits: Mutex<Vec<(Option<u32>, Option<std::time::Duration>)>>,
         execute_gate: Option<Arc<ExecuteGate>>,
         truncate_rows: AtomicBool,
+        /// Whether the connection advertises
+        /// `DriverCapabilities::REQUEST_ROW_LIMIT`, meaning its `execute`
+        /// enforces `QueryRequest::limit` instead of refusing a request that
+        /// carries one.
+        enforces_row_limit: bool,
     }
 
     impl FakeConnection {
@@ -280,11 +285,27 @@ mod tests {
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
+                enforces_row_limit: true,
             })
         }
 
         fn isolated() -> Arc<Self> {
             Self::isolated_with_gate(None)
+        }
+
+        /// The external RPC driver case: this connection refuses a request that
+        /// carries a row limit, so it must not claim to enforce one.
+        fn isolated_without_row_limit() -> Arc<Self> {
+            Arc::new(Self {
+                factory: None,
+                queries: AtomicUsize::new(0),
+                cancels: AtomicUsize::new(0),
+                databases: Mutex::new(Vec::new()),
+                request_limits: Mutex::new(Vec::new()),
+                execute_gate: None,
+                truncate_rows: AtomicBool::new(false),
+                enforces_row_limit: false,
+            })
         }
 
         fn isolated_with_gate(execute_gate: Option<Arc<ExecuteGate>>) -> Arc<Self> {
@@ -296,21 +317,38 @@ mod tests {
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate,
                 truncate_rows: AtomicBool::new(false),
+                enforces_row_limit: true,
             })
         }
     }
 
     impl Connection for FakeConnection {
         fn metadata(&self) -> &dbflux_core::DriverMetadata {
-            static METADATA: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+            static ENFORCING_ROW_LIMIT: std::sync::OnceLock<dbflux_core::DriverMetadata> =
                 std::sync::OnceLock::new();
-            METADATA.get_or_init(|| {
+            static WITHOUT_ROW_LIMIT: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+                std::sync::OnceLock::new();
+
+            let enforces_row_limit = self.enforces_row_limit;
+            let metadata = if enforces_row_limit {
+                &ENFORCING_ROW_LIMIT
+            } else {
+                &WITHOUT_ROW_LIMIT
+            };
+            metadata.get_or_init(|| {
+                let capabilities = if enforces_row_limit {
+                    dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT
+                } else {
+                    dbflux_core::DriverCapabilities::empty()
+                };
+
                 DriverMetadataBuilder::new(
                     "execution-session-test",
                     "Execution Session Test",
                     DatabaseCategory::Relational,
                     dbflux_core::QueryLanguage::Sql,
                 )
+                .capabilities(capabilities)
                 .build()
             })
         }
@@ -1131,6 +1169,54 @@ mod tests {
                 .lock()
                 .expect("test request limit collection"),
             vec![(Some(10_000), None), (Some(5_000), None)]
+        );
+    }
+
+    /// An external RPC driver cannot enforce `QueryRequest::limit`: its adapter
+    /// refuses any request that carries one before anything is sent. The editor
+    /// must therefore run the query with no limit at all, instead of building a
+    /// request the connection turns away.
+    #[gpui::test]
+    fn real_run_query_omits_the_row_limit_for_a_driver_that_cannot_enforce_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated_without_row_limit();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert_eq!(
+            *root
+                .request_limits
+                .lock()
+                .expect("test request limit collection"),
+            vec![(None, None)],
+            "a driver that cannot enforce a row limit must be sent no limit"
         );
     }
 
