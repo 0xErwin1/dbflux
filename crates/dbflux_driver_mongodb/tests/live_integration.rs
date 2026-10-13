@@ -85,44 +85,57 @@ fn mongodb_live_connect_ping_query_and_schema() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn mongodb_query_safety_refuses_protected_mutations_before_effects() -> Result<(), DbError> {
+fn mongodb_query_safety_refuses_timeout_before_effects() -> Result<(), DbError> {
     containers::with_mongodb_url(|uri| {
         let connection = connect_mongodb(uri)?;
-        for (index, protection) in ["zero", "positive", "timeout"].iter().enumerate() {
-            let query = format!(
-                "db.query_safety.insertOne({{\"marker\": \"{}\"}})",
-                protection
-            );
-            let mut request = QueryRequest::new(query);
-            match index {
-                0 => request.limit = Some(0),
-                1 => request.limit = Some(3),
-                _ => request.statement_timeout = Some(Duration::from_secs(1)),
-            }
-            let execution = connection.execute(&request);
-            let result = connection.execute(&QueryRequest::new(format!(
-                "db.query_safety.find({{\"marker\": \"{}\"}})",
-                protection
-            )))?;
-            assert_eq!(
-                result.rows.len(),
-                0,
-                "protected {protection} insert persisted {} rows before refusal check",
-                result.rows.len()
-            );
+        let mut request = QueryRequest::new("db.query_safety.insertOne({\"marker\": \"timeout\"})");
+        request.statement_timeout = Some(Duration::from_secs(1));
+        let execution = connection.execute(&request);
+        let result = connection.execute(&QueryRequest::new(
+            "db.query_safety.find({\"marker\": \"timeout\"})",
+        ))?;
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "timeout insert persisted before refusal"
+        );
+        assert!(matches!(execution, Err(DbError::NotSupported(_))));
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_row_limit_accepts_writes_and_bounds_reads() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+        for (marker, limit) in [("zero", 0), ("positive", 3)] {
+            let mut request = QueryRequest::new(format!(
+                "db.row_limit.insertMany([{{\"marker\": \"{marker}\"}}, {{\"marker\": \"{marker}\"}}, {{\"marker\": \"{marker}\"}}, {{\"marker\": \"{marker}\"}}])"
+            ));
+            request.limit = Some(limit);
+            let write = connection.execute(&request)?;
             assert!(
-                matches!(execution, Err(DbError::NotSupported(_))),
-                "protected {protection} insert must be refused"
+                !write.rows_truncated(),
+                "{marker} write must ignore the limit"
             );
+
+            let mut read =
+                QueryRequest::new(format!("db.row_limit.find({{\"marker\": \"{marker}\"}})"));
+            read.limit = Some(limit);
+            let result = connection.execute(&read)?;
+            assert_eq!(result.rows.len(), limit as usize);
+            assert!(result.rows_truncated(), "{marker} read dropped rows");
         }
 
-        connection.execute(&QueryRequest::new(
-            "db.query_safety.insertOne({\"marker\": \"control\"})",
-        ))?;
-        let result = connection.execute(&QueryRequest::new(
-            "db.query_safety.find({\"marker\": \"control\"})",
-        ))?;
-        assert_eq!(result.rows.len(), 1);
+        let mut exact = QueryRequest::new("db.row_limit.find({\"marker\": \"positive\"}).limit(2)");
+        exact.limit = Some(3);
+        let result = connection.execute(&exact)?;
+        assert_eq!(result.rows.len(), 2);
+        assert!(
+            !result.rows_truncated(),
+            "the query's own limit is not budget truncation"
+        );
         Ok(())
     })
 }
