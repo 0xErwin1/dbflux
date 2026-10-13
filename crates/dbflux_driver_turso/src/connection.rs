@@ -554,8 +554,6 @@ fn value_to_i64(value: &Value) -> Option<i64> {
     }
 }
 
-/// Materializes one SDK batch result into a `QueryResult`.
-///
 /// Keeps at most `remaining` rows and charges them against the request-wide
 /// budget, returning whether the budget dropped any rows.
 fn retain_within_budget(rows: &mut Vec<Row>, remaining: &mut Option<usize>) -> bool {
@@ -568,6 +566,8 @@ fn retain_within_budget(rows: &mut Vec<Row>, remaining: &mut Option<usize>) -> b
     dropped
 }
 
+/// Materializes one SDK batch result into a `QueryResult`.
+///
 /// Row-returning statements report `affected_rows = None` because the server
 /// answers zero for them, which would read as "nothing happened".
 fn batch_result_to_query_result(

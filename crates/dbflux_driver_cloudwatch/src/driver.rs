@@ -1267,15 +1267,6 @@ pub(crate) fn check_period_nonzero(period_s: u32) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Execute a CloudWatch GetMetricData call batching every requested series
-/// and return a `QueryResult` with one timestamp column plus one numeric
-/// column per series.
-///
-/// All series share the supplied time window. The resulting columns are
-/// labelled (in order): the series' explicit `label`, the series'
-/// `metric_name` when no label is set and metric names are unique, or
-/// `metric_name (dim1=value1, ...)` otherwise. Every column name is made
-/// unique by suffixing `#<index>` when a collision would otherwise occur.
 /// Logs Insights returns one materialized result set per request, so the whole
 /// request budget applies to it. The flag is set only when the budget dropped rows.
 fn retain_within_row_limit<T>(mut rows: Vec<T>, limit: Option<u32>) -> (Vec<T>, bool) {
@@ -1288,6 +1279,15 @@ fn retain_within_row_limit<T>(mut rows: Vec<T>, limit: Option<u32>) -> (Vec<T>, 
     }
 }
 
+/// Execute a CloudWatch GetMetricData call batching every requested series
+/// and return a `QueryResult` with one timestamp column plus one numeric
+/// column per series.
+///
+/// All series share the supplied time window. The resulting columns are
+/// labelled (in order): the series' explicit `label`, the series'
+/// `metric_name` when no label is set and metric names are unique, or
+/// `metric_name (dim1=value1, ...)` otherwise. Every column name is made
+/// unique by suffixing `#<index>` when a collision would otherwise occur.
 fn execute_metric_query(
     client: &aws_sdk_cloudwatch::Client,
     series: &[MetricQuerySeries],
