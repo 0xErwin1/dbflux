@@ -147,7 +147,7 @@ impl TursoConnection {
                 "Turso returned no result for statement",
             ));
         };
-        Ok(batch_result_to_query_result(result, None, start))
+        Ok(batch_result_to_query_result(result, &mut None, start))
     }
 
     fn run_batch(
@@ -554,18 +554,32 @@ fn value_to_i64(value: &Value) -> Option<i64> {
     }
 }
 
+/// Charges `available` rows against the request-wide budget and returns how
+/// many of them to keep and whether the budget dropped any.
+fn admit_within_budget(available: usize, remaining: &mut Option<usize>) -> (usize, bool) {
+    let Some(budget) = remaining.as_mut() else {
+        return (available, false);
+    };
+    let kept = available.min(*budget);
+    *budget -= kept;
+    (kept, kept < available)
+}
+
 /// Materializes one SDK batch result into a `QueryResult`.
 ///
 /// Row-returning statements report `affected_rows = None` because the server
 /// answers zero for them, which would read as "nothing happened".
 fn batch_result_to_query_result(
     result: BatchResult,
-    limit: Option<u32>,
+    remaining: &mut Option<usize>,
     start: Instant,
 ) -> QueryResult {
-    let mut rows: Vec<Row> = result
+    // Only the rows the budget keeps are converted.
+    let (kept, truncated) = admit_within_budget(result.rows().len(), remaining);
+    let rows: Vec<Row> = result
         .rows()
         .iter()
+        .take(kept)
         .map(|row| {
             (0..row.column_count())
                 .map(|i| {
@@ -576,10 +590,6 @@ fn batch_result_to_query_result(
                 .collect()
         })
         .collect();
-
-    if let Some(limit) = limit {
-        rows.truncate(limit as usize);
-    }
 
     let columns: Vec<ColumnMeta> = result
         .columns()
@@ -610,7 +620,22 @@ fn batch_result_to_query_result(
         None
     };
 
-    QueryResult::table(columns, rows, affected_rows, start.elapsed())
+    let mut query_result = QueryResult::table(columns, rows, affected_rows, start.elapsed());
+    query_result.set_rows_truncated(truncated);
+    query_result
+}
+
+/// Folds a script's per-statement results into the one result `execute`
+/// returns, keeping each set's own truncation flag.
+fn assemble_script_results(result_sets: Vec<QueryResult>, start: Instant) -> QueryResult {
+    let mut result_sets = result_sets.into_iter();
+    let Some(mut primary) = result_sets.next() else {
+        return QueryResult::table(vec![], vec![], Some(0), start.elapsed());
+    };
+    for extra in result_sets {
+        primary.push_additional_result(extra);
+    }
+    primary
 }
 
 // =============================================================================
@@ -645,16 +670,18 @@ impl Connection for TursoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "Turso cannot enforce requested row limits or statement timeouts before execution"
-                    .into(),
+                "Turso cannot enforce statement timeouts before execution".into(),
             ));
         }
         // Not verified against a server: whether `PRAGMA query_only` holds on
         // a Hrana stream is unknown, so read-only enforcement is refused.
         req.refuse_read_only_enforcement("Turso")?;
 
+        // The server sends every row of a statement in one response, so the
+        // budget bounds what is retained, not what crosses the wire.
+        let mut remaining = req.limit.map(|limit| limit as usize);
         let start = Instant::now();
         let params = req
             .params
@@ -670,7 +697,7 @@ impl Connection for TursoConnection {
                     "Turso returned no result for statement",
                 ));
             };
-            return Ok(batch_result_to_query_result(result, req.limit, start));
+            return Ok(batch_result_to_query_result(result, &mut remaining, start));
         }
 
         if !params.is_empty() {
@@ -686,17 +713,11 @@ impl Connection for TursoConnection {
             .map(|statement| (statement, Vec::new()))
             .collect();
         let results = self.run_batch(batch)?;
-        let mut result_sets = results
+        let result_sets = results
             .into_iter()
-            .map(|result| batch_result_to_query_result(result, req.limit, start));
-
-        let Some(mut primary) = result_sets.next() else {
-            return Ok(QueryResult::table(vec![], vec![], Some(0), start.elapsed()));
-        };
-        for extra in result_sets {
-            primary.push_additional_result(extra);
-        }
-        Ok(primary)
+            .map(|result| batch_result_to_query_result(result, &mut remaining, start))
+            .collect();
+        Ok(assemble_script_results(result_sets, start))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1351,6 +1372,86 @@ fn classify_sql_message(message: &str, formatted: FormattedError) -> DbError {
 mod tests {
     use super::*;
     use turso_serverless::Error as E;
+
+    fn rows(count: i64) -> Vec<Row> {
+        (0..count).map(|index| vec![Value::Int(index)]).collect()
+    }
+
+    fn retain_within_budget(rows: &mut Vec<Row>, remaining: &mut Option<usize>) -> bool {
+        let (kept, truncated) = admit_within_budget(rows.len(), remaining);
+        rows.truncate(kept);
+        truncated
+    }
+
+    #[test]
+    fn row_budget_is_shared_across_result_sets() {
+        let mut remaining = Some(3);
+
+        let mut first = rows(2);
+        assert!(!retain_within_budget(&mut first, &mut remaining));
+        assert_eq!(first.len(), 2);
+
+        let mut second = rows(4);
+        assert!(retain_within_budget(&mut second, &mut remaining));
+        assert_eq!(second, rows(1));
+
+        let mut third = rows(2);
+        assert!(retain_within_budget(&mut third, &mut remaining));
+        assert!(third.is_empty());
+
+        let mut no_rows = Vec::new();
+        assert!(!retain_within_budget(&mut no_rows, &mut remaining));
+    }
+
+    #[test]
+    fn script_assembly_keeps_truncation_flags_on_the_returned_result() {
+        let start = Instant::now();
+        let mut remaining = Some(3);
+        let result_sets = [rows(2), rows(4), rows(1)]
+            .into_iter()
+            .map(|mut result_rows| {
+                let truncated = retain_within_budget(&mut result_rows, &mut remaining);
+                let mut result = QueryResult::table(vec![], result_rows, None, start.elapsed());
+                result.set_rows_truncated(truncated);
+                result
+            })
+            .collect();
+
+        let returned = assemble_script_results(result_sets, start);
+
+        assert!(!returned.rows_truncated());
+        assert_eq!(returned.rows.len(), 2);
+        assert_eq!(returned.additional_results.len(), 2);
+        assert!(returned.additional_results[0].rows_truncated());
+        assert_eq!(returned.additional_results[0].rows.len(), 1);
+        assert!(returned.additional_results[1].rows_truncated());
+        assert!(returned.additional_results[1].rows.is_empty());
+    }
+
+    #[test]
+    fn row_budget_exactly_met_is_not_truncation() {
+        let mut remaining = Some(2);
+        let mut exact = rows(2);
+        assert!(!retain_within_budget(&mut exact, &mut remaining));
+        assert_eq!(exact.len(), 2);
+        assert_eq!(remaining, Some(0));
+    }
+
+    #[test]
+    fn zero_row_budget_drops_every_row() {
+        let mut remaining = Some(0);
+        let mut result_rows = rows(1);
+        assert!(retain_within_budget(&mut result_rows, &mut remaining));
+        assert!(result_rows.is_empty());
+    }
+
+    #[test]
+    fn absent_row_budget_keeps_every_row() {
+        let mut remaining = None;
+        let mut result_rows = rows(5);
+        assert!(!retain_within_budget(&mut result_rows, &mut remaining));
+        assert_eq!(result_rows.len(), 5);
+    }
 
     #[test]
     fn sdk_errors_map_to_ui_facing_variants() {

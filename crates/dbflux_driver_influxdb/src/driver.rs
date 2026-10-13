@@ -37,7 +37,8 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         | DriverCapabilities::EXPORT_JSON
         | DriverCapabilities::CHART_AUTHORING
         | DriverCapabilities::INSTANCE_METRICS
-        | DriverCapabilities::INSTANCE_INSPECTOR,
+        | DriverCapabilities::INSTANCE_INSPECTOR
+        | DriverCapabilities::REQUEST_ROW_LIMIT,
     default_port: Some(8086),
     uri_scheme: "http".into(),
     icon: Icon::Influxdb,
@@ -425,6 +426,11 @@ mod tests {
 
     #[test]
     fn influxdb_metadata_capabilities_include_expected_flags() {
+        assert!(
+            INFLUXDB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
         assert!(
             INFLUXDB_METADATA
                 .capabilities

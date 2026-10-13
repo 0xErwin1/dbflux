@@ -16,14 +16,18 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 
 - Driver de log-streaming clasificado como `DatabaseCategory::LogStream`;
   `deployment_class` es `CloudManaged`. Las capacidades declaradas son
-  `AUTHENTICATION` y `METRIC_SERIES`.
+  `AUTHENTICATION`, `METRIC_SERIES`, `METRIC_CATALOG`, `DASHBOARD_IMPORT`,
+  `DASHBOARD_SYNC`, `CHART_AUTHORING` y `REQUEST_ROW_LIMIT`.
 - Configuración de conexión AWS vía región, perfil con nombre y override de
   endpoint opcional, alineado con el flujo de conexión AWS de DynamoDB.
 - Ejecución de queries a través de `StartQuery` + polling de `GetQueryResults`
   (intervalo de polling de 500 ms, hasta 120 intentos), con un source context
   gestionado por el editor que provee los log groups objetivo y el rango de
-  tiempo. Las queries de Logs sin restricciones solicitadas usan el límite fijo
-  de 1000 resultados de `StartQuery` del SDK.
+  tiempo. Las queries de Logs usan el límite fijo de 1000 resultados de
+  `StartQuery` del SDK.
+- `execute` aplica `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) a los resultados
+  de Logs Insights, así que las queries del editor llevan el límite de filas
+  del editor.
 - Tres sintaxis de query seleccionables desde el desplegable "Syntax" del source
   context:
   - CloudWatch Logs Insights QL (`cwli`, la opción por defecto) —
@@ -76,7 +80,7 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 
 ## Limitaciones
 
-- `execute` rechaza cualquier límite de filas solicitado (incluso cero) o timeout de sentencia con `NotSupported` antes de enviar requests de Logs o Metrics. El límite fijo del SDK para Logs no es un límite específico del request; no hay timeout por defecto ni garantía sobre el trabajo del servidor.
+- `execute` rechaza un timeout de sentencia, y un límite de filas en queries de métricas, con `NotSupported` antes del despacho. Los resultados de Logs Insights se recortan localmente al límite del request, pero la query sigue enviando el límite fijo de 1000 del servidor, así que un límite mayor a 1000 lo acota CloudWatch sin marca de truncamiento. No hay timeout por defecto ni garantía sobre el trabajo del servidor.
 - `tests/live_integration.rs` ejecuta el data plane de Logs (descubrimiento de
   log groups/streams, navegación de eventos) contra un contenedor de LocalStack
   Community en CI. `DashboardImporter` es parseo puro de JSON y se verifica de

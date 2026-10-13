@@ -69,10 +69,11 @@ The console applies the same checks as the editor before anything runs:
 
 On drivers that can enforce it, the **Editor row limit** from
 [Settings](SETTINGS.md) caps the rows a command returns, and a warning says
-when rows were left out. Drivers that cannot enforce a row limit (MongoDB,
-Redis, Turso, ClickHouse, Redshift) run console commands without one, as they do
-editor queries; add a limit to the command itself
-(`LIMIT`, `.limit()`) when the result may be large.
+when rows were left out. Every driver that offers a native console enforces
+it; external RPC drivers cannot, and run commands without one, as they do
+editor queries. Where a driver bounds only part of its results (Redis bounds
+only replies shown as a table), add a limit to the command itself (`LIMIT`,
+`.limit()`) when the result may be large.
 
 Where the driver offers an isolated editor session (Turso), the console uses
 one of its own, so a transaction opened by one command stays open for the

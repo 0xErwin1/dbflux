@@ -204,7 +204,8 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
             | DriverCapabilities::CHART_AUTHORING.bits()
-            | DriverCapabilities::NATIVE_CONSOLE.bits(),
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: Some(6379),
     uri_scheme: "redis".into(),
@@ -1500,12 +1501,7 @@ impl Connection for RedisConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
-            return Err(DbError::NotSupported(
-                "Redis command execution does not support a requested row limit or statement timeout"
-                    .to_string(),
-            ));
-        }
+        refuse_unsupported_request_options(req)?;
         if req.read_only.is_required() && self.is_cluster()? {
             return Err(DbError::NotSupported(
                 "Redis: read-only enforcement is unsupported on Redis Cluster connections, \
@@ -1574,7 +1570,7 @@ impl Connection for RedisConnection {
             send_parsed_command(conn, &parts, req.read_only)
         })?;
 
-        Ok(redis_value_to_result(value, start.elapsed()))
+        Ok(redis_value_to_result(value, start.elapsed(), req.limit))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -2962,9 +2958,42 @@ impl ConnectionErrorFormatter for RedisErrorFormatter {
     }
 }
 
+/// Rejects request options `execute` cannot honor before any command runs.
+/// Instance metric and inspector sources build their own results, so they
+/// cannot apply a row budget.
+fn refuse_unsupported_request_options(request: &QueryRequest) -> Result<(), DbError> {
+    if request.statement_timeout.is_some() {
+        return Err(DbError::NotSupported(
+            "Redis: requested statement timeout is unsupported; rejected before execution"
+                .to_string(),
+        ));
+    }
+    if request.limit.is_some()
+        && let Some(
+            ExecutionSourceContext::InstanceMetricQuery { .. }
+            | ExecutionSourceContext::InstanceInspectorQuery { .. },
+        ) = request
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.source.as_ref())
+    {
+        return Err(DbError::NotSupported(
+            "Redis: row limits on instance catalog queries are unsupported; rejected before execution"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // -- Redis Value → QueryResult --
 
-fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duration) -> QueryResult {
+/// Converts one command reply into a result. `row_limit` bounds only the rows
+/// of a tabular reply; text and scalar replies carry no rows and ignore it.
+fn redis_value_to_result(
+    value: redis::Value,
+    execution_time: std::time::Duration,
+    row_limit: Option<u32>,
+) -> QueryResult {
     match value {
         redis::Value::Nil => QueryResult::text("(nil)".to_string(), execution_time),
 
@@ -2977,7 +3006,7 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
 
         redis::Value::SimpleString(s) => QueryResult::text(s, execution_time),
 
-        redis::Value::Array(items) => redis_array_to_result(items, execution_time),
+        redis::Value::Array(items) => redis_array_to_result(items, execution_time, row_limit),
 
         redis::Value::Map(entries) => {
             let mut lines = Vec::with_capacity(entries.len());
@@ -3002,7 +3031,7 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
 
         redis::Value::VerbatimString { format: _, text } => QueryResult::text(text, execution_time),
 
-        redis::Value::Set(items) => redis_array_to_result(items, execution_time),
+        redis::Value::Set(items) => redis_array_to_result(items, execution_time, row_limit),
 
         redis::Value::Okay => QueryResult::text("OK".to_string(), execution_time),
 
@@ -3011,12 +3040,14 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
             execution_time,
         ),
 
-        redis::Value::Push { kind: _, data } => redis_array_to_result(data, execution_time),
+        redis::Value::Push { kind: _, data } => {
+            redis_array_to_result(data, execution_time, row_limit)
+        }
 
         redis::Value::Attribute {
             data,
             attributes: _,
-        } => redis_value_to_result(*data, execution_time),
+        } => redis_value_to_result(*data, execution_time, row_limit),
     }
 }
 
@@ -3025,6 +3056,7 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
 fn redis_array_to_result(
     items: Vec<redis::Value>,
     execution_time: std::time::Duration,
+    row_limit: Option<u32>,
 ) -> QueryResult {
     if items.is_empty() {
         return QueryResult::text("(empty array)".to_string(), execution_time);
@@ -3062,13 +3094,23 @@ fn redis_array_to_result(
             },
         ];
 
+        let retained = row_limit.map_or(items.len(), |limit| {
+            items
+                .len()
+                .min(usize::try_from(limit).unwrap_or(usize::MAX))
+        });
+        let truncated = retained < items.len();
+
         let rows: Vec<Vec<Value>> = items
             .into_iter()
+            .take(retained)
             .enumerate()
             .map(|(i, v)| vec![Value::Int(i as i64), redis_scalar_to_value(v)])
             .collect();
 
-        return QueryResult::table(columns, rows, None, execution_time);
+        let mut result = QueryResult::table(columns, rows, None, execution_time);
+        result.set_rows_truncated(truncated);
+        return result;
     }
 
     // Fallback: numbered text dump
@@ -4390,6 +4432,140 @@ mod tests {
         DatabaseCategory, DbDriver, KeySetRequest, MutationRequest, QueryLanguage,
         SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
     };
+
+    fn bulk(text: &str) -> redis::Value {
+        redis::Value::BulkString(text.as_bytes().to_vec())
+    }
+
+    fn scalar_array(count: usize) -> redis::Value {
+        redis::Value::Array((0..count).map(|index| bulk(&index.to_string())).collect())
+    }
+
+    #[test]
+    fn row_limit_truncates_array_replies_and_marks_the_result() {
+        let result = redis_value_to_result(scalar_array(5), std::time::Duration::ZERO, Some(3));
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(result.rows_truncated());
+        assert_eq!(result.rows[2][1], Value::Text("2".to_string()));
+    }
+
+    #[test]
+    fn row_limit_equal_to_the_reply_size_does_not_mark_truncation() {
+        let result = redis_value_to_result(scalar_array(3), std::time::Duration::ZERO, Some(3));
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn zero_row_limit_keeps_the_columns_and_drops_every_row() {
+        let result = redis_value_to_result(scalar_array(2), std::time::Duration::ZERO, Some(0));
+
+        assert!(result.rows.is_empty());
+        assert_eq!(result.columns.len(), 2);
+        assert!(result.rows_truncated());
+    }
+
+    #[test]
+    fn zero_row_limit_on_an_empty_array_does_not_mark_truncation() {
+        let result = redis_value_to_result(
+            redis::Value::Array(Vec::new()),
+            std::time::Duration::ZERO,
+            Some(0),
+        );
+
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn row_limit_counts_rows_of_set_and_push_replies() {
+        let set = redis_value_to_result(
+            redis::Value::Set(vec![bulk("a"), bulk("b")]),
+            std::time::Duration::ZERO,
+            Some(1),
+        );
+        let attribute = redis_value_to_result(
+            redis::Value::Attribute {
+                data: Box::new(scalar_array(4)),
+                attributes: Vec::new(),
+            },
+            std::time::Duration::ZERO,
+            Some(2),
+        );
+
+        assert_eq!(set.rows.len(), 1);
+        assert!(set.rows_truncated());
+        assert_eq!(attribute.rows.len(), 2);
+        assert!(attribute.rows_truncated());
+    }
+
+    #[test]
+    fn row_limit_is_ignored_by_scalar_and_ok_replies() {
+        for value in [redis::Value::Okay, redis::Value::Int(7), bulk("text")] {
+            let result = redis_value_to_result(value, std::time::Duration::ZERO, Some(0));
+
+            assert!(result.text_body.is_some());
+            assert!(!result.rows_truncated());
+        }
+    }
+
+    #[test]
+    fn unlimited_requests_keep_every_row() {
+        let result = redis_value_to_result(scalar_array(5), std::time::Duration::ZERO, None);
+
+        assert_eq!(result.rows.len(), 5);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn redis_declares_request_row_limit() {
+        assert!(
+            REDIS_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
+    fn row_limit_on_instance_catalog_sources_is_refused_before_execution() {
+        for source in [
+            ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "redis.connected_clients".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            },
+            ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: "redis.client_list".to_string(),
+            },
+        ] {
+            let request = QueryRequest::new("INFO")
+                .with_limit(10)
+                .with_execution_context(Some(dbflux_core::ExecutionContext {
+                    source: Some(source),
+                    ..Default::default()
+                }));
+
+            assert!(matches!(
+                refuse_unsupported_request_options(&request),
+                Err(DbError::NotSupported(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn row_limit_on_editor_commands_and_timeouts_are_classified() {
+        assert!(
+            refuse_unsupported_request_options(&QueryRequest::new("GET a").with_limit(0)).is_ok()
+        );
+
+        let mut timed = QueryRequest::new("GET a");
+        timed.statement_timeout = Some(std::time::Duration::from_secs(1));
+        assert!(matches!(
+            refuse_unsupported_request_options(&timed),
+            Err(DbError::NotSupported(_))
+        ));
+    }
 
     fn packed_arguments(command: &redis::Cmd) -> String {
         String::from_utf8_lossy(&command.get_packed_command()).to_string()

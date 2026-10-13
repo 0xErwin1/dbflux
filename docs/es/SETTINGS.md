@@ -153,11 +153,13 @@ la misma pestaña de resultados. Ambas están también en el menú de la tabla
 compartido por todos sus resultados, y todas las sentencias se ejecutan igual.
 
 El límite solo llega a un driver cuyo `execute` lo aplica: PostgreSQL,
-MySQL/MariaDB, SQL Server, SQLite y DuckDB. Un driver que no puede aplicar un
-presupuesto de filas rechaza una query que lleve uno en lugar de ignorar el
-límite, así que el editor no le envía ninguno y la query se ejecuta sin límite
-en MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift, CloudWatch, DynamoDB y
-los drivers RPC externos. Un resultado sin límite muestra su recuento de filas
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch y DynamoDB. Algunos todavía leen la respuesta
+completa antes de recortarla, y Redis solo limita las respuestas que se muestran
+como tabla; la página de cada driver detalla sus límites. Los drivers RPC
+externos rechazan una query que lleve un presupuesto de filas en lugar de
+ignorar el límite, así que el editor no les envía ninguno y la query se ejecuta
+sin límite. Un resultado sin límite muestra su recuento de filas
 completo, porque no se omitió ninguna, y su pie no ofrece ni Contar filas ni
 Cargar todas las filas; agrega un `LIMIT` o un `.limit()` a la sentencia cuando
 el resultado pueda ser grande. El límite no agrega un timeout y no se aplica a
