@@ -651,10 +651,8 @@ mod tests {
         let bare = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"));
         let bare_scoped = bare.clone().with_database(Some("reporting".to_string()));
         assert_eq!(
-            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
-                request: bare,
-            })
-            .expect("serialize bare browse"),
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
+                .expect("serialize bare browse"),
             postcard::to_allocvec(&DriverRequestBody::BrowseTable {
                 request: bare_scoped,
             })
@@ -664,10 +662,11 @@ mod tests {
 
         // A count with a string filter and no semantic filter, which is also a
         // pre-existing undecodable shape, so again bytes only.
-        let plain_count = TableCountRequest::new(TableRef::with_schema("dbo", "events"))
-            .with_filter("id = 1");
-        let plain_count_scoped =
-            plain_count.clone().with_database(Some("reporting".to_string()));
+        let plain_count =
+            TableCountRequest::new(TableRef::with_schema("dbo", "events")).with_filter("id = 1");
+        let plain_count_scoped = plain_count
+            .clone()
+            .with_database(Some("reporting".to_string()));
         assert_eq!(
             postcard::to_allocvec(&DriverRequestBody::CountTable {
                 request: plain_count,
