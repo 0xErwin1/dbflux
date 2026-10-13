@@ -36,6 +36,9 @@ Driver de InfluxDB para DBFlux.
   viene de la selección del desplegable de source-context, no del perfil de
   conexión. Para queries Flux, el bucket va incrustado en el propio texto de la
   query (`from(bucket: "...")`).
+- **Límite de filas del request** — `execute()` aplica `QueryRequest::limit`
+  (`REQUEST_ROW_LIMIT`), así que las queries del editor llevan el límite de
+  filas del editor.
 - **Ping sin bucket** — la verificación de disponibilidad de la conexión no
   requiere un bucket: v1 usa `SHOW DATABASES` contra la database interna; v2
   obtiene `/api/v2/buckets?limit=1`.
@@ -162,7 +165,7 @@ Driver de InfluxDB para DBFlux.
 
 ## Limitaciones
 
-- `execute()` rechaza cualquier límite de filas solicitado (incluso cero) o tiempo máximo de ejecución con `NotSupported` antes de enviar HTTP o despachar el contexto de instancia. Las consultas sin estas protecciones siguen disponibles; el editor predeterminado no puede garantizarlas.
+- `execute()` aplica `QueryRequest::limit` como un único presupuesto sobre el resultado aplanado, pero solo después de leer la respuesta HTTP completa. Rechaza un tiempo máximo de ejecución, y un límite de filas en queries de métricas o inspectores de instancia, con `NotSupported` antes del despacho.
 
 - **Sin cancelación de query** — `cancel()` devuelve `NotSupported`; las queries
   en curso no se pueden abortar desde la UI (`QUERY_CANCELLATION` no está

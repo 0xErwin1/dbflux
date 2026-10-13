@@ -67,6 +67,9 @@ Driver de documentos MongoDB para DBFlux.
   filas de auditoría y el historial de consultas que usa el editor. Un comando
   peligroso confirmado lleva el techo confirmado, así que un script escrito en
   la consola sigue las mismas reglas de techo que uno ejecutado desde el editor.
+  El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 
 ### Instance Metrics
 
@@ -97,7 +100,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 ## Limitaciones
 
-- Las solicitudes de ejecución con límite de filas (incluso cero) o tiempo de espera de sentencia se rechazan antes de ejecutarse porque MongoDB no puede garantizar esas protecciones. Las solicitudes sin protección conservan su comportamiento.
+- `execute()` aplica `QueryRequest::limit` (`REQUEST_ROW_LIMIT`) a Find, Aggregate y los listados de colecciones dejando de leer el cursor al llegar al presupuesto; un script comparte un único presupuesto entre sus sentencias, y el `.limit(n)` propio de una query sigue aplicándose. Las escrituras, los conteos y los comandos ignoran el límite. Un tiempo de espera de sentencia, y un límite de filas en queries de métricas o inspectores de instancia, se siguen rechazando antes de ejecutarse.
 
 - SQL no está soportado; las queries deben usar sintaxis estilo shell de MongoDB
   (o el fallback JSON).

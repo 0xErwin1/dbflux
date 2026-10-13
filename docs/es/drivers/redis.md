@@ -27,7 +27,9 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   su propia pestaña, que ejecuta un comando a la vez mediante `Connection::execute`
   contra la database abierta, con la validación y la detección de comandos
   peligrosos del language service, las filas de auditoría y el historial de
-  consultas que usa el editor.
+  consultas que usa el editor. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Reporta su identidad de cliente al servidor vía `CLIENT SETNAME` al conectar
   (`dbflux/<version>`, visible en `CLIENT LIST`); best-effort, ya que algunos
   proveedores managed restringen los comandos `CLIENT`.
@@ -201,7 +203,8 @@ evitar exponer direcciones IP y hostnames de clientes.
 
 ## Limitaciones
 
-- `execute()` rechaza cualquier límite de filas solicitado (incluso cero) o tiempo máximo de ejecución con `NotSupported` antes de enviar el comando. Los comandos sin estas protecciones siguen disponibles; el editor predeterminado no puede garantizarlas.
+- `execute()` rechaza un tiempo máximo de ejecución solicitado, y un límite de filas en queries de métricas o inspectores de instancia, con `NotSupported` antes de enviar el comando.
+- El límite de filas del editor solo acota las respuestas que se muestran como tabla (una respuesta array, set o push de valores escalares). Los arrays anidados y las respuestas de tipo map se muestran como texto y no se acotan; la respuesta completa se sigue leyendo del servidor antes de recortarla.
 
 - SQL no está soportado; las queries deben escribirse como comandos Redis.
 
