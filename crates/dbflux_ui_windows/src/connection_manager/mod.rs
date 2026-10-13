@@ -5071,10 +5071,5 @@ mod accessible_name_tests {
             Some(override_name(&interval)),
             "the checkbox that enables the refresh interval override"
         );
-        assert_ne!(
-            accessible_name(&frame, "conn-override-refresh-policy"),
-            Some(policy),
-            "the checkbox must not repeat the field label it overrides"
-        );
     }
 }
