@@ -730,8 +730,8 @@ impl Connection for CloudWatchConnection {
         &dbflux_core::DefaultSqlDialect
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT 'cloudwatch'"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT 'cloudwatch'")
     }
 }
 
@@ -1955,6 +1955,51 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// The version probe must stay byte-for-byte identical while the trait
+    /// default moves to `Result`. The SDK client points at a closed local
+    /// port; building it contacts no server and the probe is a constant.
+    #[test]
+    fn version_query_matches_the_driver_contract() {
+        let credentials = Credentials::new("test", "test", None, None, "cloudwatch-test");
+        let metrics_client = aws_sdk_cloudwatch::Client::from_conf(
+            CloudWatchMetricsConfigBuilder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .credentials_provider(credentials.clone())
+                .endpoint_url("http://127.0.0.1:1")
+                .build(),
+        );
+        let connection = CloudWatchConnection {
+            client: Client::from_conf(
+                CloudWatchConfigBuilder::new()
+                    .behavior_version(BehaviorVersion::latest())
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(credentials.clone())
+                    .endpoint_url("http://127.0.0.1:1")
+                    .build(),
+            ),
+            metrics_client: metrics_client.clone(),
+            config: CloudWatchProfileConfig {
+                region: "us-east-1".to_string(),
+                profile: None,
+                endpoint: Some("http://127.0.0.1:1".to_string()),
+            },
+            metric_catalog_impl: CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient::new(
+                metrics_client.clone(),
+            ))),
+            dashboard_importer_impl: CloudWatchDashboardImporter,
+            dashboard_source_impl: CloudWatchDashboardSource::new(Box::new(
+                RealCloudWatchDashboardApi::new(metrics_client),
+            )),
+        };
+
+        assert_eq!(
+            Connection::version_query(&connection)
+                .expect("the CloudWatch version probe is a constant"),
+            "SELECT 'cloudwatch'"
+        );
+    }
 
     #[test]
     fn cloudwatch_query_safety() {
