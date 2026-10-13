@@ -701,13 +701,19 @@ impl CodeDocument {
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
+        // Drivers that cannot enforce a row budget refuse a request that carries
+        // one, so the editor's cap goes only to the connections that advertise
+        // the enforcement; the others run the query with no cap at all.
+        let row_limit = enforces_request_row_limit(connection.as_ref())
+            .then(|| self.app_state.read(cx).general_settings().editor_row_limit);
+
         let session_database = active_database.clone();
         let mut request = query_request_for_execution(
             query.clone(),
             active_database,
             &self.source.exec_ctx,
             self.effective_language().clone(),
-            self.app_state.read(cx).general_settings().editor_row_limit,
+            row_limit,
         );
 
         // Governance ceiling for a driver-dispatched multi-statement script
@@ -2402,7 +2408,7 @@ mod tests {
             None,
             &ExecutionContext::default(),
             QueryLanguage::Sql,
-            GeneralSettings::default().editor_row_limit,
+            Some(GeneralSettings::default().editor_row_limit),
         );
 
         assert_eq!(request.limit, Some(10_000));
@@ -2427,7 +2433,7 @@ mod tests {
                 None,
                 &ExecutionContext::default(),
                 language.clone(),
-                5_000,
+                Some(5_000),
             );
 
             assert_eq!(request.limit, Some(5_000), "{language:?}");
@@ -2435,22 +2441,52 @@ mod tests {
         }
     }
 
+    /// A connection that cannot enforce a row budget is never sent one: the
+    /// driver would refuse the request instead of running it, so the editor
+    /// query would never reach it. This is the external RPC driver case, where
+    /// the adapter clears [`DriverCapabilities::REQUEST_ROW_LIMIT`].
+    #[test]
+    fn editor_query_request_carries_no_limit_without_an_enforcing_driver() {
+        let request = query_request_for_execution(
+            "SELECT 1".into(),
+            None,
+            &ExecutionContext::default(),
+            QueryLanguage::MongoQuery,
+            None,
+        );
+
+        assert_eq!(request.limit, None);
+        assert_eq!(request.statement_timeout, None);
+    }
+
     #[test]
     fn editor_row_limit_preserves_an_explicit_request_limit() {
-        for explicit_limit in [0, 25] {
-            let request = apply_editor_row_limit(
-                QueryRequest::new("SELECT 1").with_limit(explicit_limit),
-                5_000,
-            );
+        for editor_row_limit in [Some(5_000), None] {
+            for explicit_limit in [0, 25] {
+                let request = apply_editor_row_limit(
+                    QueryRequest::new("SELECT 1").with_limit(explicit_limit),
+                    editor_row_limit,
+                );
 
-            assert_eq!(request.limit, Some(explicit_limit));
-            assert_eq!(request.statement_timeout, None);
+                assert_eq!(request.limit, Some(explicit_limit));
+                assert_eq!(request.statement_timeout, None);
+            }
         }
+    }
+
+    /// No cap leaves a request that has no limit of its own untouched, rather
+    /// than filling one in.
+    #[test]
+    fn editor_row_limit_adds_nothing_without_a_cap() {
+        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), None);
+
+        assert_eq!(request.limit, None);
+        assert_eq!(request.statement_timeout, None);
     }
 
     #[test]
     fn editor_row_limit_above_u32_range_saturates() {
-        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), usize::MAX);
+        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), Some(usize::MAX));
 
         assert_eq!(request.limit, Some(u32::MAX));
     }
@@ -2569,7 +2605,7 @@ mod tests {
             Some("logs".into()),
             &exec_ctx,
             QueryLanguage::CloudWatchLogsInsightsQl,
-            10_000,
+            Some(10_000),
         );
 
         assert_eq!(request.database.as_deref(), Some("logs"));
@@ -2661,7 +2697,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::InfluxQuery,
-            10_000,
+            Some(10_000),
         );
 
         assert!(
@@ -2706,7 +2742,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::Flux,
-            10_000,
+            Some(10_000),
         );
 
         assert!(
@@ -2748,7 +2784,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::InfluxQuery,
-            10_000,
+            Some(10_000),
         );
 
         assert_eq!(
@@ -2777,8 +2813,13 @@ mod tests {
         };
 
         let query = "SELECT $__from FROM table";
-        let request =
-            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::Sql, 10_000);
+        let request = query_request_for_execution(
+            query.into(),
+            None,
+            &exec_ctx,
+            QueryLanguage::Sql,
+            Some(10_000),
+        );
 
         assert_eq!(
             request.sql, query,

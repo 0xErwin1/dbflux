@@ -92,19 +92,20 @@ cuántas filas devuelve una query ejecutada desde el editor. Es una opción de
 seguridad independiente de los tres controles de queries peligrosas de arriba.
 Acepta cualquier número entero desde 1 y no se puede poner en cero ni
 desactivar: al guardar cualquier otro valor se muestra un error y se conserva
-el límite anterior. DBFlux envía el límite al driver con cada query del editor
+el límite anterior. DBFlux envía el límite al driver
 en lugar de agregar un `LIMIT` al texto de la query, y muestra una advertencia
 cuando un resultado omitió filas. En un script con varias sentencias, el límite
 es un único presupuesto compartido por todos sus resultados, y todas las
 sentencias se ejecutan igual.
 
-Los drivers que no pueden aplicar un límite de filas rechazan la query antes de
-ejecutarla en lugar de ignorar el límite. Por eso las queries del editor fallan
-con un error "Operation not supported" en MongoDB, Redis, Turso, InfluxDB, ClickHouse,
-Redshift, CloudWatch, drivers RPC externos y escrituras de DynamoDB (PartiQL
-`INSERT`/`UPDATE`/`DELETE` y los comandos put, update y delete). Cambiar el
-límite no cambia esto. El límite no agrega un timeout y no se aplica a scripts
-Lua, Python o Bash, hooks de conexión ni métricas.
+El límite solo llega a un driver cuyo `execute` lo aplica: PostgreSQL,
+MySQL/MariaDB, SQL Server y SQLite. Un driver que no puede aplicar un
+presupuesto de filas rechaza una query que lleve uno en lugar de ignorar el
+límite, así que el editor no le envía ninguno y la query se ejecuta sin límite
+en MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift, CloudWatch, DynamoDB y
+los drivers RPC externos. Agrega un `LIMIT` o un `.limit()` a la sentencia
+cuando el resultado pueda ser grande. El límite no agrega un timeout y no se
+aplica a scripts Lua, Python o Bash, hooks de conexión ni métricas.
 
 ### Almacenamiento (solo builds Nightly)
 

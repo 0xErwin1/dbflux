@@ -88,18 +88,19 @@ apply to SQL `DELETE`/`DROP`/`TRUNCATE`, MongoDB `deleteMany`/`drop`, Redis
 query editor returns. It is a separate execution-safety setting, not one of the
 three dangerous-query controls above. It accepts any whole number from 1 upward
 and cannot be set to zero or turned off: saving any other value shows an error
-and keeps the previous limit. DBFlux sends the limit to the driver with every
-editor query instead of adding a `LIMIT` to the query text, and shows a warning
+and keeps the previous limit. DBFlux sends the limit to the driver instead of
+adding a `LIMIT` to the query text, and shows a warning
 when a result left rows out. In a script with several statements the limit is
 one budget shared by all of its result sets, and every statement still runs.
 
-Drivers that cannot enforce a row limit refuse the query before running it
-rather than ignore the cap. Editor queries therefore fail with an "Operation
-not supported" error on MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift,
-CloudWatch, external RPC drivers, and DynamoDB writes (PartiQL
-`INSERT`/`UPDATE`/`DELETE` and put, update, and delete commands). Changing the
-limit does not change this. The limit adds no timeout and does not apply to
-Lua, Python, or Bash scripts, connection hooks, or metrics.
+The limit reaches only a driver whose `execute` enforces it: PostgreSQL,
+MySQL/MariaDB, SQL Server and SQLite. A driver that cannot enforce a row budget
+refuses a request that carries one rather than ignore the cap, so the editor
+sends it no limit at all and the query runs uncapped on MongoDB, Redis, Turso,
+InfluxDB, ClickHouse, Redshift, CloudWatch, DynamoDB and external RPC drivers.
+Put a `LIMIT` or a `.limit()` in the statement when the result may be large.
+The limit adds no timeout and does not apply to Lua, Python, or Bash scripts,
+connection hooks, or metrics.
 
 ### Storage (Nightly builds only)
 
