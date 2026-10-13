@@ -5139,7 +5139,7 @@ fn row_by_pk_sql(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::DefaultSpec;
+    use dbflux_core::{DefaultSpec, OrderByColumn};
 
     #[test]
     fn browse_sql_qualifies_the_source_database() {
