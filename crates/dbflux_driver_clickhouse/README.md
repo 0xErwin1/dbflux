@@ -35,6 +35,10 @@ the endpoint is a URL and not a host/port pair.
   size, and compression.
 - Schema loading is lazy per database, so a server with many databases does not pay
   for all of them at connect time.
+- Row-limited queries stream their result and stop reading one row past the
+  limit, so a large result comes back truncated instead of failing on the
+  response byte cap. The request sets `cancel_http_readonly_queries_on_client_close`,
+  so the server stops a read-only query once the client closes the connection.
 - SQL is sent unchanged over HTTP. The existing `offset` request value is sent
   as an HTTP query parameter; its server-side behavior is not certified here.
 - Read-only visual SELECT generation, using ClickHouse identifier and literal
@@ -73,9 +77,8 @@ arrives fully structured rather than as raw text:
 - No SSH tunnels.
 - No transactions, prepared statements, or query cancellation. Statement
   timeouts, and row limits on instance metric or inspector queries, are refused
-  before dispatch. The request row limit is enforced client-side after the full
-  response is parsed, so the response byte cap still applies: a very large
-  result can fail with a too-large error instead of returning truncated. The configured default HTTP transport timeout remains in
+  before dispatch. An error the server reports after the row-limit cut is
+  not seen, because reading stops at the cut: the result shows as truncated. The configured default HTTP transport timeout remains in
   effect, but does not guarantee that server work or mutations stop. Unbounded
   queries can allocate a whole result (within the HTTP response-body cap). The
   driver reports no lock-timeout support.
@@ -83,7 +86,9 @@ arrives fully structured rather than as raw text:
   SQL runs only when typed explicitly into the editor, so the grid is read-only and
   the driver is not a transfer target.
 - One SQL statement per request; multi-statement scripts are not batched.
-- HTTP response bodies are capped at 128 MiB.
+- HTTP response bodies are capped at 128 MiB. The cap applies to queries
+  without a row limit, and to row-limited ones only when the kept rows alone
+  exceed it.
 - Named ClickHouse time zones are not interpreted client-side. ISO timestamps
   carrying an offset are handled accurately; timestamps without one are treated
   as UTC.
