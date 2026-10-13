@@ -370,7 +370,7 @@ The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate ma
 - `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, DashboardDocument, KeyValueDocument, AuditDocument, InstanceInspectorDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
-- `dbflux_ui` — thin integrator (~16k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server, app_menu (the macOS application menu bar). Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+- `dbflux_ui` — thin integrator: workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server, app_menu (the macOS application menu bar). Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
 
 `dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
 
@@ -489,8 +489,8 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 ### Documentation translations
 
-- `docs/es/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
-- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
+- `docs/es/`, `docs/ko/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
+- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/`, `docs/ko/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
 - A page with no counterpart yet needs none; the site serves the English body with a notice.
 - Keep headings, relative links, and ```mermaid fences aligned with the English page, because the site pairs pages by structure. See `docs/TRANSLATIONS.md`.
 
@@ -504,10 +504,10 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 Documents are open-tab entities managed through a closure-erasing shell. The polymorphism mechanism is `PaneHandle`, not a closed enum. See `ARCHITECTURE.md` § Document System for the full picture.
 
-1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
+1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures covering rendering and focus, command dispatch, pure metadata reads, dedup matching, event subscription, and optional document-specific helpers such as the close and quit policy. `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
 2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
-3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`). No per-document event enums.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — the identity key for tab deduplication; the variant list lives in that file and is the source of truth. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
 6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.

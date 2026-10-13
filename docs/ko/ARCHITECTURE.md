@@ -15,7 +15,7 @@
 
 ### 계층별 크레이트 맵
 
-종속성은 아래를 향합니다. `dbflux_core`는 다른 모든 크레이트가 기반으로 삼는 종속성 없는 계약 계층이며, UI는 구체적인 드라이버 크레이트에 의존하지 않습니다 ([드라이버/UI 분리](#드라이버-체계) 참조).
+종속성은 아래를 향합니다. `dbflux_core`는 나머지 워크스페이스가 기반으로 삼는 계약 계층이며, 다시 내보내는 실행 분류와 스키마 변경 타입을 위해 `dbflux_policy`라는 좁은 종속성 하나만 가집니다. UI는 구체적인 드라이버 크레이트에 의존하지 않습니다 ([드라이버/UI 분리](#드라이버-체계) 참조).
 
 ```mermaid
 flowchart TB
@@ -247,8 +247,8 @@ crates/
         mod.rs              # AuditDocument 엔티티
         pane.rs             # AuditDocument::into_pane 생성자
         view.rs             # LogStreamView 경계 구조체
-        render.rs           # 추출된 렌더 코드 (~1300 LOC)
-        commands.rs         # 추출된 명령 디스패치 (~560 LOC)
+        render.rs           # 추출된 렌더 코드
+        commands.rs         # 추출된 명령 디스패치
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -310,7 +310,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # 프로필별 훅 바인딩
-  dbflux_ui/                # 얇은 통합자 (~13.5k LOC): 여섯 UI 크레이트를 서로 연결
+  dbflux_ui/                # 얇은 통합자: 여섯 UI 크레이트를 서로 연결
     src/                    # 이동된 하위 시스템을 이전 모듈 경로의 shim을 통해 재노출
       lib.rs                # 크레이트 루트; shim 모듈을 통한 재노출
       app.rs                # GPUI 앱 부트스트랩
@@ -582,11 +582,11 @@ crates/
 
 1. **`Tab`** (`tab_manager.rs`) — 단일 `Pane(Box<PaneHandle>)` 변형을 가진 `#[non_exhaustive]` 열거형입니다. 미래 버전과의 호환성(예: 이후 분리 가능한 창 변형)을 위해 열거형으로 유지됩니다. `TabManager`는 `Vec<Tab>`과 MRU 순서를 보유합니다.
 
-2. **`PaneHandle`** (`pane.rs`) — 기존의 닫힌(closed) `DocumentHandle` 열거형을 대체하는, 클로저를 지우는(closure-erasing) 셸입니다. 각 연산(render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe와 `resolve_close`, `save_for_close`, `flush_for_shutdown`, `is_file_backed_empty` 같은 선택적 헬퍼)은 타입화된 `Entity<T>`를 캡처하는 `Box<dyn Fn>` 클로저입니다. `PaneHandle`은 `!Clone`입니다. 각 문서 타입은 자체 `pane.rs` 파일(모두 `crates/dbflux_ui_document/src/` 아래)에서 `XxxDocument::into_pane(entity, cx) -> PaneHandle`을 제공합니다. 새 문서 타입을 추가해도 `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`는 변경할 필요가 없습니다.
+2. **`PaneHandle`** (`pane.rs`) — 기존의 닫힌(closed) `DocumentHandle` 열거형을 대체하는, 클로저를 지우는(closure-erasing) 셸입니다. 모든 연산은 타입화된 `Entity<T>`를 캡처하는 `Box<dyn Fn>` 클로저입니다: 렌더링과 포커스, 명령 디스패치, 순수 메타데이터 읽기(제목, 닫기 가능 여부, 연결과 활성 컨텍스트, 변경 요약, 새로 고침 정책), 활성 탭과 새로 고침 정책 같은 변경, 중복 제거 일치, 이벤트 구독, 그리고 문서별 선택적 헬퍼(닫기, 저장과 종료 정책, 사이드 패널, 패널 액션, 상태 표시줄 세그먼트)입니다. `PaneHandle`은 `!Clone`입니다. 각 문서 타입은 자체 `pane.rs` 파일(모두 `crates/dbflux_ui_document/src/` 아래)에서 `XxxDocument::into_pane(entity, cx) -> PaneHandle`을 제공합니다. 새 문서 타입을 추가해도 `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`는 변경할 필요가 없습니다.
 
-3. **`DocumentKey`** (`dedup.rs`) — 탭 중복 제거에 사용되는 식별 열거형입니다. 변형: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. 기존 `DocumentHandle`의 `is_*` 메서드를 대체합니다. 호출 지점은 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`를 사용합니다.
+3. **`DocumentKey`** (`dedup.rs`) — 탭 중복 제거에 사용되는 식별 열거형입니다. 변형 목록은 `dedup.rs`를 기준으로 합니다. 기존 `DocumentHandle`의 `is_*` 메서드를 대체합니다. 호출 지점은 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`를 사용합니다.
 
-4. **`DocumentEvent`** (`handle.rs`, 약 30 LOC) — 삭제된 네 개의 문서별 이벤트 열거형을 대체하는 통합 이벤트 열거형입니다. 변형: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — 삭제된 네 개의 문서별 이벤트 열거형을 대체하는 통합 이벤트 열거형입니다. 변형 목록은 `handle.rs`를 기준으로 합니다.
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — 범용 UI 프레임(chrome) 호스트입니다. `ResultPanel`은 프레임 행을 소유하고 본문 렌더링을 `ViewHandle`(render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode의 7개 클로저)에 위임합니다. 슬롯 시스템(`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`)은 뷰가 임의의 프레임 요소를 기여할 수 있게 합니다. `ResultPanel`은 내장 세그먼트(`available_modes.len() >= 2`일 때 Left/0의 모드 바)와 뷰가 제공한 세그먼트를 병합하고, `(position, index)`로 정렬하여 `flex_wrap` 행으로 렌더링합니다.
 
@@ -870,7 +870,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 
 ### 지원 구성 요소
 
-- 토스트 시스템: 성공/정보/경고 토스트에 대해 자동 닫힘(4초)이 있는 `crates/dbflux_ui_base/src/toast.rs` 자체 구현입니다. (`crates/dbflux_ui/src/ui/components/toast.rs`에 심(shim)이 있습니다.)
+- 토스트 시스템: 성공/정보/경고 토스트를 위한 설정 가능한 자동 닫힘을 갖춘 `crates/dbflux_ui_base/src/toast.rs` 자체 구현입니다(기본 8초, 경고 토스트는 그 두 배; Settings > General에서 설정).
 - 터널 인프라: `crates/dbflux_tunnel_core/`는 `TunnelConnector` 트레이트와 `ForwardingConnection<R>` 양방향 포워더를 갖춘 RAII `Tunnel`을 제공합니다.
 - 프록시 터널링: `crates/dbflux_proxy/`는 `TunnelConnector`를 통해 SOCKS5 및 HTTP CONNECT 프록시 터널을 구현합니다.
 - SSH 터널링: `crates/dbflux_ssh/src/lib.rs`는 `TunnelConnector`를 통해 SSH 터널을 구현하며, libssh2 안전성을 위해 모든 작업을 하나의 스레드로 직렬화합니다.
