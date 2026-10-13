@@ -35,6 +35,8 @@ use rmcp::{
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
+#[path = "mcp_agent_e2e/default_method_contracts.rs"]
+mod default_method_contracts;
 /// Actor id every call in this file runs as.
 const AGENT: &str = "e2e-agent";
 const ADMIN_ROLE: &str = "builtin/admin";

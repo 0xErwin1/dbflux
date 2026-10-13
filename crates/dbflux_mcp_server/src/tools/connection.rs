@@ -201,7 +201,13 @@ impl DbFluxServer {
 
                     let blocking_result: Result<Option<String>, tokio::task::JoinError> =
                         tokio::task::spawn_blocking(move || {
-                            let version_query = conn_for_blocking.version_query();
+                            // A driver without a version query reports
+                            // not-supported instead of panicking: skip the
+                            // probe and leave the version out of the
+                            // response rather than failing the call.
+                            let Ok(version_query) = conn_for_blocking.version_query() else {
+                                return None;
+                            };
 
                             // `confirmed_ceiling` mirrors the classification
                             // this call site was already authorised at

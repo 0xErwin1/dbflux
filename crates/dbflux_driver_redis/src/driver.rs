@@ -22,18 +22,17 @@ use dbflux_core::{
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
     KeyValuePrefixRequest, KeyValueSchema, LanguageService, ListEnd, ListPushRequest,
-    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, OrderByColumn,
-    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement,
-    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption,
-    SemanticPlan, SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
-    SshTunnelConfig, StreamAddRequest, StreamClaimRequest, StreamConsumerGroup,
-    StreamDeleteRequest, StreamEntry, StreamEntryId, StreamGroupsRequest, StreamPendingEntry,
-    StreamPendingRequest, StreamRangePage, StreamRangeRequest, TextPosition, TextPositionRange,
-    TransactionCapabilities, TransferFamily, Value, ValueRepr, WritePrivilege, ZSetAddRequest,
-    ZSetMember, ZSetRangePage, ZSetRangeRequest, ZSetRemoveRequest, field, field_password,
-    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_field_equals,
-    when_unchecked, with_default,
+    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, PaginationStyle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement, RelationalConnection,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan,
+    SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
+    StreamAddRequest, StreamClaimRequest, StreamConsumerGroup, StreamDeleteRequest, StreamEntry,
+    StreamEntryId, StreamGroupsRequest, StreamPendingEntry, StreamPendingRequest, StreamRangePage,
+    StreamRangeRequest, TextPosition, TextPositionRange, TransactionCapabilities, TransferFamily,
+    Value, ValueRepr, WritePrivilege, ZSetAddRequest, ZSetMember, ZSetRangePage, ZSetRangeRequest,
+    ZSetRemoveRequest, field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
+    when_checked, when_field_equals, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -1742,19 +1741,6 @@ impl Connection for RedisConnection {
         plan_redis_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM key WHERE filter LIMIT offset".to_string()
-    }
-
     fn build_insert_sql(
         &self,
         _table: &str,
@@ -1780,26 +1766,14 @@ impl Connection for RedisConnection {
         ("DEL key".to_string(), Vec::new())
     }
 
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        ("SET key value".to_string(), Vec::new())
-    }
-
     fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
         // Redis doesn't use SQL - this is for SQL-based drivers
         "DBSIZE".to_string()
     }
 
-    fn build_truncate_sql(&self, _table: &str) -> String {
+    fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {
         // Redis doesn't support TRUNCATE - use FLUSHDB with caution
-        "FLUSHDB".to_string()
+        Ok(TRUNCATE_STATEMENT.to_string())
     }
 
     fn build_drop_index_sql(
@@ -1807,14 +1781,14 @@ impl Connection for RedisConnection {
         _index_name: &str,
         _table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         // Redis doesn't have named indexes like SQL databases
-        "DROP INDEX not_applicable".to_string()
+        Ok(DROP_INDEX_STATEMENT.to_string())
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         // Redis uses INFO command, not SQL
-        "INFO server | grep redis_version"
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -1826,6 +1800,30 @@ impl Connection for RedisConnection {
         Err(DbError::NotSupported(
             "translate_filter is not applicable to Redis - it uses key-based access and commands, not SQL".to_string(),
         ))
+    }
+}
+
+/// SQL/command text of `build_truncate_sql`, kept as a constant so the exact
+/// text is testable without a live server.
+const TRUNCATE_STATEMENT: &str = "FLUSHDB";
+
+/// SQL/command text of `build_drop_index_sql`, kept as a constant so the
+/// exact text is testable without a live server.
+const DROP_INDEX_STATEMENT: &str = "DROP INDEX not_applicable";
+
+/// Command text of `version_query`, kept as a constant so the exact text is
+/// testable without a live server.
+const VERSION_QUERY: &str = "INFO server | grep redis_version";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn sql_builder_constants_match_the_driver_contract() {
+        assert_eq!(TRUNCATE_STATEMENT, "FLUSHDB");
+        assert_eq!(DROP_INDEX_STATEMENT, "DROP INDEX not_applicable");
+        assert_eq!(VERSION_QUERY, "INFO server | grep redis_version");
     }
 }
 

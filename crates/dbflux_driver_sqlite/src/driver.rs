@@ -16,16 +16,15 @@ use dbflux_core::{
     DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
     ExecutionSourceContext, ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues,
     FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection, LogErr,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field_file_path,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_update_template, render_semantic_filter_sql, strip_leading_comments,
-    validate_ddl_fragment,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field_file_path, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
+    render_semantic_filter_sql, strip_leading_comments, validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -1316,56 +1315,6 @@ impl Connection for SqliteConnection {
         plan_sqlite_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| SQLITE_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&SQLITE_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
     fn build_insert_sql(
         &self,
         table: &str,
@@ -1439,44 +1388,6 @@ impl Connection for SqliteConnection {
         (sql, params)
     }
 
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let conflict_cols = conflict_columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
-            quoted_table, cols, placeholders_str, conflict_cols, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
     fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
         let quoted_table = SQLITE_DIALECT.quote_identifier(table);
         let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
@@ -1492,9 +1403,9 @@ impl Connection for SqliteConnection {
         sql
     }
 
-    fn build_truncate_sql(&self, table: &str) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        format!("DELETE FROM {}", quoted_table)
+        Ok(format!("DELETE FROM {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -1502,17 +1413,17 @@ impl Connection for SqliteConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = SQLITE_DIALECT.quote_identifier(index_name);
         if if_exists {
-            format!("DROP INDEX IF EXISTS {}", quoted_index)
+            Ok(format!("DROP INDEX IF EXISTS {}", quoted_index))
         } else {
-            format!("DROP INDEX {}", quoted_index)
+            Ok(format!("DROP INDEX {}", quoted_index))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT sqlite_version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT sqlite_version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -2919,7 +2830,7 @@ mod cancel_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        RusqliteConnection, SqliteDialect, SqliteDriver, kind_from_decltype,
+        RusqliteConnection, SqliteConnectionState, SqliteDialect, SqliteDriver, kind_from_decltype,
         plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
@@ -3439,6 +3350,45 @@ mod tests {
         assert!(
             connection.cancelled.load(Ordering::SeqCst),
             "NUL refusal erased an existing cancellation"
+        );
+    }
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use super::SqliteConnection;
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let connection = SqliteConnection::for_test(state);
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("SQLite supports truncate"),
+            "DELETE FROM \"users\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), false)
+                .expect("SQLite supports drop index"),
+            "DROP INDEX \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), true)
+                .expect("SQLite supports drop index"),
+            "DROP INDEX IF EXISTS \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("SQLite has a version query"),
+            "SELECT sqlite_version()"
         );
     }
 }
