@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.8.11] - 2026-10-13
+
+### Fixed
+
+* **Editor queries run on drivers that cannot enforce the editor row limit** — The row limit is a budget the driver enforces, so a driver that cannot enforce one refused the query instead of running it, and no editor query ran at all on MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift, CloudWatch, DynamoDB, or an external RPC driver. The editor now sends the limit only to a driver that enforces it (PostgreSQL, MySQL/MariaDB, SQL Server, SQLite) and runs the query without one on the others; a statement that may return a large result wants its own `LIMIT` or `.limit()`. An external RPC driver's adapter also stops advertising that it enforces a limit, so the editor's query reaches the driver instead of being turned away. See Settings.
+* **SQL Server tables in another database read their rows again** — Opening a table that lives in a database other than the one the connection opened on failed with `Invalid object name 'dbo.<table>'` (SQL Server error 208) and showed no rows, even though the sidebar listed the table and its metadata. Browsing named the table as `dbo.<table>` and left the session's database to resolve it, so only tables in that database could be read. A browse now names the table in full, `[database].[schema].[table]`, which leaves the session's database untouched: reading a table no longer depends on, or changes, which database the session is on. The row count and the lookup that follows an edit use the same form, so a table in another database can be counted and saved as well.
+* **Relationship diagrams open for a database without a database name** — "View relationships" on a table of a single-file database such as SQLite failed with "No database specified" before loading anything. The diagram now resolves the database from the table's schema, as the rest of the sidebar does.
+* **No false "no primary key" banner** — Opening a table whose primary key was not cached yet flashed the yellow "no primary key" banner, and left the grid read-only, until the table was read again in key order. The banner and the read-only state now wait for that read.
+* **Closed windows release their graphics memory on macOS** — Every window opened and closed on macOS kept its renderer and textures: after using the connection manager and the settings window, the process held hundreds of megabytes of graphics memory with only the main window open. A closed window now frees them.
+* **Shift+Up and Shift+Down keep the cursor column** — In the code editor, extending a selection up or down now lands on the same column of the neighbouring line, as plain Up and Down do, and stops on an empty line instead of skipping it. Before, the selection jumped to the end of the previous line or the start of the next one. On the first or last line the selection extends to the start or end of the text.
+* **Showing the results pane no longer flashes a narrow split** — Running a query with the results pane hidden showed the editor and the results at 200 px each for one frame, the rest of the area empty, before the split filled the document. The split now fills it from the first frame. The same applies to every split whose panels all start from a set size.
+
 ## [0.8.10] - 2026-10-11
 
 ### Fixed
