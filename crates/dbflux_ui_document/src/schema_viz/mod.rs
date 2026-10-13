@@ -1203,8 +1203,21 @@ impl SchemaVizDocument {
         source: &dyn MetadataSource,
         cancel_token: Arc<CancelToken>,
     ) -> Result<LoadedSchemaData, String> {
-        let db_name =
-            database.ok_or_else(|| dbflux_i18n::t!("document.schema_viz.error.no_database"))?;
+        // A driver with no database dimension, such as a single-file database,
+        // names its sidebar nodes with the schema alone, so the diagram is
+        // opened without a database. Its schema stands in for the database
+        // name, which is how the sidebar's other consumers of those ids
+        // resolve it (`database.as_deref().unwrap_or(schema)` when a table is
+        // dropped). Only a load with neither can fail.
+        let db_name = database
+            .filter(|database| !database.is_empty())
+            .or_else(|| match &mode {
+                SchemaVizMode::Focused { schema, .. } => {
+                    schema.clone().filter(|schema| !schema.is_empty())
+                }
+                SchemaVizMode::Global => None,
+            })
+            .ok_or_else(|| dbflux_i18n::t!("document.schema_viz.error.no_database"))?;
 
         match mode {
             SchemaVizMode::Focused { table, schema } => {

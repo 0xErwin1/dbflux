@@ -1212,6 +1212,61 @@ fn loader_bulk_path_fabricates_tables_without_table_details() {
     assert!(calls.schema_for_database.is_empty());
 }
 
+/// #1039 — a driver with no database dimension, such as a single-file
+/// database, names its sidebar nodes with the schema alone, so the diagram is
+/// opened without a database. The schema stands in for it, which is how the
+/// sidebar's other consumers of those ids resolve it.
+#[test]
+fn loader_uses_the_schema_when_no_database_was_passed() {
+    let mut source = FakeSource::new();
+    source
+        .columns
+        .insert(Some("main".to_owned()), users_from_bulk());
+    source.foreign_keys.insert(
+        Some("main".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+
+    let result = SchemaVizDocument::load_focused_schema_blocking(
+        None,
+        SchemaVizMode::Focused {
+            table: "users".to_owned(),
+            schema: Some("main".to_owned()),
+        },
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("a focused load without a database should use the schema");
+
+    assert_eq!(result.tables_loaded, 2);
+    assert_eq!(result.tables.len(), 2);
+}
+
+/// The database is still required when there is no schema to stand in for it:
+/// a whole-database diagram has nothing else to name its metadata calls after.
+#[test]
+fn loader_without_a_database_or_a_schema_still_reports_no_database() {
+    let source = FakeSource::new();
+
+    let error = SchemaVizDocument::load_focused_schema_blocking(
+        None,
+        SchemaVizMode::Focused {
+            table: "users".to_owned(),
+            schema: None,
+        },
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .err()
+    .expect("a load with neither a database nor a schema cannot name its calls");
+
+    assert_eq!(
+        error,
+        dbflux_i18n::t!("document.schema_viz.error.no_database"),
+        "the reported error must stay the translated no-database message"
+    );
+}
+
 #[test]
 fn loader_fallback_path_matches_bulk_path_result() {
     // Same scenario twice: bulk supported, then `schema_columns` unsupported
