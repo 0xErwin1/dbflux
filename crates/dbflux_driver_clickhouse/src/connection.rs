@@ -10,12 +10,13 @@ use dbflux_core::{
     SchemaSnapshot, SqlDialect, TableBrowseRequest, TableInfo, TablePartitions, TableProfile,
     TableRef, TableViewFeatures, Value, WritePrivilege,
 };
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 
 use crate::dialect::CLICKHOUSE_DIALECT;
 use crate::driver::{METADATA, READ_ONLY_GENERATOR};
 use crate::error_formatter::ClickHouseErrorFormatter;
-use crate::http::{ClickHouseHttpClient, HttpResponse};
+use crate::http::{ClickHouseHttpClient, HttpResponse, LimitedResponse};
 use crate::introspection;
 use crate::types::{
     clickhouse_type_is_nullable, clickhouse_type_to_column_kind, json_to_value,
@@ -321,25 +322,43 @@ impl Connection for ClickHouseConnection {
         }
         let active_database = self.current_database()?;
         let database = request.database.as_deref().unwrap_or(&active_database);
-        let mut result = if request.read_only.is_required() {
-            self.execute_sql_read_only(
-                &request.sql,
-                Some(database),
-                request.statement_timeout,
-                None,
-                request.offset,
-            )?
-        } else {
-            self.execute_sql(
-                &request.sql,
-                Some(database),
-                request.statement_timeout,
-                None,
-                request.offset,
-            )?
+        let read_only = request.read_only.is_required();
+        let Some(row_limit) = request.limit else {
+            return if read_only {
+                self.execute_sql_read_only(
+                    &request.sql,
+                    Some(database),
+                    request.statement_timeout,
+                    None,
+                    request.offset,
+                )
+            } else {
+                self.execute_sql(
+                    &request.sql,
+                    Some(database),
+                    request.statement_timeout,
+                    None,
+                    request.offset,
+                )
+            };
         };
-        apply_row_budget(&mut result, request.limit);
-        Ok(result)
+
+        let started = Instant::now();
+        let settings = if read_only { READ_ONLY_SETTINGS } else { &[] };
+        let response = self
+            .client
+            .execute_row_limited(
+                &request.sql,
+                Some(database),
+                request.statement_timeout,
+                row_limit,
+                request.offset,
+                settings,
+            )
+            .map_err(|error| {
+                ClickHouseErrorFormatter::format_http_error(&error).into_query_error()
+            })?;
+        parse_limited_response(response, started.elapsed())
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -509,22 +528,7 @@ pub(crate) fn parse_response(
     execution_time: Duration,
 ) -> Result<QueryResult, DbError> {
     if response.body.iter().all(u8::is_ascii_whitespace) {
-        let affected_rows = response
-            .headers
-            .get("X-ClickHouse-Summary")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| serde_json::from_str::<HashMap<String, String>>(value).ok())
-            .and_then(|summary| {
-                summary
-                    .get("written_rows")
-                    .and_then(|value| value.parse().ok())
-            });
-        return Ok(QueryResult::table(
-            Vec::new(),
-            Vec::new(),
-            affected_rows,
-            execution_time,
-        ));
+        return Ok(statement_result(&response.headers, execution_time));
     }
 
     let compact: CompactResponse = serde_json::from_slice(&response.body).map_err(|error| {
@@ -532,25 +536,82 @@ pub(crate) fn parse_response(
             format!("Invalid JSONCompact response from ClickHouse: {error}").into(),
         )
     })?;
-    let parsed_types = compact
+    let (names, types): (Vec<_>, Vec<_>) = compact
         .meta
+        .into_iter()
+        .map(|column| (column.name, column.type_name))
+        .unzip();
+    table_result(&names, &types, &compact.data, execution_time)
+}
+
+/// Builds the result of a row-limited request, marking it truncated only
+/// when the server had rows past the limit.
+pub(crate) fn parse_limited_response(
+    response: LimitedResponse,
+    execution_time: Duration,
+) -> Result<QueryResult, DbError> {
+    if response.names.is_empty() && response.rows.is_empty() {
+        return Ok(statement_result(&response.headers, execution_time));
+    }
+    if response.names.len() != response.types.len() {
+        return Err(DbError::QueryFailed(
+            format!(
+                "Invalid JSONCompactEachRow header from ClickHouse: {} names, {} types",
+                response.names.len(),
+                response.types.len()
+            )
+            .into(),
+        ));
+    }
+
+    let mut result = table_result(
+        &response.names,
+        &response.types,
+        &response.rows,
+        execution_time,
+    )?;
+    result.set_rows_truncated(response.truncated);
+    Ok(result)
+}
+
+/// A statement without a result set; ClickHouse reports written rows in the
+/// summary header.
+fn statement_result(headers: &HeaderMap, execution_time: Duration) -> QueryResult {
+    let affected_rows = headers
+        .get("X-ClickHouse-Summary")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| serde_json::from_str::<HashMap<String, String>>(value).ok())
+        .and_then(|summary| {
+            summary
+                .get("written_rows")
+                .and_then(|value| value.parse().ok())
+        });
+    QueryResult::table(Vec::new(), Vec::new(), affected_rows, execution_time)
+}
+
+fn table_result(
+    names: &[String],
+    types: &[String],
+    data: &[Vec<serde_json::Value>],
+    execution_time: Duration,
+) -> Result<QueryResult, DbError> {
+    let parsed_types = types
         .iter()
-        .map(|column| parse_clickhouse_type(&column.type_name))
+        .map(|type_name| parse_clickhouse_type(type_name))
         .collect::<Vec<_>>();
-    let columns = compact
-        .meta
+    let columns = names
         .iter()
+        .zip(types)
         .zip(&parsed_types)
-        .map(|(column, data_type)| ColumnMeta {
-            name: column.name.clone(),
-            type_name: column.type_name.clone(),
+        .map(|((name, type_name), data_type)| ColumnMeta {
+            name: name.clone(),
+            type_name: type_name.clone(),
             kind: clickhouse_type_to_column_kind(data_type),
             nullable: clickhouse_type_is_nullable(data_type),
             is_primary_key: false,
         })
         .collect::<Vec<_>>();
-    let rows = compact
-        .data
+    let rows = data
         .iter()
         .map(|row| {
             if row.len() != parsed_types.len() {
@@ -578,29 +639,15 @@ pub(crate) fn parse_response(
     Ok(QueryResult::table(columns, rows, None, execution_time))
 }
 
-/// Enforces the request row budget on a parsed result. The budget is applied
-/// here rather than through the server `limit` setting because that setting
-/// gives no signal that rows were dropped. One HTTP request runs a single
-/// statement, so the budget never spans more than this one result set.
-pub(crate) fn apply_row_budget(result: &mut QueryResult, row_budget: Option<u32>) {
-    let Some(row_budget) = row_budget else {
-        return;
-    };
-    let row_budget = usize::try_from(row_budget).unwrap_or(usize::MAX);
-    if result.rows.len() > row_budget {
-        result.rows.truncate(row_budget);
-        result.set_rows_truncated(true);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        ClickHouseGrantRow, apply_row_budget, classify_clickhouse_grant_row,
-        classify_clickhouse_grants, parse_response, resolve_clickhouse_write_privilege,
+        ClickHouseConnection, ClickHouseGrantRow, classify_clickhouse_grant_row,
+        classify_clickhouse_grants, parse_limited_response, parse_response,
+        resolve_clickhouse_write_privilege,
     };
-    use crate::http::HttpResponse;
-    use dbflux_core::{ColumnKind, Value, WritePrivilege};
+    use crate::http::{ClickHouseHttpClient, HttpResponse, LimitedResponse};
+    use dbflux_core::{ColumnKind, Connection, QueryRequest, Value, WritePrivilege};
     use reqwest::header::HeaderMap;
     use std::time::Duration;
 
@@ -743,56 +790,171 @@ mod tests {
         assert_eq!(result.affected_rows, None);
     }
 
-    fn three_row_response() -> HttpResponse {
-        HttpResponse {
-            body: br#"{"meta":[{"name":"n","type":"UInt8"}],"data":[[1],[2],[3]],"rows":3}"#
-                .to_vec(),
-            headers: HeaderMap::new(),
+    /// Answers one HTTP request with `body` and hands back the request head
+    /// (request line and headers).
+    fn serve_one_request(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut head = String::new();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request head");
+                if line.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+                head.push_str(&line);
+            }
+            let mut request_body = vec![0u8; content_length];
+            reader.read_exact(&mut request_body).expect("read body");
+
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+            head
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn local_connection(endpoint: &str) -> ClickHouseConnection {
+        let client = ClickHouseHttpClient::new(
+            endpoint,
+            "default".to_string(),
+            None,
+            "default".to_string(),
+            Duration::from_secs(5),
+        )
+        .expect("loopback endpoint");
+        ClickHouseConnection::new(client, "default".to_string())
+    }
+
+    const THREE_ROWS: &str = "[\"n\"]\n[\"UInt8\"]\n[1]\n[2]\n[3]\n";
+
+    #[test]
+    fn limited_execute_streams_rows_and_marks_truncation() {
+        let (endpoint, server) = serve_one_request(THREE_ROWS);
+        let connection = local_connection(&endpoint);
+
+        let result = connection
+            .execute(&QueryRequest::new("SELECT n").with_limit(2))
+            .expect("the local server answers");
+
+        assert_eq!(result.rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        assert_eq!(result.columns.len(), 1);
+        assert!(result.rows_truncated());
+
+        let head = server.join().expect("server thread").to_ascii_lowercase();
+        assert!(
+            head.contains("x-clickhouse-format: jsoncompacteachrowwithnamesandtypes"),
+            "{head}"
+        );
+        for forbidden in [
+            "max_result_rows",
+            "max_result_bytes",
+            "&limit=",
+            "wait_end_of_query",
+        ] {
+            assert!(!head.contains(forbidden), "{forbidden} in {head}");
         }
     }
 
     #[test]
-    fn row_budget_drops_excess_rows_and_marks_truncation() {
-        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
-        apply_row_budget(&mut result, Some(2));
-        assert_eq!(result.rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
-        assert!(result.rows_truncated());
+    fn limited_execute_equal_to_row_count_is_not_truncation() {
+        let (endpoint, server) = serve_one_request(THREE_ROWS);
+        let connection = local_connection(&endpoint);
+
+        let result = connection
+            .execute(&QueryRequest::new("SELECT n").with_limit(3))
+            .expect("the local server answers");
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+        server.join().expect("server thread");
     }
 
     #[test]
-    fn row_budget_equal_to_row_count_is_not_truncation() {
-        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
-        apply_row_budget(&mut result, Some(3));
+    fn limited_read_only_execute_keeps_the_readonly_setting() {
+        let (endpoint, server) = serve_one_request(THREE_ROWS);
+        let connection = local_connection(&endpoint);
+
+        let request = QueryRequest::new("SELECT n")
+            .with_limit(0)
+            .with_read_only(dbflux_core::ReadOnlyEnforcement::Required);
+        let result = connection
+            .execute(&request)
+            .expect("the local server answers");
+
+        assert!(result.rows.is_empty());
+        assert!(result.rows_truncated());
+        let head = server.join().expect("server thread");
+        assert!(head.contains("readonly=2"), "{head}");
+    }
+
+    #[test]
+    fn unlimited_execute_keeps_the_byte_cap_and_full_response() {
+        let (endpoint, server) =
+            serve_one_request(r#"{"meta":[{"name":"n","type":"UInt8"}],"data":[[1],[2],[3]]}"#);
+        let connection = local_connection(&endpoint);
+
+        let result = connection
+            .execute(&QueryRequest::new("SELECT n"))
+            .expect("the local server answers");
+
         assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+        let head = server.join().expect("server thread").to_ascii_lowercase();
+        assert!(
+            head.contains("x-clickhouse-format: jsoncompact\r\n"),
+            "{head}"
+        );
+        assert!(head.contains("max_result_bytes=134217728"), "{head}");
+        assert!(head.contains("result_overflow_mode=throw"), "{head}");
+        assert!(head.contains("wait_end_of_query=1"), "{head}");
+    }
+
+    #[test]
+    fn limited_statement_without_result_set_reports_written_rows() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-ClickHouse-Summary",
+            reqwest::header::HeaderValue::from_static(r#"{"written_rows":"4"}"#),
+        );
+        let response = LimitedResponse {
+            headers,
+            ..LimitedResponse::default()
+        };
+        let result = parse_limited_response(response, Duration::ZERO).expect("valid");
+        assert!(result.columns.is_empty());
+        assert_eq!(result.affected_rows, Some(4));
         assert!(!result.rows_truncated());
     }
 
     #[test]
-    fn row_budget_zero_keeps_columns_and_drops_every_row() {
-        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
-        apply_row_budget(&mut result, Some(0));
-        assert!(result.rows.is_empty());
-        assert_eq!(result.columns.len(), 1);
-        assert!(result.rows_truncated());
-    }
-
-    #[test]
-    fn row_budget_zero_on_rowless_result_is_not_truncation() {
-        let response = HttpResponse {
-            body: Vec::new(),
+    fn limited_response_decodes_values_like_the_unlimited_path() {
+        let response = LimitedResponse {
+            names: vec!["big".to_string()],
+            types: vec!["UInt64".to_string()],
+            rows: vec![vec![serde_json::json!("18446744073709551615")]],
+            truncated: false,
             headers: HeaderMap::new(),
         };
-        let mut result = parse_response(response, Duration::ZERO).expect("valid");
-        apply_row_budget(&mut result, Some(0));
-        assert!(result.rows.is_empty());
-        assert!(!result.rows_truncated());
-    }
-
-    #[test]
-    fn absent_row_budget_keeps_every_row() {
-        let mut result = parse_response(three_row_response(), Duration::ZERO).expect("valid");
-        apply_row_budget(&mut result, None);
-        assert_eq!(result.rows.len(), 3);
-        assert!(!result.rows_truncated());
+        let result = parse_limited_response(response, Duration::ZERO).expect("valid");
+        assert_eq!(
+            result.rows[0][0],
+            Value::Decimal("18446744073709551615".to_string())
+        );
     }
 }
