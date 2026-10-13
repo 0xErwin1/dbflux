@@ -17,18 +17,17 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
-    when_unchecked, with_default,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+    SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -2856,100 +2855,6 @@ impl Connection for MysqlConnection {
         plan_mysql_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MYSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let (where_clause, _filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MYSQL_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let _conflict_cols = conflict_columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| {
-                format!(
-                    "{} = VALUES({})",
-                    MYSQL_DIALECT.quote_identifier(col),
-                    MYSQL_DIALECT.quote_identifier(col)
-                )
-            })
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
-            quoted_table, cols, placeholders_str, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         Ok(truncate_table_statement(table))
     }
@@ -4286,41 +4191,6 @@ fn fetch_foreign_keys(
     }
 
     Ok(builder.build_sorted())
-}
-
-/// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
-/// Returns (SQL string with ? placeholders, parameter values).
-fn translate_filter_to_sql(filter: &Value) -> (String, Vec<Value>) {
-    match filter {
-        Value::Document(doc) => {
-            let mut parts = Vec::new();
-            let mut params = Vec::new();
-            for (key, value) in doc {
-                let quoted_col = MYSQL_DIALECT.quote_identifier(key);
-                match value {
-                    Value::Null => {
-                        parts.push(format!("{} IS NULL", quoted_col));
-                    }
-                    _ => {
-                        parts.push(format!("{} = ?", quoted_col));
-                        params.push(value.clone());
-                    }
-                }
-            }
-            if parts.is_empty() {
-                (String::new(), Vec::new())
-            } else {
-                (parts.join(" AND "), params)
-            }
-        }
-        Value::Text(s) => {
-            // Treat a plain text filter as a raw SQL expression (for advanced users)
-            // WARNING: This is intentionally allowed for power users but is a SQL injection risk
-            // if the filter comes from untrusted input. The caller must validate.
-            (s.clone(), Vec::new())
-        }
-        _ => (String::new(), Vec::new()),
-    }
 }
 
 fn fetch_constraints(

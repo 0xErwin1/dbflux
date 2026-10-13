@@ -29,9 +29,9 @@ use dbflux_core::{
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
     EditorLanguageProfile, ExecutionClassification, FieldInfo, FormFieldKind, FormSection, FormTab,
     FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
-    LanguageService, MutationCapabilities, OrderByColumn, Pagination, PaginationStyle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryLanguage, QueryRequest,
-    QueryResult, RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
+    LanguageService, MutationCapabilities, Pagination, PaginationStyle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
     SemanticRequest, SqlDialect, TableInfo, TextPosition, TextPositionRange,
     TransactionCapabilities, TransferFamily, ValidationResult, Value, WhereOperator, field,
@@ -1185,31 +1185,6 @@ impl Connection for DynamoConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &dbflux_core::DefaultSqlDialect
-    }
-
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
-        // DynamoDB doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
-    }
-
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // DynamoDB doesn't use SQL - this is for SQL-based drivers
-        ("PutItem".to_string(), Vec::new())
     }
 
     fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {

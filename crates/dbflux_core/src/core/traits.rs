@@ -30,7 +30,6 @@ use crate::{
         ZSetRangePage, ZSetRangeRequest,
     },
     query::generator::QueryGenerator,
-    query::table_browser::OrderByColumn,
     render_semantic_filter_sql,
 };
 
@@ -1985,62 +1984,6 @@ pub trait Connection: Send + Sync {
     // =========================================================================
     // SQL Building Methods
     // =========================================================================
-
-    /// Build a SELECT query with optional filtering, ordering, and pagination.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to query
-    /// * `columns` - The columns to select
-    /// * `filter` - Optional WHERE clause expression
-    /// * `order_by` - Columns to order by
-    /// * `limit` - Maximum number of rows to return
-    /// * `offset` - Number of rows to skip
-    ///
-    /// # Returns
-    /// A SQL string for the SELECT query
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let _ = (table, columns, filter, order_by, limit, offset);
-        unimplemented!("build_select_sql not implemented for this driver")
-    }
-
-    /// Build an UPSERT (INSERT ON CONFLICT) query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name
-    /// * `columns` - The columns to insert/update
-    /// * `values` - The values
-    /// * `conflict_columns` - Columns that define uniqueness for conflict detection
-    /// * `update_columns` - Columns to update on conflict
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let _ = (table, columns, values, conflict_columns, update_columns);
-        unimplemented!("build_upsert_sql not implemented for this driver")
-    }
 
     /// Build a TRUNCATE TABLE statement.
     ///

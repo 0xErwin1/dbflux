@@ -16,16 +16,15 @@ use dbflux_core::{
     DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
     ExecutionSourceContext, ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues,
     FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection, LogErr,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field_file_path,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_update_template, render_semantic_filter_sql, strip_leading_comments,
-    validate_ddl_fragment,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field_file_path, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
+    render_semantic_filter_sql, strip_leading_comments, validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -1325,94 +1324,6 @@ impl Connection for SqliteConnection {
         plan_sqlite_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| SQLITE_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&SQLITE_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let conflict_cols = conflict_columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
-            quoted_table, cols, placeholders_str, conflict_cols, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = SQLITE_DIALECT.quote_identifier(table);
         Ok(format!("DELETE FROM {}", quoted_table))
@@ -2519,37 +2430,6 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
 
     sql.push_str(");");
     sql
-}
-
-/// Translate a Value filter expression to a SQL WHERE clause string for SQLite.
-fn translate_filter_to_sql(filter: &Value) -> String {
-    match filter {
-        Value::Document(doc) => {
-            let mut parts = Vec::new();
-            for (key, value) in doc {
-                let quoted_col = SQLITE_DIALECT.quote_identifier(key);
-                let expr = match value {
-                    Value::Null => format!("{} IS NULL", quoted_col),
-                    Value::Text(s) => format!("{} = '{}'", quoted_col, sqlite_escape_string(s)),
-                    Value::Int(i) => format!("{} = {}", quoted_col, i),
-                    Value::Bool(b) => format!("{} = {}", quoted_col, if *b { "1" } else { "0" }),
-                    Value::Float(f) => format!("{} = {}", quoted_col, f),
-                    _ => format!("{} = {}", quoted_col, value_to_sqlite_literal(value)),
-                };
-                parts.push(expr);
-            }
-            if parts.is_empty() {
-                String::new()
-            } else {
-                parts.join(" AND ")
-            }
-        }
-        Value::Text(s) => {
-            // Treat a plain text filter as a raw SQL expression (for advanced users)
-            s.clone()
-        }
-        _ => String::new(),
-    }
 }
 
 /// Map a SQLite declared-type string to a `ColumnKind` using SQLite's type-affinity rules.

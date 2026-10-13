@@ -22,18 +22,17 @@ use dbflux_core::{
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
     KeyValuePrefixRequest, KeyValueSchema, LanguageService, ListEnd, ListPushRequest,
-    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, OrderByColumn,
-    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement,
-    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption,
-    SemanticPlan, SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
-    SshTunnelConfig, StreamAddRequest, StreamClaimRequest, StreamConsumerGroup,
-    StreamDeleteRequest, StreamEntry, StreamEntryId, StreamGroupsRequest, StreamPendingEntry,
-    StreamPendingRequest, StreamRangePage, StreamRangeRequest, TextPosition, TextPositionRange,
-    TransactionCapabilities, TransferFamily, Value, ValueRepr, WritePrivilege, ZSetAddRequest,
-    ZSetMember, ZSetRangePage, ZSetRangeRequest, ZSetRemoveRequest, field, field_password,
-    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_field_equals,
-    when_unchecked, with_default,
+    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, PaginationStyle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement, RelationalConnection,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan,
+    SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
+    StreamAddRequest, StreamClaimRequest, StreamConsumerGroup, StreamDeleteRequest, StreamEntry,
+    StreamEntryId, StreamGroupsRequest, StreamPendingEntry, StreamPendingRequest, StreamRangePage,
+    StreamRangeRequest, TextPosition, TextPositionRange, TransactionCapabilities, TransferFamily,
+    Value, ValueRepr, WritePrivilege, ZSetAddRequest, ZSetMember, ZSetRangePage, ZSetRangeRequest,
+    ZSetRemoveRequest, field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
+    when_checked, when_field_equals, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -1741,31 +1740,6 @@ impl Connection for RedisConnection {
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
         plan_redis_semantic_request(request)
-    }
-
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM key WHERE filter LIMIT offset".to_string()
-    }
-
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        ("SET key value".to_string(), Vec::new())
     }
 
     fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {

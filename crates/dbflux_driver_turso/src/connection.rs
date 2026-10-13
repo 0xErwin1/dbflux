@@ -14,13 +14,13 @@ use dbflux_core::{
     CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection,
     ConnectionExt, ConstraintInfo, ConstraintKind, CrudResult, DbError, DbKind, DbSchemaInfo,
     DescribeRequest, DocumentConnection, DriverMetadata, ExecutionSessionFactory, ExplainRequest,
-    ForeignKeyInfo, FormattedError, IndexData, IndexInfo, KeyValueConnection, OrderByColumn,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo,
-    Value, ViewInfo, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_update_template,
+    ForeignKeyInfo, FormattedError, IndexData, IndexInfo, KeyValueConnection, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SortDirection,
+    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_update_template,
 };
 use turso_serverless::{
     BatchResult, Builder, Connection as SdkConnection, Database, Value as TursoValue,
@@ -28,7 +28,7 @@ use turso_serverless::{
 
 use crate::dialect::{
     TURSO_CODE_GENERATOR, TURSO_DIALECT, escape_string, generate_create_table, kind_from_decltype,
-    kind_from_values, quote_ident, translate_filter_to_sql, value_from_turso, value_to_param,
+    kind_from_values, quote_ident, value_from_turso, value_to_param,
 };
 use crate::driver::METADATA;
 use crate::session::TursoSessionFactory;
@@ -1018,88 +1018,6 @@ impl Connection for TursoConnection {
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
         plan_semantic_request(request)
-    }
-
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| quote_ident(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {cols} FROM {}", quote_ident(table));
-
-        if let Some(where_clause) = filter.map(translate_filter_to_sql)
-            && !where_clause.is_empty()
-        {
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        }
-
-        if !order_by.is_empty() {
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {dir}", col.column.quoted_with(&TURSO_DIALECT))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(" ORDER BY ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
-        sql
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let cols = columns
-            .iter()
-            .map(|c| quote_ident(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let placeholders = vec!["?"; values.len()].join(", ");
-        let conflict_cols = conflict_columns
-            .iter()
-            .map(|c| quote_ident(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let update_str = update_columns
-            .iter()
-            .map(|col| format!("{} = ?", quote_ident(col)))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        (
-            format!(
-                "INSERT INTO {} ({cols}) VALUES ({placeholders}) ON CONFLICT ({conflict_cols}) DO UPDATE SET {update_str}",
-                quote_ident(table)
-            ),
-            values.to_vec(),
-        )
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {

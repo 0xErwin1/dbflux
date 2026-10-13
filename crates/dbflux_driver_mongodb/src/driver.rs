@@ -24,14 +24,13 @@ use dbflux_core::{
     DriverLimits, DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo,
     FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities,
-    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
-    SchemaSampleAccumulator, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
-    TransactionCapabilities, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked,
-    with_default,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSampleAccumulator,
+    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::action::Action;
@@ -3182,34 +3181,6 @@ impl Connection for MongoConnection {
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
         plan_mongo_semantic_request(request)
-    }
-
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
-    }
-
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        (
-            "INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(),
-            Vec::new(),
-        )
     }
 
     fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {

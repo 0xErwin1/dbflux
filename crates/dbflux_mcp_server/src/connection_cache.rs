@@ -6,11 +6,11 @@ use dbflux_core::{
     CodeGenCapabilities, CodeGenerator, CodeGeneratorInfo, CollectionBrowseRequest,
     CollectionCountRequest, Connection, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind,
     DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, ExplainRequest,
-    KeyValueApi, LanguageService, OrderByColumn, QueryCancelHandle, QueryGenerator, QueryHandle,
-    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    KeyValueApi, LanguageService, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest,
+    QueryResult, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    TableCountRequest, TableInfo, ViewInfo,
 };
 
 pub struct CachedConnection {
@@ -254,31 +254,6 @@ impl Connection for CachedConnection {
 
     fn generate_sql(&self, request: &SqlGenerationRequest) -> Result<String, DbError> {
         self.connection.generate_sql(request)
-    }
-
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        self.connection
-            .build_select_sql(table, columns, filter, order_by, limit, offset)
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        self.connection
-            .build_upsert_sql(table, columns, values, conflict_columns, update_columns)
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {

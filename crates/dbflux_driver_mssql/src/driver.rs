@@ -17,9 +17,9 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
     FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData, IndexInfo,
     InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
-    MissingCreationMetadata, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    MissingCreationMetadata, MutationCapabilities, PaginationStyle, PlaceholderStyle,
+    PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
     RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
     SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
@@ -3138,55 +3138,6 @@ impl Connection for MssqlConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
         Some(&GENERATOR)
-    }
-
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        _filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MSSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        let order_by_clause = if order_by.is_empty() {
-            // OFFSET requires ORDER BY in SQL Server; an order-neutral constant keeps
-            // paginated reads valid for every column type when no order was supplied.
-            "ORDER BY (SELECT NULL)".to_string()
-        } else {
-            let parts: Vec<String> = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
-                })
-                .collect();
-            format!("ORDER BY {}", parts.join(", "))
-        };
-
-        sql.push(' ');
-        sql.push_str(&order_by_clause);
-        sql.push_str(&format!(
-            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            offset, limit
-        ));
-        sql
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
