@@ -554,16 +554,15 @@ fn value_to_i64(value: &Value) -> Option<i64> {
     }
 }
 
-/// Keeps at most `remaining` rows and charges them against the request-wide
-/// budget, returning whether the budget dropped any rows.
-fn retain_within_budget(rows: &mut Vec<Row>, remaining: &mut Option<usize>) -> bool {
+/// Charges `available` rows against the request-wide budget and returns how
+/// many of them to keep and whether the budget dropped any.
+fn admit_within_budget(available: usize, remaining: &mut Option<usize>) -> (usize, bool) {
     let Some(budget) = remaining.as_mut() else {
-        return false;
+        return (available, false);
     };
-    let dropped = rows.len() > *budget;
-    rows.truncate(*budget);
-    *budget -= rows.len();
-    dropped
+    let kept = available.min(*budget);
+    *budget -= kept;
+    (kept, kept < available)
 }
 
 /// Materializes one SDK batch result into a `QueryResult`.
@@ -575,9 +574,12 @@ fn batch_result_to_query_result(
     remaining: &mut Option<usize>,
     start: Instant,
 ) -> QueryResult {
-    let mut rows: Vec<Row> = result
+    // Only the rows the budget keeps are converted.
+    let (kept, truncated) = admit_within_budget(result.rows().len(), remaining);
+    let rows: Vec<Row> = result
         .rows()
         .iter()
+        .take(kept)
         .map(|row| {
             (0..row.column_count())
                 .map(|i| {
@@ -588,8 +590,6 @@ fn batch_result_to_query_result(
                 .collect()
         })
         .collect();
-
-    let truncated = retain_within_budget(&mut rows, remaining);
 
     let columns: Vec<ColumnMeta> = result
         .columns()
@@ -1375,6 +1375,12 @@ mod tests {
 
     fn rows(count: i64) -> Vec<Row> {
         (0..count).map(|index| vec![Value::Int(index)]).collect()
+    }
+
+    fn retain_within_budget(rows: &mut Vec<Row>, remaining: &mut Option<usize>) -> bool {
+        let (kept, truncated) = admit_within_budget(rows.len(), remaining);
+        rows.truncate(kept);
+        truncated
     }
 
     #[test]
