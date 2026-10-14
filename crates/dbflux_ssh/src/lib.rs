@@ -254,9 +254,6 @@ pub struct OpenedSshTunnel {
     pub ssh_host: String,
 }
 
-/// Resolve the SSH target, establish a session and start a tunnel to `db_host:db_port`,
-/// logging the resolved target and the timing of each phase.
-///
 /// Drivers connect to `127.0.0.1:tunnel.local_port()` with their own parameters
 /// and keep the tunnel alive for as long as the connection uses it.
 pub fn open_tunnel(

@@ -235,8 +235,7 @@ pub(crate) fn drop_cascade_not_supported() -> DbError {
     )
 }
 
-/// Wraps an identifier in double quotes and doubles every embedded double quote,
-/// the ANSI quoting SQLite and the default dialect share.
+/// Shared so every double-quoting dialect escapes identifiers the same way.
 pub fn quote_double_quoted_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
