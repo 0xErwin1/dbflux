@@ -53,7 +53,8 @@ holds other statements, the editor asks first: run the entire script, which is
 the default, or run only that statement. A connection whose driver cannot run
 a whole script at once offers only that statement. Run alone, a `BEGIN` leaves a
 transaction open that later runs in the same tab silently join, and a `COMMIT`
-or `ROLLBACK` ends nothing the script did.
+or `ROLLBACK` skips the rest of the script, ending at most a transaction an
+earlier run left open.
 
 Each result is captioned with the lines of the statement that produced it. A
 statement that returns no result set, such as `UPDATE` or `COMMIT`, shows

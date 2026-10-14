@@ -58,8 +58,8 @@ otras sentencias, el editor pregunta primero: ejecutar todo el script, que es la
 opción predeterminada, o solo esa sentencia. Una conexión cuyo driver no puede
 ejecutar un script completo de una vez ofrece solo esa sentencia. Ejecutado solo, un `BEGIN` deja
 abierta una transacción a la que se suman en silencio las ejecuciones
-posteriores de la misma pestaña, y un `COMMIT` o `ROLLBACK` no cierra nada de lo
-que hizo el script.
+posteriores de la misma pestaña, y un `COMMIT` o `ROLLBACK` omite el resto del script
+y como mucho cierra una transacción que dejó abierta una ejecución anterior.
 
 Cada resultado lleva como título las líneas de la sentencia que lo produjo. Una
 sentencia que no devuelve un conjunto de resultados, como `UPDATE` o `COMMIT`,

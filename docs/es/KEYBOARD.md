@@ -245,7 +245,7 @@ hasta el final de la línea sin unir líneas; `u` con contador deshace esa canti
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
-selección del editor, y un clic del ratón vuelve al modo Normal con el cursor
+selección del editor, y un clic izquierdo simple vuelve al modo Normal con el cursor
 donde se hizo clic, como en Vim. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
 se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
