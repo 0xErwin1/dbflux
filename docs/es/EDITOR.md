@@ -52,6 +52,14 @@ También un buffer con un bloque compuesto, como el cuerpo `BEGIN ... END` de un
 procedimiento o trigger, ya que el `;` dentro de él no termina una sentencia; un
 `BEGIN` que abre una transacción no es un bloque.
 
+Cuando la sentencia bajo el cursor solo abre o cierra una transacción (`BEGIN`,
+`START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` o `ABORT`) y el buffer contiene
+otras sentencias, el editor pregunta primero: ejecutar todo el script, que es la
+opción predeterminada, o solo esa sentencia. Ejecutado solo, un `BEGIN` deja
+abierta una transacción a la que se suman en silencio las ejecuciones
+posteriores de la misma pestaña, y un `COMMIT` o `ROLLBACK` no cierra nada de lo
+que hizo el script.
+
 Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
 
 ## Scripts multi-statement

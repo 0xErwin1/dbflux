@@ -1313,6 +1313,10 @@ document:
         many: "No hay texto seleccionado, por lo que se ejecutará todo el script como %{count} sentencias en orden. ¿Continuar?"
       cancel: Cancelar
       run: Ejecutar script
+      run_statement: "Ejecutar solo esta sentencia"
+      transaction:
+        title: "Sentencia de transacción bajo el cursor"
+        message: "La sentencia bajo el cursor (línea %{line}) es \"%{statement}\", que solo abre o cierra una transacción. Ejecutarla sola no ejecuta el resto del script. ¿Ejecutar en su lugar todo el script de %{count} sentencias?"
     dangerous_query:
       fallback:
         title: Advertencia

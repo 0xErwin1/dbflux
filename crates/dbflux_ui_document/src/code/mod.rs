@@ -661,11 +661,22 @@ struct PendingDangerousQuery {
 /// Pending confirmation for running a whole multi-statement script.
 ///
 /// Raised when the user runs without a selection, the buffer holds more than
-/// one statement, and the driver advertises `MULTI_STATEMENT`.
+/// one statement, and the driver advertises `MULTI_STATEMENT`, or when the
+/// statement under the cursor only opens or ends a transaction.
 struct PendingScriptConfirm {
     query: String,
     in_new_tab: bool,
     statement_count: usize,
+    /// The transaction boundary under the cursor that a cursor run would have
+    /// executed alone; the confirmation offers to run just that statement.
+    cursor_statement: Option<CursorStatement>,
+}
+
+/// A statement of the buffer a run without a selection would execute.
+struct CursorStatement {
+    text: String,
+    origin: usize,
+    line: usize,
 }
 
 /// Action resolved by the schema-drift modal.

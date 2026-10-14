@@ -1313,6 +1313,10 @@ document:
         many: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句执行。是否继续？"
       cancel: 取消
       run: 执行脚本
+      run_statement: "仅执行此语句"
+      transaction:
+        title: "光标处的事务语句"
+        message: "光标处的语句（第 %{line} 行）是 \"%{statement}\"，它只会开始或结束事务。单独执行它不会执行脚本的其余部分。是否改为执行包含 %{count} 条语句的整个脚本？"
     dangerous_query:
       fallback:
         title: 警告

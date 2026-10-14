@@ -4284,6 +4284,9 @@ mod tests {
             "document.code.script_confirm.message.many",
             "document.code.script_confirm.cancel",
             "document.code.script_confirm.run",
+            "document.code.script_confirm.run_statement",
+            "document.code.script_confirm.transaction.title",
+            "document.code.script_confirm.transaction.message",
         ];
 
         for key in keys {

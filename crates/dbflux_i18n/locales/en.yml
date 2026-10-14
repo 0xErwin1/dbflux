@@ -1313,6 +1313,10 @@ document:
         many: "No text is selected, so the entire script will run as %{count} statements in order. Continue?"
       cancel: Cancel
       run: Run Script
+      run_statement: "Run Only This Statement"
+      transaction:
+        title: "Transaction statement under the cursor"
+        message: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script. Run the entire script of %{count} statements instead?"
     dangerous_query:
       fallback:
         title: Warning

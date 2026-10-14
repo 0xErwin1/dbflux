@@ -47,6 +47,13 @@ whole. So does a buffer with a compound block, such as the `BEGIN ... END` body
 of a procedure or trigger, since the `;` inside it does not end a statement;
 `BEGIN` that opens a transaction is not a block.
 
+When the statement under the cursor only opens or ends a transaction (`BEGIN`,
+`START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` or `ABORT`) and the buffer
+holds other statements, the editor asks first: run the entire script, which is
+the default, or run only that statement. Run alone, a `BEGIN` leaves a
+transaction open that later runs in the same tab silently join, and a `COMMIT`
+or `ROLLBACK` ends nothing the script did.
+
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ## Multi-statement scripts
