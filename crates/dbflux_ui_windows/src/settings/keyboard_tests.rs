@@ -355,6 +355,44 @@ fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppConte
     );
 }
 
+/// Typing in the key bindings filter types: its letters are not the page's
+/// single-key commands, however the field got focus.
+#[gpui::test]
+fn typing_in_the_keybindings_filter_does_not_run_the_page_commands(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    window.update(|window, cx| {
+        // Focus events reach an input only in the active window.
+        window.activate_window();
+        let filter = keybindings.read(cx).keybindings_filter.clone();
+        filter.update(cx, |state, cx| state.focus(window, cx));
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("c");
+
+    let (open, value) = window.update(|_, cx| {
+        let section = keybindings.read(cx);
+        (
+            section.context_filter.read(cx).is_open(),
+            section.keybindings_filter.read(cx).value().to_string(),
+        )
+    });
+    assert!(
+        !open,
+        "`c` typed in the filter does not open the context filter"
+    );
+    assert_eq!(value, "c");
+}
+
 /// In the key bindings editor `c` opens the context filter with keyboard
 /// focus and Shift+R drops every override, as the Reset to defaults button.
 #[gpui::test]

@@ -17,7 +17,7 @@ use dbflux_ui_base::keymap::{
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use super::keybindings_section::{
@@ -161,11 +161,6 @@ impl KeybindingsSection {
         let current_selection = self.keybindings_selection;
         let is_content_focused = self.content_focused && !self.keybindings_editing_filter;
 
-        let conflicts_by_slot: HashMap<BindingSlot, Vec<BindingSlot>> = self
-            .overrides
-            .existing_conflicts(default_keymap(), &self.overlap)
-            .into_iter()
-            .collect();
         let predicate_target = self
             .predicate_editing
             .as_ref()
@@ -211,7 +206,8 @@ impl KeybindingsSection {
                 let edits_predicate =
                     !entry.is_inherited && predicate_target.as_ref() == Some(&entry.slot);
                 let warning = self.binding_warning(&entry);
-                let conflict_context = conflicts_by_slot
+                let conflict_context = self
+                    .conflicts
                     .get(&entry.slot)
                     .and_then(|others| others.first())
                     .map(|other| other.context);
@@ -583,7 +579,12 @@ impl KeybindingsSection {
             return Some(dbflux_i18n::t!("settings.keybindings.warning.typed_text"));
         }
 
-        let is_user_binding = self.overrides.is_overridden(&entry.slot);
+        // Only a binding the user changed warns, so the scan for prefix
+        // conflicts (it rebuilds the default slots) runs for those alone.
+        if !self.overrides.is_overridden(&entry.slot) {
+            return None;
+        }
+
         let prefixes = self.overrides.prefix_conflicts_for(
             default_keymap(),
             &entry.slot,
@@ -592,8 +593,7 @@ impl KeybindingsSection {
             &self.overlap,
         );
 
-        (is_user_binding && !prefixes.is_empty())
-            .then(|| dbflux_i18n::t!("settings.keybindings.warning.prefix"))
+        (!prefixes.is_empty()).then(|| dbflux_i18n::t!("settings.keybindings.warning.prefix"))
     }
 
     /// Reset arrow (overridden bindings only), the context editor (on the
