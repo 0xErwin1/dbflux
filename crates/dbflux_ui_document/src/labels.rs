@@ -4299,6 +4299,7 @@ mod tests {
             "document.code.script_confirm.run_statement",
             "document.code.script_confirm.transaction.title",
             "document.code.script_confirm.transaction.message",
+            "document.code.script_confirm.transaction.message_statement_only",
         ];
 
         for key in keys {

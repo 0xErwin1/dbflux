@@ -50,7 +50,8 @@ of a procedure or trigger, since the `;` inside it does not end a statement;
 When the statement under the cursor only opens or ends a transaction (`BEGIN`,
 `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` or `ABORT`) and the buffer
 holds other statements, the editor asks first: run the entire script, which is
-the default, or run only that statement. Run alone, a `BEGIN` leaves a
+the default, or run only that statement. A connection whose driver cannot run
+a whole script at once offers only that statement. Run alone, a `BEGIN` leaves a
 transaction open that later runs in the same tab silently join, and a `COMMIT`
 or `ROLLBACK` ends nothing the script did.
 

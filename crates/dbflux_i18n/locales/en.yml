@@ -1317,6 +1317,7 @@ document:
       transaction:
         title: "Transaction statement under the cursor"
         message: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script. Run the entire script of %{count} statements instead?"
+        message_statement_only: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script, and this connection cannot run a whole script at once: select the statements to run them together. Run only this statement?"
     dangerous_query:
       fallback:
         title: Warning

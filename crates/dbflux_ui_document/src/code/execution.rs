@@ -218,6 +218,9 @@ impl CodeDocument {
                             text: statement,
                             origin,
                             line,
+                            offers_script: statements::guard_offers_script(
+                                self.connection_capabilities(cx),
+                            ),
                         }),
                     },
                     window,
@@ -306,7 +309,29 @@ impl CodeDocument {
         supports_batch.then_some(count)
     }
 
+    /// Capabilities of the active connection's driver, `None` without one.
+    fn connection_capabilities(&self, cx: &Context<Self>) -> Option<DriverCapabilities> {
+        let conn_id = self.connection_id?;
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&conn_id)?;
+
+        Some(connected.connection.metadata().capabilities)
+    }
+
     pub(super) fn confirm_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter confirms the dialog; when it offers only the statement under
+        // the cursor, that is what Enter runs.
+        let statement_only = self
+            .pending
+            .script_confirm
+            .as_ref()
+            .and_then(|pending| pending.cursor_statement.as_ref())
+            .is_some_and(|statement| !statement.offers_script);
+        if statement_only {
+            self.confirm_cursor_statement(window, cx);
+            return;
+        }
+
         let Some(pending) = self.pending.script_confirm.take() else {
             return;
         };

@@ -1317,6 +1317,7 @@ document:
       transaction:
         title: "Sentencia de transacción bajo el cursor"
         message: "La sentencia bajo el cursor (línea %{line}) es \"%{statement}\", que solo abre o cierra una transacción. Ejecutarla sola no ejecuta el resto del script. ¿Ejecutar en su lugar todo el script de %{count} sentencias?"
+        message_statement_only: "La sentencia bajo el cursor (línea %{line}) es \"%{statement}\", que solo abre o cierra una transacción. Ejecutarla sola no ejecuta el resto del script, y esta conexión no puede ejecutar un script completo de una vez: seleccione las sentencias para ejecutarlas juntas. ¿Ejecutar solo esta sentencia?"
     dangerous_query:
       fallback:
         title: Advertencia

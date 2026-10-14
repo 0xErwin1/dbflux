@@ -55,7 +55,8 @@ procedimiento o trigger, ya que el `;` dentro de él no termina una sentencia; u
 Cuando la sentencia bajo el cursor solo abre o cierra una transacción (`BEGIN`,
 `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` o `ABORT`) y el buffer contiene
 otras sentencias, el editor pregunta primero: ejecutar todo el script, que es la
-opción predeterminada, o solo esa sentencia. Ejecutado solo, un `BEGIN` deja
+opción predeterminada, o solo esa sentencia. Una conexión cuyo driver no puede
+ejecutar un script completo de una vez ofrece solo esa sentencia. Ejecutado solo, un `BEGIN` deja
 abierta una transacción a la que se suman en silencio las ejecuciones
 posteriores de la misma pestaña, y un `COMMIT` o `ROLLBACK` no cierra nada de lo
 que hizo el script.

@@ -1317,6 +1317,7 @@ document:
       transaction:
         title: "Instrução de transação sob o cursor"
         message: "A instrução sob o cursor (linha %{line}) é \"%{statement}\", que apenas abre ou encerra uma transação. Executá-la sozinha não executa o restante do script. Executar o script inteiro de %{count} instruções em vez disso?"
+        message_statement_only: "A instrução sob o cursor (linha %{line}) é \"%{statement}\", que apenas abre ou encerra uma transação. Executá-la sozinha não executa o restante do script, e esta conexão não pode executar um script inteiro de uma vez: selecione as instruções para executá-las juntas. Executar apenas esta instrução?"
     dangerous_query:
       fallback:
         title: Aviso

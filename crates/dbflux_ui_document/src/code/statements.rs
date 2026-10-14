@@ -74,7 +74,17 @@ pub(super) fn statement_at_cursor(ranges: &[Range<usize>], cursor: usize) -> Opt
 /// of a script, such a statement leaves the work it brackets undone, or a
 /// transaction open that the next run silently joins.
 pub(super) fn is_transaction_boundary(statement: &str) -> bool {
-    let words: Vec<String> = dbflux_core::strip_leading_comments(statement)
+    let statement = dbflux_core::strip_leading_comments(statement);
+    // A trailing comment is not part of the statement: `ROLLBACK -- to start`
+    // still ends the transaction.
+    let statement = [statement.find("--"), statement.find("/*")]
+        .into_iter()
+        .flatten()
+        .min()
+        .and_then(|comment| statement.get(..comment))
+        .unwrap_or(statement);
+
+    let words: Vec<String> = statement
         .split(|character: char| character.is_whitespace() || character == ';')
         .filter(|word| !word.is_empty())
         .map(str::to_ascii_uppercase)
@@ -86,12 +96,25 @@ pub(super) fn is_transaction_boundary(statement: &str) -> bool {
     let rest = words.get(1..).unwrap_or_default();
 
     match first.as_str() {
-        "BEGIN" | "COMMIT" | "END" | "ABORT" => true,
+        "BEGIN" | "END" | "ABORT" => true,
         "START" => rest.first().is_some_and(|word| word == "TRANSACTION"),
+        // `COMMIT PREPARED` ends a prepared transaction, not the session's.
+        "COMMIT" => rest.first().is_none_or(|word| word != "PREPARED"),
         // `ROLLBACK TO` returns to a savepoint and keeps the transaction open.
-        "ROLLBACK" => !rest.iter().any(|word| word == "TO"),
+        "ROLLBACK" => {
+            rest.first().is_none_or(|word| word != "PREPARED")
+                && !rest.iter().any(|word| word == "TO")
+        }
         _ => false,
     }
+}
+
+/// Whether the transaction-boundary confirmation offers to run the whole
+/// script: not on a driver that cannot run a batch.
+pub(super) fn guard_offers_script(capabilities: Option<dbflux_core::DriverCapabilities>) -> bool {
+    capabilities.is_none_or(|capabilities| {
+        capabilities.contains(dbflux_core::DriverCapabilities::MULTI_STATEMENT)
+    })
 }
 
 /// The context bar's run summary (IslEditor): "3 statements · last run
@@ -302,8 +325,8 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_statement, is_transaction_boundary, result_statement_captions, run_summary_label,
-        statement_at_cursor,
+        cursor_statement, guard_offers_script, is_transaction_boundary, result_statement_captions,
+        run_summary_label, statement_at_cursor,
     };
     use dbflux_core::QueryLanguage;
 
@@ -324,12 +347,28 @@ mod tests {
             "COMMIT;",
             "-- Must return one row.\nCOMMIT",
             "/* close */ ROLLBACK",
+            "ROLLBACK -- go to start",
+            "COMMIT /* to disk */",
         ] {
             assert!(
                 is_transaction_boundary(statement),
                 "{statement:?} opens or ends a transaction"
             );
         }
+    }
+
+    #[test]
+    fn the_script_is_offered_unless_the_driver_cannot_run_one() {
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            guard_offers_script(None),
+            "nothing runs without a connection"
+        );
+        assert!(guard_offers_script(Some(
+            DriverCapabilities::MULTI_STATEMENT
+        )));
+        assert!(!guard_offers_script(Some(DriverCapabilities::empty())));
     }
 
     #[test]
@@ -342,6 +381,8 @@ mod tests {
             "SAVEPOINT before_update",
             "RELEASE SAVEPOINT before_update",
             "START REPLICATION",
+            "COMMIT PREPARED 'checkout'",
+            "ROLLBACK PREPARED 'checkout'",
             "COMMITTED_AT",
             "-- COMMIT\nSELECT 1",
             "",
@@ -836,6 +877,34 @@ mod transaction_guard_tests {
         assert_eq!(
             query_origin(window, &document),
             Some(SCRIPT.find("COMMIT").expect("COMMIT in the script"))
+        );
+    }
+
+    #[gpui::test]
+    fn without_batch_support_enter_runs_only_the_boundary(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, COMMIT_LINE);
+        run(window, &document);
+        window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                if let Some(statement) = document
+                    .pending
+                    .script_confirm
+                    .as_mut()
+                    .and_then(|pending| pending.cursor_statement.as_mut())
+                {
+                    statement.offers_script = false;
+                }
+            });
+        });
+
+        window.simulate_keystrokes("enter");
+
+        assert!(guarded_statement(window, &document).is_none());
+        assert!(ran_a_query(window, &toasts));
+        assert_eq!(
+            query_origin(window, &document),
+            Some(SCRIPT.find("COMMIT").expect("COMMIT in the script")),
+            "a driver without batches never receives the whole script"
         );
     }
 

@@ -677,6 +677,9 @@ struct CursorStatement {
     text: String,
     origin: usize,
     line: usize,
+    /// Whether the confirmation may offer the whole script: false on a
+    /// driver that cannot run a batch, where only this statement can run.
+    offers_script: bool,
 }
 
 /// Action resolved by the schema-drift modal.
