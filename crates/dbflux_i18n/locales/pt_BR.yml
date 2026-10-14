@@ -1313,6 +1313,11 @@ document:
         many: "Nenhum texto está selecionado, então o script inteiro será executado em ordem como %{count} instruções. Continuar?"
       cancel: Cancelar
       run: Executar script
+      run_statement: "Executar apenas esta instrução"
+      transaction:
+        title: "Instrução de transação sob o cursor"
+        message: "A instrução sob o cursor (linha %{line}) é \"%{statement}\", que apenas abre ou encerra uma transação. Executá-la sozinha não executa o restante do script. Executar o script inteiro de %{count} instruções em vez disso?"
+        message_statement_only: "A instrução sob o cursor (linha %{line}) é \"%{statement}\", que apenas abre ou encerra uma transação. Executá-la sozinha não executa o restante do script, e esta conexão não pode executar um script inteiro de uma vez: selecione as instruções para executá-las juntas. Executar apenas esta instrução?"
     dangerous_query:
       fallback:
         title: Aviso
@@ -1725,6 +1730,10 @@ document:
         rows:
           one: "%{count} linha"
           many: "%{count} linhas"
+        executed: "Instrução executada"
+        affected_rows:
+          one: "%{count} linha afetada"
+          many: "%{count} linhas afetadas"
         limited_rows:
           first: "Primeiras %{count} linhas carregadas"
           of_total: "%{loaded}/%{total} linhas carregadas"

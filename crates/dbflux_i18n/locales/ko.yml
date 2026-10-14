@@ -1313,6 +1313,11 @@ document:
         many: "텍스트가 선택되지 않았습니다. 전체 스크립트가 %{count}개 문으로 순서대로 실행됩니다. 계속하시겠습니까?"
       cancel: 취소
       run: 스크립트 실행
+      run_statement: "이 문만 실행"
+      transaction:
+        title: "커서 위치의 트랜잭션 문"
+        message: "커서 위치의 문(%{line}행)은 \"%{statement}\"이며, 트랜잭션을 시작하거나 끝내기만 합니다. 이 문만 실행하면 스크립트의 나머지 부분은 실행되지 않습니다. 대신 %{count}개 문으로 된 전체 스크립트를 실행하시겠습니까?"
+        message_statement_only: "커서 위치의 문(%{line}행)은 \"%{statement}\"이며, 트랜잭션을 시작하거나 끝내기만 합니다. 이 문만 실행하면 스크립트의 나머지 부분은 실행되지 않으며, 이 연결은 전체 스크립트를 한 번에 실행할 수 없습니다. 함께 실행하려면 문을 선택하세요. 이 문만 실행하시겠습니까?"
     dangerous_query:
       fallback:
         title: 경고
@@ -1725,6 +1730,10 @@ document:
         rows:
           one: "행 %{count}개"
           many: "행 %{count}개"
+        executed: "문이 실행되었습니다"
+        affected_rows:
+          one: "%{count}개 행이 영향을 받음"
+          many: "%{count}개 행이 영향을 받음"
         limited_rows:
           first: "처음 %{count}개 행 로드됨"
           of_total: "%{loaded}/%{total}개 행 로드됨"

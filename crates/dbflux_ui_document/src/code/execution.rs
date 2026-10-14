@@ -200,6 +200,35 @@ impl CodeDocument {
                 .and_then(|range| Some((range.start, query.get(range)?.to_string())));
 
         if let Some((origin, statement)) = cursor_statement {
+            // A lone BEGIN leaves a transaction open that later runs silently
+            // join; a lone COMMIT or ROLLBACK ends nothing the script did.
+            if statements::is_transaction_boundary(&statement) {
+                let statement_count = self.effective_language().statement_count(&query);
+                let line = query
+                    .get(..origin)
+                    .map_or(0, |prefix| prefix.matches('\n').count())
+                    + 1;
+
+                self.ask_script_confirm(
+                    PendingScriptConfirm {
+                        query,
+                        in_new_tab,
+                        statement_count,
+                        cursor_statement: Some(CursorStatement {
+                            text: statement,
+                            origin,
+                            line,
+                            offers_script: statements::guard_offers_script(
+                                self.connection_capabilities(cx),
+                            ),
+                        }),
+                    },
+                    window,
+                    cx,
+                );
+                return;
+            }
+
             self.execution.query_origin = Some(origin);
             self.run_query_text(statement, in_new_tab, window, cx);
             return;
@@ -217,6 +246,7 @@ impl CodeDocument {
                     query,
                     in_new_tab,
                     statement_count,
+                    cursor_statement: None,
                 },
                 window,
                 cx,
@@ -279,7 +309,29 @@ impl CodeDocument {
         supports_batch.then_some(count)
     }
 
+    /// Capabilities of the active connection's driver, `None` without one.
+    fn connection_capabilities(&self, cx: &Context<Self>) -> Option<DriverCapabilities> {
+        let conn_id = self.connection_id?;
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&conn_id)?;
+
+        Some(connected.connection.metadata().capabilities)
+    }
+
     pub(super) fn confirm_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter confirms the dialog; when it offers only the statement under
+        // the cursor, that is what Enter runs.
+        let statement_only = self
+            .pending
+            .script_confirm
+            .as_ref()
+            .and_then(|pending| pending.cursor_statement.as_ref())
+            .is_some_and(|statement| !statement.offers_script);
+        if statement_only {
+            self.confirm_cursor_statement(window, cx);
+            return;
+        }
+
         let Some(pending) = self.pending.script_confirm.take() else {
             return;
         };
@@ -287,7 +339,27 @@ impl CodeDocument {
         self.script_confirm_focus.restore(cx);
         self.focus(window, cx);
         cx.notify();
+        self.execution.query_origin = Some(0);
         self.run_query_text(pending.query, pending.in_new_tab, window, cx);
+    }
+
+    /// Runs only the transaction boundary the script confirmation was raised
+    /// for, as a run without the confirmation would have.
+    pub(super) fn confirm_cursor_statement(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending.script_confirm.take() else {
+            return;
+        };
+
+        self.script_confirm_focus.restore(cx);
+        self.focus(window, cx);
+        cx.notify();
+
+        let Some(statement) = pending.cursor_statement else {
+            return;
+        };
+
+        self.execution.query_origin = Some(statement.origin);
+        self.run_query_text(statement.text, pending.in_new_tab, window, cx);
     }
 
     pub(super) fn cancel_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3541,6 +3613,7 @@ mod confirm_keyboard_tests {
                             query,
                             in_new_tab: false,
                             statement_count: 2,
+                            cursor_statement: None,
                         },
                         window,
                         cx,

@@ -5402,3 +5402,58 @@ fn question_mark_searches_backward(cx: &mut TestAppContext) {
     editor.keys("escape n");
     assert_eq!(editor.cursor(), 0);
 }
+
+/// Clicks the editor text at byte `offset` with the left button.
+fn click_at_offset(editor: &mut Fixture, offset: usize) {
+    let document = editor.document.clone();
+    let position = editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.read(cx);
+        let bounds = input
+            .range_to_bounds(&(offset..offset))
+            .expect("the offset is laid out");
+        let line_height = input.line_height().expect("the editor is laid out");
+        gpui::point(
+            bounds.origin.x + gpui::px(1.0),
+            bounds.origin.y + line_height / 2.0,
+        )
+    });
+    editor
+        .window
+        .simulate_click(position, gpui::Modifiers::default());
+    editor.window.run_until_parked();
+}
+
+#[gpui::test]
+fn click_in_visual_mode_returns_to_normal_at_the_clicked_offset(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "hello world", true);
+    editor.keys("v l l");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+    assert_eq!(editor.selection(), 0..3);
+
+    click_at_offset(&mut editor, 8);
+
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 8);
+    assert_eq!(editor.selection(), 8..8);
+    assert_eq!(editor.motion_offset(), 8);
+
+    editor.keys("l");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 9);
+    assert_eq!(editor.selection(), 9..9);
+}
+
+#[gpui::test]
+fn click_in_normal_mode_only_moves_the_cursor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "hello world", true);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    click_at_offset(&mut editor, 6);
+
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 6);
+    assert_eq!(editor.selection(), 6..6);
+
+    editor.keys("l");
+    assert_eq!(editor.cursor(), 7);
+}
