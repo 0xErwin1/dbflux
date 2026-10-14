@@ -768,7 +768,8 @@ mod tests {
         });
 
         let query_id = start_task(&app_state, TaskKind::Query, window);
-        let key_value_ids = [TaskKind::KeyScan, TaskKind::KeyGet, TaskKind::KeyMutation]
+        let key_scan_id = start_task(&app_state, TaskKind::KeyScan, window);
+        let key_read_and_write_ids = [TaskKind::KeyGet, TaskKind::KeyMutation]
             .map(|kind| start_task(&app_state, kind, window));
         window.run_until_parked();
 
@@ -778,13 +779,19 @@ mod tests {
                 .is_some(),
             "a running query keeps its cancel button"
         );
+        assert!(
+            window
+                .debug_bounds(selector("cancel-task", key_scan_id))
+                .is_some(),
+            "a running key scan offers a cancel button"
+        );
 
-        for task_id in key_value_ids {
+        for task_id in key_read_and_write_ids {
             assert!(
                 window
                     .debug_bounds(selector("cancel-task", task_id))
                     .is_none(),
-                "a key-value task must not render a cancel button"
+                "a key read or write must not render a cancel button"
             );
         }
     }

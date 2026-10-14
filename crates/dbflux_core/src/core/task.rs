@@ -65,18 +65,15 @@ impl TaskKind {
 
     /// Whether a user cancel request can stop the work behind a task of this kind.
     ///
-    /// Key-value scans, reads, and mutations run as one blocking
-    /// `KeyValueApi` call that takes no cancel token, and no key-value driver
-    /// exposes a cancel path for them. Cancelling such a task could only mark
-    /// it cancelled while the driver keeps working (and a mutation still
-    /// commits), so these kinds report `false` and the UI hides their cancel
-    /// control. Internal supersede logic may still cancel them to discard a
-    /// stale result.
+    /// Key scans pass their token to `KeyValueApi::scan_keys_with_cancel`,
+    /// which stops between server round trips. Key reads and mutations run as
+    /// one blocking `KeyValueApi` call with no cancel path: cancelling one
+    /// could only mark it cancelled while the driver keeps working (and a
+    /// mutation still commits), so these kinds report `false` and the UI hides
+    /// their cancel control. Internal supersede logic may still cancel them to
+    /// discard a stale result.
     pub fn supports_cancellation(&self) -> bool {
-        !matches!(
-            self,
-            TaskKind::KeyScan | TaskKind::KeyGet | TaskKind::KeyMutation
-        )
+        !matches!(self, TaskKind::KeyGet | TaskKind::KeyMutation)
     }
 }
 
@@ -626,10 +623,18 @@ mod tests {
     }
 
     #[test]
-    fn key_value_tasks_are_not_cancellable_while_running() {
+    fn running_key_scan_task_is_cancellable() {
+        let mut manager = TaskManager::new();
+        let (id, _token) = manager.start(TaskKind::KeyScan, "SCAN 0");
+
+        assert!(manager.get(id).expect("task exists").is_cancellable);
+    }
+
+    #[test]
+    fn key_reads_and_writes_are_not_cancellable_while_running() {
         let mut manager = TaskManager::new();
 
-        for kind in [TaskKind::KeyScan, TaskKind::KeyGet, TaskKind::KeyMutation] {
+        for kind in [TaskKind::KeyGet, TaskKind::KeyMutation] {
             let (id, _token) = manager.start(kind, kind.label());
             let snapshot = manager.get(id).expect("task exists");
 
