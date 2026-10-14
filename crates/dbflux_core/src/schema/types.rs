@@ -787,14 +787,22 @@ pub struct ColumnInfo {
     /// For enum/set columns: the list of allowed values.
     /// Populated by drivers that support custom types (PostgreSQL enums,
     /// MySQL ENUM/SET).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub enum_values: Option<Vec<String>>,
 }
 
 /// Relational tables store [`IndexInfo`], document collections store
 /// [`CollectionIndexInfo`] with direction, sparse, and TTL metadata.
+///
+/// Externally tagged on purpose: serde's internally tagged representation
+/// cannot encode a newtype variant whose payload is a sequence, so postcard
+/// (the driver RPC codec) rejected every `IndexData` value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(rename_all = "snake_case")]
 pub enum IndexData {
     Relational(Vec<IndexInfo>),
     Document(Vec<CollectionIndexInfo>),

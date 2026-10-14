@@ -382,12 +382,15 @@ pub struct TableBrowseRequest {
     pub pagination: Pagination,
     pub order_by: Vec<OrderByColumn>,
     pub filter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
     /// The columns to read, in the order to return them. Empty reads every
     /// column. Honoured by connections that report
     /// `TableViewFeatures::COLUMN_PROJECTION`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub columns: Vec<String>,
 }
 
@@ -499,15 +502,16 @@ pub struct CollectionBrowseRequest {
     pub collection: CollectionRef,
     pub pagination: Pagination,
     pub filter: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `TableBrowseRequest::semantic_filter`.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
     /// Native projection document selecting the fields each document returns.
     /// Honoured by drivers that report `DocumentFeatures::QUERY_SLOTS`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub projection: Option<serde_json::Value>,
     /// Native sort document. Honoured by drivers that report
     /// `DocumentFeatures::QUERY_SLOTS`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub sort: Option<serde_json::Value>,
 }
 
@@ -559,7 +563,8 @@ pub struct TableCountRequest {
     #[serde(skip)]
     pub database: Option<String>,
     pub filter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `TableBrowseRequest::semantic_filter`.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
 }
 
@@ -594,7 +599,8 @@ impl TableCountRequest {
 pub struct CollectionCountRequest {
     pub collection: CollectionRef,
     pub filter: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `TableBrowseRequest::semantic_filter`.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
 }
 
@@ -747,12 +753,20 @@ mod tests {
     }
 
     #[test]
-    fn a_request_without_columns_serializes_as_before_and_old_payloads_parse() {
+    fn a_request_without_columns_always_encodes_the_field_and_old_payloads_parse() {
         let request = TableBrowseRequest::new(TableRef::new("events"));
         let json = serde_json::to_value(&request).unwrap();
-        assert!(json.get("columns").is_none());
+        // postcard has no representation for an absent field, so `columns`
+        // always encodes; JSON consumers see an empty array, not a missing key.
+        assert_eq!(
+            json.get("columns").and_then(|value| value.as_array()),
+            Some(&Vec::new())
+        );
 
-        let parsed: TableBrowseRequest = serde_json::from_value(json).unwrap();
+        // A JSON payload written before the field always encoded still parses.
+        let mut legacy = json.clone();
+        legacy.as_object_mut().unwrap().remove("columns");
+        let parsed: TableBrowseRequest = serde_json::from_value(legacy).unwrap();
         assert!(parsed.columns.is_empty());
 
         let projected = request.with_columns(vec!["ts".into()]);

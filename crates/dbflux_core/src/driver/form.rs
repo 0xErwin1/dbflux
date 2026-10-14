@@ -172,7 +172,10 @@ pub enum FormSectionIcon {
 pub struct FormSection {
     pub title: String,
     /// Icon before the title; `None` draws the title alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub icon: Option<FormSectionIcon>,
     pub fields: Vec<FormFieldDef>,
 }
