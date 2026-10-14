@@ -117,8 +117,8 @@ mod tests {
             .unwrap();
         stmt.query_map([], |row| row.get::<_, String>(0))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     fn seed_old_schema(conn: &Connection) {

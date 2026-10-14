@@ -15,12 +15,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use dbflux_core::{SchemaSnapshotRecord, SnapshotDepth, TableCreationMetadata, TableInfo};
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -193,7 +194,7 @@ impl SchemaSnapshotRepo {
         let rows = stmt
             .query_map(rusqlite::params![profile_id, database], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("sch_schema_snapshots"))
             .collect();
 
         Ok(rows)
@@ -263,7 +264,8 @@ fn load_record(conn: &Connection, id: &str) -> Result<Option<SchemaSnapshotRecor
                 })
             },
         )
-        .ok();
+        .optional()
+        .map_err(sqlite_err)?;
 
     let root = match root {
         Some(r) => r,
@@ -290,8 +292,8 @@ fn load_record(conn: &Connection, id: &str) -> Result<Option<SchemaSnapshotRecor
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_err)?;
 
     let mut tables = Vec::with_capacity(rows.len());
     let mut creation_metadata = Vec::new();
@@ -436,6 +438,28 @@ mod tests {
             tables: vec![sample_table("users"), sample_table("orders")],
             creation_metadata: Vec::new(),
         }
+    }
+
+    #[test]
+    fn get_fails_when_a_table_row_of_the_snapshot_is_unreadable() {
+        let (conn, repo, profile_id) = setup("unreadable_table_row");
+        let record = sample_record(profile_id, Some("db1"), 1000);
+        repo.insert(&record).expect("insert");
+
+        // A BLOB keeps its storage class in a TEXT column, so reading
+        // `detail_json` as a String fails for this row only.
+        conn.lock()
+            .expect("lock connection")
+            .execute(
+                "UPDATE sch_snapshot_tables SET detail_json = X'00' WHERE name = 'orders'",
+                [],
+            )
+            .expect("corrupt one table row");
+
+        assert!(
+            repo.get(&record.id.to_string()).is_err(),
+            "a snapshot missing a table would diff as if the table were dropped"
+        );
     }
 
     #[test]

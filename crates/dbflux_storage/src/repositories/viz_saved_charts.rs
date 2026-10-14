@@ -29,6 +29,7 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 use crate::repositories::viz_saved_chart_binding_y::BindingYDto;
 use crate::repositories::viz_saved_chart_series::SeriesDto;
 use crate::repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto;
@@ -147,7 +148,7 @@ impl SavedChartsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_saved_charts"))
             .collect();
 
         drop(stmt);
@@ -186,7 +187,7 @@ impl SavedChartsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_saved_charts"))
             .collect();
 
         drop(stmt);
@@ -227,7 +228,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_dashboard_panels"))
                 .collect()
         };
 
@@ -269,7 +270,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_saved_charts"))
                 .collect()
         };
 
@@ -563,7 +564,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_saved_chart_series"))
                 .collect();
 
             for s in series_rows {
@@ -603,7 +604,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_saved_chart_binding_y"))
                 .collect();
 
             for b in binding_y_rows {
@@ -650,7 +651,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_saved_chart_source_metric_series"))
                 .collect();
 
             for s in metric_series_rows {
@@ -693,7 +694,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_saved_chart_source_metric_dimensions"))
                 .collect();
 
             for d in dim_rows {
@@ -729,7 +730,7 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(readable_row("viz_saved_chart_source_instance_metric"))
                 .collect();
 
             for (chart_id, metric_id) in inst_rows {
@@ -780,7 +781,7 @@ fn query_parent_rows<P: rusqlite::Params>(
             path: DB_PATH.into(),
             source,
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(readable_row("viz_saved_charts"))
         .collect();
 
     Ok(rows)

@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -60,7 +61,7 @@ impl SavedChartBindingYRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_saved_chart_binding_y"))
             .collect();
 
         Ok(rows)

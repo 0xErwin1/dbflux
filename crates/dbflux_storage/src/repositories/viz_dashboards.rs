@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -71,7 +72,7 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_dashboards"))
             .collect();
 
         Ok(rows)
@@ -102,7 +103,7 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_dashboards"))
             .collect();
 
         Ok(rows.pop())
@@ -187,7 +188,7 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_dashboard_panels"))
             .filter_map(|s| {
                 Uuid::parse_str(&s)
                     .map_err(|e| {
@@ -230,7 +231,7 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_dashboards"))
             .collect();
 
         Ok(rows)

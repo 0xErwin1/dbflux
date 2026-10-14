@@ -66,6 +66,7 @@ fn parse_conditions_envelope(raw: &str) -> Option<JoinOn> {
 }
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -112,7 +113,7 @@ impl SavedQueryRepo {
         let rows = stmt
             .query_map([profile_id], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("qry_saved_queries"))
             .collect();
 
         Ok(rows)
@@ -134,7 +135,7 @@ impl SavedQueryRepo {
         let rows = stmt
             .query_map([], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("qry_saved_queries"))
             .collect();
 
         Ok(rows)
@@ -519,7 +520,7 @@ fn load_columns(conn: &Connection, id: &str) -> Result<Vec<ProjectedColumn>, Sto
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
+        .filter_map(readable_row("qry_saved_query_columns"))
         .collect();
 
     Ok(columns)
@@ -550,7 +551,7 @@ fn load_sorts(conn: &Connection, id: &str) -> Result<Vec<SortEntry>, StorageErro
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
+        .filter_map(readable_row("qry_saved_query_sorts"))
         .collect();
 
     Ok(sorts)
@@ -603,7 +604,7 @@ fn load_joins(conn: &Connection, id: &str) -> Result<Vec<JoinStep>, StorageError
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
+        .filter_map(readable_row("qry_saved_query_joins"))
         .collect();
 
     Ok(joins)
