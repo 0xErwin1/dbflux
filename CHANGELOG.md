@@ -50,6 +50,10 @@ All notable changes to DBFlux will be documented in this file.
 * **A sidebar row being renamed announced the row menu's glyph** — While the inline editor stood in for a row's label, the row was announced as `⋯` and nothing else, and once the rename settled the glyph was part of the name (`new_folderreports ⋯`). A row now names itself after the item it stands for — the connection, folder, database, table or script — so the editor cannot take the name away and the glyph never joins it. See Contributing.
 * **Turso scripts with several statements run from the editor** — A Turso editor tab refused a script of two or more statements with "unsupported or multiple transaction-control statements in the editor", even when none of them was `BEGIN`, `COMMIT` or `ROLLBACK`. Such a script now runs; a script that mixes other statements with transaction control is still refused.
 
+### Security
+
+* **Creating, importing, renaming or moving a script could write past an external folder through a link** — Inside a registered external scripts folder, a name that already exists as a symlink is now treated as taken: a dangling link is refused with the same "already exists" message as any other name, instead of the new file being written where the link points. A write that a folder swapped for a link sends outside the folder is detected and undone, and the operation reports the folder's "resolves outside the scripts folder" error. A symlink the user placed in DBFlux's own folder keeps working, the files an external folder already holds are unchanged, and the messages for an existing file or folder are the same. A full fix still needs an `openat`-with-`O_NOFOLLOW` walk of every path component, which this change does not add. See Browsing the Schema.
+
 ## [0.8.11] - 2026-10-13
 
 ### Fixed
