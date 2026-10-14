@@ -432,6 +432,7 @@ impl Sidebar {
                 task_description,
                 Some(profile_id),
             );
+            state.tasks_mut().mark_uncancellable(task_id);
             task_id
         });
 

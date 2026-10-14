@@ -334,6 +334,9 @@ impl Sidebar {
                                     format!("  ↳ {}", description),
                                     Some(profile_id),
                                 );
+                            // The parent Connect task owns the pipeline's
+                            // cancel; a stage row only reports progress.
+                            app_state.tasks_mut().mark_uncancellable(stage_task_id);
                             current_stage = Some((description.clone(), stage_task_id));
 
                             cx.emit(AppStateChanged);

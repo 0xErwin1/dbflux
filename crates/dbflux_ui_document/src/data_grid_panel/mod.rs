@@ -3097,7 +3097,7 @@ impl DataGridPanel {
             vec![]
         };
 
-        let (task_id, cancel_handle) = self.runner.start_mutation(
+        let (task_id, cancel_handle) = self.runner.start_cancellable_mutation(
             dbflux_core::TaskKind::Query,
             crate::labels::visual_mutation_task_label(mode),
             cx,
