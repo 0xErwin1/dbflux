@@ -2639,6 +2639,17 @@ fn postgres_server_notices_travel_with_the_result() -> Result<(), DbError> {
             assert!(notices.is_empty(), "{script}: {notices:?}");
         }
 
+        // The adopted `BEGIN` reports what the same script sent at once does.
+        let limited = connection
+            .execute(&QueryRequest::new("SELECT 1; BEGIN; SELECT 2; COMMIT").with_limit(10))?;
+        let unlimited =
+            connection.execute(&QueryRequest::new("SELECT 1; BEGIN; SELECT 2; COMMIT"))?;
+        assert_eq!(limited.additional_results[0].affected_rows, Some(0));
+        assert_eq!(
+            limited.additional_results[0].affected_rows,
+            unlimited.additional_results[0].affected_rows
+        );
+
         // The block the user `BEGIN` adopted stays open until the user's
         // `COMMIT`: rows written before it commit with it.
         connection.execute(

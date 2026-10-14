@@ -5779,7 +5779,7 @@ fn execute_bounded_batch(
             results.push(QueryResult::table(
                 Vec::new(),
                 Vec::new(),
-                None,
+                Some(0),
                 start.elapsed(),
             ));
             block = BatchBlock::Explicit;
