@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use dbflux_core::{
@@ -199,7 +199,8 @@ impl SavedQueryRepo {
                 rusqlite::params![profile_id, name],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(sqlite_err)?;
 
         let id = match existing_id {
             Some(id) => id,
@@ -456,7 +457,8 @@ fn load_spec(conn: &Connection, id: &str) -> Result<Option<VisualQuerySpec>, Sto
                 })
             },
         )
-        .ok();
+        .optional()
+        .map_err(sqlite_err)?;
 
     let root = match row {
         Some(r) => r,
@@ -707,7 +709,27 @@ mod tests {
         }
     }
 
-    // --- unreadable child rows ---
+    #[test]
+    fn get_fails_when_the_root_row_is_unreadable() {
+        let (conn, repo, profile_id) = setup("unreadable_root_row");
+
+        let id = Uuid::now_v7().to_string();
+        repo.upsert_by_id(&id, &profile_id, "My Query", &base_spec())
+            .expect("upsert");
+
+        conn.lock()
+            .expect("lock connection")
+            .execute(
+                "UPDATE qry_saved_queries SET source_alias = X'00' WHERE id = ?1",
+                [&id],
+            )
+            .expect("corrupt the root row");
+
+        assert!(
+            repo.get(&id).is_err(),
+            "an unreadable saved query must not be reported as missing"
+        );
+    }
 
     #[test]
     fn get_fails_when_a_child_row_is_unreadable() {
