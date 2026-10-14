@@ -29,6 +29,7 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 use crate::repositories::viz_saved_chart_binding_y::BindingYDto;
 use crate::repositories::viz_saved_chart_series::SeriesDto;
 use crate::repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto;
@@ -147,7 +148,7 @@ impl SavedChartsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_saved_charts"))
             .collect();
 
         drop(stmt);
@@ -186,8 +187,11 @@ impl SavedChartsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         drop(stmt);
         drop(conn);
@@ -227,8 +231,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect()
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
         };
 
         if chart_ids.is_empty() {
@@ -269,8 +276,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect()
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
         };
 
         // SELECT 2 + SELECT 3: children for all charts in the IN list.
@@ -563,8 +573,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for s in series_rows {
                 if let Some(&idx) = index_map.get(&s.chart_id) {
@@ -597,8 +610,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for b in binding_y_rows {
                 if let Some(&idx) = index_map.get(&b.chart_id) {
@@ -638,8 +654,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for s in metric_series_rows {
                 if let Some(&idx) = index_map.get(&s.chart_id) {
@@ -675,8 +694,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for d in dim_rows {
                 if let Some(&idx) = index_map.get(&d.chart_id) {
@@ -705,8 +727,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for (chart_id, metric_id) in inst_rows {
                 if let Some(&idx) = index_map.get(&chart_id) {
@@ -750,7 +775,7 @@ fn query_parent_rows<P: rusqlite::Params>(
             path: DB_PATH.into(),
             source,
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(readable_row("viz_saved_charts"))
         .collect();
 
     Ok(rows)

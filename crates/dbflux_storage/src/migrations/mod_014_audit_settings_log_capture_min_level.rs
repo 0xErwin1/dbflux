@@ -46,11 +46,10 @@ impl Migration for MigrationImpl {
         let column_exists: bool = tx
             .prepare("PRAGMA table_info(cfg_audit_settings)")
             .and_then(|mut stmt| {
-                let exists = stmt
+                let names = stmt
                     .query_map([], |row| row.get::<_, String>(1))?
-                    .filter_map(|r| r.ok())
-                    .any(|name| name == "log_capture_min_level");
-                Ok(exists)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(names.iter().any(|name| name == "log_capture_min_level"))
             })
             .map_err(|source| MigrationError::Sqlite {
                 path: std::path::PathBuf::from("<unknown>"),
@@ -86,8 +85,8 @@ mod tests {
             .unwrap();
         stmt.query_map([], |row| row.get::<_, String>(1))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     #[test]

@@ -13,8 +13,8 @@ fn table_names(conn: &Connection) -> std::collections::HashSet<String> {
         .unwrap();
     stmt.query_map([], |row| row.get::<_, String>(0))
         .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        .collect::<Result<_, _>>()
+        .unwrap()
 }
 
 fn index_names(conn: &Connection) -> std::collections::HashSet<String> {
@@ -23,8 +23,8 @@ fn index_names(conn: &Connection) -> std::collections::HashSet<String> {
         .unwrap();
     stmt.query_map([], |row| row.get::<_, String>(0))
         .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        .collect::<Result<_, _>>()
+        .unwrap()
 }
 
 fn insert_profile(conn: &Connection) -> String {

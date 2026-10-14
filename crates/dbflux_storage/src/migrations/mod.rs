@@ -502,8 +502,8 @@ mod tests {
 
         stmt.query_map([], |row| row.get::<_, String>(1))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
@@ -525,8 +525,8 @@ mod tests {
             .unwrap();
         stmt.query_map([], |row| row.get::<_, String>(0))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     #[test]

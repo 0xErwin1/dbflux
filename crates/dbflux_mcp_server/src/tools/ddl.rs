@@ -2588,8 +2588,8 @@ mod alter_table_integration_tests {
         let cols: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .expect("query_map")
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .expect("every row reads");
         cols
     }
 
