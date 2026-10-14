@@ -1483,12 +1483,14 @@ impl Workspace {
         // Connection> is `Send + Sync`, so we can move it into the
         // background_executor closure and call `metric_catalog()` from there.
         if let Some(connection) = connection_for_catalog {
-            let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
-                state.start_task_for_profile(
+            let task_id = self.app_state.update(cx, |state, _| {
+                let (task_id, _) = state.start_task_for_profile(
                     dbflux_core::TaskKind::LoadSchema,
                     dbflux_i18n::t!("charts.status.loading_namespaces"),
                     Some(profile_id),
-                )
+                );
+                state.tasks_mut().mark_uncancellable(task_id);
+                task_id
             });
             let modal = self.modal_add_panel.clone();
             let app_state = self.app_state.clone();
@@ -1552,12 +1554,14 @@ impl Workspace {
             return;
         };
 
-        let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
-            state.start_task_for_profile(
+        let task_id = self.app_state.update(cx, |state, _| {
+            let (task_id, _) = state.start_task_for_profile(
                 dbflux_core::TaskKind::LoadSchema,
                 charts_loading_metrics_label(&ev.namespace),
                 Some(ev.profile_id),
-            )
+            );
+            state.tasks_mut().mark_uncancellable(task_id);
+            task_id
         });
         let app_state = self.app_state.clone();
         let namespace = ev.namespace.clone();

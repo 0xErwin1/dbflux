@@ -145,6 +145,9 @@ pub struct Task {
     /// render do not copy a large script.
     pub query_text: Option<Arc<str>>,
     cancel_token: CancelToken,
+    /// Cleared by `TaskManager::mark_uncancellable` for work that never polls
+    /// its token, such as a write already sent to the server.
+    accepts_cancel: bool,
 }
 
 impl Task {
@@ -160,7 +163,9 @@ impl Task {
     }
 
     pub fn is_cancellable(&self) -> bool {
-        self.status == TaskStatus::Running && self.kind.supports_cancellation()
+        self.status == TaskStatus::Running
+            && self.accepts_cancel
+            && self.kind.supports_cancellation()
     }
 }
 
@@ -240,10 +245,21 @@ impl TaskManager {
             target,
             query_text: None,
             cancel_token: cancel_token.clone(),
+            accepts_cancel: true,
         };
 
         self.tasks.insert(id, task);
         (id, cancel_token)
+    }
+
+    /// Hides the cancel control of a task whose work does not observe its
+    /// cancel token, so the UI never offers a cancel that cannot stop it.
+    /// Internal supersede logic may still cancel the task to discard a stale
+    /// result.
+    pub fn mark_uncancellable(&mut self, id: TaskId) {
+        if let Some(task) = self.tasks.get_mut(&id) {
+            task.accepts_cancel = false;
+        }
     }
 
     /// Records the full query text of a task whose description is a
@@ -645,6 +661,18 @@ mod tests {
                 kind.label()
             );
         }
+    }
+
+    #[test]
+    fn a_task_marked_uncancellable_offers_no_cancel_while_running() {
+        let mut manager = TaskManager::new();
+        let (id, _token) = manager.start(TaskKind::Query, "UPDATE users SET name = 'a'");
+
+        manager.mark_uncancellable(id);
+
+        let snapshot = manager.get(id).expect("task exists");
+        assert_eq!(snapshot.status, TaskStatus::Running);
+        assert!(!snapshot.is_cancellable);
     }
 
     #[test]
