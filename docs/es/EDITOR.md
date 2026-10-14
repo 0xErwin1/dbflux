@@ -63,7 +63,12 @@ que hizo el script.
 Cada resultado lleva como título las líneas de la sentencia que lo produjo. Una
 sentencia que no devuelve un conjunto de resultados, como `UPDATE` o `COMMIT`,
 muestra **Sentencia ejecutada** y, cuando el driver lo informa, cuántas filas
-afectó, que el pie repite en lugar del recuento de filas.
+afectó, que el pie repite en lugar del recuento de filas. Los avisos y
+advertencias que envía el servidor mientras se ejecuta la sentencia, como el
+`WARNING: there is no transaction in progress` de PostgreSQL tras un `COMMIT`
+fuera de una transacción, se listan debajo de esa línea, o en el pie de un
+resultado con filas. Solo los muestran los drivers que los informan; PostgreSQL
+lo hace.
 
 Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
 

@@ -132,6 +132,16 @@ impl DataGridPanel {
         }
     }
 
+    /// The server notices the result carries, one line each, as
+    /// "WARNING: there is no transaction in progress".
+    pub(super) fn server_notice_lines(&self) -> Vec<String> {
+        self.result
+            .server_notices()
+            .into_iter()
+            .map(|notice| format!("{}: {}", notice.severity, notice.message))
+            .collect()
+    }
+
     /// A query result that is a table without columns: a statement such as
     /// `UPDATE` or `COMMIT` that returned no result set.
     fn is_statement_without_result_set(&self) -> bool {
@@ -853,11 +863,27 @@ impl DataGridPanel {
                             .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
                             .into_any_element()
                     } else {
-                        Text::caption(
-                            self.statement_outcome()
-                                .unwrap_or_else(|| dbflux_i18n::t!("document.data.grid.empty")),
-                        )
-                        .into_any_element()
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(Spacing::XS)
+                            .child(Text::caption(self.statement_outcome().unwrap_or_else(
+                                || dbflux_i18n::t!("document.data.grid.empty"),
+                            )))
+                            .children(self.server_notice_lines().into_iter().map(|line| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(Spacing::XS)
+                                    .child(
+                                        Icon::new(AppIcon::TriangleAlert)
+                                            .size(ui(12.0))
+                                            .color(theme.warning),
+                                    )
+                                    .child(Text::caption(line))
+                            }))
+                            .into_any_element()
                     })
             },
         );
@@ -3678,6 +3704,27 @@ impl DataGridPanel {
                     self.rows_footer(row_count)
                 },
             ))
+            // A result with rows has no room for the notices in its body, so
+            // the footer carries them, cut to the space it has.
+            .when(!self.result.columns.is_empty(), |d| {
+                let notices = self.server_notice_lines();
+                d.when(!notices.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .id("footer-server-notices")
+                            .flex()
+                            .min_w_0()
+                            .items_center()
+                            .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                            .child(
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .size(ResultMetrics::FOOTER_ICON)
+                                    .color(cx.theme().warning),
+                            )
+                            .child(div().min_w_0().truncate().child(notices.join(" · "))),
+                    )
+                })
+            })
             .when(self.offers_count_rows(), |d| {
                 d.child(
                     Button::new("footer-count-rows", crate::labels::count_rows_label())

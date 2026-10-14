@@ -88,3 +88,58 @@ fn a_result_with_columns_keeps_the_row_count(cx: &mut TestAppContext) {
         assert_eq!(panel.rows_footer(0), "0 rows");
     });
 }
+
+fn with_notices(mut result: QueryResult, notices: &[(&str, &str)]) -> QueryResult {
+    result.set_server_notices(notices.iter().map(|(severity, message)| {
+        dbflux_core::ServerNotice {
+            severity: severity.to_string(),
+            message: message.to_string(),
+        }
+    }));
+    result
+}
+
+#[gpui::test]
+fn a_bare_commit_shows_the_server_warning(cx: &mut TestAppContext) {
+    let (panel, window) = result_grid(
+        cx,
+        with_notices(
+            no_column_result(Some(0)),
+            &[("WARNING", "there is no transaction in progress")],
+        ),
+    );
+
+    window.update(|_, cx| {
+        assert_eq!(
+            panel.read(cx).server_notice_lines(),
+            vec!["WARNING: there is no transaction in progress".to_string()]
+        );
+    });
+}
+
+#[gpui::test]
+fn every_notice_of_a_row_result_is_listed_in_order(cx: &mut TestAppContext) {
+    let (panel, window) = result_grid(
+        cx,
+        with_notices(
+            QueryResult::table(super::zero_row_columns(), Vec::new(), None, Duration::ZERO),
+            &[("NOTICE", "first"), ("INFO", "second")],
+        ),
+    );
+
+    window.update(|_, cx| {
+        assert_eq!(
+            panel.read(cx).server_notice_lines(),
+            vec!["NOTICE: first".to_string(), "INFO: second".to_string()]
+        );
+    });
+}
+
+#[gpui::test]
+fn a_result_without_notices_lists_none(cx: &mut TestAppContext) {
+    let (panel, window) = result_grid(cx, no_column_result(Some(1)));
+
+    window.update(|_, cx| {
+        assert!(panel.read(cx).server_notice_lines().is_empty());
+    });
+}
