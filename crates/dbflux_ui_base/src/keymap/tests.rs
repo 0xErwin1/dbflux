@@ -1073,6 +1073,26 @@ fn ctrl_shift_digit_focus_chords_are_native_bindings() {
     assert!(runs_command(action.as_ref(), Command::FocusEditor));
 }
 
+/// GPUI's Linux backend reports Ctrl+Shift+digit as Ctrl and the shifted
+/// symbol, so those keystrokes must reach the same commands.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[test]
+fn ctrl_shift_digit_chords_match_the_keystrokes_linux_reports() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Sidebar, &[]);
+
+    for (keys, command) in [
+        ("ctrl-@", Command::FocusEditor),
+        ("ctrl-%", Command::ShowConnectionsView),
+        ("ctrl-^", Command::ShowScriptsView),
+        ("ctrl-&", Command::ShowDashboardsView),
+    ] {
+        let action = top_action(&keymap, keys, std::slice::from_ref(&root))
+            .unwrap_or_else(|| panic!("{keys} is unbound"));
+        assert!(runs_command(action.as_ref(), command), "{keys}");
+    }
+}
+
 /// The keys the document tree bound itself before the keymap owned them,
 /// and the action each one ran.
 fn former_document_tree_bindings() -> Vec<(&'static str, Box<dyn Action>)> {

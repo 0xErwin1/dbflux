@@ -503,8 +503,72 @@ fn native_bindings(bindings: &[EffectiveBinding]) -> Vec<KeyBinding> {
     chords
         .iter()
         .chain(bindings)
-        .filter_map(native_binding)
+        .flat_map(|binding| {
+            shifted_symbol_binding(binding)
+                .into_iter()
+                .chain([binding.clone()])
+        })
+        .filter_map(|binding| native_binding(&binding))
         .collect()
+}
+
+/// A copy of `binding` with each Shift+digit chord written as the symbol the
+/// key types, without Shift, or `None` when it has no such chord.
+///
+/// GPUI's Linux backend reports Ctrl+Shift+5 as `ctrl-%` and its keyboard
+/// mapper does not translate bindings, so `ctrl-shift-5` alone never matches
+/// there. The copy comes first so the menus keep showing the original keys.
+// ponytail: US layout symbols only; other layouts need GPUI to map bindings per layout.
+fn shifted_symbol_binding(binding: &EffectiveBinding) -> Option<EffectiveBinding> {
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        return None;
+    }
+
+    let mut changed = false;
+
+    let chords = binding
+        .keys
+        .chords()
+        .iter()
+        .map(|chord| match us_shifted_digit_symbol(&chord.key) {
+            Some(symbol) if chord.modifiers.shift => {
+                changed = true;
+                KeyChord {
+                    key: symbol.to_string(),
+                    modifiers: Modifiers {
+                        shift: false,
+                        ..chord.modifiers
+                    },
+                }
+            }
+            _ => chord.clone(),
+        })
+        .collect();
+
+    if !changed {
+        return None;
+    }
+
+    Some(EffectiveBinding {
+        keys: KeySequence::new(chords)?,
+        ..binding.clone()
+    })
+}
+
+fn us_shifted_digit_symbol(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "1" => "!",
+        "2" => "@",
+        "3" => "#",
+        "4" => "$",
+        "5" => "%",
+        "6" => "^",
+        "7" => "&",
+        "8" => "*",
+        "9" => "(",
+        "0" => ")",
+        _ => return None,
+    })
 }
 
 /// The copy of a global binding that applies in the roots keeping the
