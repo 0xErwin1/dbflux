@@ -26,7 +26,7 @@ use dbflux_core::{
     generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
     render_semantic_filter_sql, strip_leading_comments, validate_ddl_fragment,
 };
-use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
+use rusqlite::{Connection as RusqliteConnection, InterruptHandle, OptionalExtension};
 
 use crate::table_rebuild::SqliteTableAlterPlanner;
 
@@ -1423,8 +1423,8 @@ impl SqliteConnection {
         let table_names: Vec<String> = stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let tables = table_names
             .into_iter()
@@ -1485,8 +1485,8 @@ impl SqliteConnection {
                 Ok((column, row.get::<_, i64>(5).unwrap_or(0)))
             })
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut columns = Vec::new();
         let mut unlisted = Vec::new();
@@ -1514,20 +1514,12 @@ impl SqliteConnection {
         let index_list: Vec<(String, bool)> = stmt
             .query_map([], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut indexes = Vec::new();
         for (index_name, is_unique) in index_list {
-            let mut col_stmt = conn
-                .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| format_sqlite_query_error(&e))?;
-
-            let columns: Vec<String> = col_stmt
-                .query_map([], |row| row.get(2))
-                .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+            let columns = index_columns(conn, &index_name)?;
 
             indexes.push(IndexInfo {
                 name: index_name,
@@ -1553,8 +1545,8 @@ impl SqliteConnection {
                 })
             })
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         Ok(views)
     }
@@ -1564,25 +1556,7 @@ impl SqliteConnection {
         conn: &RusqliteConnection,
         table: &str,
     ) -> Result<Vec<ForeignKeyInfo>, DbError> {
-        let mut stmt = conn
-            .prepare(&format!("PRAGMA foreign_key_list('{}')", table))
-            .map_err(|e| format_sqlite_query_error(&e))?;
-
-        // PRAGMA foreign_key_list returns: id, seq, table, from, to, on_update, on_delete, match
-        let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,              // id
-                    row.get::<_, String>(2)?, // table (referenced)
-                    row.get::<_, String>(3)?, // from (local column)
-                    row.get::<_, String>(4)?, // to (referenced column)
-                    row.get::<_, String>(5)?, // on_update
-                    row.get::<_, String>(6)?, // on_delete
-                ))
-            })
-            .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+        let fk_rows = foreign_key_rows(conn, table)?;
 
         // Group by FK id
         let mut fk_map: HashMap<i32, ForeignKeyInfo> = HashMap::new();
@@ -1622,7 +1596,11 @@ impl SqliteConnection {
             .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
             .map_err(|e| format_sqlite_query_error(&e))?;
 
-        let sql: Option<String> = stmt.query_row([table], |row| row.get(0)).ok();
+        let sql: Option<String> = stmt
+            .query_row([table], |row| row.get(0))
+            .optional()
+            .map_err(|e| format_sqlite_query_error(&e))?
+            .flatten();
 
         let mut constraints = Vec::new();
 
@@ -1672,20 +1650,15 @@ impl SqliteConnection {
                 ))
             })
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .filter(|(_, origin)| origin == "u") // Only UNIQUE constraints, not indexes
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
-        for (index_name, _) in unique_indexes {
-            let mut col_stmt = conn
-                .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| format_sqlite_query_error(&e))?;
-
-            let columns: Vec<String> = col_stmt
-                .query_map([], |row| row.get(2))
-                .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+        // Only UNIQUE constraints (origin `u`), not plain indexes or the primary key.
+        for (index_name, _) in unique_indexes
+            .into_iter()
+            .filter(|(_, origin)| origin == "u")
+        {
+            let columns = index_columns(conn, &index_name)?;
 
             constraints.push(ConstraintInfo {
                 name: index_name,
@@ -1707,8 +1680,8 @@ impl SqliteConnection {
         let table_names: Vec<String> = tables_stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut all_indexes = Vec::new();
 
@@ -1726,19 +1699,11 @@ impl SqliteConnection {
                     ))
                 })
                 .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             for (index_name, is_unique, origin) in index_list {
-                let mut col_stmt = conn
-                    .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                    .map_err(|e| format_sqlite_query_error(&e))?;
-
-                let columns: Vec<String> = col_stmt
-                    .query_map([], |row| row.get(2))
-                    .map_err(|e| format_sqlite_query_error(&e))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                let columns = index_columns(conn, &index_name)?;
 
                 all_indexes.push(SchemaIndexInfo {
                     name: index_name,
@@ -1765,30 +1730,13 @@ impl SqliteConnection {
         let table_names: Vec<String> = tables_stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut all_fks = Vec::new();
 
         for table_name in table_names {
-            let mut stmt = conn
-                .prepare(&format!("PRAGMA foreign_key_list('{}')", table_name))
-                .map_err(|e| format_sqlite_query_error(&e))?;
-
-            let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get(0)?,              // id
-                        row.get::<_, String>(2)?, // table (referenced)
-                        row.get::<_, String>(3)?, // from (local column)
-                        row.get::<_, String>(4)?, // to (referenced column)
-                        row.get::<_, String>(5)?, // on_update
-                        row.get::<_, String>(6)?, // on_delete
-                    ))
-                })
-                .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+            let fk_rows = foreign_key_rows(conn, &table_name)?;
 
             // Group by FK id
             let mut fk_map: HashMap<i32, SchemaForeignKeyInfo> = HashMap::new();
@@ -2512,8 +2460,8 @@ pub fn fetch_dependents(
     let rows: Vec<(String, String)> = stmt
         .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?;
 
     for (obj_type, obj_name) in rows {
         let kind = match obj_type.as_str() {
@@ -2539,8 +2487,10 @@ pub fn fetch_dependents(
             .map_err(|e| {
                 DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
             })?
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?
     };
 
     for child_table in all_tables {
@@ -2741,6 +2691,127 @@ fn rowid_pseudo_columns(conn: &RusqliteConnection, table: &str) -> Vec<String> {
 
 /// The stored name of the table or view `table` names. SQLite resolves table
 /// names with ASCII case folding, which `COLLATE NOCASE` applies.
+/// One row of `PRAGMA foreign_key_list`: the constraint id, the referenced
+/// table, the local column, the referenced column, and the ON UPDATE and
+/// ON DELETE actions.
+type ForeignKeyRow = (i32, String, String, String, String, String);
+
+/// Reads the foreign key columns of `table`.
+///
+/// A reference that names only the parent table (`REFERENCES parents`)
+/// targets the parent's primary key, and the pragma reports its target
+/// column as NULL, so the primary key columns are filled in here
+/// (<https://www.sqlite.org/foreignkeys.html#fk_indexes>).
+fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<ForeignKeyRow>, DbError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete \
+             FROM pragma_foreign_key_list(?1) ORDER BY id, seq",
+        )
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    struct PragmaRow {
+        id: i32,
+        seq: i64,
+        referenced_table: String,
+        from: String,
+        to: Option<String>,
+        on_update: String,
+        on_delete: String,
+    }
+
+    let rows: Vec<PragmaRow> = stmt
+        .query_map([table], |row| {
+            Ok(PragmaRow {
+                id: row.get(0)?,
+                seq: row.get(1)?,
+                referenced_table: row.get(2)?,
+                from: row.get(3)?,
+                to: row.get(4)?,
+                on_update: row.get(5)?,
+                on_delete: row.get(6)?,
+            })
+        })
+        .map_err(|e| format_sqlite_query_error(&e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    let mut primary_keys: HashMap<String, Vec<String>> = HashMap::new();
+    let mut foreign_keys = Vec::with_capacity(rows.len());
+
+    for PragmaRow {
+        id,
+        seq,
+        referenced_table,
+        from,
+        to,
+        on_update,
+        on_delete,
+    } in rows
+    {
+        let to = match to {
+            Some(to) => to,
+            None => {
+                if !primary_keys.contains_key(&referenced_table) {
+                    let columns = primary_key_columns(conn, &referenced_table)?;
+                    primary_keys.insert(referenced_table.clone(), columns);
+                }
+
+                match primary_keys
+                    .get(&referenced_table)
+                    .zip(usize::try_from(seq).ok())
+                    .and_then(|(columns, position)| columns.get(position))
+                {
+                    Some(column) => column.clone(),
+                    None => {
+                        // SQLite accepts this schema and reports a mismatch only
+                        // when the key is used, so the column is left out of the
+                        // constraint rather than failing the whole schema read.
+                        log::warn!(
+                            "[SCHEMA] Foreign key {id} of {table} references {referenced_table}, \
+                             which has no primary key column at position {seq}"
+                        );
+                        continue;
+                    }
+                }
+            }
+        };
+
+        foreign_keys.push((id, referenced_table, from, to, on_update, on_delete));
+    }
+
+    Ok(foreign_keys)
+}
+
+fn primary_key_columns(conn: &RusqliteConnection, table: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    stmt.query_map([table], |row| row.get(0))
+        .map_err(|e| format_sqlite_query_error(&e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format_sqlite_query_error(&e))
+}
+
+/// Reads the named columns of an index.
+///
+/// `PRAGMA index_info` reports an expression column such as `lower(label)`
+/// with a NULL name; it has no column to name, so it is left out.
+fn index_columns(conn: &RusqliteConnection, index: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    let names: Vec<Option<String>> = stmt
+        .query_map([index], |row| row.get(0))
+        .map_err(|e| format_sqlite_query_error(&e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    Ok(names.into_iter().flatten().collect())
+}
+
 fn resolve_relation_name(conn: &RusqliteConnection, table: &str) -> Result<String, DbError> {
     let resolved = conn.query_row(
         "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') \
