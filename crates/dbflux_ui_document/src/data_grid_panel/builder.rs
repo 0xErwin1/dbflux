@@ -472,6 +472,10 @@ impl DataGridPanel {
             }
         }
 
+        // The metadata this resolution needs may have landed after the page
+        // it should label.
+        self.resolve_fk_display_values(cx);
+
         cx.notify();
     }
 
