@@ -142,6 +142,16 @@ impl DataGridPanel {
             .collect()
     }
 
+    /// The notices drawn in the body, under the statement line. Every other
+    /// result carries them in the footer, so each notice shows once.
+    pub(super) fn body_notice_lines(&self) -> Vec<String> {
+        if self.is_statement_without_result_set() {
+            self.server_notice_lines()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// A query result that is a table without columns: a statement such as
     /// `UPDATE` or `COMMIT` that returned no result set.
     fn is_statement_without_result_set(&self) -> bool {
@@ -871,7 +881,7 @@ impl DataGridPanel {
                             .child(Text::caption(self.statement_outcome().unwrap_or_else(
                                 || dbflux_i18n::t!("document.data.grid.empty"),
                             )))
-                            .children(self.server_notice_lines().into_iter().map(|line| {
+                            .children(self.body_notice_lines().into_iter().map(|line| {
                                 div()
                                     .flex()
                                     .items_center()
@@ -3706,7 +3716,7 @@ impl DataGridPanel {
             ))
             // A result with rows has no room for the notices in its body, so
             // the footer carries them, cut to the space it has.
-            .when(!self.result.columns.is_empty(), |d| {
+            .when(!self.is_statement_without_result_set(), |d| {
                 let notices = self.server_notice_lines();
                 d.when(!notices.is_empty(), |d| {
                     d.child(

@@ -110,10 +110,12 @@ fn a_bare_commit_shows_the_server_warning(cx: &mut TestAppContext) {
     );
 
     window.update(|_, cx| {
+        let panel = panel.read(cx);
         assert_eq!(
-            panel.read(cx).server_notice_lines(),
+            panel.server_notice_lines(),
             vec!["WARNING: there is no transaction in progress".to_string()]
         );
+        assert_eq!(panel.body_notice_lines(), panel.server_notice_lines());
     });
 }
 
@@ -128,9 +130,14 @@ fn every_notice_of_a_row_result_is_listed_in_order(cx: &mut TestAppContext) {
     );
 
     window.update(|_, cx| {
+        let panel = panel.read(cx);
         assert_eq!(
-            panel.read(cx).server_notice_lines(),
+            panel.server_notice_lines(),
             vec!["NOTICE: first".to_string(), "INFO: second".to_string()]
+        );
+        assert!(
+            panel.body_notice_lines().is_empty(),
+            "a result with columns carries its notices in the footer only"
         );
     });
 }
