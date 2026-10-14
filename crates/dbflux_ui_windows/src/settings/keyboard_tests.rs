@@ -3,6 +3,7 @@
 //! fields answer Left and Right.
 
 use super::hooks_section::{HookFocus, HookFormField};
+use super::keybindings_section::KeybindingsListItem;
 use super::{ActiveSettingsSection, SettingsCoordinator, SettingsFocus, SettingsSectionId};
 use dbflux_app::keymap::Command;
 use dbflux_core::{HookExecutionMode, ThemeSetting};
@@ -237,6 +238,25 @@ fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAp
         })
     });
     window.run_until_parked();
+    // The editor row is below the visible rows of the virtual list, as when
+    // a row is selected and its editor opens under it; bring it into view.
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, _| {
+            let editor_index = section
+                .keybindings_items
+                .iter()
+                .position(|item| matches!(item, KeybindingsListItem::PredicateEditor { .. }))
+                .expect("the predicate editor row is in the list");
+            section.keybindings_list.scroll_to(gpui::ListOffset {
+                item_ix: editor_index,
+                offset_in_item: gpui::px(0.),
+            });
+        });
+    });
+    for _ in 0..2 {
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
 
     let set_predicate_text = |text: &str, window: &mut VisualTestContext| {
         window.update(|window, cx| {
@@ -353,6 +373,43 @@ fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppConte
         ProxyFocus::Form,
         "the new key adds one"
     );
+}
+
+/// `G` jumps to the last row of the virtual list, which is far below the
+/// rows that were measured.
+#[gpui::test]
+fn shift_g_scrolls_the_keybindings_list_to_its_last_row(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    // Expand every context, so the list is long.
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.keybindings_expanded.extend(
+                dbflux_app::keymap::ContextId::all_variants()
+                    .iter()
+                    .copied(),
+            );
+            cx.notify();
+        });
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("shift-g");
+    for _ in 0..2 {
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
+
+    let top = window.update(|_, cx| keybindings.read(cx).keybindings_list.logical_scroll_top());
+    assert!(top.item_ix > 0, "the list scrolled down to the last row");
 }
 
 /// Typing in the key bindings filter types: its letters are not the page's

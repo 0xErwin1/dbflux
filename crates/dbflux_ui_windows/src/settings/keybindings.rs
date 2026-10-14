@@ -154,9 +154,6 @@ impl KeybindingsSection {
         }
 
         let border = theme.border;
-        let group_line = theme.input;
-        let muted_foreground = theme.muted_foreground;
-        let strong = ChromeColors::strong(theme);
 
         let current_selection = self.keybindings_selection;
         let is_content_focused = self.content_focused && !self.keybindings_editing_filter;
@@ -252,11 +249,40 @@ impl KeybindingsSection {
             }
         }
 
-        if let Some(scroll_idx) = self.keybindings_pending_scroll.take() {
-            self.keybindings_scroll_handle.scroll_to_item(scroll_idx);
+        // Heights differ only for the banner and editor rows, which change
+        // the row count or kinds, so the measured heights are kept otherwise.
+        let kinds_changed = self.keybindings_items.len() != flat_items.len()
+            || self
+                .keybindings_items
+                .iter()
+                .zip(&flat_items)
+                .any(|(old, new)| std::mem::discriminant(old) != std::mem::discriminant(new));
+        self.keybindings_items = flat_items;
+        if kinds_changed {
+            self.keybindings_list.reset(self.keybindings_items.len());
         }
 
-        let inherited_label = dbflux_i18n::t!("settings.keybindings.inherited");
+        if std::mem::take(&mut self.reveal_predicate_editor)
+            && let Some(editor_index) = self
+                .keybindings_items
+                .iter()
+                .position(|item| matches!(item, KeybindingsListItem::PredicateEditor { .. }))
+        {
+            self.keybindings_pending_scroll = Some(editor_index);
+        }
+
+        if let Some(scroll_idx) = self.keybindings_pending_scroll.take() {
+            // Revealing needs the row measured, which only the rows near the
+            // visible ones are; a jump to the end goes there directly.
+            if scroll_idx + 1 == self.keybindings_items.len() {
+                self.keybindings_list.scroll_to(ListOffset {
+                    item_ix: scroll_idx,
+                    offset_in_item: px(0.),
+                });
+            } else {
+                self.keybindings_list.scroll_to_reveal_item(scroll_idx);
+            }
+        }
 
         div()
             .flex_1()
@@ -302,72 +328,87 @@ impl KeybindingsSection {
                     .id("keybindings-scroll-container")
                     .flex_1()
                     .min_h_0()
-                    .overflow_scroll()
-                    .track_scroll(&self.keybindings_scroll_handle)
                     .px(SettingsMetrics::BODY_PADDING_X)
                     .pb(Spacing::XL)
-                    .flex()
-                    .flex_col()
-                    .children(flat_items.into_iter().map(|item| {
-                        match item {
-                            KeybindingsListItem::ContextHeader {
-                                context,
-                                ctx_idx,
-                                is_expanded,
-                                is_selected,
-                                binding_count,
-                            } => Self::render_context_header(
-                                context,
-                                ctx_idx,
-                                is_expanded,
-                                is_selected,
-                                binding_count,
-                                group_line,
-                                muted_foreground,
-                                strong,
-                                cx,
-                            )
-                            .into_any_element(),
-
-                            KeybindingsListItem::Binding {
-                                entry,
-                                is_selected,
-                                is_recording,
-                                is_overridden,
-                                conflict_context,
-                                warning,
-                                ctx_idx,
-                                binding_idx,
-                            } => self
-                                .render_binding_row(
-                                    entry,
-                                    BindingRowState {
-                                        is_selected,
-                                        is_recording,
-                                        is_overridden,
-                                        conflict_context,
-                                        warning,
-                                    },
-                                    ctx_idx,
-                                    binding_idx,
-                                    &inherited_label,
-                                    cx,
-                                )
-                                .into_any_element(),
-
-                            KeybindingsListItem::PendingConflict {
-                                keys,
-                                target,
-                                conflicts,
-                            } => Self::render_pending_conflict(&keys, &target, &conflicts, cx)
-                                .into_any_element(),
-
-                            KeybindingsListItem::PredicateEditor { slot } => {
-                                self.render_predicate_editor(&slot, cx).into_any_element()
-                            }
-                        }
-                    })),
+                    .child(
+                        list(
+                            self.keybindings_list.clone(),
+                            cx.processor(|this, index, _window, cx| {
+                                this.render_list_item(index, cx)
+                            }),
+                        )
+                        .size_full(),
+                    ),
             )
+    }
+
+    fn render_list_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(item) = self.keybindings_items.get(index).cloned() else {
+            return div().into_any_element();
+        };
+
+        let theme = cx.theme();
+        let group_line = theme.input;
+        let muted_foreground = theme.muted_foreground;
+        let strong = ChromeColors::strong(theme);
+        let inherited_label = dbflux_i18n::t!("settings.keybindings.inherited");
+
+        match item {
+            KeybindingsListItem::ContextHeader {
+                context,
+                ctx_idx,
+                is_expanded,
+                is_selected,
+                binding_count,
+            } => Self::render_context_header(
+                context,
+                ctx_idx,
+                is_expanded,
+                is_selected,
+                binding_count,
+                group_line,
+                muted_foreground,
+                strong,
+                cx,
+            )
+            .into_any_element(),
+
+            KeybindingsListItem::Binding {
+                entry,
+                is_selected,
+                is_recording,
+                is_overridden,
+                conflict_context,
+                warning,
+                ctx_idx,
+                binding_idx,
+            } => self
+                .render_binding_row(
+                    entry,
+                    BindingRowState {
+                        is_selected,
+                        is_recording,
+                        is_overridden,
+                        conflict_context,
+                        warning,
+                    },
+                    ctx_idx,
+                    binding_idx,
+                    &inherited_label,
+                    cx,
+                )
+                .into_any_element(),
+
+            KeybindingsListItem::PendingConflict {
+                keys,
+                target,
+                conflicts,
+            } => Self::render_pending_conflict(&keys, &target, &conflicts, cx).into_any_element(),
+
+            KeybindingsListItem::PredicateEditor { slot } => {
+                self.render_predicate_editor(&slot, cx).into_any_element()
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

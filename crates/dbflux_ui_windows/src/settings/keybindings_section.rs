@@ -54,6 +54,7 @@ pub(super) struct BindingEntry {
     pub(super) is_inherited: bool,
 }
 
+#[derive(Clone)]
 pub(super) enum KeybindingsListItem {
     ContextHeader {
         context: ContextId,
@@ -102,7 +103,13 @@ pub(super) struct KeybindingsSection {
     pub(super) keybindings_expanded: HashSet<ContextId>,
     pub(super) keybindings_selection: KeybindingsSelection,
     pub(super) keybindings_editing_filter: bool,
-    pub(super) keybindings_scroll_handle: ScrollHandle,
+    /// The rows are a virtual list: a one-letter filter matches hundreds of
+    /// them, and drawing every one made the first keystrokes lag.
+    pub(super) keybindings_list: ListState,
+    pub(super) keybindings_items: Vec<KeybindingsListItem>,
+    /// The predicate editor just opened: scroll its row into view so the
+    /// virtual list draws it and its input can take keys.
+    pub(super) reveal_predicate_editor: bool,
     pub(super) keybindings_pending_scroll: Option<usize>,
     pub(super) content_focused: bool,
     /// The saved overrides; the effective keymap is built from these.
@@ -182,7 +189,9 @@ impl KeybindingsSection {
             keybindings_expanded,
             keybindings_selection: KeybindingsSelection::Context(0),
             keybindings_editing_filter: false,
-            keybindings_scroll_handle: ScrollHandle::new(),
+            keybindings_list: ListState::new(0, ListAlignment::Top, px(400.)),
+            keybindings_items: Vec::new(),
+            reveal_predicate_editor: false,
             keybindings_pending_scroll: None,
             content_focused: false,
             conflicts: HashMap::new(),
@@ -372,6 +381,7 @@ impl KeybindingsSection {
             input,
             error: None,
         });
+        self.reveal_predicate_editor = true;
         cx.notify();
     }
 
