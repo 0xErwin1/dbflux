@@ -2739,6 +2739,7 @@ fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<Foreig
     let mut primary_keys: HashMap<String, Vec<String>> = HashMap::new();
     let mut foreign_keys = Vec::with_capacity(rows.len());
     let mut unresolved_ids = std::collections::HashSet::new();
+    let mut implicit_key_lengths: HashMap<i32, (usize, usize)> = HashMap::new();
 
     for PragmaRow {
         id,
@@ -2758,8 +2759,13 @@ fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<Foreig
                     primary_keys.insert(referenced_table.clone(), columns);
                 }
 
-                match primary_keys
-                    .get(&referenced_table)
+                let parent_key = primary_keys.get(&referenced_table);
+                let lengths = implicit_key_lengths
+                    .entry(id)
+                    .or_insert((0, parent_key.map_or(0, Vec::len)));
+                lengths.0 += 1;
+
+                match parent_key
                     .zip(usize::try_from(seq).ok())
                     .and_then(|(columns, position)| columns.get(position))
                 {
@@ -2782,6 +2788,16 @@ fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<Foreig
         };
 
         foreign_keys.push((id, referenced_table, from, to, on_update, on_delete));
+    }
+
+    // A reference with fewer columns than the parent key is a mismatch too.
+    for (id, (child_columns, parent_columns)) in implicit_key_lengths {
+        if child_columns != parent_columns && unresolved_ids.insert(id) {
+            log::warn!(
+                "[SCHEMA] Foreign key {id} of {table} lists {child_columns} columns, \
+                 but the primary key it references has {parent_columns}"
+            );
+        }
     }
 
     foreign_keys.retain(|(id, ..)| !unresolved_ids.contains(id));

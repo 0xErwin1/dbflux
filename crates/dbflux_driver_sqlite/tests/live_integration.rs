@@ -175,6 +175,31 @@ fn sqlite_schema_omits_an_implicit_foreign_key_wider_than_the_parent_key() -> Re
     Ok(())
 }
 
+/// The opposite mismatch: a reference with fewer columns than the parent's
+/// composite primary key is left out as well.
+#[test]
+fn sqlite_schema_omits_an_implicit_foreign_key_narrower_than_the_parent_key() -> Result<(), DbError>
+{
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE parents (code TEXT, region TEXT, PRIMARY KEY (code, region))",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE children (
+            id INTEGER PRIMARY KEY,
+            parent_code TEXT,
+            FOREIGN KEY (parent_code) REFERENCES parents
+        )",
+    ))?;
+
+    let table = connection.table_details("main", None, "children")?;
+    let foreign_keys = table.foreign_keys.as_ref().expect("foreign keys load");
+    assert!(foreign_keys.is_empty(), "{foreign_keys:?}");
+
+    Ok(())
+}
+
 #[test]
 fn sqlite_schema_introspection() -> Result<(), DbError> {
     let connection = connect_sqlite()?;
