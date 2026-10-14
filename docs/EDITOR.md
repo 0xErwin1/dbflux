@@ -54,6 +54,11 @@ the default, or run only that statement. Run alone, a `BEGIN` leaves a
 transaction open that later runs in the same tab silently join, and a `COMMIT`
 or `ROLLBACK` ends nothing the script did.
 
+Each result is captioned with the lines of the statement that produced it. A
+statement that returns no result set, such as `UPDATE` or `COMMIT`, shows
+**Statement executed** and, when the driver reports it, how many rows it
+affected, which the footer repeats in place of the row count.
+
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ## Multi-statement scripts

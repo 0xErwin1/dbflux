@@ -1729,6 +1729,10 @@ document:
         rows:
           one: "%{count} fila"
           many: "%{count} filas"
+        executed: "Sentencia ejecutada"
+        affected_rows:
+          one: "%{count} fila afectada"
+          many: "%{count} filas afectadas"
         limited_rows:
           first: "Primeras %{count} filas cargadas"
           of_total: "%{loaded}/%{total} filas cargadas"

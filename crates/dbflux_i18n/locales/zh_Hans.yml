@@ -1729,6 +1729,10 @@ document:
         rows:
           one: "%{count} 行"
           many: "%{count} 行"
+        executed: "语句已执行"
+        affected_rows:
+          one: "%{count} 行受影响"
+          many: "%{count} 行受影响"
         limited_rows:
           first: "已加载前 %{count} 行"
           of_total: "已加载 %{loaded}/%{total} 行"

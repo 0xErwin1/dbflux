@@ -107,6 +107,39 @@ pub(super) enum DataGridContentMode {
 }
 
 impl DataGridPanel {
+    /// What a query result without columns reports instead of an empty grid:
+    /// the statement ran, and how many rows it changed when the driver says.
+    pub(super) fn statement_outcome(&self) -> Option<String> {
+        if !self.is_statement_without_result_set() {
+            return None;
+        }
+
+        let executed = dbflux_i18n::t!("document.data.grid.status.executed");
+        Some(match self.result.affected_rows {
+            Some(count) => format!("{executed} · {}", crate::labels::affected_rows_label(count)),
+            None => executed,
+        })
+    }
+
+    /// The footer's row figure: the rows a statement without columns
+    /// changed, otherwise the rows it returned.
+    pub(super) fn rows_footer(&self, row_count: usize) -> String {
+        match self.result.affected_rows {
+            Some(count) if self.is_statement_without_result_set() => {
+                crate::labels::affected_rows_label(count)
+            }
+            _ => self.row_count_footer(row_count),
+        }
+    }
+
+    /// A query result that is a table without columns: a statement such as
+    /// `UPDATE` or `COMMIT` that returned no result set.
+    fn is_statement_without_result_set(&self) -> bool {
+        matches!(self.source, DataSource::QueryResult { .. })
+            && self.result.shape == dbflux_core::QueryResultShape::Table
+            && self.result.columns.is_empty()
+    }
+
     /// The footer's row count. A result the row limit cut short says it holds
     /// only the first rows, and how many there are in all once counted.
     fn row_count_footer(&self, row_count: usize) -> String {
@@ -820,8 +853,11 @@ impl DataGridPanel {
                             .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
                             .into_any_element()
                     } else {
-                        Text::caption(dbflux_i18n::t!("document.data.grid.empty"))
-                            .into_any_element()
+                        Text::caption(
+                            self.statement_outcome()
+                                .unwrap_or_else(|| dbflux_i18n::t!("document.data.grid.empty")),
+                        )
+                        .into_any_element()
                     })
             },
         );
@@ -3639,7 +3675,7 @@ impl DataGridPanel {
                 if self.collection.raw.is_some() {
                     self.document_count_footer()
                 } else {
-                    self.row_count_footer(row_count)
+                    self.rows_footer(row_count)
                 },
             ))
             .when(self.offers_count_rows(), |d| {
@@ -4068,6 +4104,9 @@ mod tests {
         "document.data.grid.views.raw",
         "document.data.grid.views.truncated",
         "document.data.grid.views.empty",
+        "document.data.grid.status.executed",
+        "document.data.grid.status.affected_rows.one",
+        "document.data.grid.status.affected_rows.many",
         "document.data.grid.status.rows.one",
         "document.data.grid.status.rows.many",
         "document.data.grid.status.pending_changes.one",

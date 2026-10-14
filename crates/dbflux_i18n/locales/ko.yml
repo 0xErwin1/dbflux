@@ -1729,6 +1729,10 @@ document:
         rows:
           one: "행 %{count}개"
           many: "행 %{count}개"
+        executed: "문이 실행되었습니다"
+        affected_rows:
+          one: "%{count}개 행이 영향을 받음"
+          many: "%{count}개 행이 영향을 받음"
         limited_rows:
           first: "처음 %{count}개 행 로드됨"
           of_total: "%{loaded}/%{total}개 행 로드됨"

@@ -1729,6 +1729,10 @@ document:
         rows:
           one: "%{count} row"
           many: "%{count} rows"
+        executed: "Statement executed"
+        affected_rows:
+          one: "%{count} row affected"
+          many: "%{count} rows affected"
         limited_rows:
           first: "First %{count} rows loaded"
           of_total: "%{loaded}/%{total} rows loaded"

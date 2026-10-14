@@ -1729,6 +1729,10 @@ document:
         rows:
           one: "%{count} linha"
           many: "%{count} linhas"
+        executed: "Instrução executada"
+        affected_rows:
+          one: "%{count} linha afetada"
+          many: "%{count} linhas afetadas"
         limited_rows:
           first: "Primeiras %{count} linhas carregadas"
           of_total: "%{loaded}/%{total} linhas carregadas"

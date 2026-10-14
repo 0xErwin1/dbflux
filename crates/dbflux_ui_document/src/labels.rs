@@ -139,6 +139,18 @@ pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String
 ///
 /// Uses the singular catalog bucket only for exactly one row; every other
 /// count, including zero, uses the plural bucket.
+/// Rows a statement without a result set changed: "3 rows affected".
+pub(crate) fn affected_rows_label(count: u64) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.data.grid.status.affected_rows.one", count = count)
+    } else {
+        dbflux_i18n::t!(
+            "document.data.grid.status.affected_rows.many",
+            count = grouped_count(count)
+        )
+    }
+}
+
 pub(crate) fn row_count_label(count: usize) -> String {
     if count == 1 {
         dbflux_i18n::t!("document.data.grid.status.rows.one", count = count)
