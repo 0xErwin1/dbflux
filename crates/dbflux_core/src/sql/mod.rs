@@ -13,7 +13,9 @@ pub use code_generation::{
     TableAlterPreview, TableAlterRequest, TableAlterRoute, TypeAttributeDefinition, TypeDefinition,
     validate_ddl_fragment,
 };
-pub use dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
+pub use dialect::{
+    DefaultSqlDialect, PlaceholderStyle, SqlDialect, quote_double_quoted_identifier,
+};
 pub use generation::{
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,

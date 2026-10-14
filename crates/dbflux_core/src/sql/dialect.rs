@@ -235,13 +235,18 @@ pub(crate) fn drop_cascade_not_supported() -> DbError {
     )
 }
 
+/// Wraps an identifier in double quotes and doubles every embedded double quote,
+/// the ANSI quoting SQLite and the default dialect share.
+pub fn quote_double_quoted_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).
 pub struct DefaultSqlDialect;
 
 impl SqlDialect for DefaultSqlDialect {
     fn quote_identifier(&self, name: &str) -> String {
-        let escaped = name.replace('"', "\"\"");
-        format!("\"{}\"", escaped)
+        quote_double_quoted_identifier(name)
     }
 
     fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
@@ -362,6 +367,27 @@ impl SqlDialect for DefaultSqlDialect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_quoted_identifier_wraps_plain_name() {
+        assert_eq!(quote_double_quoted_identifier("users"), "\"users\"");
+    }
+
+    #[test]
+    fn double_quoted_identifier_doubles_embedded_quotes() {
+        assert_eq!(
+            quote_double_quoted_identifier("we\"ird\""),
+            "\"we\"\"ird\"\"\""
+        );
+    }
+
+    #[test]
+    fn default_dialect_quotes_through_shared_function() {
+        assert_eq!(
+            DefaultSqlDialect.quote_identifier("a\"b"),
+            quote_double_quoted_identifier("a\"b")
+        );
+    }
 
     struct NopDialect;
 
