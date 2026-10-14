@@ -1075,24 +1075,48 @@ fn build_keyword_conn_string(
     pairs.join(" ")
 }
 
+/// Notices one request keeps; a loop raising a notice per row would
+/// otherwise hold every one of them in memory and in the result.
+const MAX_KEPT_NOTICES: usize = 100;
+
 /// Collects the notices and warnings the server sends on one client.
 #[derive(Clone, Default)]
-struct NoticeBuffer(Arc<Mutex<Vec<ServerNotice>>>);
+struct NoticeBuffer(Arc<Mutex<CollectedNotices>>);
+
+#[derive(Default)]
+struct CollectedNotices {
+    kept: Vec<ServerNotice>,
+    dropped: usize,
+}
 
 impl NoticeBuffer {
     fn push(&self, notice: ServerNotice) {
-        self.lock().push(notice);
+        let mut notices = self.lock();
+        if notices.kept.len() < MAX_KEPT_NOTICES {
+            notices.kept.push(notice);
+        } else {
+            notices.dropped += 1;
+        }
     }
 
     fn clear(&self) {
-        self.lock().clear();
+        *self.lock() = CollectedNotices::default();
     }
 
+    /// The notices kept since the last clear, followed by one that counts
+    /// those past the limit.
     fn take(&self) -> Vec<ServerNotice> {
-        std::mem::take(&mut *self.lock())
+        let CollectedNotices { mut kept, dropped } = std::mem::take(&mut *self.lock());
+        if dropped > 0 {
+            kept.push(ServerNotice {
+                severity: "INFO".to_string(),
+                message: format!("{dropped} more notices were not kept"),
+            });
+        }
+        kept
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<ServerNotice>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, CollectedNotices> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -5099,6 +5123,26 @@ fn statement_opens_transaction(statement: &str) -> bool {
     second_keyword.eq_ignore_ascii_case("TRANSACTION")
 }
 
+/// `BEGIN`, `BEGIN WORK`, `BEGIN TRANSACTION` or `START TRANSACTION` with no
+/// transaction modes, which would have to apply before the block's first
+/// statement.
+fn is_plain_begin(statement: &str) -> bool {
+    let words: Vec<String> = strip_leading_comments(statement)
+        .split(|character: char| character.is_whitespace() || character == ';')
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    matches!(
+        words
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["BEGIN"] | ["BEGIN", "WORK" | "TRANSACTION"] | ["START", "TRANSACTION"]
+    )
+}
+
 /// Splits the leading keyword, after any comments, from the rest of `sql`.
 fn split_leading_keyword(sql: &str) -> (&str, &str) {
     let stripped = strip_leading_comments(sql);
@@ -5722,6 +5766,24 @@ fn execute_bounded_batch(
             }
             log::info!("[QUERY] Batch query {} was cancelled", query_id);
             return Err(DbError::Cancelled);
+        }
+
+        // At a plain `BEGIN`, PostgreSQL's implicit block becomes the user's
+        // block. Running it inside the block the driver opened in its place
+        // would change nothing but raise `there is already a transaction in
+        // progress`, so the driver's block is adopted instead.
+        if *control == TransactionControl::Open
+            && block == BatchBlock::Implicit
+            && is_plain_begin(statement)
+        {
+            results.push(QueryResult::table(
+                Vec::new(),
+                Vec::new(),
+                None,
+                start.elapsed(),
+            ));
+            block = BatchBlock::Explicit;
+            continue;
         }
 
         if opens {
@@ -8489,6 +8551,43 @@ mod notice_buffer_tests {
 
         assert_eq!(buffer.take(), vec![notice("first"), notice("second")]);
         assert!(buffer.take().is_empty());
+    }
+
+    #[test]
+    fn a_flood_keeps_the_first_notices_and_counts_the_rest() {
+        let buffer = NoticeBuffer::default();
+        for index in 0..super::MAX_KEPT_NOTICES + 5 {
+            buffer.push(notice(&format!("n{index}")));
+        }
+
+        let notices = buffer.take();
+        assert_eq!(notices.len(), super::MAX_KEPT_NOTICES + 1);
+        assert_eq!(notices[0], notice("n0"));
+        assert_eq!(
+            notices[super::MAX_KEPT_NOTICES].message,
+            "5 more notices were not kept"
+        );
+        assert!(buffer.take().is_empty(), "take resets the count");
+    }
+
+    #[test]
+    fn only_a_begin_without_modes_is_plain() {
+        for statement in [
+            "BEGIN",
+            "begin work",
+            "BEGIN TRANSACTION",
+            "START TRANSACTION",
+            "-- go\nBEGIN",
+        ] {
+            assert!(super::is_plain_begin(statement), "{statement}");
+        }
+        for statement in [
+            "BEGIN ISOLATION LEVEL SERIALIZABLE",
+            "START TRANSACTION READ ONLY",
+            "COMMIT",
+        ] {
+            assert!(!super::is_plain_begin(statement), "{statement}");
+        }
     }
 
     #[test]

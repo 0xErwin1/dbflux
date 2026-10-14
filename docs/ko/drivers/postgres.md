@@ -19,7 +19,7 @@
 - PostgreSQL 취소 토큰을 통한 쿼리 취소를 지원합니다.
 - CRUD, 인덱스, reindex, 외래 키, 타입 작업을 위한 PostgreSQL 전용 SQL/코드 생성을 포함합니다.
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 단순 쿼리 프로토콜을 통해 배치로 실행되며 문마다 하나의 결과 집합을 반환합니다.
-- 쿼리가 발생시킨 서버 알림과 경고(예: 단독 `COMMIT`의 `WARNING: there is no transaction in progress` 또는 `RAISE NOTICE`)는 그 결과와 함께 반환됩니다. 배치는 모든 알림을 기본 결과에 붙이며, 실패한 쿼리는 알림을 버립니다.
+- 쿼리가 발생시킨 서버 알림과 경고(예: 단독 `COMMIT`의 `WARNING: there is no transaction in progress` 또는 `RAISE NOTICE`)는 그 결과와 함께 반환됩니다. 배치는 모든 알림을 기본 결과에 붙이며, 실패한 쿼리는 알림을 버립니다. 쿼리는 처음 100개의 알림을 유지하고, 나머지 개수를 알려 주는 알림 하나를 덧붙입니다.
 - 데이터 전송 엔진: 네이티브 다중 행 `INSERT` 대량 적재(`BULK_INSERT`), 원본 테이블의 열을 기반으로 한 드라이버 네이티브 `CREATE TABLE` DDL, `TRUNCATE TABLE` 지원, FK 안전 마이그레이션을 위한 참조 무결성 토글(`SET session_replication_role`).
 - 검증된 1차원 배열을 포함해 `pgvector`의 `vector`, `halfvec`, `sparsevec` 값을 텍스트 결과로 표시합니다.
 - 1차원 배열을 포함해 전문 검색의 `tsvector`와 `tsquery` 값을 PostgreSQL의 정규 텍스트 형태로 표시합니다.

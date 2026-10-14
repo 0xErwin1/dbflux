@@ -2626,6 +2626,45 @@ fn postgres_server_notices_travel_with_the_result() -> Result<(), DbError> {
             assert!(notices.is_empty(), "{notices:?}");
         }
 
+        // A user `BEGIN` after earlier statements of a row-limited batch joins
+        // the block the driver opened for them, as PostgreSQL's implicit block
+        // does for the same script sent at once: no driver-made warning.
+        for script in [
+            "SELECT 1; BEGIN; SELECT 2; COMMIT",
+            "SELECT 1; START TRANSACTION; SELECT 2; COMMIT",
+        ] {
+            let notices = connection
+                .execute(&QueryRequest::new(script).with_limit(10))?
+                .server_notices();
+            assert!(notices.is_empty(), "{script}: {notices:?}");
+        }
+
+        // The block the user `BEGIN` adopted stays open until the user's
+        // `COMMIT`: rows written before it commit with it.
+        connection.execute(
+            &QueryRequest::new(
+                "INSERT INTO device VALUES (7); BEGIN; INSERT INTO device VALUES (8); ROLLBACK",
+            )
+            .with_limit(10),
+        )?;
+        let kept = connection.execute(&QueryRequest::new(
+            "SELECT count(*) FROM device WHERE id IN (7, 8)",
+        ))?;
+        assert_eq!(
+            kept.rows[0][0],
+            Value::Int(0),
+            "the ROLLBACK undid both rows"
+        );
+
+        // A notice flood keeps a bounded number of notices.
+        let flood = connection.execute(&QueryRequest::new(
+            "DO $$ BEGIN FOR i IN 1..500 LOOP RAISE NOTICE 'n%', i; END LOOP; END $$",
+        ))?;
+        let notices = flood.server_notices();
+        assert_eq!(notices.len(), 101, "100 kept plus one that counts the rest");
+        assert_eq!(notices[0].message, "n1");
+        assert!(notices[100].message.contains("400"), "{:?}", notices[100]);
+
         connection.schema()?;
         let after_refresh = connection.execute(&QueryRequest::new("SELECT 1"))?;
         assert!(after_refresh.server_notices().is_empty());

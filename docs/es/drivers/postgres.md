@@ -31,7 +31,7 @@ Base de datos relacional open-source avanzada.
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se ejecutan
   como un lote vía el simple query protocol, devolviendo un result set por
   sentencia.
-- Los avisos y advertencias del servidor que produce una consulta (por ejemplo `WARNING: there is no transaction in progress` de un `COMMIT` suelto, o `RAISE NOTICE`) se devuelven con su resultado; un lote los adjunta todos al resultado principal y una consulta fallida los descarta.
+- Los avisos y advertencias del servidor que produce una consulta (por ejemplo `WARNING: there is no transaction in progress` de un `COMMIT` suelto, o `RAISE NOTICE`) se devuelven con su resultado; un lote los adjunta todos al resultado principal y una consulta fallida los descarta. Una consulta conserva sus primeros 100 avisos, seguidos de uno que cuenta el resto.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle de integridad
