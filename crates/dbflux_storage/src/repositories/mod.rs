@@ -65,7 +65,10 @@ pub mod sch_schema_snapshots;
 /// readable rows and logs the ones that fail to read.
 ///
 /// One corrupt row must not hide every other entry of the list it feeds, so
-/// it is skipped, but never silently: the warning names the table.
+/// it is skipped, but never silently: the warning names the table. Use it
+/// only for display lists that are never written back. A read whose result
+/// is saved again, counted, or looked up by id must propagate the error,
+/// because a skipped row there is lost on the next save or reads as absent.
 pub(crate) fn readable_row<T>(table: &'static str) -> impl FnMut(rusqlite::Result<T>) -> Option<T> {
     move |row| match row {
         Ok(value) => Some(value),

@@ -21,7 +21,6 @@ use uuid::Uuid;
 use dbflux_core::{SchemaSnapshotRecord, SnapshotDepth, TableCreationMetadata, TableInfo};
 
 use crate::error::StorageError;
-use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -194,8 +193,8 @@ impl SchemaSnapshotRepo {
         let rows = stmt
             .query_map(rusqlite::params![profile_id, database], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(readable_row("sch_schema_snapshots"))
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(sqlite_err)?;
 
         Ok(rows)
     }

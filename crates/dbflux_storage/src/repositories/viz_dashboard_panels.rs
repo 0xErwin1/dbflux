@@ -10,7 +10,6 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::error::StorageError;
-use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -90,8 +89,11 @@ impl DashboardPanelsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(readable_row("viz_dashboard_panels"))
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         Ok(rows)
     }
@@ -137,8 +139,11 @@ impl DashboardPanelsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(readable_row("viz_dashboard_panels"))
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         Ok(rows)
     }

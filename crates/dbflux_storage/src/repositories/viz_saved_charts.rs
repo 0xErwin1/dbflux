@@ -187,8 +187,11 @@ impl SavedChartsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(readable_row("viz_saved_charts"))
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         drop(stmt);
         drop(conn);
@@ -228,8 +231,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_dashboard_panels"))
-                .collect()
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
         };
 
         if chart_ids.is_empty() {
@@ -270,8 +276,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_saved_charts"))
-                .collect()
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
         };
 
         // SELECT 2 + SELECT 3: children for all charts in the IN list.
@@ -564,8 +573,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_saved_chart_series"))
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for s in series_rows {
                 if let Some(&idx) = index_map.get(&s.chart_id) {
@@ -604,8 +616,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_saved_chart_binding_y"))
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for b in binding_y_rows {
                 if let Some(&idx) = index_map.get(&b.chart_id) {
@@ -651,8 +666,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_saved_chart_source_metric_series"))
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for s in metric_series_rows {
                 if let Some(&idx) = index_map.get(&s.chart_id) {
@@ -694,8 +712,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_saved_chart_source_metric_dimensions"))
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for d in dim_rows {
                 if let Some(&idx) = index_map.get(&d.chart_id) {
@@ -730,8 +751,11 @@ impl SavedChartsRepository {
                     path: DB_PATH.into(),
                     source,
                 })?
-                .filter_map(readable_row("viz_saved_chart_source_instance_metric"))
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
 
             for (chart_id, metric_id) in inst_rows {
                 if let Some(&idx) = index_map.get(&chart_id) {
