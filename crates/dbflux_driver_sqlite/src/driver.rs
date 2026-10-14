@@ -1508,11 +1508,11 @@ impl SqliteConnection {
         table: &str,
     ) -> Result<Vec<IndexInfo>, DbError> {
         let mut stmt = conn
-            .prepare(&format!("PRAGMA index_list('{}')", table))
+            .prepare("SELECT seq, name, \"unique\", origin FROM pragma_index_list(?1)")
             .map_err(|e| format_sqlite_query_error(&e))?;
 
         let index_list: Vec<(String, bool)> = stmt
-            .query_map([], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
+            .query_map([table], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
             .map_err(|e| format_sqlite_query_error(&e))?
             .collect::<Result<_, _>>()
             .map_err(|e| format_sqlite_query_error(&e))?;
@@ -1639,11 +1639,11 @@ impl SqliteConnection {
 
         // Get UNIQUE constraints from indexes
         let mut idx_stmt = conn
-            .prepare(&format!("PRAGMA index_list('{}')", table))
+            .prepare("SELECT seq, name, \"unique\", origin FROM pragma_index_list(?1)")
             .map_err(|e| format_sqlite_query_error(&e))?;
 
         let unique_indexes: Vec<(String, String)> = idx_stmt
-            .query_map([], |row| {
+            .query_map([table], |row| {
                 Ok((
                     row.get::<_, String>(1)?, // name
                     row.get::<_, String>(3)?, // origin (c=CREATE INDEX, u=UNIQUE, pk=PRIMARY KEY)
@@ -1687,11 +1687,11 @@ impl SqliteConnection {
 
         for table_name in table_names {
             let mut stmt = conn
-                .prepare(&format!("PRAGMA index_list('{}')", table_name))
+                .prepare("SELECT seq, name, \"unique\", origin FROM pragma_index_list(?1)")
                 .map_err(|e| format_sqlite_query_error(&e))?;
 
             let index_list: Vec<(String, bool, String)> = stmt
-                .query_map([], |row| {
+                .query_map([&table_name], |row| {
                     Ok((
                         row.get::<_, String>(1)?,   // name
                         row.get::<_, i32>(2)? == 1, // unique
@@ -2738,6 +2738,7 @@ fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<Foreig
 
     let mut primary_keys: HashMap<String, Vec<String>> = HashMap::new();
     let mut foreign_keys = Vec::with_capacity(rows.len());
+    let mut unresolved_ids = std::collections::HashSet::new();
 
     for PragmaRow {
         id,
@@ -2765,12 +2766,15 @@ fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<Foreig
                     Some(column) => column.clone(),
                     None => {
                         // SQLite accepts this schema and reports a mismatch only
-                        // when the key is used, so the column is left out of the
-                        // constraint rather than failing the whole schema read.
+                        // when the key is used. Listing the other columns would
+                        // present a narrower key than the one declared, so the
+                        // whole constraint is left out rather than failing the
+                        // schema read.
                         log::warn!(
                             "[SCHEMA] Foreign key {id} of {table} references {referenced_table}, \
                              which has no primary key column at position {seq}"
                         );
+                        unresolved_ids.insert(id);
                         continue;
                     }
                 }
@@ -2779,6 +2783,8 @@ fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<Foreig
 
         foreign_keys.push((id, referenced_table, from, to, on_update, on_delete));
     }
+
+    foreign_keys.retain(|(id, ..)| !unresolved_ids.contains(id));
 
     Ok(foreign_keys)
 }

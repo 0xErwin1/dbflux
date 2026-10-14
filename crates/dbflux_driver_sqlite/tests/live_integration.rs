@@ -141,6 +141,40 @@ fn sqlite_schema_reads_implicit_foreign_key_targets_and_expression_indexes() -> 
     Ok(())
 }
 
+/// A reference that lists more columns than the parent's primary key has
+/// cannot be resolved in full, so it is left out rather than listed with
+/// fewer columns than were declared.
+#[test]
+fn sqlite_schema_omits_an_implicit_foreign_key_wider_than_the_parent_key() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE parents (code TEXT PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE children (
+            id INTEGER PRIMARY KEY,
+            parent_code TEXT,
+            parent_region TEXT,
+            FOREIGN KEY (parent_code, parent_region) REFERENCES parents
+        )",
+    ))?;
+
+    let table = connection.table_details("main", None, "children")?;
+    let foreign_keys = table.foreign_keys.as_ref().expect("foreign keys load");
+    assert!(foreign_keys.is_empty(), "{foreign_keys:?}");
+
+    let schema_foreign_keys = connection.schema_foreign_keys("main", None)?;
+    assert!(
+        schema_foreign_keys
+            .iter()
+            .all(|foreign_key| foreign_key.table_name != "children"),
+        "{schema_foreign_keys:?}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn sqlite_schema_introspection() -> Result<(), DbError> {
     let connection = connect_sqlite()?;
