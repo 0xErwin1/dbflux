@@ -30,7 +30,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Runtime};
@@ -1212,28 +1212,9 @@ impl MssqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials.
-        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
-
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            config.host,
-            config.port
-        );
-
-        let ssh_session = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, config.host.clone(), config.port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            total_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         let tiberius_config = build_tiberius_config(&MssqlConnectParams {
             host: "127.0.0.1",
@@ -1259,7 +1240,7 @@ impl MssqlDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             config.host,
             config.port,
-            tunnel_config.host,
+            ssh_host,
             established.spid
         );
 

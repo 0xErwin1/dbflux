@@ -90,7 +90,7 @@ impl SqlDialect for TursoDialect {
 
 pub(crate) fn quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
-    format!("\"{}\"", ident.replace('"', "\"\""))
+    dbflux_core::quote_double_quoted_identifier(ident)
 }
 
 pub(crate) fn escape_string(s: &str) -> String {
