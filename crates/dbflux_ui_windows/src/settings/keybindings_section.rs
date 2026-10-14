@@ -5,18 +5,20 @@ use dbflux_app::keymap::{
     BindingSlot, ContextId, KeyChord, KeySequence, KeybindingRecorder, KeymapOverrides, Modifiers,
     RecordingOutcome, RecordingState, save_keymap_overrides,
 };
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
+use dbflux_components::controls::{
+    Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
+};
 use dbflux_components::icons::AppIcon;
 use dbflux_core::LogErr;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{
-    GpuiPredicateOverlap, PredicateError, apply_keymap_overrides, key_chord_from_gpui,
-    keymap_overrides, validate_predicate, vim_leader,
+    GpuiPredicateOverlap, PredicateError, apply_keymap_overrides, default_keymap,
+    key_chord_from_gpui, keymap_overrides, validate_predicate, vim_leader,
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// How long the recorder waits after the last key before it saves the
@@ -52,6 +54,7 @@ pub(super) struct BindingEntry {
     pub(super) is_inherited: bool,
 }
 
+#[derive(Clone)]
 pub(super) enum KeybindingsListItem {
     ContextHeader {
         context: ContextId,
@@ -100,11 +103,20 @@ pub(super) struct KeybindingsSection {
     pub(super) keybindings_expanded: HashSet<ContextId>,
     pub(super) keybindings_selection: KeybindingsSelection,
     pub(super) keybindings_editing_filter: bool,
-    pub(super) keybindings_scroll_handle: ScrollHandle,
+    /// The rows are a virtual list: a one-letter filter matches hundreds of
+    /// them, and drawing every one made the first keystrokes lag.
+    pub(super) keybindings_list: ListState,
+    pub(super) keybindings_items: Vec<KeybindingsListItem>,
+    /// The predicate editor just opened: scroll its row into view so the
+    /// virtual list draws it and its input can take keys.
+    pub(super) reveal_predicate_editor: bool,
     pub(super) keybindings_pending_scroll: Option<usize>,
     pub(super) content_focused: bool,
     /// The saved overrides; the effective keymap is built from these.
     pub(super) overrides: KeymapOverrides,
+    /// Conflicts of the saved overrides, recomputed only when they change:
+    /// finding them compares every binding with every other.
+    pub(super) conflicts: HashMap<BindingSlot, Vec<BindingSlot>>,
     pub(super) recorder: KeybindingRecorder,
     /// Context group whose row started the recording. A binding inherited
     /// by several contexts shows the recording only in that group.
@@ -147,12 +159,34 @@ impl KeybindingsSection {
             },
         );
 
+        // Clicking into the filter must count as typing too, or its letters
+        // run the page's single-key commands (c, d, r, p, j, k).
+        let filter_subscription = cx.subscribe(
+            &keybindings_filter,
+            |this, _, event: &InputEvent, cx| match event {
+                InputEvent::Focus => {
+                    this.keybindings_editing_filter = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.keybindings_editing_filter = false;
+                    cx.notify();
+                }
+                // A new filter shows other rows, so it starts at the top.
+                InputEvent::Change => {
+                    this.keybindings_pending_scroll = Some(0);
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+
         let recording_interceptor = Self::intercept_recording_keys(window, cx);
 
         let mut keybindings_expanded = HashSet::new();
         keybindings_expanded.insert(ContextId::Global);
 
-        Self {
+        let mut section = Self {
             app_state,
             keybindings_filter,
             context_filter,
@@ -160,17 +194,36 @@ impl KeybindingsSection {
             keybindings_expanded,
             keybindings_selection: KeybindingsSelection::Context(0),
             keybindings_editing_filter: false,
-            keybindings_scroll_handle: ScrollHandle::new(),
+            keybindings_list: ListState::new(0, ListAlignment::Top, px(400.)),
+            keybindings_items: Vec::new(),
+            reveal_predicate_editor: false,
             keybindings_pending_scroll: None,
             content_focused: false,
+            conflicts: HashMap::new(),
             overrides: keymap_overrides(),
             recorder: KeybindingRecorder::new(),
             recording_group: None,
             recording_pause: None,
             predicate_editing: None,
             overlap: GpuiPredicateOverlap::new(),
-            _subscriptions: vec![context_subscription, recording_interceptor],
-        }
+            _subscriptions: vec![
+                context_subscription,
+                filter_subscription,
+                recording_interceptor,
+            ],
+        };
+
+        section.refresh_conflicts();
+        section
+    }
+
+    /// Recomputes the conflicts of the saved overrides.
+    fn refresh_conflicts(&mut self) {
+        self.conflicts = self
+            .overrides
+            .existing_conflicts(default_keymap(), &self.overlap)
+            .into_iter()
+            .collect();
     }
 
     /// Captures every key press of this window while a shortcut is being
@@ -333,6 +386,7 @@ impl KeybindingsSection {
             input,
             error: None,
         });
+        self.reveal_predicate_editor = true;
         cx.notify();
     }
 
@@ -419,6 +473,7 @@ impl KeybindingsSection {
         }
 
         self.overrides = overrides.clone();
+        self.refresh_conflicts();
         apply_keymap_overrides(overrides, cx);
         cx.notify();
     }
