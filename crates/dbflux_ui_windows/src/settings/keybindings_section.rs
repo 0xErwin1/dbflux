@@ -172,6 +172,11 @@ impl KeybindingsSection {
                     this.keybindings_editing_filter = false;
                     cx.notify();
                 }
+                // A new filter shows other rows, so it starts at the top.
+                InputEvent::Change => {
+                    this.keybindings_pending_scroll = Some(0);
+                    cx.notify();
+                }
                 _ => {}
             },
         );

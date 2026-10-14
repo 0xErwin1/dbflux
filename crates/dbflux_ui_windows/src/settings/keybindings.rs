@@ -249,8 +249,8 @@ impl KeybindingsSection {
             }
         }
 
-        // Heights differ only for the banner and editor rows, which change
-        // the row count or kinds, so the measured heights are kept otherwise.
+        // Headers and binding rows have fixed heights, so measured heights
+        // are kept unless the row count or kinds change.
         let kinds_changed = self.keybindings_items.len() != flat_items.len()
             || self
                 .keybindings_items
@@ -259,7 +259,23 @@ impl KeybindingsSection {
                 .any(|(old, new)| std::mem::discriminant(old) != std::mem::discriminant(new));
         self.keybindings_items = flat_items;
         if kinds_changed {
+            // `reset` drops the scroll position, which would send the list
+            // back to the top whenever a group is toggled.
+            let scroll_top = self.keybindings_list.logical_scroll_top();
             self.keybindings_list.reset(self.keybindings_items.len());
+            self.keybindings_list.scroll_to(scroll_top);
+        } else {
+            // The banner's conflicts and the editor's message change their
+            // height without changing their kind.
+            for (index, item) in self.keybindings_items.iter().enumerate() {
+                if matches!(
+                    item,
+                    KeybindingsListItem::PendingConflict { .. }
+                        | KeybindingsListItem::PredicateEditor { .. }
+                ) {
+                    self.keybindings_list.remeasure_items(index..index + 1);
+                }
+            }
         }
 
         if std::mem::take(&mut self.reveal_predicate_editor)
@@ -272,15 +288,15 @@ impl KeybindingsSection {
         }
 
         if let Some(scroll_idx) = self.keybindings_pending_scroll.take() {
-            // Revealing needs the row measured, which only the rows near the
-            // visible ones are; a jump to the end goes there directly.
-            if scroll_idx + 1 == self.keybindings_items.len() {
+            // Revealing needs the row measured, which only the drawn rows
+            // are; an unmeasured row is scrolled to directly.
+            if self.keybindings_list.bounds_for_item(scroll_idx).is_some() {
+                self.keybindings_list.scroll_to_reveal_item(scroll_idx);
+            } else {
                 self.keybindings_list.scroll_to(ListOffset {
                     item_ix: scroll_idx,
                     offset_in_item: px(0.),
                 });
-            } else {
-                self.keybindings_list.scroll_to_reveal_item(scroll_idx);
             }
         }
 
