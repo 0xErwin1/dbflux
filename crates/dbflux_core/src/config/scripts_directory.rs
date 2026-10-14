@@ -1014,10 +1014,26 @@ impl ScriptsDirectory {
             })?;
 
         if let Err(error) = std::io::copy(&mut source_file, &mut destination) {
+            // The partial copy is the entry the handle holds, whatever a later
+            // replacement puts at its pathname; it is removed only while it is
+            // still that entry.
+            let id = match destination.metadata() {
+                Ok(metadata) => Some(EntryId::of(&metadata)),
+                Err(metadata_error) => {
+                    log::warn!(
+                        "Could not identify the incomplete copy {}: {}",
+                        dest.display(),
+                        metadata_error
+                    );
+                    None
+                }
+            };
             // Close the handle before removing the partial copy: Windows
             // refuses to remove a file that is still open.
             drop(destination);
-            if let Err(cleanup) = fs::remove_file(&dest) {
+            if id.is_some_and(|id| id.matches(&dest))
+                && let Err(cleanup) = fs::remove_file(&dest)
+            {
                 log::warn!(
                     "Failed to remove the incomplete copy {}: {}",
                     dest.display(),
