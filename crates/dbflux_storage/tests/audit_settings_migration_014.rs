@@ -18,8 +18,8 @@ fn columns(conn: &Connection, table: &str) -> std::collections::HashSet<String> 
         .unwrap();
     stmt.query_map([], |row| row.get::<_, String>(1))
         .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        .collect::<Result<_, _>>()
+        .unwrap()
 }
 
 #[test]

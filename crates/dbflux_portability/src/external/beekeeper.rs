@@ -102,8 +102,8 @@ fn find_connection_table(conn: &Connection) -> Result<String, ExternalImportErro
     let table_names: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| ExternalImportError::Sqlite(e.to_string()))?
-        .filter_map(Result::ok)
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| ExternalImportError::Sqlite(e.to_string()))?;
 
     for table_name in &table_names {
         let columns = table_columns(conn, table_name)?;
@@ -130,8 +130,8 @@ fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, External
     let columns = stmt
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|e| ExternalImportError::Sqlite(e.to_string()))?
-        .filter_map(Result::ok)
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| ExternalImportError::Sqlite(e.to_string()))?;
 
     Ok(columns)
 }

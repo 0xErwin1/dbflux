@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use dbflux_core::{
@@ -66,6 +66,7 @@ fn parse_conditions_envelope(raw: &str) -> Option<JoinOn> {
 }
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -112,7 +113,7 @@ impl SavedQueryRepo {
         let rows = stmt
             .query_map([profile_id], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("qry_saved_queries"))
             .collect();
 
         Ok(rows)
@@ -134,7 +135,7 @@ impl SavedQueryRepo {
         let rows = stmt
             .query_map([], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("qry_saved_queries"))
             .collect();
 
         Ok(rows)
@@ -198,7 +199,8 @@ impl SavedQueryRepo {
                 rusqlite::params![profile_id, name],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(sqlite_err)?;
 
         let id = match existing_id {
             Some(id) => id,
@@ -455,7 +457,8 @@ fn load_spec(conn: &Connection, id: &str) -> Result<Option<VisualQuerySpec>, Sto
                 })
             },
         )
-        .ok();
+        .optional()
+        .map_err(sqlite_err)?;
 
     let root = match row {
         Some(r) => r,
@@ -519,8 +522,8 @@ fn load_columns(conn: &Connection, id: &str) -> Result<Vec<ProjectedColumn>, Sto
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(sqlite_err)?;
 
     Ok(columns)
 }
@@ -550,8 +553,8 @@ fn load_sorts(conn: &Connection, id: &str) -> Result<Vec<SortEntry>, StorageErro
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(sqlite_err)?;
 
     Ok(sorts)
 }
@@ -603,8 +606,8 @@ fn load_joins(conn: &Connection, id: &str) -> Result<Vec<JoinStep>, StorageError
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(sqlite_err)?;
 
     Ok(joins)
 }
@@ -704,6 +707,54 @@ mod tests {
             limit: Some(100),
             offset: 0,
         }
+    }
+
+    #[test]
+    fn get_fails_when_the_root_row_is_unreadable() {
+        let (conn, repo, profile_id) = setup("unreadable_root_row");
+
+        let id = Uuid::now_v7().to_string();
+        repo.upsert_by_id(&id, &profile_id, "My Query", &base_spec())
+            .expect("upsert");
+
+        conn.lock()
+            .expect("lock connection")
+            .execute(
+                "UPDATE qry_saved_queries SET source_alias = X'00' WHERE id = ?1",
+                [&id],
+            )
+            .expect("corrupt the root row");
+
+        assert!(
+            repo.get(&id).is_err(),
+            "an unreadable saved query must not be reported as missing"
+        );
+    }
+
+    #[test]
+    fn get_fails_when_a_child_row_is_unreadable() {
+        let (conn, repo, profile_id) = setup("unreadable_child_row");
+
+        let id = Uuid::now_v7().to_string();
+        repo.upsert_by_id(&id, &profile_id, "My Query", &base_spec())
+            .expect("upsert");
+
+        // A BLOB keeps its storage class in a TEXT column, so reading
+        // `column_name` as a String fails for this row only.
+        conn.lock()
+            .expect("lock connection")
+            .execute(
+                "INSERT INTO qry_saved_query_sorts
+                    (saved_query_id, position, source_alias, column_name, direction)
+                 VALUES (?1, 0, 'users', X'00', 'asc')",
+                [&id],
+            )
+            .expect("insert the unreadable sort row");
+
+        assert!(
+            repo.get(&id).is_err(),
+            "a query loaded without its sort row would lose it on the next save"
+        );
     }
 
     // --- upsert_by_id round-trip ---
