@@ -219,17 +219,76 @@ pub struct ScriptsDirectory {
     external: Vec<MountedScriptRoot>,
 }
 
+/// The identity of a just-written entry.
+///
+/// Rollback acts on the entry's pathname, so a replacement at that pathname
+/// between the write and the rollback would otherwise be removed or renamed.
+/// Comparing this id right before the rollback keeps it from acting on a
+/// replacement. It cannot make the check and the rollback one step, which
+/// still needs `openat` with `O_NOFOLLOW` for every component.
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EntryId {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(unix)]
+impl EntryId {
+    /// The identity described by `metadata`.
+    fn of(metadata: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        }
+    }
+
+    /// The identity of the entry at `path`, following no symlink.
+    fn at(path: &Path) -> Result<Self, DbError> {
+        fs::symlink_metadata(path)
+            .map(|metadata| Self::of(&metadata))
+            .map_err(DbError::IoError)
+    }
+
+    /// Whether `path` still names this entry.
+    fn matches(self, path: &Path) -> bool {
+        Self::at(path).is_ok_and(|current| current == self)
+    }
+}
+
+/// Without a portable inode identity, a rollback keeps its pathname behavior.
+#[cfg(not(unix))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EntryId;
+
+#[cfg(not(unix))]
+impl EntryId {
+    fn of(_metadata: &fs::Metadata) -> Self {
+        Self
+    }
+
+    fn at(_path: &Path) -> Result<Self, DbError> {
+        Ok(Self)
+    }
+
+    fn matches(self, path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok()
+    }
+}
+
 /// What a write just put on disk, so a write that landed outside an external
 /// root can be undone.
 #[derive(Clone, Copy)]
 enum WrittenEntry<'a> {
     /// A file created empty (`create_file`) or copied (`import`).
-    File,
+    File(EntryId),
     /// A folder created empty (`create_folder`).
-    Folder,
+    Folder(EntryId),
     /// An entry moved into place (`rename`, `move_entry`); the move is undone
     /// by renaming it back to where it came from.
-    Moved { from: &'a Path },
+    Moved { from: &'a Path, id: EntryId },
 }
 
 /// The cached tree of one root, borrowed for an in-memory edit.
@@ -536,10 +595,25 @@ impl ScriptsDirectory {
             return Ok(());
         }
 
+        // Roll back only the entry this write created, never whatever an
+        // attacker may have put at the same path in the meantime.
+        let still_written = match written {
+            WrittenEntry::File(id) | WrittenEntry::Folder(id) => id.matches(path),
+            WrittenEntry::Moved { id, .. } => id.matches(path),
+        };
+
+        if !still_written {
+            log::warn!(
+                "Not undoing the write past {}: the entry there is no longer the one just written",
+                path.display()
+            );
+            return Err(io_error(resolved_outside_message(path, root)));
+        }
+
         let undo = match written {
-            WrittenEntry::File => remove_file_or_link(path),
-            WrittenEntry::Folder => fs::remove_dir(path),
-            WrittenEntry::Moved { from } => fs::rename(path, from),
+            WrittenEntry::File(_) => remove_file_or_link(path),
+            WrittenEntry::Folder(_) => fs::remove_dir(path),
+            WrittenEntry::Moved { from, .. } => fs::rename(path, from),
         };
 
         match undo {
@@ -723,7 +797,7 @@ impl ScriptsDirectory {
         // `create_new` refuses any existing entry, a dangling symlink included,
         // and never follows a link in the final component the way `fs::write`
         // would.
-        fs::OpenOptions::new()
+        let created = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
@@ -733,8 +807,12 @@ impl ScriptsDirectory {
                 }
                 _ => DbError::IoError(error),
             })?;
+        // The handle's metadata is the entry just created, whatever a later
+        // replacement puts at its pathname.
+        let id = EntryId::of(&created.metadata().map_err(DbError::IoError)?);
+        drop(created);
 
-        self.ensure_contained_after_write(&root, &path, WrittenEntry::File)?;
+        self.ensure_contained_after_write(&root, &path, WrittenEntry::File(id))?;
         self.record_insert(&path, false);
         Ok(path)
     }
@@ -748,10 +826,15 @@ impl ScriptsDirectory {
 
         let path = dir.join(name);
 
-        // Missing parents keep being created, as `create_dir_all` did, but the
-        // last component goes through `create_dir` alone: it refuses any
+        // Only the managed root can be missing parents; an external root's
+        // parent was already resolved and must exist. Recursive creation stays
+        // off the external-root path, where a swapped component could have it
+        // create directories outside the root.
+        if root == self.root {
+            fs::create_dir_all(&dir).map_err(DbError::IoError)?;
+        }
+        // The last component goes through `create_dir` alone: it refuses any
         // existing entry, a dangling symlink included.
-        fs::create_dir_all(&dir).map_err(DbError::IoError)?;
         fs::create_dir(&path).map_err(|error| match error.kind() {
             std::io::ErrorKind::AlreadyExists => {
                 io_error(format!("Folder already exists: {}", name))
@@ -759,7 +842,8 @@ impl ScriptsDirectory {
             _ => DbError::IoError(error),
         })?;
 
-        self.ensure_contained_after_write(&root, &path, WrittenEntry::Folder)?;
+        let id = EntryId::at(&path)?;
+        self.ensure_contained_after_write(&root, &path, WrittenEntry::Folder(id))?;
         self.record_insert(&path, true);
         Ok(path)
     }
@@ -797,11 +881,12 @@ impl ScriptsDirectory {
             return Err(io_error(format!("Already exists: {}", new_name)));
         }
 
+        let id = EntryId::at(old_path)?;
         fs::rename(old_path, &new_path).map_err(DbError::IoError)?;
         self.ensure_contained_after_write(
             &root,
             &new_path,
-            WrittenEntry::Moved { from: old_path },
+            WrittenEntry::Moved { from: old_path, id },
         )?;
         self.record_move(old_path, &new_path);
         Ok(new_path)
@@ -883,12 +968,17 @@ impl ScriptsDirectory {
         }
 
         self.ensure_contained(&target_root, target_dir)?;
-        fs::create_dir_all(target_dir).map_err(DbError::IoError)?;
+        // As in `create_folder`: an external root's target already exists, and
+        // recursive creation stays off that path.
+        if target_root == self.root {
+            fs::create_dir_all(target_dir).map_err(DbError::IoError)?;
+        }
+        let id = EntryId::at(source)?;
         fs::rename(source, &dest).map_err(DbError::IoError)?;
         self.ensure_contained_after_write(
             &target_root,
             &dest,
-            WrittenEntry::Moved { from: source },
+            WrittenEntry::Moved { from: source, id },
         )?;
         self.record_move(source, &dest);
         Ok(dest)
@@ -936,9 +1026,12 @@ impl ScriptsDirectory {
             }
             return Err(DbError::IoError(error));
         }
+        // The handle's metadata is the entry just copied, whatever a later
+        // replacement puts at its pathname.
+        let id = EntryId::of(&destination.metadata().map_err(DbError::IoError)?);
         drop(destination);
 
-        self.ensure_contained_after_write(&root, &dest, WrittenEntry::File)?;
+        self.ensure_contained_after_write(&root, &dest, WrittenEntry::File(id))?;
         self.record_insert(&dest, false);
         Ok(dest)
     }
@@ -1949,9 +2042,10 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
         let escaped = root.join("escape").join("x.sql");
         fs::write(&escaped, "").unwrap();
+        let id = EntryId::at(&escaped).unwrap();
 
         let error = dir
-            .ensure_contained_after_write(&root, &escaped, WrittenEntry::File)
+            .ensure_contained_after_write(&root, &escaped, WrittenEntry::File(id))
             .expect_err("a path that resolves outside the root is refused");
 
         assert!(
@@ -1981,8 +2075,16 @@ mod tests {
         let moved = root.join("escape").join("renamed.sql");
         fs::rename(&original, &moved).unwrap();
 
+        let id = EntryId::at(&moved).unwrap();
         let error = dir
-            .ensure_contained_after_write(&root, &moved, WrittenEntry::Moved { from: &original })
+            .ensure_contained_after_write(
+                &root,
+                &moved,
+                WrittenEntry::Moved {
+                    from: &original,
+                    id,
+                },
+            )
             .expect_err("a move that resolves outside the root is refused");
 
         assert!(
@@ -1994,6 +2096,45 @@ mod tests {
         assert!(original.exists(), "the move is undone, not deleted");
         assert!(!moved.exists());
         assert_eq!(fs::read_to_string(&original).unwrap(), "SELECT 1;");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replacement_at_the_written_path_is_not_removed_by_rollback() {
+        let (_managed, _external, dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+
+        // The entry the write created, and a different one put in its place
+        // afterwards. Both are created while the first still exists, so their
+        // inodes differ.
+        let written = root.join("escape").join("x.sql");
+        fs::write(&written, "written").unwrap();
+        let id_of_written = EntryId::at(&written).unwrap();
+        let foreign = root.join("escape").join("foreign.sql");
+        fs::write(&foreign, "foreign").unwrap();
+        fs::rename(&foreign, &written).unwrap();
+        assert!(
+            !id_of_written.matches(&written),
+            "the replacement has a different identity"
+        );
+
+        let error = dir
+            .ensure_contained_after_write(&root, &written, WrittenEntry::File(id_of_written))
+            .expect_err("the path still resolves outside the root");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(&written).unwrap(),
+            "foreign",
+            "the replacement is left alone"
+        );
     }
 
     #[cfg(unix)]
@@ -2072,6 +2213,11 @@ mod tests {
             .create_file(Some(&managed_folder), "query", "sql")
             .unwrap();
         assert!(managed_file.exists());
+
+        // A missing parent is still created in the managed root.
+        let deep = managed.path().join("a").join("b");
+        let deep_folder = dir.create_folder(Some(&deep), "c").unwrap();
+        assert!(deep_folder.is_dir());
 
         // A symlink the user placed in DBFlux's own folder keeps working: a
         // write through a linked folder is still spelled inside the root.
