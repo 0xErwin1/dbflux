@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::*;
 use dbflux_components::modals::{MutationConfirmHardRequest, MutationConfirmRequest};
 use dbflux_core::{
     Connection, FilterNode, QueryRequest, Value, VisualMutationSpec, inline_params,
@@ -213,6 +214,494 @@ pub(crate) fn build_pending_modal(
 #[allow(dead_code)]
 pub(crate) fn format_value(value: &Value) -> String {
     format!("{}", value)
+}
+
+impl DataGridPanel {
+    /// Handles `BuilderEvent::MutationRunRequested`.
+    ///
+    /// 1. Reads `mutation_policy` from `ConnectedProfile`. `ReadOnly` → error toast; returns.
+    /// 2. Generates the SQL preview via the driver's `QueryGenerator`.
+    /// 3. Fetches sample rows from the connection (2s deadline, synchronous on background thread).
+    /// 4. Builds `PendingMutationModal` and stores it; the render cycle will open the modal.
+    pub(crate) fn on_mutation_run_requested(
+        &mut self,
+        spec: dbflux_core::VisualMutationSpec,
+        opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
+        est_rows: Option<u64>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_core::MutationPolicy;
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let (policy, read_only_reason, connection) = {
+            let state = self.app_state.read(cx);
+            let connected = match state.connections().get(&profile_id) {
+                Some(c) => c,
+                None => return,
+            };
+
+            (
+                connected.mutation_policy,
+                connected.read_only_reason,
+                Arc::clone(&connected.connection),
+            )
+        };
+
+        // Gate on mutation policy — state borrow has been released above.
+        match policy {
+            MutationPolicy::ReadOnly => {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::User,
+                        crate::labels::mutation_read_only_error(read_only_reason),
+                    ),
+                    cx,
+                );
+                return;
+            }
+            MutationPolicy::ApprovalRequired => {
+                #[cfg(feature = "mcp")]
+                {
+                    use dbflux_core::MutationKind;
+                    use dbflux_policy::ExecutionClassification;
+                    let classification = match &spec.kind {
+                        MutationKind::Delete => ExecutionClassification::Destructive,
+                        MutationKind::Update { .. } => ExecutionClassification::Write,
+                    };
+                    let spec_json = serde_json::to_value(&spec).unwrap_or_default();
+                    let connection_id = profile_id.to_string();
+                    let enqueue_result = self.app_state.update(cx, |app, _| {
+                        app.request_mcp_execution(
+                            "user".to_string(),
+                            connection_id,
+                            "mutation.run".to_string(),
+                            classification,
+                            spec_json,
+                        )
+                    });
+                    match enqueue_result {
+                        Ok(_) => {
+                            dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                                "document.data.grid.toast.mutation_queued"
+                            ))
+                            .push(cx);
+                        }
+                        Err(e) => {
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    crate::labels::mutation_approval_queue_failed_error(
+                                        &e.to_string(),
+                                    ),
+                                ),
+                                cx,
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                #[cfg(not(feature = "mcp"))]
+                {
+                    dbflux_ui_base::user_error::report_error(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::User,
+                            dbflux_i18n::t!("document.data.mutation.error.approval_requires_mcp"),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            }
+            MutationPolicy::Allowed => {}
+        }
+
+        let sql_preview = connection
+            .query_generator()
+            .and_then(|qgen| {
+                use dbflux_core::MutationKind;
+                let generated = match &spec.kind {
+                    MutationKind::Delete => qgen.generate_delete_from_spec(&spec).ok(),
+                    MutationKind::Update { .. } => qgen.generate_update_from_spec(&spec).ok(),
+                };
+                generated.map(|m| m.materialize_for_editor(connection.dialect()))
+            })
+            .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
+
+        // Fetch sample rows synchronously on background thread (2s deadline).
+        let (sample_columns, sample_rows) =
+            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(
+                connection,
+                &spec,
+                |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+            );
+
+        let sample_rows_opt = if sample_rows.is_empty() {
+            None
+        } else {
+            Some(sample_rows)
+        };
+
+        let pk_col_refs: Vec<&str> = match &self.source {
+            DataSource::Table { .. } => self.pk_columns.iter().map(|s| s.as_str()).collect(),
+            _ => vec![],
+        };
+
+        let modal = crate::data_grid_panel::mutation_confirm::build_pending_modal(
+            &spec,
+            sql_preview,
+            est_rows,
+            sample_columns,
+            sample_rows_opt,
+            &pk_col_refs,
+        );
+
+        self.pending_mutation_exec = Some(PendingMutationExec {
+            spec,
+            opts,
+            profile_id,
+            intent: MutationIntent::Direct,
+        });
+        self.pending.mutation_modal = Some(modal);
+        cx.notify();
+    }
+
+    /// Called when either `ModalMutationConfirm` or `ModalMutationConfirmHard` emits
+    /// a `MutationConfirmOutcome` (Confirmed or Cancelled).
+    ///
+    /// On `Confirmed`: takes `pending_mutation_exec`, dispatches `MutationExecutor`
+    /// to a background thread, and emits audit events via `EventSink`.
+    /// On `Cancelled`: clears `pending_mutation_exec` with no side effects.
+    pub(super) fn handle_mutation_confirm_outcome(
+        &mut self,
+        outcome: MutationConfirmOutcome,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = match self.pending_mutation_exec.take() {
+            Some(p) => p,
+            None => return,
+        };
+
+        if matches!(outcome, MutationConfirmOutcome::Cancelled) {
+            return;
+        }
+
+        let (connection, event_sink, policy) = {
+            let state = self.app_state.read(cx);
+            let connected = match state.connections().get(&pending.profile_id) {
+                Some(c) => c,
+                None => {
+                    dbflux_ui_base::user_error::report_error(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::Driver,
+                            dbflux_i18n::t!("document.data.mutation.error.connection_not_found"),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            };
+
+            let connection = Arc::clone(&connected.connection);
+            let event_sink: Option<Arc<dyn dbflux_core::EventSink>> =
+                Some(Arc::new(state.audit_service().clone()) as Arc<dyn dbflux_core::EventSink>);
+            let policy = connected.mutation_policy;
+
+            (connection, event_sink, policy)
+        };
+
+        #[cfg(feature = "mcp")]
+        if matches!(policy, dbflux_core::MutationPolicy::ApprovalRequired) {
+            use dbflux_core::MutationKind;
+            use dbflux_policy::ExecutionClassification;
+            let classification = match &pending.spec.kind {
+                MutationKind::Delete => ExecutionClassification::Destructive,
+                MutationKind::Update { .. } => ExecutionClassification::Write,
+            };
+            let spec_json = serde_json::to_value(&pending.spec).unwrap_or_default();
+            let connection_id = pending.profile_id.to_string();
+            let enqueue_result = self.app_state.update(cx, |app, _| {
+                app.request_mcp_execution(
+                    "user".to_string(),
+                    connection_id,
+                    "mutation.run".to_string(),
+                    classification,
+                    spec_json,
+                )
+            });
+            match enqueue_result {
+                Ok(_) => {
+                    dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                        "document.data.grid.toast.mutation_queued"
+                    ))
+                    .push(cx);
+                }
+                Err(e) => {
+                    dbflux_ui_base::user_error::report_error(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::Driver,
+                            crate::labels::mutation_approval_queue_failed_error(&e.to_string()),
+                        ),
+                        cx,
+                    );
+                }
+            }
+            return;
+        }
+
+        let deps = crate::data_grid_panel::mutation_executor::MutationDeps {
+            connection,
+            event_sink,
+            policy,
+        };
+
+        let spec = pending.spec;
+        let mut opts = pending.opts;
+        let intent = pending.intent;
+
+        let is_chunked = matches!(
+            opts.mode,
+            crate::data_grid_panel::mutation_executor::ExecutionMode::ChunkedTransaction
+        );
+
+        let table_name = spec.from.name.clone();
+
+        let mode = if is_chunked {
+            crate::labels::VisualMutationTaskMode::Chunked
+        } else if matches!(
+            opts.mode,
+            crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit
+        ) {
+            crate::labels::VisualMutationTaskMode::Direct
+        } else {
+            crate::labels::VisualMutationTaskMode::SingleTransaction
+        };
+
+        // A chunked run walks the primary key and has to stay under the driver's
+        // parameter limit, so both are resolved before the run starts — while a
+        // refusal can still be shown instead of a finished task that did nothing.
+        let pk_columns: Vec<String> = if is_chunked {
+            let columns: Vec<String> = match &self.source {
+                DataSource::Table { .. } => self.pk_columns.clone(),
+                _ => vec![],
+            };
+
+            if columns.is_empty() {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::User,
+                        dbflux_i18n::t!(
+                            "document.data.mutation.error.chunked_requires_primary_key"
+                        ),
+                    ),
+                    cx,
+                );
+                return;
+            }
+
+            // Compute the effective chunk size before spawning so we can surface
+            // any reduction to the user via Toast while we still have a cx handle.
+            {
+                use crate::data_grid_panel::mutation_executor::{
+                    compute_effective_chunk_size, count_assignment_params,
+                };
+                use dbflux_core::render_filter_node_sql;
+
+                let max_params = deps
+                    .connection
+                    .metadata()
+                    .query
+                    .as_ref()
+                    .map(|q| q.max_query_parameters)
+                    .unwrap_or(0);
+
+                if max_params > 0 {
+                    let dialect = deps.connection.dialect();
+                    let mut dummy_params = Vec::new();
+                    let mut dummy_idx: usize = 1;
+                    render_filter_node_sql(
+                        spec.filter.as_ref(),
+                        dialect,
+                        &mut dummy_params,
+                        &mut dummy_idx,
+                    );
+                    let filter_param_count = dummy_params.len() as u32;
+
+                    let assignment_param_count = match &spec.kind {
+                        dbflux_core::MutationKind::Update { assignments } => {
+                            count_assignment_params(assignments)
+                        }
+                        dbflux_core::MutationKind::Delete => 0,
+                    };
+
+                    let (effective, reduced_from) = compute_effective_chunk_size(
+                        opts.chunk_size,
+                        max_params,
+                        filter_param_count,
+                        assignment_param_count,
+                        columns.len() as u32,
+                    );
+
+                    if let Some(original) = reduced_from {
+                        const FLOOR: u32 = 1_000;
+                        if effective < FLOOR {
+                            dbflux_ui_base::toast::Toast::warning(
+                                crate::labels::mutation_chunk_size_reduced_toast(
+                                    original, effective, FLOOR,
+                                ),
+                            )
+                            .push(cx);
+                        } else {
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_chunk_size_adjusted_toast(
+                                    original, effective,
+                                ),
+                            )
+                            .push(cx);
+                        }
+                        opts.chunk_size = effective;
+                    }
+                }
+            }
+
+            columns
+        } else {
+            vec![]
+        };
+
+        let (task_id, cancel_handle) = self.runner.start_mutation(
+            dbflux_core::TaskKind::Query,
+            crate::labels::visual_mutation_task_label(mode),
+            cx,
+        );
+
+        let run = MutationRun {
+            task_id,
+            mode,
+            table_name,
+            intent,
+        };
+
+        cx.spawn(async move |this, cx| {
+            use crate::data_grid_panel::mutation_executor::MutationExecutor;
+            use dbflux_ui_base::user_error::report_error_async;
+
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let executor = MutationExecutor::new(spec, opts, deps);
+                    match mode {
+                        crate::labels::VisualMutationTaskMode::Chunked => {
+                            let pk_refs: Vec<&str> =
+                                pk_columns.iter().map(String::as_str).collect();
+                            executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                        }
+                        crate::labels::VisualMutationTaskMode::Direct => {
+                            executor.run_direct(&cancel_handle)
+                        }
+                        crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                            executor.run_single_tx(&cancel_handle)
+                        }
+                    }
+                })
+                .await;
+
+            // Raising the failure needs an `AsyncApp` and recording it needs the
+            // entity, so the report travels back out instead of being raised here.
+            let failure = cx.update(|cx| {
+                this.update(cx, |grid, cx| grid.finish_mutation(run, result, cx))
+                    .ok()
+                    .flatten()
+            });
+
+            if let Some(failure) = failure {
+                report_error_async(failure, cx);
+            }
+        })
+        .detach();
+    }
+
+    /// Records a finished visual-mutation run, and tells the platform whether a
+    /// close that was waiting on it may proceed.
+    ///
+    /// Returns the user-facing error of a failed run, so the caller can raise it
+    /// with an `AsyncApp` handle this method does not have.
+    ///
+    /// The run counts as landed only when the executor wrote at least one row.
+    /// `MutationOutcome::Success { rows_affected: 0 }` means the statement matched
+    /// nothing — the row is gone, or its key changed — so a close waiting on this
+    /// apply must not read it as a landed write.
+    pub(super) fn finish_mutation(
+        &mut self,
+        run: MutationRun,
+        result: Result<
+            crate::data_grid_panel::mutation_executor::MutationOutcome,
+            crate::data_grid_panel::mutation_executor::ExecutorError,
+        >,
+        cx: &mut Context<Self>,
+    ) -> Option<dbflux_ui_base::user_error::UserFacingError> {
+        use crate::data_grid_panel::mutation_executor::MutationOutcome;
+        use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
+
+        let MutationRun {
+            task_id,
+            mode,
+            table_name,
+            intent,
+        } = run;
+
+        let failure_text = |error: &str| match mode {
+            crate::labels::VisualMutationTaskMode::Chunked => {
+                crate::labels::mutation_chunked_execution_failed_error(&table_name, error)
+            }
+            crate::labels::VisualMutationTaskMode::Direct
+            | crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                crate::labels::mutation_execution_failed_error(&table_name, error)
+            }
+        };
+
+        let (failure, landed) = match result {
+            Err(error) => {
+                let text = error.to_string();
+                self.runner.fail_mutation(task_id, text.clone(), cx);
+                (Some(failure_text(&text)), false)
+            }
+            Ok(MutationOutcome::Success { rows_affected }) => {
+                self.runner.complete_mutation(task_id, cx);
+                dbflux_ui_base::toast::Toast::success(
+                    crate::labels::mutation_execution_completed_toast(rows_affected),
+                )
+                .push(cx);
+                (None, rows_affected > 0)
+            }
+            Ok(MutationOutcome::Cancelled { rows_affected }) => {
+                self.runner.cancel_mutation(task_id, cx);
+                dbflux_ui_base::toast::Toast::info(
+                    crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                )
+                .push(cx);
+                (None, false)
+            }
+            Ok(MutationOutcome::Failed { error }) => {
+                self.runner.fail_mutation(task_id, error.clone(), cx);
+                (Some(failure_text(&error)), false)
+            }
+        };
+
+        cx.emit(DataGridEvent::MutationFinished { landed });
+
+        if intent == MutationIntent::CloseAfterApply && landed {
+            cx.emit(DataGridEvent::RequestClose);
+        }
+
+        failure.map(|message| UserFacingError::new(ErrorKind::Driver, message))
+    }
 }
 
 #[cfg(test)]
