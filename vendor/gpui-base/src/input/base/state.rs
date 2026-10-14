@@ -135,6 +135,14 @@ pub enum InputEvent {
     Blur,
 }
 
+/// Pointer interaction with the input, kept apart from [`InputEvent`] so
+/// existing exhaustive matches on that enum stay valid.
+#[derive(Clone)]
+pub enum InputPointerEvent {
+    /// A plain left press placed the caret at the clicked offset.
+    CaretPlaced,
+}
+
 pub(super) const CONTEXT: &str = "Input";
 
 pub(crate) fn init(cx: &mut App) {
@@ -714,6 +722,7 @@ impl InputPresentation {
 }
 
 impl<M: InputModeKind> EventEmitter<InputEvent> for InputBaseState<M> {}
+impl<M: InputModeKind> EventEmitter<InputPointerEvent> for InputBaseState<M> {}
 
 impl<M: InputModeKind> InputBaseState<M> {
     #[doc(hidden)]
@@ -2738,7 +2747,10 @@ impl<M: InputModeKind> InputBaseState<M> {
         if event.modifiers.shift {
             self.select_to_with_affinity(offset, line_end_affinity, cx);
         } else {
-            self.move_to_with_affinity(offset, None, line_end_affinity, cx)
+            self.move_to_with_affinity(offset, None, line_end_affinity, cx);
+            if event.button == MouseButton::Left {
+                cx.emit(InputPointerEvent::CaretPlaced);
+            }
         }
     }
 
