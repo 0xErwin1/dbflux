@@ -76,7 +76,7 @@ pub use transfer::TransferColumn;
 pub use tx_vocab::TransactionVocab;
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
-    ResolvedWindow, Row,
+    ResolvedWindow, Row, SERVER_NOTICES_METADATA_KEY, ServerNotice,
 };
 pub use visual_query::AggregateSpec as VisualAggregateSpec;
 pub use visual_query::SortDirection as VisualSortDirection;

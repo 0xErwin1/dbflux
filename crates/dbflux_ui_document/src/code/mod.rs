@@ -2122,26 +2122,7 @@ impl CodeDocument {
         // Build details_json from the query text and any driver-provided extra fields.
         // The extra fields let drivers surface structured context (e.g., language, version,
         // injected window) without requiring driver-id branching here.
-        let details = {
-            let mut obj = serde_json::Map::new();
-            if let Some(q) = query {
-                obj.insert(
-                    "query".to_string(),
-                    serde_json::Value::String(q.to_string()),
-                );
-            }
-            if let Some(extra) = metadata_extra {
-                for (key, value) in extra {
-                    obj.insert(key.clone(), value.clone());
-                }
-            }
-            if !obj.is_empty() {
-                Some(serde_json::Value::Object(obj).to_string())
-            } else {
-                None
-            }
-        };
-        event.details_json = details;
+        event.details_json = audit_details_json(query, metadata_extra);
 
         if let Some(duration) = duration_ms {
             event.duration_ms = Some(duration);
@@ -4059,5 +4040,70 @@ mod tests {
         });
 
         assert!(panel_ids(window).is_empty());
+    }
+}
+
+/// `details_json` of an editor audit event: the query text and the
+/// driver-provided extra fields, without the server notices, which are user
+/// output rather than audit context and can carry row values.
+fn audit_details_json(
+    query: Option<&str>,
+    metadata_extra: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Option<String> {
+    let mut details = serde_json::Map::new();
+    if let Some(query) = query {
+        details.insert(
+            "query".to_string(),
+            serde_json::Value::String(query.to_string()),
+        );
+    }
+    if let Some(extra) = metadata_extra {
+        for (key, value) in extra {
+            if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
+                continue;
+            }
+            details.insert(key.clone(), value.clone());
+        }
+    }
+
+    (!details.is_empty()).then(|| serde_json::Value::Object(details).to_string())
+}
+
+#[cfg(test)]
+mod audit_details_tests {
+    use super::audit_details_json;
+    use dbflux_core::{QueryResult, ServerNotice};
+    use std::time::Duration;
+
+    #[test]
+    fn server_notices_stay_out_of_the_audit_details() {
+        let mut result = QueryResult::table(Vec::new(), Vec::new(), Some(0), Duration::ZERO);
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "row 42 belongs to alice".to_string(),
+        }]);
+        result.set_rows_truncated(true);
+
+        let details = audit_details_json(Some("COMMIT"), result.metadata_extra.as_ref())
+            .expect("details with the query");
+        let details: serde_json::Value = serde_json::from_str(&details).expect("details are JSON");
+
+        assert_eq!(details["query"], "COMMIT");
+        assert!(
+            details
+                .get(dbflux_core::SERVER_NOTICES_METADATA_KEY)
+                .is_none()
+        );
+        assert!(!details.to_string().contains("alice"));
+        assert_eq!(
+            details.as_object().map(|object| object.len()),
+            Some(2),
+            "the other driver fields are kept"
+        );
+    }
+
+    #[test]
+    fn no_query_and_no_extra_fields_leave_no_details() {
+        assert_eq!(audit_details_json(None, None), None);
     }
 }

@@ -2568,3 +2568,68 @@ fn postgres_read_only_requests_are_refused_inside_an_open_transaction() -> Resul
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_server_notices_travel_with_the_result() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let commit = connection.execute(&QueryRequest::new("COMMIT"))?;
+        let notices = commit.server_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].severity, "WARNING");
+        assert!(
+            notices[0].message.contains("no transaction in progress"),
+            "{notices:?}"
+        );
+
+        let raise = "DO $$ BEGIN RAISE NOTICE 'hello'; END $$";
+        for request in [
+            QueryRequest::new(raise),
+            QueryRequest::new(raise).with_limit(10),
+        ] {
+            let notices = connection.execute(&request)?.server_notices();
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].severity, "NOTICE");
+            assert_eq!(notices[0].message, "hello");
+        }
+
+        let batch = connection.execute(&QueryRequest::new(format!("SELECT 1; {raise}")))?;
+        let notices = batch.server_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].message, "hello");
+
+        let bounded_batch =
+            connection.execute(&QueryRequest::new(format!("SELECT 1; {raise}")).with_limit(10))?;
+        assert_eq!(bounded_batch.server_notices().len(), 1);
+
+        let plain = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert!(plain.server_notices().is_empty());
+        assert!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1").with_limit(10))?
+                .server_notices()
+                .is_empty()
+        );
+
+        // The driver's own block handling around a user transaction raises
+        // no notice of its own.
+        connection.execute(&QueryRequest::new("CREATE TEMP TABLE device (id int)"))?;
+        let script =
+            "BEGIN;\nUPDATE device SET id = 1 WHERE id = 0;\nSELECT id FROM device;\nCOMMIT;";
+        for request in [
+            QueryRequest::new(script),
+            QueryRequest::new(script).with_limit(10),
+        ] {
+            let notices = connection.execute(&request)?.server_notices();
+            assert!(notices.is_empty(), "{notices:?}");
+        }
+
+        connection.schema()?;
+        let after_refresh = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert!(after_refresh.server_notices().is_empty());
+
+        Ok(())
+    })
+}
