@@ -52,7 +52,8 @@ También un buffer con un bloque compuesto, como el cuerpo `BEGIN ... END` de un
 procedimiento o trigger, ya que el `;` dentro de él no termina una sentencia; un
 `BEGIN` que abre una transacción no es un bloque.
 
-Cuando la sentencia bajo el cursor solo abre o cierra una transacción (`BEGIN`,
+Sin selección, cuando la sentencia bajo el cursor solo abre o cierra una
+transacción (`BEGIN`,
 `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` o `ABORT`) y el buffer contiene
 otras sentencias, el editor pregunta primero: ejecutar todo el script, que es la
 opción predeterminada, o solo esa sentencia. Una conexión cuyo driver no puede
