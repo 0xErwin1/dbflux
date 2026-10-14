@@ -93,15 +93,15 @@ impl AppAccessManager {
             ))
         })?;
 
-        let session = dbflux_ssh::establish_session(
+        let dbflux_ssh::OpenedSshTunnel { tunnel, .. } = dbflux_ssh::open_tunnel(
             &resolved.config,
             resolved
                 .secret
                 .as_ref()
                 .map(|secret| secret.expose_secret()),
+            remote_host,
+            remote_port,
         )?;
-
-        let tunnel = dbflux_ssh::SshTunnel::start(session, remote_host.to_string(), remote_port)?;
         let local_port = tunnel.local_port();
 
         Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))

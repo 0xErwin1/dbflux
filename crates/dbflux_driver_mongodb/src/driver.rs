@@ -32,7 +32,7 @@ use dbflux_core::{
     TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
     field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mongodb::action::Action;
 use mongodb::options::ClientOptions;
 use mongodb::sync::{Client, Database};
@@ -740,37 +740,9 @@ impl MongoDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials.
-        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
-
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            db_host,
-            db_port
-        );
-
-        let phase_start = Instant::now();
-        let ssh_session = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        log::info!(
-            "[CONNECT] SSH session phase completed in {:.2}ms",
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
-
-        log::info!("[SSH] Setting up tunnel to {}:{}", db_host, db_port);
-        let phase_start = Instant::now();
-
-        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         log::info!("[DB] Connecting to MongoDB via tunnel");
         let phase_start = Instant::now();
@@ -801,7 +773,7 @@ impl MongoDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         Ok(Box::new(MongoConnection {

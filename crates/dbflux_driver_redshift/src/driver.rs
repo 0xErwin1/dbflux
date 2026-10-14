@@ -12,7 +12,7 @@ use dbflux_core::{
     TransferFamily, WhereOperator, field_password, field_required, field_use_uri, ssh_tab,
     when_checked, when_unchecked, with_default, with_help,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::OpenedSshTunnel;
 use postgres::Config;
 
 use crate::connection::{
@@ -689,8 +689,8 @@ impl RedshiftDriver {
         ssl_mode: &str,
         tls_certs: &RedshiftTlsCerts,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel { tunnel, .. } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
 
         let client = connect_redshift(&RedshiftConnectParams {

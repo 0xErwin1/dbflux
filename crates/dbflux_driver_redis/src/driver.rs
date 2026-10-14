@@ -34,7 +34,7 @@ use dbflux_core::{
     ZSetRemoveRequest, field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
     when_checked, when_field_equals, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 
 use crate::transport::{
     AclCommandAvailability, AclDryRunReply, ClusterScanCursor, ConfiguredTopology,
@@ -594,8 +594,8 @@ impl RedisDriver {
         ssh_secret: Option<&str>,
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, config.host.clone(), config.port)?;
+        let OpenedSshTunnel { tunnel, .. } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
 
         self.connect_direct(DirectConnectParams {
