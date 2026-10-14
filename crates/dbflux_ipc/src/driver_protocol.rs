@@ -970,14 +970,14 @@ mod tests {
         let filter = SemanticFilter::compare("id", WhereOperator::Eq, Value::Int(1));
 
         // The shape an external driver RPC actually sends for a browse: no
-        // projection at all. Only the encoded bytes are compared here, because
-        // an empty projection has a pre-existing trailing-skip hazard of its
-        // own that the last assertion in this test does not touch.
+        // projection and no semantic filter. Both fields always encode from
+        // v1.7, so the bare shape decodes like any other.
         let bare = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"));
         let bare_scoped = bare.clone().with_database(Some("reporting".to_string()));
+        let bare_bytes = postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
+            .expect("serialize bare browse");
         assert_eq!(
-            postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
-                .expect("serialize bare browse"),
+            bare_bytes,
             postcard::to_allocvec(&DriverRequestBody::BrowseTable {
                 request: bare_scoped,
             })
@@ -985,18 +985,26 @@ mod tests {
             "the database must be zero-width even with no projection"
         );
 
-        // A count with a string filter and no semantic filter, which is also a
-        // pre-existing undecodable shape, so again bytes only.
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&bare_bytes).expect("decode bare browse");
+        let DriverRequestBody::BrowseTable { request } = decoded else {
+            panic!("expected BrowseTable");
+        };
+        assert!(request.semantic_filter.is_none());
+        assert!(request.columns.is_empty());
+
+        // A count with a string filter and no semantic filter decodes as well.
         let plain_count =
             TableCountRequest::new(TableRef::with_schema("dbo", "events")).with_filter("id = 1");
         let plain_count_scoped = plain_count
             .clone()
             .with_database(Some("reporting".to_string()));
+        let plain_count_bytes = postcard::to_allocvec(&DriverRequestBody::CountTable {
+            request: plain_count,
+        })
+        .expect("serialize plain count");
         assert_eq!(
-            postcard::to_allocvec(&DriverRequestBody::CountTable {
-                request: plain_count,
-            })
-            .expect("serialize plain count"),
+            plain_count_bytes,
             postcard::to_allocvec(&DriverRequestBody::CountTable {
                 request: plain_count_scoped,
             })
@@ -1004,9 +1012,16 @@ mod tests {
             "the database must be zero-width with no semantic filter"
         );
 
-        // A projection is part of the fixture because an empty one carries a
-        // postcard hazard of its own, independent of this field: `columns` has
-        // `skip_serializing_if`, so an empty vector shifts whatever follows it.
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&plain_count_bytes).expect("decode plain count");
+        let DriverRequestBody::CountTable { request } = decoded else {
+            panic!("expected CountTable");
+        };
+        assert!(request.semantic_filter.is_none());
+
+        // A populated projection is part of the fixture: `columns` used to be
+        // skipped when empty (which shifted the fields after it), and v1.7
+        // always encodes it.
         let browse = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"))
             .with_pagination(Pagination::Offset {
                 limit: 10,
@@ -1311,7 +1326,7 @@ mod tests {
     /// `storage_hints`. Deliberately left empty: `indexes`, `sample_fields`
     /// (document-database only), and `child_items` (driver child sources).
     ///
-    /// The populated `enum_values`/`Some` choices predate the v1.6 wire-format
+    /// The populated `enum_values`/`Some` choices predate the v1.7 wire-format
     /// fix and are kept so the captured bytes stay valid legacy fixtures; see
     /// `tests/driver_wire_roundtrip.rs` for the live round-trip coverage.
     fn nontrivial_table_info() -> dbflux_core::TableInfo {
@@ -1328,7 +1343,7 @@ mod tests {
                     // Legacy fixture value: `enum_values` used to carry
                     // `skip_serializing_if`, so only `Some` frames were
                     // decodable. Kept `Some` to preserve the captured bytes;
-                    // v1.6 always encodes the field and no longer has this
+                    // v1.7 always encodes the field and no longer has this
                     // hazard.
                     enum_values: Some(Vec::new()),
                 },
@@ -1342,7 +1357,7 @@ mod tests {
                 },
             ]),
             // `IndexData` used to be internally tagged, which postcard could
-            // not encode; v1.6 tags it externally and can carry it. The
+            // not encode; v1.7 tags it externally and can carry it. The
             // golden fixture stays index-free so its captured bytes remain a
             // valid v1.4 legacy frame.
             indexes: None,
