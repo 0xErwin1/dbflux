@@ -1157,3 +1157,340 @@ fn h3_approval_required_does_not_open_confirmation_modal(cx: &mut TestAppContext
          pending_mutation_modal must remain None"
     );
 }
+
+// =========================================================================
+// FK display resolution in the grid
+// =========================================================================
+
+/// Connection stub whose `fetch_row_by_pk` counts its calls and answers the
+/// id 8 with a customers row when `found` is set, so the resolution path can
+/// be driven without a live database.
+struct FkResolveConnection {
+    fetches: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    found: bool,
+}
+
+impl dbflux_core::Connection for FkResolveConnection {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        static META: std::sync::OnceLock<dbflux_core::DriverMetadata> = std::sync::OnceLock::new();
+        META.get_or_init(|| dbflux_core::DriverMetadata {
+            id: "fk-resolve".to_string(),
+            display_name: "FK Resolve".to_string(),
+            description: "test stub for fk display".to_string(),
+            category: dbflux_core::DatabaseCategory::Relational,
+            transfer_family: dbflux_core::TransferFamily::Sql,
+            deployment_class: None,
+            query_language: dbflux_core::QueryLanguage::Sql,
+            capabilities: dbflux_core::DriverCapabilities::empty(),
+            default_port: None,
+            uri_scheme: "fk-resolve".to_string(),
+            icon: dbflux_core::Icon::Database,
+            syntax: None,
+            query: None,
+            mutation: None,
+            ddl: None,
+            transactions: None,
+            limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
+            classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
+            editor_profile: None,
+        })
+    }
+
+    fn kind(&self) -> dbflux_core::DbKind {
+        dbflux_core::DbKind::Postgres
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        dbflux_core::SchemaLoadingStrategy::SingleDatabase
+    }
+
+    #[expect(
+        clippy::unimplemented,
+        reason = "test-only stub connection: the fk display path never asks for a dialect"
+    )]
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        unimplemented!("FkResolveConnection::dialect not needed")
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _req: &dbflux_core::QueryRequest,
+    ) -> Result<QueryResult, dbflux_core::DbError> {
+        Err(dbflux_core::DbError::NotSupported("fk-resolve".to_string()))
+    }
+
+    fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        Ok(dbflux_core::SchemaSnapshot::default())
+    }
+
+    fn fetch_row_by_pk(
+        &self,
+        _database: &str,
+        _schema: &str,
+        _table: &str,
+        _pk_column: &str,
+        pk_value: &dbflux_core::Value,
+    ) -> Result<Option<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        self.fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let name = match (self.found, pk_value) {
+            (true, dbflux_core::Value::Int(8)) => {
+                dbflux_core::Value::Text("María López".to_string())
+            }
+            _ => return Ok(None),
+        };
+
+        Ok(Some(std::collections::HashMap::from([
+            ("id".to_string(), dbflux_core::Value::Int(8)),
+            ("name".to_string(), name),
+        ])))
+    }
+}
+
+/// Caches the referenced customers table, whose `name` column is the
+/// display column the resolution picks.
+fn cache_customers_details(
+    cx: &mut TestAppContext,
+    app_state: &gpui::Entity<AppStateEntity>,
+    profile_id: Uuid,
+) {
+    cx.update(|cx| {
+        app_state.update(cx, |app, _| {
+            let column =
+                |name: &str, type_name: &str, is_primary_key: bool| dbflux_core::ColumnInfo {
+                    name: name.to_string(),
+                    type_name: type_name.to_string(),
+                    nullable: true,
+                    is_primary_key,
+                    default_value: None,
+                    enum_values: None,
+                };
+
+            app.set_table_details(
+                profile_id,
+                "app".to_string(),
+                Some("public".to_string()),
+                "customers".to_string(),
+                dbflux_core::TableInfo {
+                    name: "customers".to_string(),
+                    schema: Some("public".to_string()),
+                    columns: Some(vec![
+                        column("id", "int4", true),
+                        column("name", "text", false),
+                    ]),
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: Default::default(),
+                    child_items: None,
+                    storage_hints: None,
+                    pseudo_columns: Box::default(),
+                },
+            );
+        });
+    });
+}
+
+/// A grid over a page of `public.orders` whose `customer_id` foreign key
+/// points at `public.customers`, with the same customer on both rows.
+fn panel_with_fk_grid(
+    cx: &mut TestAppContext,
+    app_state: gpui::Entity<AppStateEntity>,
+    profile_id: Uuid,
+) -> (gpui::Entity<DataGridPanel>, &mut gpui::VisualTestContext) {
+    let panel_holder = Rc::new(RefCell::new(None));
+    let panel_handle = panel_holder.clone();
+
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let panel = cx.new(|cx| {
+            let source = DataSource::Table {
+                profile_id,
+                database: Some("app".to_string()),
+                table: TableRef::with_schema("public", "orders"),
+                pagination: Pagination::default(),
+                order_by: Vec::new(),
+                total_rows: None,
+            };
+
+            let mut panel = DataGridPanel::new_internal(
+                source,
+                app_state.clone(),
+                vec!["id".to_string()],
+                window,
+                cx,
+            );
+
+            let column = |name: &str, is_primary_key: bool| ColumnMeta {
+                name: name.to_string(),
+                type_name: "int4".to_string(),
+                kind: ColumnKind::Integer,
+                nullable: false,
+                is_primary_key,
+            };
+            panel.result = QueryResult::table(
+                vec![column("id", true), column("customer_id", false)],
+                vec![
+                    vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(8)],
+                    vec![dbflux_core::Value::Int(2), dbflux_core::Value::Int(8)],
+                ],
+                None,
+                Duration::ZERO,
+            );
+
+            panel.builder.fk_cache =
+                super::super::FkLoadState::Ready(vec![dbflux_core::SchemaForeignKeyInfo {
+                    name: "orders_customer_fk".to_string(),
+                    table_name: "orders".to_string(),
+                    columns: vec!["customer_id".to_string()],
+                    referenced_schema: Some("public".to_string()),
+                    referenced_table: "customers".to_string(),
+                    referenced_columns: vec!["id".to_string()],
+                    on_delete: None,
+                    on_update: None,
+                }]);
+
+            panel.rebuild_table(None, cx);
+            panel
+        });
+
+        panel_handle.replace(Some(panel.clone()));
+        Root::new(panel, window, cx)
+    });
+
+    let panel = panel_holder
+        .borrow()
+        .clone()
+        .expect("panel should be created");
+
+    (panel, window)
+}
+
+/// The fk cell as `(label, edit_text)` of `row`, col 1.
+fn fk_cell(
+    panel: &gpui::Entity<DataGridPanel>,
+    window: &mut gpui::VisualTestContext,
+    row: usize,
+) -> (Option<String>, String) {
+    window.update(|_, app| {
+        let panel_read = panel.read(app);
+        let table_state = panel_read
+            .grid_table
+            .table_state
+            .as_ref()
+            .expect("rebuild builds the table");
+        let state = table_state.read(app);
+        let cell = state
+            .model()
+            .cell(row, 1)
+            .expect("the fk cell exists")
+            .clone();
+
+        (
+            cell.fk_spans().map(|(label, _)| label.to_string()),
+            cell.edit_text(),
+        )
+    })
+}
+
+#[gpui::test]
+fn fk_display_resolution_labels_cells_and_caches_the_fetch(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = std::sync::Arc::new(FkResolveConnection {
+        fetches: fetches.clone(),
+        found: true,
+    });
+    let (app_state, profile_id) = register_stub_connection(cx, connection);
+    cache_customers_details(cx, &app_state, profile_id);
+
+    let (panel, window) = panel_with_fk_grid(cx, app_state, profile_id);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    let (label, edit_text) = fk_cell(&panel, window, 0);
+    assert_eq!(label.as_deref(), Some("María López"));
+    assert_eq!(edit_text, "8", "editing must carry the raw id");
+    let (second_label, _) = fk_cell(&panel, window, 1);
+    assert_eq!(
+        second_label.as_deref(),
+        Some("María López"),
+        "the repeated id on another row resolves from the same fetch"
+    );
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        1,
+        "the distinct id is fetched once"
+    );
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        1,
+        "a resolved id is applied from the cache without a new query"
+    );
+    let (label, _) = fk_cell(&panel, window, 0);
+    assert_eq!(label.as_deref(), Some("María López"));
+}
+
+#[gpui::test]
+fn fk_display_missing_row_keeps_the_plain_cell_and_is_not_refetched(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = std::sync::Arc::new(FkResolveConnection {
+        fetches: fetches.clone(),
+        found: false,
+    });
+    let (app_state, profile_id) = register_stub_connection(cx, connection);
+    cache_customers_details(cx, &app_state, profile_id);
+
+    let (panel, window) = panel_with_fk_grid(cx, app_state, profile_id);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    let (label, edit_text) = fk_cell(&panel, window, 0);
+    assert_eq!(label, None, "an id no row answers keeps the plain cell");
+    assert_eq!(edit_text, "8", "the raw id stays readable");
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        1,
+        "a missing row is cached and not fetched again"
+    );
+}

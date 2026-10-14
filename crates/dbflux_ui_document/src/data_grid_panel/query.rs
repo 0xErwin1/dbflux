@@ -910,6 +910,7 @@ impl DataGridPanel {
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         self.rebuild_table(initial_sort, cx);
+        self.resolve_fk_display_values(cx);
         self.refresh.state = GridState::Ready;
         cx.notify();
     }

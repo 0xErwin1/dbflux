@@ -6,6 +6,7 @@ mod document_view;
 mod documents;
 mod facets;
 pub(crate) mod filter_bar;
+mod fk_display;
 mod grid;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
@@ -830,6 +831,8 @@ pub struct DataGridPanel {
     result_search: result_search::ResultSearch,
     inspector: InspectorState,
     pub(crate) builder: BuilderState,
+    /// Resolved display values of the grid's foreign-key cells.
+    fk_display: fk_display::FkDisplayLoader,
     /// Document collection presentation (flattened table, query bar, schema,
     /// field edits). Inert for other sources.
     collection: documents::CollectionViewState,
@@ -1429,6 +1432,7 @@ impl DataGridPanel {
                 builder_open: false,
                 builder_editable_binding: None,
             },
+            fk_display: fk_display::FkDisplayLoader::default(),
             collection,
             table_views: table_views::TableViewsState::default(),
             runner,
