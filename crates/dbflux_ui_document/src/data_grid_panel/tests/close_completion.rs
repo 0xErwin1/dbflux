@@ -646,3 +646,31 @@ fn a_close_after_a_failed_batch_reports_back(cx: &mut TestAppContext) {
         event_kinds(&seen)
     );
 }
+
+/// A queued row whose edits were cleared before the pump reached it must not
+/// park the close.
+///
+/// The pump marked it in flight and the save handler then returned with nothing
+/// to write, leaving no completion to advance or finish the batch.
+#[gpui::test]
+fn a_queued_row_that_lost_its_edits_does_not_park_the_close(cx: &mut TestAppContext) {
+    let (panel, window, seen) = staged_edit_panel(cx);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            // A close waiting on a batch whose one queued row has no edits left.
+            panel.close_after_apply = true;
+            panel.pending_batch_remaining = Some(PendingBatchRemaining {
+                pending_inserts: Vec::new(),
+                dirty_rows: vec![0],
+            });
+            panel.process_next_batch_op(cx);
+        });
+    });
+
+    assert!(
+        asked_to_close(&seen),
+        "a queued row with no edits must let the close through; got {:?}",
+        event_kinds(&seen)
+    );
+}

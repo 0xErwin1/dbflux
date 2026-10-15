@@ -1655,31 +1655,69 @@ impl DataGridPanel {
             return;
         };
 
-        if let Some(insert_idx) = remaining.pending_inserts.first().copied() {
-            remaining.pending_inserts.remove(0);
-            if !remaining.pending_inserts.is_empty() || !remaining.dirty_rows.is_empty() {
-                self.pending_batch_remaining = Some(remaining);
+        loop {
+            if let Some(insert_idx) = remaining.pending_inserts.first().copied() {
+                remaining.pending_inserts.remove(0);
+                if !self.queued_insert_is_pending(insert_idx, cx) {
+                    // The insert was removed before the pump reached it. It has
+                    // nothing to write, so it must not park the batch.
+                    continue;
+                }
+                if !remaining.pending_inserts.is_empty() || !remaining.dirty_rows.is_empty() {
+                    self.pending_batch_remaining = Some(remaining);
+                }
+                self.batch_op_in_flight = true;
+                self.handle_commit_insert(insert_idx, true, cx);
+                return;
             }
-            self.batch_op_in_flight = true;
-            self.handle_commit_insert(insert_idx, true, cx);
+
+            if let Some(row_idx) = remaining.dirty_rows.first().copied() {
+                remaining.dirty_rows.remove(0);
+                if !self.queued_row_has_changes(row_idx, cx) {
+                    // The row's edits were cleared before the pump reached it.
+                    // It has nothing to write, so it must not park the batch.
+                    continue;
+                }
+                if !remaining.dirty_rows.is_empty() {
+                    self.pending_batch_remaining = Some(remaining);
+                }
+                self.batch_op_in_flight = true;
+                self.handle_save_row(row_idx, true, cx);
+                return;
+            }
+
+            // All batch operations complete
+            self.finish_close_after_apply(cx);
+
+            self.queue_reload_after_mutation(cx);
+            cx.notify();
             return;
         }
+    }
 
-        if let Some(row_idx) = remaining.dirty_rows.first().copied() {
-            remaining.dirty_rows.remove(0);
-            if !remaining.dirty_rows.is_empty() {
-                self.pending_batch_remaining = Some(remaining);
-            }
-            self.batch_op_in_flight = true;
-            self.handle_save_row(row_idx, true, cx);
-            return;
-        }
+    /// Whether a queued insert still carries data to write.
+    fn queued_insert_is_pending(&self, insert_idx: usize, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| {
+                table_state
+                    .read(cx)
+                    .edit_buffer()
+                    .get_pending_insert_by_idx(insert_idx)
+                    .is_some()
+            })
+    }
 
-        // All batch operations complete
-        self.finish_close_after_apply(cx);
-
-        self.queue_reload_after_mutation(cx);
-        cx.notify();
+    /// Whether a queued row still holds unsaved edits to write.
+    fn queued_row_has_changes(&self, row_idx: usize, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| {
+                let state = table_state.read(cx);
+                state.is_editable() && !state.edit_buffer().row_changes(row_idx).is_empty()
+            })
     }
 
     /// Reports a close that was waiting on the staged edits, once the batch has
