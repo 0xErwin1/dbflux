@@ -349,7 +349,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        panel.abandon_close_apply_independent(cx);
                     });
                 });
                 return;
@@ -1381,7 +1381,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        panel.abandon_close_apply_independent(cx);
                     });
                 });
                 return;
@@ -1526,7 +1526,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        panel.abandon_close_apply_independent(cx);
                     });
                 });
                 return;
@@ -2200,6 +2200,18 @@ impl DataGridPanel {
         // them for a write still in flight and park instead of applying.
         self.pending_batch_remaining = None;
 
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: false });
+        }
+    }
+
+    /// Reports a failed mutation that is not part of the close-apply batch.
+    ///
+    /// It may still be the failure the user is looking at, so a waiting close is
+    /// told the run did not land. It must not clear the batch state, which
+    /// belongs to the batch operation still in flight: doing so would let the
+    /// next close start a second write beside it.
+    fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.close_after_apply) {
             cx.emit(DataGridEvent::MutationFinished { landed: false });
         }
