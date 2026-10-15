@@ -2604,6 +2604,7 @@ impl ConnectionManager {
         let count = self.connections.len();
         let connections = std::mem::take(&mut self.connections);
         self.active_connection_id = None;
+        self.session_passwords.clear();
         self.database_lists.clear();
         self.session_generations.clear();
         self.invalidation_revisions.clear();
@@ -6698,6 +6699,21 @@ mod tests {
             recorded_connect_calls(&recorded),
             vec![("analytics".to_string(), None)]
         );
+    }
+
+    #[test]
+    fn session_password_is_dropped_when_every_connection_closes_at_shutdown() {
+        let (mut manager, profile, _recorded) = switch_manager_with(None, false);
+        manager.set_session_password(profile.id, SecretString::from(PROMPTED_PASSWORD_VALUE));
+        assert!(manager.session_password(profile.id).is_some());
+
+        let shutdown = crate::ShutdownCoordinator::new();
+        shutdown.set_phase(crate::ShutdownPhase::CancellingTasks);
+        for teardown in manager.close_all_connections(&shutdown) {
+            teardown.join().expect("teardown thread").expect("teardown");
+        }
+
+        assert!(manager.session_password(profile.id).is_none());
     }
 
     #[test]
