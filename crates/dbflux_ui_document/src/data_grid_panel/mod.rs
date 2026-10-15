@@ -809,6 +809,12 @@ pub struct DataGridPanel {
     /// grid owns the close gesture: the tab must not go before the edits land,
     /// and must not go if they did not.
     close_after_apply: bool,
+    /// Whether the batch pump has a write in flight.
+    ///
+    /// Set when `process_next_batch_op` dispatches an operation and cleared when
+    /// that operation reports back. `apply_for_close` reads it so a second close
+    /// request cannot re-enter the pump and start the held rows concurrently.
+    batch_op_in_flight: bool,
     /// Pending "Save chart from collection" state.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
@@ -1624,6 +1630,7 @@ impl DataGridPanel {
             pending_delete_confirm: None,
             pending_batch_remaining: None,
             close_after_apply: false,
+            batch_op_in_flight: false,
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
         };
@@ -3115,7 +3122,7 @@ impl DataGridPanel {
                         if this.commits_document_patches(cx) {
                             this.commit_document_edits(cx);
                         } else {
-                            this.handle_save_row(*row_idx, cx);
+                            this.handle_save_row(*row_idx, false, cx);
                         }
                     }
                     DataTableEvent::StepIntoRequested { row, col } => {
@@ -3194,7 +3201,7 @@ impl DataGridPanel {
                         cx.notify();
                     }
                     DataTableEvent::CommitInsertRequested(insert_idx) => {
-                        this.handle_commit_insert(*insert_idx, cx);
+                        this.handle_commit_insert(*insert_idx, false, cx);
                     }
                     DataTableEvent::CommitDeleteRequested(row_idx) => {
                         this.handle_commit_delete(*row_idx, cx);
@@ -3536,11 +3543,16 @@ impl DataGridPanel {
         // A live delete confirmation resumes the batch it was held for, and a
         // batch already in flight is the same apply. Re-requesting either would
         // duplicate the rows they already carry.
+        if self.batch_op_in_flight {
+            // A write is already running; it chains the rows it still holds.
+            return true;
+        }
         if self.pending_delete_confirm.is_some() {
             return true;
         }
         if self.pending_batch_remaining.is_some() {
-            self.process_next_batch_op(cx);
+            // The pump holds unstarted rows for the write in flight; re-entering
+            // it here would run two writes at once.
             return true;
         }
 
@@ -3562,6 +3574,24 @@ impl DataGridPanel {
     /// close. Reporting the run as not landed here is what keeps the tab open with
     /// the rows that did not land.
     fn abandon_close_apply(&mut self, cx: &mut Context<Self>) {
+        self.batch_op_in_flight = false;
+        // The batch never chains past a failure, so the rows it still held are
+        // gone with it. Leaving them queued would make the next close mistake
+        // them for a write still in flight and park instead of applying.
+        self.pending_batch_remaining = None;
+
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: false });
+        }
+    }
+
+    /// Reports a failed mutation that is not part of the close-apply batch.
+    ///
+    /// It may still be the failure the user is looking at, so a waiting close is
+    /// told the run did not land. It must not clear the batch state, which
+    /// belongs to the batch operation still in flight: doing so would let the
+    /// next close start a second write beside it.
+    fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.close_after_apply) {
             cx.emit(DataGridEvent::MutationFinished { landed: false });
         }
@@ -6550,6 +6580,7 @@ mod tests {
                         dbflux_core::Value::Int(5),
                         dbflux_core::Value::Text("saved".to_string()),
                     ])),
+                    false,
                     cx,
                 )
             })
@@ -6575,6 +6606,7 @@ mod tests {
                         dbflux_core::Value::Int(1),
                         dbflux_core::Value::Text("from the server".to_string()),
                     ])),
+                    false,
                     cx,
                 )
             })
@@ -6717,7 +6749,7 @@ mod tests {
                     state.edit_buffer_mut().remove_pending_insert_by_idx(0);
                 });
 
-                panel.queue_refresh_after_mutation_success(cx);
+                panel.queue_refresh_after_mutation_success(false, cx);
                 let refresh_was_queued = panel.pending.refresh;
                 panel.set_result(zero_row_result(), cx);
                 refresh_was_queued
@@ -9222,6 +9254,7 @@ mod tests {
                     TableRef::with_schema("public", "users"),
                     0,
                     &[(1, &new_cell)],
+                    false,
                     cx,
                 );
             });
@@ -12252,6 +12285,155 @@ mod tests {
         assert!(
             asked_to_close(&seen),
             "a landed delete must let the tab it was closing go"
+        );
+    }
+
+    /// A close request must not re-enter the batch pump while an operation is
+    /// already in flight.
+    ///
+    /// While the pump writes one row, the rows it has not started yet stay in
+    /// `pending_batch_remaining`. A second `apply_for_close` used to call the pump
+    /// again, starting a second write at the same time; the operation that landed
+    /// first could then report the close before the other reached the database.
+    ///
+    /// The fake driver answers immediately, so a real operation cannot be held in
+    /// flight long enough to observe. The test stages the pump's in-flight shape
+    /// directly instead: one edit still to write, and the held row waiting.
+    #[gpui::test]
+    fn apply_for_close_does_not_start_a_second_batch_operation(cx: &mut TestAppContext) {
+        let (panel, window, _seen) = staged_edit_panel(cx);
+        register_writable_connection(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_row_edit(panel, cx);
+                panel.pending_batch_remaining = Some(super::PendingBatchRemaining {
+                    pending_inserts: Vec::new(),
+                    dirty_rows: vec![0],
+                });
+
+                assert!(
+                    panel.apply_for_close(cx),
+                    "a staged row with a batch in flight is an apply to wait on"
+                );
+                assert!(
+                    panel.pending_batch_remaining.is_some(),
+                    "the held row must still be waiting when the close request returns"
+                );
+            });
+        });
+    }
+
+    /// A close request while a write is in flight must not ask the table to save
+    /// again.
+    ///
+    /// The pump sets `batch_op_in_flight` when it has a write running; the close
+    /// returns without dispatching a Save All. The fake driver answers at once, so
+    /// the in-flight state is staged directly instead of holding a real operation.
+    #[gpui::test]
+    fn apply_for_close_while_an_operation_is_in_flight_does_not_save_all_again(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, window, _seen) = staged_edit_panel(cx);
+        register_writable_connection(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_row_edit(panel, cx);
+                panel.batch_op_in_flight = true;
+
+                assert!(
+                    panel.apply_for_close(cx),
+                    "a write in flight is an apply to wait on"
+                );
+            });
+        });
+
+        // Nothing was asked to save, so the staged row is still pending.
+        window.run_until_parked();
+
+        let counts = window.update(|_, app| panel.read(app).pending_edit_counts(app));
+        assert_eq!(
+            counts,
+            (0, 1, 0),
+            "the close must not dispatch a second Save All while a write is in flight"
+        );
+    }
+
+    /// A close after a batch operation failed must resume or report, not park.
+    ///
+    /// The failed insert abandons the batch; the rows it still held must not look
+    /// like a write in flight to the next close.
+    #[gpui::test]
+    fn a_close_after_a_failed_batch_reports_back(cx: &mut TestAppContext) {
+        // No connection is registered, so the first insert fails with "No connection".
+        let (panel, window, seen) = staged_edit_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, cx| {
+                    state.edit_buffer_mut().add_pending_insert(vec![
+                        dbflux_components::components::data_table::model::CellValue::int(1),
+                    ]);
+                    state.edit_buffer_mut().add_pending_insert(vec![
+                        dbflux_components::components::data_table::model::CellValue::int(2),
+                    ]);
+                    cx.notify();
+                });
+                assert!(
+                    panel.apply_for_close(cx),
+                    "two staged inserts are an apply to wait on"
+                );
+            });
+        });
+        window.run_until_parked();
+
+        // Drop the first attempt's `landed: false`.
+        seen.borrow_mut().clear();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(
+                    panel.apply_for_close(cx),
+                    "the remaining insert is still an apply to wait on"
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            !seen.borrow().is_empty(),
+            "the second close must resume or report, not park; got {:?}",
+            event_kinds(&seen)
+        );
+    }
+
+    /// A queued row whose edits were cleared before the pump reached it must not
+    /// park the close.
+    ///
+    /// The pump marked it in flight and the save handler then returned with nothing
+    /// to write, leaving no completion to advance or finish the batch.
+    #[gpui::test]
+    fn a_queued_row_that_lost_its_edits_does_not_park_the_close(cx: &mut TestAppContext) {
+        let (panel, window, seen) = staged_edit_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                // A close waiting on a batch whose one queued row has no edits left.
+                panel.close_after_apply = true;
+                panel.pending_batch_remaining = Some(super::PendingBatchRemaining {
+                    pending_inserts: Vec::new(),
+                    dirty_rows: vec![0],
+                });
+                panel.process_next_batch_op(cx);
+            });
+        });
+
+        assert!(
+            asked_to_close(&seen),
+            "a queued row with no edits must let the close through; got {:?}",
+            event_kinds(&seen)
         );
     }
 
