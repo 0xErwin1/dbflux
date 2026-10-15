@@ -931,6 +931,98 @@ mod tests {
         server.wait().expect("server completed");
     }
 
+    fn result_sets() -> dbflux_ipc::driver_protocol::QueryResultSetsDto {
+        use dbflux_ipc::driver_protocol::{QueryResultSetsDto, ResultSetDto};
+
+        let labelled = |label: &str, rows_truncated: bool| {
+            let mut result = two_row_result();
+            result.text_body = Some(label.to_string());
+            ResultSetDto {
+                result,
+                rows_truncated,
+            }
+        };
+        QueryResultSetsDto {
+            primary: labelled("primary", true),
+            additional: vec![labelled("second", false), labelled("third", true)],
+        }
+    }
+
+    fn result_set_summary(result: &dbflux_core::QueryResult) -> Vec<(Option<&str>, bool, usize)> {
+        result
+            .iter_result_sets()
+            .map(|set| {
+                (
+                    set.text_body.as_deref(),
+                    set.rows_truncated(),
+                    set.rows.len(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn v1_7_session_surfaces_every_result_set_with_its_truncation_flag() {
+        let socket_id = format!("result-sets-v17-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_protocol_version(ProtocolVersion::new(1, 7))
+                .with_driver_capabilities(DriverCapabilities::REQUEST_ROW_LIMIT)
+                .with_actions(vec![
+                    FakeDriverAction::respond(DriverResponseBody::ExecuteResultSets {
+                        results: result_sets(),
+                    }),
+                    FakeDriverAction::respond(DriverResponseBody::ExecuteWithHandleResultSets {
+                        handle_id: Uuid::nil(),
+                        results: result_sets(),
+                    }),
+                    FakeDriverAction::respond(DriverResponseBody::BrowseResultSets {
+                        results: result_sets(),
+                    }),
+                    FakeDriverAction::respond(DriverResponseBody::BrowseResultSets {
+                        results: result_sets(),
+                    }),
+                ]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = connection_declaring(
+            client,
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+        );
+        let expected = vec![
+            (Some("primary"), true, 2),
+            (Some("second"), false, 2),
+            (Some("third"), true, 2),
+        ];
+
+        let limited = QueryRequest::new("SELECT 1; SELECT 2; SELECT 3").with_limit(2);
+        let result = connection.execute(&limited).expect("execute");
+        assert_eq!(result_set_summary(&result), expected);
+
+        let (_handle, result) = connection
+            .execute_with_handle(&limited)
+            .expect("execute with handle");
+        assert_eq!(result_set_summary(&result), expected);
+
+        // Explain and describe share the browse response. A bare table or
+        // collection browse cannot be decoded by the fake server yet (#1042).
+        let table = dbflux_core::TableRef::new("events");
+        let result = connection
+            .explain(&dbflux_core::ExplainRequest::new(table.clone()))
+            .expect("explain");
+        assert_eq!(result_set_summary(&result), expected);
+
+        let result = connection
+            .describe_table(&dbflux_core::DescribeRequest::new(table))
+            .expect("describe table");
+        assert_eq!(result_set_summary(&result), expected);
+
+        server.wait().expect("server completed");
+    }
+
     #[test]
     fn v1_6_session_without_declared_row_limit_refuses_limit_locally() {
         let socket_id = format!("row-limit-undeclared-{}", Uuid::new_v4());

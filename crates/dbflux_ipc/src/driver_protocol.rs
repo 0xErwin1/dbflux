@@ -1,5 +1,5 @@
 use crate::audit::AuditEventEmitDto;
-use crate::envelope::{DRIVER_RPC_V1_6, ProtocolVersion};
+use crate::envelope::{DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, ProtocolVersion};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
@@ -176,13 +176,76 @@ impl From<QueryResultDto> for QueryResult {
             // Resolved window and metadata_extra are not part of the IPC DTO; drivers set them locally.
             resolved_window: None,
             metadata_extra: None,
-            // The driver RPC DTO does not currently propagate additional
-            // result sets across the wire. External RPC drivers that need
-            // multi-set support would have to extend QueryResultDto first;
-            // until then, IPC-driven connections behave as single-result-set.
+            // A single DTO is one result set; additional sets travel in
+            // `QueryResultSetsDto` from v1.7.
             additional_results: Vec::new(),
         }
     }
+}
+
+/// One result set together with the truncation flag `QueryResultDto` has no
+/// room for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultSetDto {
+    pub result: QueryResultDto,
+    pub rows_truncated: bool,
+}
+
+impl From<&QueryResult> for ResultSetDto {
+    fn from(value: &QueryResult) -> Self {
+        Self {
+            result: QueryResultDto::from(value),
+            rows_truncated: value.rows_truncated(),
+        }
+    }
+}
+
+impl From<ResultSetDto> for QueryResult {
+    fn from(value: ResultSetDto) -> Self {
+        let mut result = QueryResult::from(value.result);
+        result.set_rows_truncated(value.rows_truncated);
+        result
+    }
+}
+
+/// Every result set of a query, execute or browse answer (v1.7+): the primary
+/// set first, then the additional ones in the order the driver returned them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryResultSetsDto {
+    pub primary: ResultSetDto,
+    pub additional: Vec<ResultSetDto>,
+}
+
+impl From<&QueryResult> for QueryResultSetsDto {
+    fn from(value: &QueryResult) -> Self {
+        Self {
+            primary: ResultSetDto::from(value),
+            additional: value
+                .additional_results
+                .iter()
+                .map(ResultSetDto::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<QueryResultSetsDto> for QueryResult {
+    fn from(value: QueryResultSetsDto) -> Self {
+        let mut result = QueryResult::from(value.primary);
+        for additional in value.additional {
+            result.push_additional_result(additional.into());
+        }
+        result
+    }
+}
+
+/// Whether `Execute`, `ExecuteWithHandle` and the browse requests are answered
+/// with every result set (`ExecuteResultSets`, `ExecuteWithHandleResultSets`,
+/// `BrowseResultSets`) on a session that negotiated `version`. Older peers
+/// cannot decode those variants and receive only the primary result set.
+pub fn protocol_carries_result_sets(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_V1_7.major
+        || (version.major == DRIVER_RPC_V1_7.major && version.minor >= DRIVER_RPC_V1_7.minor)
 }
 
 /// Whether `Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`
@@ -574,6 +637,19 @@ pub enum DriverResponseBody {
         result: QueryResultDto,
         rows_truncated: bool,
     },
+    // v1.7: every result set with its own truncation flag, appended after the
+    // last v1.6 variant. A host sends them only on sessions that negotiated
+    // v1.7 or newer.
+    ExecuteResultSets {
+        results: QueryResultSetsDto,
+    },
+    ExecuteWithHandleResultSets {
+        handle_id: Uuid,
+        results: QueryResultSetsDto,
+    },
+    BrowseResultSets {
+        results: QueryResultSetsDto,
+    },
 }
 
 /// Response envelope for driver RPC operations.
@@ -643,12 +719,14 @@ impl DriverResponseEnvelope {
 mod tests {
     use super::{
         DriverRequestBody, DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
-        DriverRpcError, DriverRpcErrorCode, QueryRequestDto, QueryResultDto, QueryResultShapeDto,
-        protocol_carries_request_row_limit,
+        DriverRpcError, DriverRpcErrorCode, QueryRequestDto, QueryResultDto, QueryResultSetsDto,
+        QueryResultShapeDto, ResultSetDto, protocol_carries_request_row_limit,
+        protocol_carries_result_sets,
     };
     use crate::ProtocolVersion;
     use dbflux_core::{
         ExecutionContext, ExecutionSourceContext, KeyGetRequest, KeyGetResult, QueryRequest,
+        QueryResult,
     };
     use std::time::Duration;
     use uuid::Uuid;
@@ -1231,6 +1309,149 @@ mod tests {
             }),
             5
         );
+    }
+
+    fn result_set_dto(label: &str, rows_truncated: bool) -> ResultSetDto {
+        let mut result = limited_result_dto();
+        result.text_body = Some(label.to_string());
+        ResultSetDto {
+            result,
+            rows_truncated,
+        }
+    }
+
+    fn result_sets_dto() -> QueryResultSetsDto {
+        QueryResultSetsDto {
+            primary: result_set_dto("primary", true),
+            additional: vec![
+                result_set_dto("second", false),
+                result_set_dto("third", true),
+            ],
+        }
+    }
+
+    #[test]
+    fn result_set_responses_are_appended_after_the_last_v1_6_response_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteResultSets {
+                results: result_sets_dto(),
+            }),
+            37
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteWithHandleResultSets {
+                handle_id: Uuid::nil(),
+                results: result_sets_dto(),
+            }),
+            38
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::BrowseResultSets {
+                results: result_sets_dto(),
+            }),
+            39
+        );
+    }
+
+    #[test]
+    fn result_set_responses_round_trip_through_postcard() {
+        let handle = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("uuid");
+        let responses = [
+            DriverResponseBody::ExecuteResultSets {
+                results: result_sets_dto(),
+            },
+            DriverResponseBody::ExecuteWithHandleResultSets {
+                handle_id: handle,
+                results: result_sets_dto(),
+            },
+            DriverResponseBody::BrowseResultSets {
+                results: result_sets_dto(),
+            },
+        ];
+
+        for response in responses {
+            let bytes = postcard::to_allocvec(&response).expect("serialize");
+            let restored: DriverResponseBody = postcard::from_bytes(&bytes).expect("deserialize");
+
+            let results = match restored {
+                DriverResponseBody::ExecuteResultSets { results }
+                | DriverResponseBody::BrowseResultSets { results } => results,
+                DriverResponseBody::ExecuteWithHandleResultSets { handle_id, results } => {
+                    assert_eq!(handle_id, handle);
+                    results
+                }
+                other => panic!("unexpected response body: {other:?}"),
+            };
+
+            let labels: Vec<(Option<String>, bool)> = std::iter::once(&results.primary)
+                .chain(&results.additional)
+                .map(|set| (set.result.text_body.clone(), set.rows_truncated))
+                .collect();
+            assert_eq!(
+                labels,
+                vec![
+                    (Some("primary".to_string()), true),
+                    (Some("second".to_string()), false),
+                    (Some("third".to_string()), true),
+                ]
+            );
+            assert_eq!(results.primary.result.rows.len(), 2);
+        }
+    }
+
+    #[test]
+    fn result_sets_carry_every_set_and_its_truncation_flag() {
+        let mut primary = QueryResult::text("primary".to_string(), Duration::from_millis(3));
+        primary.set_rows_truncated(true);
+        let second = QueryResult::text("second".to_string(), Duration::from_millis(4));
+        let mut third = QueryResult::text("third".to_string(), Duration::from_millis(5));
+        third.set_rows_truncated(true);
+        primary.push_additional_result(second);
+        primary.push_additional_result(third);
+
+        let dto = QueryResultSetsDto::from(&primary);
+        assert!(dto.primary.rows_truncated);
+        assert!(dto.primary.result.text_body.as_deref() == Some("primary"));
+        assert_eq!(dto.additional.len(), 2);
+
+        let bytes = postcard::to_allocvec(&dto).expect("serialize");
+        let restored: QueryResult = postcard::from_bytes::<QueryResultSetsDto>(&bytes)
+            .expect("deserialize")
+            .into();
+
+        let sets: Vec<(Option<&str>, bool, Duration)> = restored
+            .iter_result_sets()
+            .map(|set| {
+                (
+                    set.text_body.as_deref(),
+                    set.rows_truncated(),
+                    set.execution_time,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sets,
+            vec![
+                (Some("primary"), true, Duration::from_millis(3)),
+                (Some("second"), false, Duration::from_millis(4)),
+                (Some("third"), true, Duration::from_millis(5)),
+            ]
+        );
+        assert!(
+            restored
+                .additional_results
+                .iter()
+                .all(|set| set.additional_results.is_empty())
+        );
+    }
+
+    #[test]
+    fn result_sets_travel_only_from_v1_7() {
+        assert!(!protocol_carries_result_sets(ProtocolVersion::new(1, 0)));
+        assert!(!protocol_carries_result_sets(ProtocolVersion::new(1, 6)));
+        assert!(protocol_carries_result_sets(ProtocolVersion::new(1, 7)));
+        assert!(protocol_carries_result_sets(ProtocolVersion::new(1, 8)));
+        assert!(protocol_carries_result_sets(ProtocolVersion::new(2, 0)));
     }
 
     #[test]
