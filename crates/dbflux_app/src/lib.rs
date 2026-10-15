@@ -20,7 +20,7 @@ pub mod rpc_services;
 pub mod updates;
 
 pub use access_manager::AppAccessManager;
-pub use app_state::AppState;
+pub use app_state::{AppState, ConnectionPasswordPrompt};
 pub use auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 pub use hook_executor::CompositeExecutor;
 pub use metric_catalog_cache::{MetricCatalogCache, MetricsPageView};
