@@ -24,6 +24,7 @@
 //! so the caller can distinguish rows from different statements. When only one
 //! statement is present the column is omitted to avoid cluttering the output.
 
+use dbflux_core::chrono::{DateTime, Utc};
 use dbflux_core::{ColumnKind, ColumnMeta, Value};
 use serde_json::Value as Json;
 
@@ -45,6 +46,7 @@ fn kind_from_influx_type_name(s: &str) -> ColumnKind {
 }
 
 const SERIES_COLUMN: &str = "_series";
+const TIME_TYPE_NAME: &str = "timestamp_ms";
 const STATEMENT_INDEX_COLUMN: &str = "statement_index";
 
 /// Parse the JSON body of an InfluxQL response into a `QueryResult`.
@@ -210,7 +212,7 @@ fn infer_type_names(col_names: &[String], values: &[Json]) -> Vec<String> {
         .enumerate()
         .map(|(idx, name)| {
             if name == "time" {
-                return "timestamp_ms".to_string();
+                return TIME_TYPE_NAME.to_string();
             }
 
             let sample = first_row
@@ -239,8 +241,40 @@ fn infer_type_names(col_names: &[String], values: &[Json]) -> Vec<String> {
         .collect()
 }
 
+/// Convert an InfluxQL `time` value to a `Value::DateTime`.
+///
+/// Queries request `epoch=ms`, so the server sends integers; RFC 3339 strings
+/// appear when a caller omits that parameter. Anything else is kept verbatim
+/// rather than dropped.
+fn time_to_value(json: &Json) -> Value {
+    let parsed = match json {
+        Json::Null => return Value::Null,
+        Json::Number(n) => n.as_i64().and_then(DateTime::from_timestamp_millis),
+        Json::String(s) => s
+            .parse::<i64>()
+            .ok()
+            .and_then(DateTime::from_timestamp_millis)
+            .or_else(|| {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|datetime| datetime.with_timezone(&Utc))
+            }),
+        _ => None,
+    };
+
+    match (parsed, json) {
+        (Some(datetime), _) => Value::DateTime(datetime),
+        (None, Json::String(s)) => Value::Text(s.clone()),
+        (None, other) => Value::Text(other.to_string()),
+    }
+}
+
 /// Convert a JSON value to a `Value` using the inferred type.
 fn json_to_value(json: &Json, type_name: &str) -> Value {
+    if type_name == TIME_TYPE_NAME {
+        return time_to_value(json);
+    }
+
     match json {
         Json::Null => Value::Null,
         Json::Bool(b) => Value::Bool(*b),
@@ -255,16 +289,7 @@ fn json_to_value(json: &Json, type_name: &str) -> Value {
                     .unwrap_or_else(|| n.as_f64().map(Value::Float).unwrap_or(Value::Null))
             }
         }
-        Json::String(s) => {
-            if type_name == "timestamp_ms" {
-                // InfluxDB returns ms timestamps as integers in JSON when epoch=ms.
-                s.parse::<i64>()
-                    .map(Value::Int)
-                    .unwrap_or_else(|_| Value::Text(s.clone()))
-            } else {
-                Value::Text(s.clone())
-            }
-        }
+        Json::String(s) => Value::Text(s.clone()),
         _ => Value::Text(json.to_string()),
     }
 }
@@ -301,6 +326,40 @@ mod tests {
             .expect("time column must be present");
         assert_eq!(time_col.kind, ColumnKind::Timestamp);
         assert_eq!(time_col.type_name, "timestamp_ms");
+    }
+
+    #[test]
+    fn time_values_parse_as_datetimes_not_epoch_integers() {
+        let body = r#"{
+            "results": [{
+                "statement_id": 0,
+                "series": [{
+                    "name": "cpu",
+                    "columns": ["time", "value"],
+                    "values": [
+                        [1790267965000, 0.5],
+                        ["1790267966000", 0.7],
+                        ["2026-09-24T16:39:27Z", 0.9],
+                        [null, 1.1]
+                    ]
+                }]
+            }]
+        }"#;
+
+        let result = parse_influxql_json(body).expect("parse must succeed");
+        let times: Vec<&Value> = result.rows.iter().map(|row| &row[0]).collect();
+
+        let expected = |millis: i64| {
+            Value::DateTime(
+                dbflux_core::chrono::DateTime::from_timestamp_millis(millis)
+                    .expect("valid timestamp"),
+            )
+        };
+        assert_eq!(times[0], &expected(1_790_267_965_000));
+        assert_eq!(times[1], &expected(1_790_267_966_000));
+        assert_eq!(times[2], &expected(1_790_267_967_000));
+        assert_eq!(times[3], &Value::Null);
+        assert_eq!(result.rows[0][1], Value::Float(0.5));
     }
 
     // C.3.1 — single series

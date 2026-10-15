@@ -1498,26 +1498,54 @@ impl Sidebar {
         database_name: &str,
         schema: &dbflux_core::SchemaSnapshot,
     ) -> Vec<TreeItem> {
-        let measurements = schema.measurements();
+        Self::build_measurement_items(
+            profile_id,
+            database_name,
+            schema
+                .measurements()
+                .iter()
+                .map(|measurement| measurement.name.as_str()),
+        )
+    }
 
-        if measurements.is_empty() {
-            return Vec::new();
-        }
+    /// Build the measurement folder from a lazily loaded bucket, whose
+    /// `DbSchemaInfo` carries the measurement names as `tables`.
+    fn build_lazy_time_series_db_content(
+        profile_id: Uuid,
+        database_name: &str,
+        db_schema: &dbflux_core::DbSchemaInfo,
+    ) -> Vec<TreeItem> {
+        Self::build_measurement_items(
+            profile_id,
+            database_name,
+            db_schema.tables.iter().map(|table| table.name.as_str()),
+        )
+    }
 
-        let measurement_items: Vec<TreeItem> = measurements
-            .iter()
-            .map(|measurement| {
+    fn build_measurement_items<'a>(
+        profile_id: Uuid,
+        database_name: &str,
+        measurement_names: impl Iterator<Item = &'a str>,
+    ) -> Vec<TreeItem> {
+        let measurement_items: Vec<TreeItem> = measurement_names
+            .map(|name| {
                 TreeItem::new(
                     SchemaNodeId::Collection {
                         profile_id,
                         database: database_name.to_string(),
-                        name: measurement.name.clone(),
+                        name: name.to_string(),
                     }
                     .to_string(),
-                    measurement.name.clone(),
+                    name.to_string(),
                 )
             })
             .collect();
+
+        if measurement_items.is_empty() {
+            return Vec::new();
+        }
+
+        let measurement_count = measurement_items.len();
 
         vec![
             TreeItem::new(
@@ -1528,7 +1556,7 @@ impl Sidebar {
                 .to_string(),
                 crate::labels::container_folder_label(
                     dbflux_core::DatabaseCategory::TimeSeries,
-                    measurements.len(),
+                    measurement_count,
                 ),
             )
             .expanded(true)
@@ -2574,14 +2602,14 @@ fn resolve_special_db_children(
                     metric_fetch_errors,
                 )
             } else if is_time_series_db {
-                // Time-series lazy schemas are stored in database_schemas
-                // as a DbSchemaInfo whose tables carry measurement names.
-                // Route through the time-series builder the same way document
-                // databases route through build_document_db_content.
-                Sidebar::build_time_series_db_content(profile_id, db_name, schema)
+                Sidebar::build_lazy_time_series_db_content(profile_id, db_name, db_schema)
             } else {
                 Vec::new()
             }
+        } else if is_time_series_db && is_current {
+            // The connect-time snapshot already lists the current bucket's
+            // measurements, so it needs no lazy fetch before it can show them.
+            Sidebar::build_time_series_db_content(profile_id, db_name, schema)
         } else if is_pending {
             vec![TreeItem::new(
                 SchemaNodeId::Loading {
@@ -2647,8 +2675,8 @@ fn resolve_special_db_children(
                 metric_fetch_errors,
             )
         } else if is_time_series_db {
-            // InfluxDB uses SingleDatabase loading: the connection-level
-            // schema already contains all measurements for this bucket.
+            // Single-database loading: the connection-level schema already
+            // contains all measurements for this bucket.
             Sidebar::build_time_series_db_content(profile_id, db_name, schema)
         } else {
             Vec::new()
@@ -4182,6 +4210,94 @@ mod tests {
 
         let result = Sidebar::build_time_series_db_content(profile_id, "empty_bucket", &schema);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn lazy_time_series_bucket_lists_its_own_loaded_measurements() {
+        use dbflux_core::{
+            DatabaseCategory, DatabaseInfo, DbSchemaInfo, DriverCapabilities, MeasurementInfo,
+            SchemaNodeId, SchemaSnapshot, TimeSeriesSchema,
+        };
+
+        let profile_id = Uuid::new_v4();
+        let schema = SchemaSnapshot::time_series(TimeSeriesSchema {
+            databases: vec![
+                DatabaseInfo {
+                    name: "monitoring".to_string(),
+                    is_current: true,
+                },
+                DatabaseInfo {
+                    name: "metrics".to_string(),
+                    is_current: false,
+                },
+                DatabaseInfo {
+                    name: "archive".to_string(),
+                    is_current: false,
+                },
+            ],
+            current_database: Some("monitoring".to_string()),
+            measurements: vec![MeasurementInfo {
+                name: "cpu".to_string(),
+                tags: vec![],
+                fields: vec![],
+            }],
+            retention_policies: vec![],
+        });
+
+        let mut connected = make_connected_profile(profile_id, DriverCapabilities::empty());
+        connected.database_schemas.insert(
+            "metrics".to_string(),
+            DbSchemaInfo {
+                name: "metrics".to_string(),
+                tables: vec![relational_table("disk", Some("metrics"))],
+                views: Vec::new(),
+                custom_types: None,
+            },
+        );
+        let metric_cache = dbflux_app::MetricCatalogCache::new();
+
+        let resolve = |db_name: &str, is_current: bool| {
+            super::resolve_special_db_children(
+                profile_id,
+                &connected,
+                &schema,
+                DriverCapabilities::empty(),
+                DatabaseCategory::TimeSeries,
+                &metric_cache,
+                &HashMap::new(),
+                false,
+                true,
+                true,
+                false,
+                db_name,
+                is_current,
+            )
+        };
+        let leaves = |items: &[TreeItem]| -> Vec<(String, String)> {
+            items
+                .iter()
+                .flat_map(|folder| folder.children.iter())
+                .map(|leaf| match leaf.id.as_ref().parse::<SchemaNodeId>() {
+                    Ok(SchemaNodeId::Collection { database, name, .. }) => (database, name),
+                    other => panic!("expected a measurement leaf, got {other:?}"),
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            leaves(&resolve("metrics", false)),
+            [("metrics".to_string(), "disk".to_string())],
+            "a loaded bucket lists its own measurements, not the default bucket's"
+        );
+        assert_eq!(
+            leaves(&resolve("monitoring", true)),
+            [("monitoring".to_string(), "cpu".to_string())],
+            "the default bucket keeps the measurements fetched at connect time"
+        );
+        assert!(
+            resolve("archive", false).is_empty(),
+            "a bucket that was never expanded has no children yet"
+        );
     }
 
     #[test]
