@@ -25,7 +25,8 @@ The first commit that added this directory carries the published source unchange
   are copied bit for bit, which assumes both keymaps order their modifiers the same way, as
   keymaps compiled from xkeyboard-config do. Covered by
   `a_new_keymap_keeps_the_held_modifiers` (`cargo test -p gpui-pre-linux --lib`), which needs
-  the xkeyboard-config data files.
+  the xkeyboard-config data files. Reported upstream as
+  [zed-industries/zed#65650](https://github.com/zed-industries/zed/issues/65650).
 
 ## Refreshing
 
