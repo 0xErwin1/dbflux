@@ -661,7 +661,7 @@ fn successful_insert_refresh_runtime_keeps_filter_and_can_stay_visually_empty(
                 state.edit_buffer_mut().remove_pending_insert_by_idx(0);
             });
 
-            panel.queue_refresh_after_mutation_success(cx);
+            panel.queue_refresh_after_mutation_success(false, cx);
             let refresh_was_queued = panel.pending.refresh;
             panel.set_result(zero_row_result(), cx);
             refresh_was_queued

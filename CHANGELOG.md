@@ -44,6 +44,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A close no longer races a save that is already running** — Closing a tab whose edits were already being applied, or closing while a **Save all** was still running, could start the next queued row at the same time and let the tab close before that row reached the database. The close now waits for the operation in flight, which chains the rest.
 * **Every InfluxDB bucket can be expanded** — On an InfluxDB connection, only the profile's default bucket (or default database on v1) listed its measurements in the sidebar: expanding any other bucket did nothing, so a connection without a default bucket showed none. Each bucket now lists its measurements when expanded. A rejected token now reports an authentication error when the sidebar lists buckets or measurements, instead of "missing 'buckets' field" or an empty bucket.
 * **InfluxDB timestamps show as dates** — In an InfluxDB measurement's data grid and in InfluxQL query results, the `time` column showed epoch milliseconds such as `1790267965000`. It now shows the date and time, and charts still use it as their time axis.
 * **Shortcuts with Shift work on the first press after leaving a text field on Wayland** — With an input method such as fcitx5 running, the first Shift shortcut on a digit or symbol key after focus left the SQL editor or another text field lost its Shift, so `Ctrl+Shift+6` arrived as `Ctrl+6` and had to be pressed again. The window now keeps the held modifiers when the compositor switches keyboard layouts.
