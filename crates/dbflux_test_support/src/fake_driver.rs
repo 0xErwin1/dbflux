@@ -672,10 +672,10 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB | DbKind::S3 => {
+            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::S3 => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::ClickHouse => SchemaLoadingStrategy::LazyPerDatabase,
+            DbKind::ClickHouse | DbKind::InfluxDB => SchemaLoadingStrategy::LazyPerDatabase,
             DbKind::Turso => SchemaLoadingStrategy::SingleDatabase,
         }
     }
@@ -1651,6 +1651,7 @@ mod tests {
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::ClickHouse, SchemaLoadingStrategy::LazyPerDatabase),
             (DbKind::DynamoDB, SchemaLoadingStrategy::SingleDatabase),
+            (DbKind::InfluxDB, SchemaLoadingStrategy::LazyPerDatabase),
             (
                 DbKind::CloudWatchLogs,
                 SchemaLoadingStrategy::SingleDatabase,

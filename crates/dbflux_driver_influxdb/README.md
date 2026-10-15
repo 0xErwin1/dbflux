@@ -20,6 +20,8 @@ InfluxDB driver for DBFlux.
 - **Optional default bucket** — the connection profile's bucket (v2) or database (v1) field is optional. A v2 API token gives access to all buckets in the organisation; a v1 user gives access to all databases on the server. Leaving the field blank lets the user select a bucket per-query from the source-context dropdown in the editor. Setting it pre-selects that bucket without restricting access to others.
 - **Per-query bucket routing** — the bucket used for each InfluxQL query comes from the source-context dropdown selection, not the connection profile. For Flux queries the bucket is embedded in the query text itself (`from(bucket: "...")`).
 - **Bucket-free ping** — the connection liveness check does not require a bucket: v1 uses `SHOW DATABASES` against the internal database; v2 fetches `/api/v2/buckets?limit=1`.
+- **Per-bucket measurement listing** — buckets (v2) and databases (v1) load lazily (`SchemaLoadingStrategy::LazyPerDatabase`): expanding one in the sidebar lists its measurements through `schema_for_database`, with Flux `schema.measurements()` on v2 and `SHOW MEASUREMENTS` on v1. The profile's default bucket shows the measurements fetched at connect time; any other bucket expands without changing the profile.
+- **Typed timestamps** — the InfluxQL `time` column arrives as a datetime value (`Value::DateTime`), so the data grid shows a formatted timestamp instead of epoch milliseconds, and charts still read it as the time axis.
 - **Time range macros** — InfluxQL and Flux queries support Grafana-compatible macro tokens that are substituted with the bound time-range window before the query is sent to the driver:
 
   | Token | Language | Expansion |
