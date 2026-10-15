@@ -909,6 +909,34 @@ impl Drop for WaylandConnection {
 const WL_DATA_DEVICE_MANAGER_VERSION: u32 = 3;
 
 /// Returns the path of the socket that `WAYLAND_DISPLAY` names, as libwayland resolves it.
+/// A fresh xkb state for `keymap` that keeps the modifiers and layout of
+/// `previous`.
+///
+/// A compositor that switches between keyboards, such as an input method's
+/// virtual keyboard and the physical one, sends the new keymap while keys
+/// are still held and can deliver the next key before any `Modifiers`
+/// event. A state without the held modifiers resolves that key at the wrong
+/// level: Ctrl+Shift+6 on a US layout arrives as `ctrl-6` instead of
+/// `ctrl-^`. The masks are carried by bit, which assumes both keymaps order
+/// their modifiers the same way, as keymaps compiled from xkeyboard-config do.
+fn keymap_state_keeping_modifiers(
+    keymap: &xkb::Keymap,
+    previous: Option<&xkb::State>,
+) -> xkb::State {
+    let mut keymap_state = xkb::State::new(keymap);
+    if let Some(previous) = previous {
+        keymap_state.update_mask(
+            previous.serialize_mods(xkb::STATE_MODS_DEPRESSED),
+            previous.serialize_mods(xkb::STATE_MODS_LATCHED),
+            previous.serialize_mods(xkb::STATE_MODS_LOCKED),
+            0,
+            0,
+            previous.serialize_layout(xkb::STATE_LAYOUT_LOCKED),
+        );
+    }
+    keymap_state
+}
+
 fn wayland_socket_path(environment: &GraphicalEnvironment) -> anyhow::Result<PathBuf> {
     let display = environment
         .wayland_display
@@ -2079,7 +2107,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                     .flatten()
                     .expect("Failed to create keymap")
                 };
-                state.keymap_state = Some(xkb::State::new(&keymap));
+                state.keymap_state = Some(keymap_state_keeping_modifiers(
+                    &keymap,
+                    state.keymap_state.as_ref(),
+                ));
                 state.compose_state = get_xkb_compose_state(&xkb_context);
                 drop(state);
 
@@ -3190,6 +3221,29 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[test]
+    fn a_new_keymap_keeps_the_held_modifiers() {
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap =
+            xkb::Keymap::new_from_names(&context, "", "", "us", "", None, KEYMAP_COMPILE_NO_FLAGS)
+                .expect("US keymap from xkeyboard-config");
+        let digit_six = Keycode::from(7 + MIN_KEYCODE);
+        let left_shift = Keycode::from(42 + MIN_KEYCODE);
+
+        let mut held = xkb::State::new(&keymap);
+        held.update_key(left_shift, xkb::KeyDirection::Down);
+        assert_eq!(held.key_get_one_sym(digit_six), xkb::Keysym::asciicircum);
+
+        let replaced = keymap_state_keeping_modifiers(&keymap, Some(&held));
+        assert_eq!(
+            replaced.key_get_one_sym(digit_six),
+            xkb::Keysym::asciicircum
+        );
+
+        let first = keymap_state_keeping_modifiers(&keymap, None);
+        assert_eq!(first.key_get_one_sym(digit_six), xkb::Keysym::_6);
+    }
 
     #[test]
     fn rejects_required_globals_below_supported_versions() {
