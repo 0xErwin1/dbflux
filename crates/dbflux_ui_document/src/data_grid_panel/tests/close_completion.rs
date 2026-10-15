@@ -1,4 +1,5 @@
 use super::*;
+use crate::data_grid_panel::PendingBatchRemaining;
 
 // === #629 — the completion path a close waits on ===
 
@@ -523,4 +524,40 @@ fn a_delete_only_apply_that_lands_asks_the_close_to_proceed(cx: &mut TestAppCont
         asked_to_close(&seen),
         "a landed delete must let the tab it was closing go"
     );
+}
+
+/// A close request must not re-enter the batch pump while an operation is
+/// already in flight.
+///
+/// While the pump writes one row, the rows it has not started yet stay in
+/// `pending_batch_remaining`. A second `apply_for_close` used to call the pump
+/// again, starting a second write at the same time; the operation that landed
+/// first could then report the close before the other reached the database.
+///
+/// The fake driver answers immediately, so a real operation cannot be held in
+/// flight long enough to observe. The test stages the pump's in-flight shape
+/// directly instead: one edit still to write, and the held row waiting.
+#[gpui::test]
+fn apply_for_close_does_not_start_a_second_batch_operation(cx: &mut TestAppContext) {
+    let (panel, window, _seen) = staged_edit_panel(cx);
+    register_writable_connection(&panel, window);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            stage_row_edit(panel, cx);
+            panel.pending_batch_remaining = Some(PendingBatchRemaining {
+                pending_inserts: Vec::new(),
+                dirty_rows: vec![0],
+            });
+
+            assert!(
+                panel.apply_for_close(cx),
+                "a staged row with a batch in flight is an apply to wait on"
+            );
+            assert!(
+                panel.pending_batch_remaining.is_some(),
+                "the held row must still be waiting when the close request returns"
+            );
+        });
+    });
 }

@@ -152,6 +152,8 @@ impl DataGridPanel {
     // === Row Editing ===
 
     pub(super) fn queue_refresh_after_mutation_success(&mut self, cx: &mut Context<Self>) {
+        self.batch_op_in_flight = false;
+
         if self.pending_batch_remaining.is_some() {
             self.process_next_batch_op(cx);
         } else {
@@ -766,6 +768,8 @@ impl DataGridPanel {
         result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
         cx: &mut Context<Self>,
     ) {
+        self.batch_op_in_flight = false;
+
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
@@ -1174,6 +1178,7 @@ impl DataGridPanel {
                 ..
             } = &self.source
             {
+                self.batch_op_in_flight = true;
                 self.commit_bulk_deletes_table(
                     *profile_id,
                     database.clone(),
@@ -1188,6 +1193,7 @@ impl DataGridPanel {
             ..
         } = &self.source
         {
+            self.batch_op_in_flight = true;
             self.commit_bulk_deletes_collection(
                 *profile_id,
                 collection.clone(),
@@ -1535,6 +1541,7 @@ impl DataGridPanel {
                     collection,
                     ..
                 } => {
+                    self.batch_op_in_flight = true;
                     self.commit_bulk_deletes_collection(
                         *profile_id,
                         collection.clone(),
@@ -1584,6 +1591,7 @@ impl DataGridPanel {
             if !remaining.pending_inserts.is_empty() || !remaining.dirty_rows.is_empty() {
                 self.pending_batch_remaining = Some(remaining);
             }
+            self.batch_op_in_flight = true;
             self.handle_commit_insert(insert_idx, cx);
             return;
         }
@@ -1593,6 +1601,7 @@ impl DataGridPanel {
             if !remaining.dirty_rows.is_empty() {
                 self.pending_batch_remaining = Some(remaining);
             }
+            self.batch_op_in_flight = true;
             self.handle_save_row(row_idx, cx);
             return;
         }
@@ -1802,6 +1811,7 @@ impl DataGridPanel {
                             is_error: false,
                         });
 
+                        panel.batch_op_in_flight = false;
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
@@ -1998,6 +2008,7 @@ impl DataGridPanel {
                             is_error: false,
                         });
 
+                        panel.batch_op_in_flight = false;
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
@@ -2045,11 +2056,16 @@ impl DataGridPanel {
         // A live delete confirmation resumes the batch it was held for, and a
         // batch already in flight is the same apply. Re-requesting either would
         // duplicate the rows they already carry.
+        if self.batch_op_in_flight {
+            // A write is already running; it chains the rows it still holds.
+            return true;
+        }
         if self.pending_delete_confirm.is_some() {
             return true;
         }
         if self.pending_batch_remaining.is_some() {
-            self.process_next_batch_op(cx);
+            // The pump holds unstarted rows for the write in flight; re-entering
+            // it here would run two writes at once.
             return true;
         }
 
@@ -2071,6 +2087,8 @@ impl DataGridPanel {
     /// close. Reporting the run as not landed here is what keeps the tab open with
     /// the rows that did not land.
     pub(super) fn abandon_close_apply(&mut self, cx: &mut Context<Self>) {
+        self.batch_op_in_flight = false;
+
         if std::mem::take(&mut self.close_after_apply) {
             cx.emit(DataGridEvent::MutationFinished { landed: false });
         }

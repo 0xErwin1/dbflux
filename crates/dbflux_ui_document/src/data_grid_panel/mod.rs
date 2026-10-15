@@ -855,6 +855,12 @@ pub struct DataGridPanel {
     /// grid owns the close gesture: the tab must not go before the edits land,
     /// and must not go if they did not.
     close_after_apply: bool,
+    /// Whether the batch pump has a write in flight.
+    ///
+    /// Set when `process_next_batch_op` dispatches an operation and cleared when
+    /// that operation reports back. `apply_for_close` reads it so a second close
+    /// request cannot re-enter the pump and start the held rows concurrently.
+    batch_op_in_flight: bool,
     /// Pending "Save chart from collection" state.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
@@ -1420,6 +1426,7 @@ impl DataGridPanel {
             pending_delete_confirm: None,
             pending_batch_remaining: None,
             close_after_apply: false,
+            batch_op_in_flight: false,
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
             limited_rows: LimitedRows::default(),
