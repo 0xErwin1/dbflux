@@ -154,35 +154,29 @@ impl ModalTunnelAuth {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.show_prompt(SecretPrompt::TunnelPassphrase(request), true, window, cx);
+        self.show_prompt(SecretPrompt::TunnelPassphrase(request), window, cx);
     }
 
     /// Ask for a connection password before connecting.
     ///
-    /// The remember checkbox starts unchecked: without it the password lasts
-    /// only for the connection being opened.
+    /// Like the passphrase prompt, the remember checkbox starts checked;
+    /// unchecked, the password lasts only for the connection being opened.
     pub fn open_connection_password(
         &mut self,
         request: ConnectionPasswordRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.show_prompt(SecretPrompt::ConnectionPassword(request), false, window, cx);
+        self.show_prompt(SecretPrompt::ConnectionPassword(request), window, cx);
     }
 
-    fn show_prompt(
-        &mut self,
-        request: SecretPrompt,
-        remember: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn show_prompt(&mut self, request: SecretPrompt, window: &mut Window, cx: &mut Context<Self>) {
         let placeholder = request.input_label();
         self.passphrase_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
             state.set_placeholder(placeholder, window, cx);
         });
-        self.remember = remember;
+        self.remember = true;
         self.set_passphrase_visible(false, window, cx);
         self.request = Some(request);
         self.visible = true;
@@ -652,7 +646,7 @@ mod keyboard_tests {
 
         assert_eq!(
             provided_password(&outcomes.borrow()),
-            Some((profile_id, String::new(), false))
+            Some((profile_id, String::new(), true))
         );
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
@@ -662,6 +656,35 @@ mod keyboard_tests {
         let profile_id = Uuid::new_v4();
         let (_modal, window, outcomes) = open_password_prompt(profile_id, cx);
 
+        window.simulate_input("hunter2");
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(
+            provided_password(&outcomes.borrow()),
+            Some((profile_id, "hunter2".to_string(), true))
+        );
+    }
+
+    #[gpui::test]
+    fn password_prompt_opens_with_remember_checked_like_the_passphrase_prompt(
+        cx: &mut TestAppContext,
+    ) {
+        let (modal, window, _outcomes) = open_password_prompt(Uuid::new_v4(), cx);
+
+        assert!(window.update(|_, cx| modal.read(cx).remember));
+    }
+
+    #[gpui::test]
+    fn unchecking_remember_connects_for_this_connection_only(cx: &mut TestAppContext) {
+        let profile_id = Uuid::new_v4();
+        let (modal, window, outcomes) = open_password_prompt(profile_id, cx);
+
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.remember = false;
+                cx.notify();
+            })
+        });
         window.simulate_input("hunter2");
         window.simulate_keystrokes("enter");
 
