@@ -1686,7 +1686,6 @@ impl DataGridPanel {
                 return;
             }
 
-            // All batch operations complete
             self.finish_close_after_apply(cx);
 
             self.queue_reload_after_mutation(cx);
