@@ -193,7 +193,7 @@ document") to open the current query in a chart document.
 
 A data grid's context menu offers a "Chart this query" item. The item is gated
 by `can_chart_from_context_menu` in
-`crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs`, which
+`crates/dbflux_ui_document/src/data_grid_panel/context_menu/mod.rs`, which
 requires both:
 
 1. The panel's source is a `QueryResult` with a non-empty original query, and
