@@ -597,3 +597,52 @@ fn apply_for_close_while_an_operation_is_in_flight_does_not_save_all_again(
         "the close must not dispatch a second Save All while a write is in flight"
     );
 }
+
+/// A close after a batch operation failed must resume or report, not park.
+///
+/// The failed insert abandons the batch; the rows it still held must not look
+/// like a write in flight to the next close.
+#[gpui::test]
+fn a_close_after_a_failed_batch_reports_back(cx: &mut TestAppContext) {
+    // No connection is registered, so the first insert fails with "No connection".
+    let (panel, window, seen) = staged_edit_panel(cx);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            let table_state = panel.grid_table.table_state.clone().expect("table state");
+            table_state.update(cx, |state, cx| {
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    dbflux_components::components::data_table::model::CellValue::int(1),
+                ]);
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    dbflux_components::components::data_table::model::CellValue::int(2),
+                ]);
+                cx.notify();
+            });
+            assert!(
+                panel.apply_for_close(cx),
+                "two staged inserts are an apply to wait on"
+            );
+        });
+    });
+    window.run_until_parked();
+
+    // Drop the first attempt's `landed: false`.
+    seen.borrow_mut().clear();
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            assert!(
+                panel.apply_for_close(cx),
+                "the remaining insert is still an apply to wait on"
+            );
+        });
+    });
+    window.run_until_parked();
+
+    assert!(
+        !seen.borrow().is_empty(),
+        "the second close must resume or report, not park; got {:?}",
+        event_kinds(&seen)
+    );
+}

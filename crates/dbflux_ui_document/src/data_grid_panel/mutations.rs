@@ -2157,6 +2157,10 @@ impl DataGridPanel {
     /// the rows that did not land.
     pub(super) fn abandon_close_apply(&mut self, cx: &mut Context<Self>) {
         self.batch_op_in_flight = false;
+        // The batch never chains past a failure, so the rows it still held are
+        // gone with it. Leaving them queued would make the next close mistake
+        // them for a write still in flight and park instead of applying.
+        self.pending_batch_remaining = None;
 
         if std::mem::take(&mut self.close_after_apply) {
             cx.emit(DataGridEvent::MutationFinished { landed: false });
