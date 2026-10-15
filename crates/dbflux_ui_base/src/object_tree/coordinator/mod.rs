@@ -189,7 +189,9 @@ pub struct ObjectTreeCoordinator {
     next_attempt: u64,
     fetches: HashMap<ObjectTreeRequestKey, PendingFetch>,
     installs: HashMap<ObjectTreeInstallKey, PendingInstall>,
-    outcomes: HashMap<ObjectTreeRequestKey, ObjectTreeOutcome>,
+    /// Each outcome keeps the profile session generation it settled under,
+    /// so a failure from a previous session never blocks a new one.
+    outcomes: HashMap<ObjectTreeRequestKey, (Option<u64>, ObjectTreeOutcome)>,
 }
 
 impl ObjectTreeCoordinator {
@@ -312,12 +314,24 @@ impl ObjectTreeCoordinator {
         self.installs.keys()
     }
 
-    fn set_outcome(&mut self, key: ObjectTreeRequestKey, outcome: ObjectTreeOutcome) {
-        self.outcomes.insert(key, outcome);
+    fn set_outcome(
+        &mut self,
+        key: ObjectTreeRequestKey,
+        session_generation: Option<u64>,
+        outcome: ObjectTreeOutcome,
+    ) {
+        self.outcomes.insert(key, (session_generation, outcome));
     }
 
-    fn outcome(&self, key: &ObjectTreeRequestKey) -> Option<&ObjectTreeOutcome> {
-        self.outcomes.get(key)
+    fn outcome(
+        &self,
+        key: &ObjectTreeRequestKey,
+        session_generation: Option<u64>,
+    ) -> Option<&ObjectTreeOutcome> {
+        self.outcomes
+            .get(key)
+            .filter(|(settled_generation, _)| *settled_generation == session_generation)
+            .map(|(_, outcome)| outcome)
     }
 }
 
@@ -428,9 +442,11 @@ impl AppStateEntity {
             .map(|fetch| fetch.session_generation)
     }
 
-    /// The last settled outcome for a request, if any.
+    /// The last outcome settled for a request during the profile's current
+    /// session, if any. Outcomes from an earlier session are not reported.
     pub fn object_tree_outcome(&self, key: &ObjectTreeRequestKey) -> Option<&ObjectTreeOutcome> {
-        self.object_tree.outcome(key)
+        let generation = self.profile_session_generation(key.profile_id());
+        self.object_tree.outcome(key, generation)
     }
 }
 
@@ -707,7 +723,9 @@ impl AppStateEntity {
         cx: &mut gpui::Context<Self>,
     ) {
         self.object_tree.remove_fetch(&key);
-        self.object_tree.set_outcome(key.clone(), outcome.clone());
+        let generation = self.profile_session_generation(key.profile_id());
+        self.object_tree
+            .set_outcome(key.clone(), generation, outcome.clone());
         cx.emit(ObjectTreeEvent { key, outcome });
     }
 
