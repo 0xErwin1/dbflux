@@ -3,10 +3,10 @@ use std::rc::Rc;
 use fuzzy_matcher::FuzzyMatcher as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
-    Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
-    RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window, deferred, div,
-    prelude::FluentBuilder, px, relative,
+    Action, AnyElement, App, AppContext, AvailableSpace, Context, DismissEvent, Empty, Entity,
+    EventEmitter, Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement,
+    Pixels, Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
+    deferred, div, prelude::FluentBuilder, px, relative,
 };
 use gpui_base::TestSupportExt as _;
 use lsp_types::CompletionItem;
@@ -201,6 +201,7 @@ pub struct CompletionMenu {
     offset: usize,
     editor: WeakEntity<EditorState>,
     list: Entity<ListState<ContextMenuDelegate>>,
+    content_width: Pixels,
     open: bool,
 
     /// The offset of the first character that triggered the completion.
@@ -246,6 +247,7 @@ impl CompletionMenu {
                 offset: 0,
                 editor: editor.downgrade(),
                 list,
+                content_width: px(120.),
                 open: false,
                 trigger_start_offset: None,
                 query: SharedString::default(),
@@ -354,20 +356,31 @@ impl CompletionMenu {
         let items = items.into();
         self.offset = offset;
         self.open = true;
-        self.list.update(cx, |this, cx| {
-            let longest_ix = items
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, item)| {
-                    item.label.len() + item.detail.as_ref().map(|d| d.len()).unwrap_or(0)
-                })
-                .map(|(ix, _)| ix)
-                .unwrap_or(0);
-
+        self.content_width = self.list.update(cx, |this, cx| {
             this.delegate_mut().query = self.query.clone();
             this.delegate_mut().set_items(items);
+            // The virtual list measures at its previous viewport width, which can
+            // keep a new response as narrow as an earlier, shorter one.
+            let mut widest_index = 0;
+            let mut content_width = px(120.);
+            for (index, item) in this.delegate().items.iter().enumerate() {
+                let width = editor_popover("completion-menu-measure", cx)
+                    .child(CompletionMenuItem::new(index, item.clone()))
+                    .into_any_element()
+                    .layout_as_root(
+                        gpui::size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                        window,
+                        cx,
+                    )
+                    .width;
+                if width > content_width {
+                    content_width = width;
+                    widest_index = index;
+                }
+            }
             this.set_selected_index(Some(IndexPath::new(0)), window, cx);
-            this.set_item_to_measure_index(IndexPath::new(longest_ix), window, cx);
+            this.set_item_to_measure_index(IndexPath::new(widest_index), window, cx);
+            content_width
         });
 
         cx.notify();
@@ -391,6 +404,7 @@ impl Render for CompletionMenu {
         // The anchor is resolved in the popup's deferred prepaint from the
         // input's current-frame geometry; the content below is built there.
         let configured_max = editor.read(cx).lsp().completion_menu.max_width;
+        let content_width = self.content_width;
         let list = self.list.clone();
         let menu = cx.weak_entity();
 
@@ -418,6 +432,7 @@ impl Render for CompletionMenu {
                     .child(
                         editor_popover("completion-menu", cx)
                             .test_support()
+                            .w(content_width.min(max_width))
                             .max_w(max_width)
                             .min_w(px(120.))
                             .child(List::new(&list).max_h(MAX_MENU_HEIGHT)),

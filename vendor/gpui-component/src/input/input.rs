@@ -667,7 +667,11 @@ impl RenderOnce for Input {
             .paste_handler
             .clone()
             .filter(|_| state.presentation(cx).is_editable());
-        let mut overlays = state.render_overlays(window, cx);
+        // Overlay content is measured during synchronization, before the input's
+        // styled container applies its font and spacing to the element tree.
+        let mut overlays = window.with_text_style(Some(self.style.text.clone()), |window| {
+            state.render_overlays(window, cx)
+        });
         overlays
             .floating
             .extend(Self::render_touch_selection(&state, window, cx));

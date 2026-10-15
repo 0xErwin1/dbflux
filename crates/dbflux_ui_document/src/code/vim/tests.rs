@@ -3367,6 +3367,172 @@ fn escape_leaves_insert_mode_and_keeps_focus(cx: &mut TestAppContext) {
     );
 }
 
+#[derive(Default)]
+struct MenuWidths(std::sync::Mutex<Option<gpui::Pixels>>);
+
+impl gpui::FrameObserver for MenuWidths {
+    fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+        *self.0.lock().expect("menu width lock") = frame
+            .nodes()
+            .find(|(_, node)| node.id() == "completion-menu")
+            .map(|(_, node)| node.bounds().size.width);
+    }
+}
+
+#[gpui::test]
+fn completion_menu_fits_long_labels_and_caps_its_width(cx: &mut TestAppContext) {
+    let editor = open_editor(cx, "select * from ", false);
+    let document = editor.document.clone();
+    let menu_width = std::sync::Arc::new(MenuWidths::default());
+    editor
+        .window
+        .update(|window, _| window.observe_frames(&menu_width));
+    let mut widths = Vec::new();
+
+    for label in [
+        "users".to_string(),
+        "table_".repeat(10),
+        "table_".repeat(40),
+        "users".to_string(),
+    ] {
+        editor.window.update(|_, cx| {
+            let input = document.read(cx).editor.input_state.clone();
+            input.update(cx, |state, cx| {
+                state.present_completion_items(
+                    14,
+                    "",
+                    vec![
+                        lsp_types::CompletionItem {
+                            label: "id".to_string(),
+                            ..Default::default()
+                        },
+                        lsp_types::CompletionItem {
+                            label,
+                            ..Default::default()
+                        },
+                    ],
+                    cx,
+                );
+            });
+        });
+        editor.window.run_until_parked();
+        widths.push(
+            menu_width
+                .0
+                .lock()
+                .expect("menu width lock")
+                .expect("completion menu is rendered"),
+        );
+    }
+
+    assert!(widths[0] < gpui::px(320.), "short labels stay compact");
+    assert!(
+        widths[1] > gpui::px(320.),
+        "long labels exceed the old cap: {widths:?}"
+    );
+    assert!(widths[2] > widths[1], "the menu grows with its content");
+    assert!(
+        widths[2] <= gpui::px(640.),
+        "very long labels respect the cap"
+    );
+    assert_eq!(widths[3], widths[0], "the menu shrinks for short results");
+}
+
+#[gpui::test]
+fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppContext) {
+    struct TableCompletions;
+
+    impl gpui_component::input::CompletionProvider for TableCompletions {
+        fn completions(
+            &self,
+            text: &gpui_component::input::Rope,
+            _offset: usize,
+            _trigger: lsp_types::CompletionContext,
+            _window: &mut Window,
+            _cx: &mut gpui::App,
+        ) -> gpui::Task<anyhow::Result<lsp_types::CompletionResponse>> {
+            let source = text.to_string();
+            let prefix = source.strip_prefix("select * from ").unwrap_or_default();
+            gpui::Task::ready(Ok(lsp_types::CompletionResponse::Array(
+                [
+                    "tbl_verification_profile",
+                    "tbl_verification_data",
+                    "tbl_verification_tracking",
+                ]
+                .into_iter()
+                .map(|label| lsp_types::CompletionItem {
+                    label: label.to_string(),
+                    filter_text: Some(prefix.to_string()),
+                    ..Default::default()
+                })
+                .collect(),
+            )))
+        }
+
+        fn is_completion_trigger(&self, _: usize, _: &str, _: &mut gpui::App) -> bool {
+            true
+        }
+    }
+
+    struct SpacedEditor(Entity<gpui_component::input::EditorState>);
+
+    impl Render for SpacedEditor {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui_component::input::Editor::new(&self.0)
+                .letter_spacing(gpui::px(8.))
+                .h(gpui::px(400.))
+        }
+    }
+
+    init_runtime(cx);
+    let menu_width = std::sync::Arc::new(MenuWidths::default());
+    let input_slot = Rc::new(RefCell::new(None));
+    let (_, window) = cx.add_window_view(|window, cx| {
+        window.observe_frames(&menu_width);
+        let input = cx.new(|cx| {
+            gpui_component::input::EditorState::new(window, cx).default_value("select * from ")
+        });
+        input.update(cx, |state, cx| {
+            state.lsp_mut().completion_menu.max_width = gpui::px(640.);
+            state.lsp_mut().completion_provider = Some(Rc::new(TableCompletions));
+            state.set_selected_range(14..14, cx);
+            state.focus(window, cx);
+        });
+        input_slot.replace(Some(input.clone()));
+        let view = cx.new(|_| SpacedEditor(input));
+        Root::new(view, window, cx)
+    });
+    let input = input_slot.borrow().clone().expect("editor input");
+    window.run_until_parked();
+    window.update(|window, cx| input.update(cx, |state, cx| state.show_completions(window, cx)));
+    let mut widths = Vec::new();
+
+    for text in ["", "t", "bl", "_verification_"] {
+        if !text.is_empty() {
+            window.simulate_input(text);
+        }
+        window.run_until_parked();
+        widths.push(
+            menu_width
+                .0
+                .lock()
+                .expect("menu width lock")
+                .expect("completion menu is rendered"),
+        );
+    }
+
+    assert!(
+        widths[0] > gpui::px(300.),
+        "measurement must include the editor typography: {widths:?}"
+    );
+    for width in &widths {
+        assert_eq!(
+            *width, widths[0],
+            "highlighting a prefix must not shrink unchanged labels: {widths:?}"
+        );
+    }
+}
+
 #[gpui::test]
 fn escape_with_an_open_completion_menu_closes_it_and_stays_in_insert(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "sel", true);

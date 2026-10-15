@@ -44,6 +44,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Completion menus fit long table names while typing** — Query editor suggestions now size to their widest entry using the editor's font and spacing, up to 640 px and the available window space. Filtering suggestions by typing a table-name prefix no longer makes long names get clipped in a narrow menu, and short suggestion lists stay compact.
 * **A close no longer races a save that is already running** — Closing a tab whose edits were already being applied, or closing while a **Save all** was still running, could start the next queued row at the same time and let the tab close before that row reached the database. The close now waits for the operation in flight, which chains the rest.
 * **Every InfluxDB bucket can be expanded** — On an InfluxDB connection, only the profile's default bucket (or default database on v1) listed its measurements in the sidebar: expanding any other bucket did nothing, so a connection without a default bucket showed none. Each bucket now lists its measurements when expanded. A rejected token now reports an authentication error when the sidebar lists buckets or measurements, instead of "missing 'buckets' field" or an empty bucket.
 * **InfluxDB timestamps show as dates** — In an InfluxDB measurement's data grid and in InfluxQL query results, the `time` column showed epoch milliseconds such as `1790267965000`. It now shows the date and time, and charts still use it as their time axis.
