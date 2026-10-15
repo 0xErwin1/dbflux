@@ -3644,6 +3644,13 @@ modals:
     remember: Remember for this session
     cancel: Cancel
     connect: Connect
+  connection_password:
+    title: "Password required"
+    connection_label: "Connection"
+    placeholder: "Password"
+    show_password: "Show password"
+    hide_password: "Hide password"
+    remember: "Remember until DBFlux closes"
   unsaved_changes:
     title: Unsaved changes
     prompt: You have unsaved changes in the following documents. What would you like to do?

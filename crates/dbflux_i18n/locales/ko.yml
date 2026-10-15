@@ -3644,6 +3644,13 @@ modals:
     remember: 이 세션 동안 기억
     cancel: 취소
     connect: 연결
+  connection_password:
+    title: "비밀번호 필요"
+    connection_label: "연결"
+    placeholder: "비밀번호"
+    show_password: "비밀번호 표시"
+    hide_password: "비밀번호 숨기기"
+    remember: "DBFlux를 닫을 때까지 기억"
   unsaved_changes:
     title: 저장되지 않은 변경 사항
     prompt: 다음 문서에 저장되지 않은 변경 사항이 있습니다. 어떻게 하시겠습니까?

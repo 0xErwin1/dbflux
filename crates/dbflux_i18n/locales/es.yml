@@ -3644,6 +3644,13 @@ modals:
     remember: Recordar durante esta sesión
     cancel: Cancelar
     connect: Conectar
+  connection_password:
+    title: "Se requiere la contraseña"
+    connection_label: "Conexión"
+    placeholder: "Contraseña"
+    show_password: "Mostrar contraseña"
+    hide_password: "Ocultar contraseña"
+    remember: "Recordar hasta cerrar DBFlux"
   unsaved_changes:
     title: Cambios sin guardar
     prompt: Tienes cambios sin guardar en los siguientes documentos. ¿Qué quieres hacer?

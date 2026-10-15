@@ -4,6 +4,7 @@ use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{BannerBlock, BannerVariant, Icon};
 use crate::tokens::{ChromeColors, ModalMetrics, Spacing};
 use dbflux_core::LogErr;
+use dbflux_core::secrecy::SecretString;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Focusable, Pixels, Subscription, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -17,8 +18,53 @@ const TUNNEL_AUTH_WIDTH: Pixels = px(460.0);
 pub enum TunnelAuthOutcome {
     /// User supplied a passphrase and clicked Connect.
     Provided { passphrase: String, remember: bool },
+    /// User supplied the connection password and clicked Connect. The
+    /// password may be empty.
+    PasswordProvided {
+        profile_id: Uuid,
+        password: SecretString,
+        remember: bool,
+    },
     /// User cancelled — the connection attempt should be abandoned.
     Cancelled,
+}
+
+/// Request payload used to ask for a connection password before connecting.
+#[derive(Clone, Debug)]
+pub struct ConnectionPasswordRequest {
+    pub profile_id: Uuid,
+    /// Connection name shown in the sub-line.
+    pub profile_name: String,
+    /// Driver-provided name of the secret, used instead of "Password".
+    pub field_label: Option<String>,
+}
+
+/// The secret the modal is currently asking for.
+#[derive(Clone, Debug)]
+enum SecretPrompt {
+    TunnelPassphrase(TunnelAuthRequest),
+    ConnectionPassword(ConnectionPasswordRequest),
+}
+
+impl SecretPrompt {
+    /// An SSH passphrase cannot be empty; a connection password can, so
+    /// servers that trust the client keep working.
+    fn accepts(&self, value: &str) -> bool {
+        match self {
+            Self::TunnelPassphrase(_) => TunnelAuthRequest::validate_passphrase(value).is_ok(),
+            Self::ConnectionPassword(_) => true,
+        }
+    }
+
+    fn input_label(&self) -> String {
+        match self {
+            Self::TunnelPassphrase(_) => dbflux_i18n::t!("modals.tunnel_auth.placeholder"),
+            Self::ConnectionPassword(request) => request
+                .field_label
+                .clone()
+                .unwrap_or_else(|| dbflux_i18n::t!("modals.connection_password.placeholder")),
+        }
+    }
 }
 
 /// Request payload used to open `ModalTunnelAuth`.
@@ -63,7 +109,7 @@ fn tunnel_address(user: &str, host: &str, port: u16) -> String {
 /// `pending_tunnel_auth_open: Option<TunnelAuthRequest>` and subscribes to
 /// `TunnelAuthOutcome` events.
 pub struct ModalTunnelAuth {
-    request: Option<TunnelAuthRequest>,
+    request: Option<SecretPrompt>,
     visible: bool,
     passphrase_input: gpui::Entity<InputState>,
     remember: bool,
@@ -108,10 +154,35 @@ impl ModalTunnelAuth {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.show_prompt(SecretPrompt::TunnelPassphrase(request), true, window, cx);
+    }
+
+    /// Ask for a connection password before connecting.
+    ///
+    /// The remember checkbox starts unchecked: without it the password lasts
+    /// only for the connection being opened.
+    pub fn open_connection_password(
+        &mut self,
+        request: ConnectionPasswordRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_prompt(SecretPrompt::ConnectionPassword(request), false, window, cx);
+    }
+
+    fn show_prompt(
+        &mut self,
+        request: SecretPrompt,
+        remember: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = request.input_label();
         self.passphrase_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
+            state.set_placeholder(placeholder, window, cx);
         });
-        self.remember = true;
+        self.remember = remember;
         self.set_passphrase_visible(false, window, cx);
         self.request = Some(request);
         self.visible = true;
@@ -129,18 +200,30 @@ impl ModalTunnelAuth {
         cx.notify();
     }
 
-    /// Connect with the typed passphrase, as the Connect button does. Does
-    /// nothing while the passphrase is empty.
+    /// Connect with the typed secret, as the Connect button does. Does
+    /// nothing while an SSH passphrase is empty.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
-        let passphrase = self.passphrase_input.read(cx).value().to_string();
-        if TunnelAuthRequest::validate_passphrase(&passphrase).is_err() {
+        let Some(request) = self.request.as_ref() else {
+            return;
+        };
+        let value = self.passphrase_input.read(cx).value().to_string();
+        if !request.accepts(&value) {
             return;
         }
 
-        cx.emit(TunnelAuthOutcome::Provided {
-            passphrase,
-            remember: self.remember,
-        });
+        let outcome = match request {
+            SecretPrompt::TunnelPassphrase(_) => TunnelAuthOutcome::Provided {
+                passphrase: value,
+                remember: self.remember,
+            },
+            SecretPrompt::ConnectionPassword(request) => TunnelAuthOutcome::PasswordProvided {
+                profile_id: request.profile_id,
+                password: SecretString::from(value),
+                remember: self.remember,
+            },
+        };
+
+        cx.emit(outcome);
         self.close(cx);
     }
 
@@ -184,53 +267,84 @@ impl Render for ModalTunnelAuth {
         let theme = cx.theme();
 
         let passphrase_value = self.passphrase_input.read(cx).value().to_string();
-        let connect_enabled = TunnelAuthRequest::validate_passphrase(&passphrase_value).is_ok();
+        let connect_enabled = request.accepts(&passphrase_value);
+        let input_label = request.input_label();
 
         let remember = self.remember;
         let show_passphrase = self.show_passphrase;
 
-        let error_banner = request.last_attempt_failed.then(|| {
-            BannerBlock::new(
-                BannerVariant::Danger,
-                dbflux_i18n::t!("modals.tunnel_auth.incorrect"),
-            )
-        });
-
-        let tunnel_line = div()
+        let info_line = div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap(Spacing::XS)
-            .text_color(theme.foreground)
-            .child(dbflux_i18n::t!("modals.tunnel_auth.tunnel_label"))
-            .child(
-                div()
-                    .text_color(ChromeColors::strong(theme))
-                    .child(request.tunnel_name.clone()),
-            )
-            .child("\u{00B7}")
-            .child(
-                div()
-                    .font_family(crate::fonts::editor_family(cx))
-                    .child(tunnel_address(&request.user, &request.host, request.port)),
-            );
+            .text_color(theme.foreground);
 
-        let (toggle_icon, toggle_label) = if show_passphrase {
-            (
+        let (title, icon, remember_label, error_banner, info_line) = match request {
+            SecretPrompt::TunnelPassphrase(request) => (
+                dbflux_i18n::t!("modals.tunnel_auth.title"),
+                AppIcon::KeyRound,
+                dbflux_i18n::t!("modals.tunnel_auth.remember"),
+                request.last_attempt_failed.then(|| {
+                    BannerBlock::new(
+                        BannerVariant::Danger,
+                        dbflux_i18n::t!("modals.tunnel_auth.incorrect"),
+                    )
+                }),
+                info_line
+                    .child(dbflux_i18n::t!("modals.tunnel_auth.tunnel_label"))
+                    .child(
+                        div()
+                            .text_color(ChromeColors::strong(theme))
+                            .child(request.tunnel_name.clone()),
+                    )
+                    .child("\u{00B7}")
+                    .child(
+                        div()
+                            .font_family(crate::fonts::editor_family(cx))
+                            .child(tunnel_address(&request.user, &request.host, request.port)),
+                    ),
+            ),
+            SecretPrompt::ConnectionPassword(request) => (
+                dbflux_i18n::t!("modals.connection_password.title"),
+                AppIcon::Lock,
+                dbflux_i18n::t!("modals.connection_password.remember"),
+                None,
+                info_line
+                    .child(dbflux_i18n::t!(
+                        "modals.connection_password.connection_label"
+                    ))
+                    .child(
+                        div()
+                            .text_color(ChromeColors::strong(theme))
+                            .child(request.profile_name.clone()),
+                    ),
+            ),
+        };
+
+        let (toggle_icon, toggle_label) = match (request, show_passphrase) {
+            (SecretPrompt::TunnelPassphrase(_), true) => (
                 AppIcon::EyeOff,
                 dbflux_i18n::t!("modals.tunnel_auth.hide_passphrase"),
-            )
-        } else {
-            (
+            ),
+            (SecretPrompt::TunnelPassphrase(_), false) => (
                 AppIcon::Eye,
                 dbflux_i18n::t!("modals.tunnel_auth.show_passphrase"),
-            )
+            ),
+            (SecretPrompt::ConnectionPassword(_), true) => (
+                AppIcon::EyeOff,
+                dbflux_i18n::t!("modals.connection_password.hide_password"),
+            ),
+            (SecretPrompt::ConnectionPassword(_), false) => (
+                AppIcon::Eye,
+                dbflux_i18n::t!("modals.connection_password.show_password"),
+            ),
         };
 
         let passphrase_field = Input::new(&self.passphrase_input)
             .secret(true)
             .w_full()
-            .aria_label(dbflux_i18n::t!("modals.tunnel_auth.placeholder"))
+            .aria_label(input_label)
             .prefix(
                 Icon::new(AppIcon::Lock)
                     .size(ModalMetrics::LIST_ICON)
@@ -253,12 +367,12 @@ impl Render for ModalTunnelAuth {
             .flex_col()
             .gap(ModalMetrics::BODY_GAP)
             .when_some(error_banner, |body, banner| body.child(banner))
-            .child(tunnel_line)
+            .child(info_line)
             .child(passphrase_field)
             .child(
                 Checkbox::new("tunnel-auth-remember")
                     .checked(remember)
-                    .label(dbflux_i18n::t!("modals.tunnel_auth.remember"))
+                    .label(remember_label)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.remember = *checked;
                         cx.notify();
@@ -304,10 +418,10 @@ impl Render for ModalTunnelAuth {
                 .on_click(on_connect),
             );
 
-        Modal::new(dbflux_i18n::t!("modals.tunnel_auth.title"))
+        Modal::new(title)
             .body(body)
             .footer(footer)
-            .icon(AppIcon::KeyRound)
+            .icon(icon)
             .variant(ModalVariant::Default)
             .width(TUNNEL_AUTH_WIDTH)
             .focus_handle(self.focus.handle())
@@ -370,6 +484,70 @@ mod tests {
         }
     }
 
+    fn password_request() -> ConnectionPasswordRequest {
+        ConnectionPasswordRequest {
+            profile_id: Uuid::nil(),
+            profile_name: "orders".to_string(),
+            field_label: None,
+        }
+    }
+
+    #[test]
+    fn connection_password_prompt_accepts_an_empty_password() {
+        let prompt = SecretPrompt::ConnectionPassword(password_request());
+
+        assert!(prompt.accepts(""));
+        assert!(prompt.accepts("hunter2"));
+    }
+
+    #[test]
+    fn tunnel_prompt_still_rejects_an_empty_passphrase() {
+        let prompt = SecretPrompt::TunnelPassphrase(TunnelAuthRequest {
+            tunnel_id: Uuid::nil(),
+            tunnel_name: "bastion".to_string(),
+            host: "bastion.example.com".to_string(),
+            port: 22,
+            user: "ec2-user".to_string(),
+            last_attempt_failed: false,
+        });
+
+        assert!(!prompt.accepts(""));
+    }
+
+    #[test]
+    fn connection_password_prompt_uses_the_driver_label_for_its_input() {
+        let generic = SecretPrompt::ConnectionPassword(password_request());
+        let token = SecretPrompt::ConnectionPassword(ConnectionPasswordRequest {
+            field_label: Some("API token".to_string()),
+            ..password_request()
+        });
+
+        assert_eq!(
+            generic.input_label(),
+            dbflux_i18n::t!("modals.connection_password.placeholder")
+        );
+        assert_eq!(token.input_label(), "API token");
+    }
+
+    #[test]
+    fn connection_password_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.connection_password.title",
+            "modals.connection_password.connection_label",
+            "modals.connection_password.placeholder",
+            "modals.connection_password.show_password",
+            "modals.connection_password.hide_password",
+            "modals.connection_password.remember",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
     #[test]
     fn tunnel_auth_connect_diverges_between_locales() {
         let en = dbflux_i18n::t!("modals.tunnel_auth.connect", locale = "en");
@@ -383,5 +561,126 @@ mod tests {
             tunnel_address("ec2-user", "bastion.example.com", 22),
             "ec2-user@bastion.example.com:22"
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ConnectionPasswordRequest, ModalTunnelAuth, TunnelAuthOutcome};
+    use dbflux_core::secrecy::ExposeSecret;
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    struct Host {
+        modal: Entity<ModalTunnelAuth>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.modal.clone())
+        }
+    }
+
+    fn open_password_prompt(
+        profile_id: Uuid,
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalTunnelAuth>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<TunnelAuthOutcome>>>,
+    ) {
+        cx.update(gpui_component::init);
+        crate::modals::modal::bind_modal_keys_for_tests(cx);
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| ModalTunnelAuth::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        let outcomes: Rc<RefCell<Vec<TunnelAuthOutcome>>> = Rc::default();
+        window.update(|window, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &TunnelAuthOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open_connection_password(
+                    ConnectionPasswordRequest {
+                        profile_id,
+                        profile_name: "orders".to_string(),
+                        field_label: None,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, window, outcomes)
+    }
+
+    fn provided_password(outcomes: &[TunnelAuthOutcome]) -> Option<(Uuid, String, bool)> {
+        match outcomes {
+            [
+                TunnelAuthOutcome::PasswordProvided {
+                    profile_id,
+                    password,
+                    remember,
+                },
+            ] => Some((*profile_id, password.expose_secret().to_string(), *remember)),
+            _ => None,
+        }
+    }
+
+    #[gpui::test]
+    fn enter_connects_with_an_empty_password(cx: &mut TestAppContext) {
+        let profile_id = Uuid::new_v4();
+        let (modal, window, outcomes) = open_password_prompt(profile_id, cx);
+
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(
+            provided_password(&outcomes.borrow()),
+            Some((profile_id, String::new(), false))
+        );
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn enter_connects_with_the_typed_password(cx: &mut TestAppContext) {
+        let profile_id = Uuid::new_v4();
+        let (_modal, window, outcomes) = open_password_prompt(profile_id, cx);
+
+        window.simulate_input("hunter2");
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(
+            provided_password(&outcomes.borrow()),
+            Some((profile_id, "hunter2".to_string(), false))
+        );
+    }
+
+    #[gpui::test]
+    fn escape_cancels_the_password_prompt(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_password_prompt(Uuid::new_v4(), cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [TunnelAuthOutcome::Cancelled]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }

@@ -255,6 +255,7 @@ impl AppState {
             session_passphrase_vault: Arc::new(RwLock::new(
                 dbflux_ssh::SessionPassphraseVault::new(),
             )),
+            remembered_connection_passwords: HashMap::new(),
             metric_catalog_cache: crate::metric_catalog_cache::MetricCatalogCache::new(),
             remote_dashboard_cache: crate::remote_dashboard_cache::RemoteDashboardCache::new(),
             #[cfg(feature = "mcp")]
