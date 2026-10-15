@@ -612,7 +612,7 @@ The right-rail builder composes SELECT / UPDATE / DELETE without writing SQL. It
 The document query builder is a separate rail for document collections, with the same rules:
 
 - The spec is `DocumentQuerySpec` in `dbflux_core/src/query/document_query.rs`. Drivers implement `DocumentQueryCodec` and return it from `Connection::document_query_codec()`; the codec renders a spec as find slots, a pipeline and preview text, and parses the slots back with the clauses it cannot represent.
-- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder.rs`.
+- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder/mod.rs`.
 - Execution goes through the query slots and `browse_collection` (Find) or the Aggregate view (Aggregate); the builder never executes generated shell text.
 - Persistence: migration `037_qry_saved_document_queries`, `DocumentQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_document_queries.rs`) and `SavedDocumentQueryManager` (`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
 
