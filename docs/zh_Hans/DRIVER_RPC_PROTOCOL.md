@@ -185,7 +185,21 @@ DriverResponseBody::Hello(DriverHelloResponse {
 
 `Execute` 和 `ExecuteWithHandle` 可以携带编辑器行数上限 `QueryRequestDto::limit`。由于 `QueryResultDto` 无处容纳该标志，宿主以 `ExecuteResultWithTruncation { result, rows_truncated }` 和 `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }` 代替 `ExecuteResult` 和 `ExecuteWithHandleResult` 作答。仅当驱动为遵守上限而丢弃了行时，`rows_truncated` 才为 `true`。
 
-出于上文所述的线路索引原因，这两个响应变体都追加在 `KvKeyCountResult` 之后。宿主只在协商为 v1.6 或更高版本的会话中，对执行调用发送它们；更早的会话继续使用 v1.5 的响应。哪些请求会携带上限，见下文的**受保护的执行**。
+出于上文所述的线路索引原因，这两个响应变体都追加在 `KvKeyCountResult` 之后。宿主只在协商结果恰为 v1.6 的会话中，对执行调用发送它们；v1.7 用下文的结果集响应取代它们，更早的会话继续使用 v1.5 的响应。哪些请求会携带上限，见下文的**受保护的执行**。
+
+### 结果集（v1.7+）
+
+一批语句或一个存储过程可能返回多个结果集，每个结果集都可能各自省略行。从 v1.7 起，宿主以全部结果集作答，而不只是第一个：
+
+| 请求 | v1.7 响应 |
+| --- | --- |
+| `Execute` | `ExecuteResultSets { results }` |
+| `ExecuteWithHandle` | `ExecuteWithHandleResultSets { handle_id, results }` |
+| `BrowseTable`、`BrowseCollection`、`Explain`、`DescribeTable` | `BrowseResultSets { results }` |
+
+`results` 是一个 `QueryResultSetsDto { primary, additional }`。每一项都是 `ResultSetDto { result, rows_truncated }`：`primary` 是第一个结果集，`additional` 按驱动返回的顺序保存其余结果集。只有当驱动从该结果集中丢弃了行时，`rows_truncated` 才为 `true`，因此从不限制行数的驱动总是发送 `false`。
+
+出于上文所述的线路索引原因，这三个变体追加在 `ExecuteWithHandleResultWithTruncation` 之后。宿主只在协商为 v1.7 或更高版本的会话中发送它们。v1.6 会话继续使用 `ExecuteResultWithTruncation`、`ExecuteWithHandleResultWithTruncation` 和 `BrowseResult`，更早的会话继续使用 v1.5 的响应；在这些会话中只有主结果集会通过线路传输。无论协商的版本如何，客户端都接受所有变体，因此宿主无需知道自己在与哪个客户端构建通信。
 
 ## 认证提供程序 RPC 契约
 
@@ -287,13 +301,13 @@ DbConfig::External {
 | `OpenSession` → `SessionOpened` | 打开连接 / 会话 |
 | `CloseSession` → `SessionClosed` | 关闭会话 |
 | `Ping` → `Pong` | 存活探测 |
-| `Execute` → `ExecuteResult` | 执行查询 |
+| `Execute` → `ExecuteResult`（自 v1.7 起为 `ExecuteResultSets`） | 执行查询 |
 | `Schema` → `Schema` | Schema 快照 |
 | `ListDatabases` → `Databases` | 数据库列表 |
 
 该协议还支持浏览、CRUD、键值与代码生成类操作。完整的枚举集合参见 `crates/dbflux_ipc/src/driver_protocol.rs`。
 
-**受保护的执行：**在协商为 v1.6 或更高版本的会话中，元数据声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动会收到 `QueryRequestDto::limit`。驱动必须在收集行时执行该上限（在所有结果集之间只计一次），并且仅在丢弃了行时设置 `rows_truncated`；否则必须在执行任何内容之前拒绝该请求。驱动未声明该能力时，宿主会话以 `UnsupportedMethod` 拒绝带上限的请求。低于 v1.6 时客户端从不发送上限：`IpcConnection` 不宣告 `REQUEST_ROW_LIMIT`，并在 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）时，于发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。在所有版本中，客户端都以同样方式拒绝 `statement_timeout` 或只读强制，宿主也会拒绝 `statement_timeout`。只有主结果集会通过线路传输，因此额外的结果集及其标志会被丢弃。客户端信任驱动的声明：声明了 `REQUEST_ROW_LIMIT` 却忽略上限的驱动，会返回未受限且标记为未截断的行。浏览和 CRUD 操作不受影响。
+**受保护的执行：**在协商为 v1.6 或更高版本的会话中，元数据声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动会收到 `QueryRequestDto::limit`。驱动必须在收集行时执行该上限（在所有结果集之间只计一次），并且仅在丢弃了行时设置 `rows_truncated`；否则必须在执行任何内容之前拒绝该请求。驱动未声明该能力时，宿主会话以 `UnsupportedMethod` 拒绝带上限的请求。低于 v1.6 时客户端从不发送上限：`IpcConnection` 不宣告 `REQUEST_ROW_LIMIT`，并在 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）时，于发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。在所有版本中，客户端都以同样方式拒绝 `statement_timeout` 或只读强制，宿主也会拒绝 `statement_timeout`。低于 v1.7 时只有主结果集会通过线路传输，因此额外的结果集及其标志会被丢弃；从 v1.7 起，每个结果集都带着自己的标志通过线路（见上文的**结果集**）。客户端信任驱动的声明：声明了 `REQUEST_ROW_LIMIT` 却忽略上限的驱动，会返回未受限且标记为未截断的行。浏览和 CRUD 操作不受影响。
 
 ## 驱动的审计事件上报（v1.2+）
 

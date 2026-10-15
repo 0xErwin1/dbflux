@@ -185,7 +185,21 @@ DriverResponseBody::Hello(DriverHelloResponse {
 
 `Execute`와 `ExecuteWithHandle`은 편집기 행 제한인 `QueryRequestDto::limit`를 실을 수 있습니다. `QueryResultDto`에는 플래그를 담을 자리가 없으므로, 호스트는 `ExecuteResult`와 `ExecuteWithHandleResult` 대신 `ExecuteResultWithTruncation { result, rows_truncated }`와 `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }`로 응답합니다. `rows_truncated`는 드라이버가 제한을 지키기 위해 행을 버렸을 때만 `true`입니다.
 
-두 응답 변형 모두 위에서 설명한 와이어 인덱스 이유로 `KvKeyCountResult` 뒤에 덧붙여집니다. 호스트는 v1.6 이상을 협상한 세션의 실행 호출에서만 이 변형을 보내며, 이전 세션은 v1.5 응답을 그대로 사용합니다. 어떤 요청이 제한을 싣는지는 아래 **보호된 실행**을 참고하세요.
+두 응답 변형 모두 위에서 설명한 와이어 인덱스 이유로 `KvKeyCountResult` 뒤에 덧붙여집니다. 호스트는 정확히 v1.6을 협상한 세션의 실행 호출에서만 이 변형을 보냅니다. v1.7은 이를 아래의 결과 집합 응답으로 대체하고, 이전 세션은 v1.5 응답을 그대로 사용합니다. 어떤 요청이 제한을 싣는지는 아래 **보호된 실행**을 참고하세요.
+
+### 결과 집합 (v1.7+)
+
+문장 배치나 저장 프로시저는 여러 결과 집합을 반환할 수 있고, 각 결과 집합은 따로 행을 생략할 수 있습니다. v1.7부터 호스트는 첫 번째 결과 집합만이 아니라 모든 결과 집합으로 응답합니다.
+
+| 요청 | v1.7 응답 |
+| --- | --- |
+| `Execute` | `ExecuteResultSets { results }` |
+| `ExecuteWithHandle` | `ExecuteWithHandleResultSets { handle_id, results }` |
+| `BrowseTable`, `BrowseCollection`, `Explain`, `DescribeTable` | `BrowseResultSets { results }` |
+
+`results`는 `QueryResultSetsDto { primary, additional }`입니다. 각 항목은 `ResultSetDto { result, rows_truncated }`이며, `primary`는 첫 번째 결과 집합이고 `additional`은 나머지를 드라이버가 반환한 순서대로 담습니다. `rows_truncated`는 드라이버가 해당 결과 집합에서 행을 버렸을 때만 `true`이므로, 행을 제한하지 않는 드라이버는 항상 `false`를 보냅니다.
+
+세 변형은 위에서 설명한 와이어 인덱스 이유로 `ExecuteWithHandleResultWithTruncation` 뒤에 덧붙여집니다. 호스트는 v1.7 이상을 협상한 세션에서만 이 변형을 보냅니다. v1.6 세션은 `ExecuteResultWithTruncation`, `ExecuteWithHandleResultWithTruncation`, `BrowseResult`를 유지하고, 그보다 이전 세션은 v1.5 응답을 유지하며, 이런 세션에서는 기본 결과 집합만 와이어를 건너갑니다. 클라이언트는 협상된 버전과 관계없이 모든 변형을 받아들이므로, 호스트는 어떤 클라이언트 빌드와 통신하는지 알 필요가 없습니다.
 
 ## 인증 프로바이더 RPC 계약
 
@@ -287,13 +301,13 @@ DbConfig::External {
 | `OpenSession` → `SessionOpened` | 연결/세션 열기 |
 | `CloseSession` → `SessionClosed` | 세션 닫기 |
 | `Ping` → `Pong` | 활성 여부 |
-| `Execute` → `ExecuteResult` | 쿼리 실행 |
+| `Execute` → `ExecuteResult` (v1.7부터 `ExecuteResultSets`) | 쿼리 실행 |
 | `Schema` → `Schema` | 스키마 스냅샷 |
 | `ListDatabases` → `Databases` | 데이터베이스 목록 |
 
 이 프로토콜은 탐색, CRUD, 키-값, 코드 생성 작업도 지원합니다. 전체 열거형 집합은 `crates/dbflux_ipc/src/driver_protocol.rs`를 참고하세요.
 
-**보호된 실행:** v1.6 이상을 협상한 세션에서는 메타데이터에 `DriverCapabilities::REQUEST_ROW_LIMIT`를 선언한 드라이버가 `QueryRequestDto::limit`를 받습니다. 드라이버는 행을 수집하는 동안 모든 결과 집합에 걸쳐 한 번만 세어 제한을 적용하고 행을 버렸을 때만 `rows_truncated`를 설정하거나, 아무것도 실행하기 전에 요청을 거부해야 합니다. 드라이버가 이 기능을 선언하지 않으면 호스트 세션이 제한이 있는 요청을 `UnsupportedMethod`로 거부합니다. v1.6 미만에서는 클라이언트가 제한을 보내지 않습니다: `IpcConnection`은 `REQUEST_ROW_LIMIT`를 알리지 않으며, `QueryRequest.limit`가 `Some(n)`(`Some(0)` 포함)이면 RPC를 보내기 전에 `Execute`와 `ExecuteWithHandle`을 `NotSupported`로 거부합니다. 모든 버전에서 클라이언트는 `statement_timeout`이나 읽기 전용 강제를 같은 방식으로 거부하고, 호스트는 `statement_timeout`을 거부합니다. 기본 결과 집합만 와이어를 건너므로 추가 결과 집합과 그 플래그는 버려집니다. 클라이언트는 드라이버의 선언을 신뢰합니다: `REQUEST_ROW_LIMIT`를 선언하고 제한을 무시하는 드라이버는 잘리지 않은 것으로 표시된 제한 없는 행을 반환합니다. 탐색 및 CRUD 작업은 영향을 받지 않습니다.
+**보호된 실행:** v1.6 이상을 협상한 세션에서는 메타데이터에 `DriverCapabilities::REQUEST_ROW_LIMIT`를 선언한 드라이버가 `QueryRequestDto::limit`를 받습니다. 드라이버는 행을 수집하는 동안 모든 결과 집합에 걸쳐 한 번만 세어 제한을 적용하고 행을 버렸을 때만 `rows_truncated`를 설정하거나, 아무것도 실행하기 전에 요청을 거부해야 합니다. 드라이버가 이 기능을 선언하지 않으면 호스트 세션이 제한이 있는 요청을 `UnsupportedMethod`로 거부합니다. v1.6 미만에서는 클라이언트가 제한을 보내지 않습니다: `IpcConnection`은 `REQUEST_ROW_LIMIT`를 알리지 않으며, `QueryRequest.limit`가 `Some(n)`(`Some(0)` 포함)이면 RPC를 보내기 전에 `Execute`와 `ExecuteWithHandle`을 `NotSupported`로 거부합니다. 모든 버전에서 클라이언트는 `statement_timeout`이나 읽기 전용 강제를 같은 방식으로 거부하고, 호스트는 `statement_timeout`을 거부합니다. v1.7 미만에서는 기본 결과 집합만 와이어를 건너므로 추가 결과 집합과 그 플래그는 버려지며, v1.7부터는 모든 결과 집합이 자체 플래그와 함께 건너갑니다(위의 **결과 집합** 참고). 클라이언트는 드라이버의 선언을 신뢰합니다: `REQUEST_ROW_LIMIT`를 선언하고 제한을 무시하는 드라이버는 잘리지 않은 것으로 표시된 제한 없는 행을 반환합니다. 탐색 및 CRUD 작업은 영향을 받지 않습니다.
 
 ## 드라이버의 감사 이벤트 내보내기 (v1.2+)
 
