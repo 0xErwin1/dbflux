@@ -1,3 +1,4 @@
+use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
@@ -234,6 +235,100 @@ pub(crate) fn render_relational_error(
 /// when a resolve error is active.
 pub(crate) fn filter_input_has_error(state: &RelationalFilterState) -> bool {
     matches!(state, RelationalFilterState::Error { .. })
+}
+
+impl DataGridPanel {
+    // === Filter bar presentation helpers ===
+
+    /// Resolve the database category for the connection backing this data source.
+    ///
+    /// `QueryResult` sources carry an optional `profile_id` because the host
+    /// (CodeDocument, ScriptDocument) knows which connection produced the
+    /// result; this is what allows category-driven UI gates (chart toggle,
+    /// filter labels) to work on query results. Returns `None` when the
+    /// profile is unknown or no longer registered.
+    pub(crate) fn connection_category(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> Option<DatabaseCategory> {
+        let profile_id = match source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            DataSource::Collection { profile_id, .. } => *profile_id,
+            DataSource::QueryResult { profile_id, .. } => (*profile_id)?,
+        };
+
+        app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.connection.metadata().category)
+    }
+
+    /// Filter verb and filter keyword ("SELECT * FROM" / "find" / "FROM") shown
+    /// in the toolbar to the left of the source name and to the left of the filter
+    /// input, respectively.
+    ///
+    /// Derived purely from `DatabaseCategory` — no driver-id branching.
+    pub(crate) fn filter_labels_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> (&'static str, &'static str) {
+        if source.is_table() {
+            return ("SELECT * FROM", "WHERE");
+        }
+
+        match Self::connection_category(source, app_state, cx) {
+            Some(DatabaseCategory::Document) => ("find", "WHERE"),
+            Some(DatabaseCategory::TimeSeries) => ("SELECT * FROM", "WHERE"),
+            _ => ("SELECT * FROM", "WHERE"),
+        }
+    }
+
+    /// Caption and label that name the source left of the filter input.
+    ///
+    /// A collection whose driver describes its browse query shows that query,
+    /// in the connection's own language, with no caption. Every other source
+    /// shows the category-derived verb and the qualified source name.
+    pub(crate) fn source_query_labels(&self, cx: &App) -> (&'static str, String) {
+        if let (DataSource::Collection { .. }, Some(label)) =
+            (&self.source, &self.filter_bar.browse_query_label)
+        {
+            return ("", label.clone());
+        }
+
+        let (prefix, _) = Self::filter_labels_for_source(&self.source, &self.app_state, cx);
+
+        let source_name = match &self.source {
+            DataSource::Table { table, .. } => table.qualified_name(),
+            DataSource::Collection { collection, .. } => collection.qualified_name(),
+            DataSource::QueryResult { .. } => String::new(),
+        };
+
+        (prefix, source_name)
+    }
+
+    /// Filter input placeholder text, derived from `DatabaseCategory`.
+    ///
+    /// Returns an empty string for `TimeSeries` sources because `browse_collection`
+    /// on InfluxDB ignores the filter field — showing a misleading placeholder
+    /// would lie to the user.
+    pub(super) fn filter_placeholder_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> &'static str {
+        if source.is_table() {
+            return "e.g. id > 10 AND name LIKE '%test%'";
+        }
+
+        match Self::connection_category(source, app_state, cx) {
+            Some(DatabaseCategory::Document) => r#"e.g. {"name": {"$regex": "test"}}"#,
+            Some(DatabaseCategory::TimeSeries) => "",
+            _ => "e.g. id > 10 AND name LIKE '%test%'",
+        }
+    }
 }
 
 #[cfg(test)]

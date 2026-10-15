@@ -1,4 +1,5 @@
 use super::utils::{extract_pk_columns, value_to_json};
+use super::*;
 use super::{
     DataGridEvent, DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm,
     PendingToast,
@@ -2012,6 +2013,67 @@ impl DataGridPanel {
             });
         })
         .detach();
+    }
+}
+
+impl DataGridPanel {
+    // === Panel Events ===
+
+    pub fn request_hide(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::RequestHide);
+    }
+
+    pub fn request_toggle_maximize(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::RequestToggleMaximize);
+    }
+
+    /// Starts applying the staged edits because a close is waiting on them.
+    ///
+    /// Returns `true` when an apply is in flight, which is also when the caller
+    /// must leave the tab open: the grid asks for the close itself once the edits
+    /// land (`DataGridEvent::RequestClose`). `false` means there was nothing to
+    /// apply, so the caller may close the tab now.
+    pub fn apply_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.pending_edit_counts(cx) == (0, 0, 0) {
+            return false;
+        }
+
+        // Armed before the apply starts: a source that answers synchronously can
+        // drain the whole batch inside `request_save_all`.
+        self.close_after_apply = true;
+
+        // A live delete confirmation resumes the batch it was held for, and a
+        // batch already in flight is the same apply. Re-requesting either would
+        // duplicate the rows they already carry.
+        if self.pending_delete_confirm.is_some() {
+            return true;
+        }
+        if self.pending_batch_remaining.is_some() {
+            self.process_next_batch_op(cx);
+            return true;
+        }
+
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            self.close_after_apply = false;
+            return false;
+        };
+
+        table_state.update(cx, |state, cx| state.request_save_all(cx));
+        true
+    }
+
+    /// Gives up on the apply a close is waiting on, because one of its operations
+    /// failed.
+    ///
+    /// The batch never chains past a failure, so waiting for it to drain would
+    /// leave the intent armed over a batch that can never finish — and the next
+    /// unrelated row save would drain that batch and close a tab nobody asked to
+    /// close. Reporting the run as not landed here is what keeps the tab open with
+    /// the rows that did not land.
+    pub(super) fn abandon_close_apply(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: false });
+        }
     }
 }
 
