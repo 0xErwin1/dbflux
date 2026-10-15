@@ -21,6 +21,7 @@ DBFlux용 InfluxDB 드라이버입니다.
 - **쿼리별 버킷 라우팅** — 각 InfluxQL 쿼리에 사용되는 버킷은 연결 프로필이 아니라 소스 컨텍스트 드롭다운 선택에서 옵니다. Flux 쿼리에서는 버킷이 쿼리 텍스트 자체에 포함됩니다(`from(bucket: "...")`).
 - **요청 행 제한** — `execute()`는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 편집기 쿼리에도 편집기의 행 제한이 적용됩니다.
 - **버킷 없는 ping** — 연결 생존 확인에는 버킷이 필요하지 않습니다. v1은 내부 데이터베이스에 대해 `SHOW DATABASES`를 사용하고, v2는 `/api/v2/buckets?limit=1`을 가져옵니다.
+- **버킷별 measurement 목록** — 버킷(v2)과 데이터베이스(v1)는 지연 로드됩니다(`SchemaLoadingStrategy::LazyPerDatabase`). 사이드바에서 하나를 펼치면 `schema_for_database`를 통해 해당 measurement 목록을 가져오며, v2에서는 Flux `schema.measurements()`, v1에서는 `SHOW MEASUREMENTS`를 사용합니다. 프로필의 기본 버킷은 연결 시 가져온 measurement를 표시하고, 다른 버킷도 프로필을 바꾸지 않고 펼칠 수 있습니다.
 - **타입이 지정된 타임스탬프** — InfluxQL `time` 열은 날짜/시간 값(`Value::DateTime`)으로 전달되므로, 데이터 그리드는 에포크 밀리초 대신 형식화된 타임스탬프를 표시하고 차트는 계속 이를 시간 축으로 사용합니다.
 - **시간 범위 매크로** — InfluxQL과 Flux 쿼리는 Grafana 호환 매크로 토큰을 지원하며, 이 토큰은 쿼리가 드라이버로 전송되기 전에 바인딩된 시간 범위 창으로 치환됩니다:
 

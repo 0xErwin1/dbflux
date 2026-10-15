@@ -21,6 +21,7 @@
 - **按查询路由存储桶** —— 每条 InfluxQL 查询所使用的存储桶来自源上下文下拉框的选择，而不是连接配置。对于 Flux 查询，存储桶内嵌在查询文本本身中（`from(bucket: "...")`）。
 - **请求行数上限** —— `execute()` 会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此编辑器查询会带上编辑器的行数上限。
 - **无需存储桶的存活检查** —— 连接存活检查不要求指定存储桶：v1 针对内部数据库执行 `SHOW DATABASES`；v2 则请求 `/api/v2/buckets?limit=1`。
+- **按存储桶列出测量** —— 存储桶（v2）与数据库（v1）采用延迟加载（`SchemaLoadingStrategy::LazyPerDatabase`）：在侧边栏中展开其中一个，会通过 `schema_for_database` 列出它的测量，v2 使用 Flux 的 `schema.measurements()`，v1 使用 `SHOW MEASUREMENTS`。配置中的默认存储桶显示连接时获取的测量；其他存储桶无需修改配置即可展开。
 - **带类型的时间戳** —— InfluxQL 的 `time` 列以日期时间值（`Value::DateTime`）返回，因此数据网格显示格式化的时间戳而非纪元毫秒数，图表仍将其作为时间轴。
 - **时间范围宏** —— InfluxQL 与 Flux 查询都支持兼容 Grafana 的宏标记，这些标记会在查询被送往驱动程序之前，替换成所绑定的时间范围窗口：
 
