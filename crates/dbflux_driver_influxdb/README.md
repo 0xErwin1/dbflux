@@ -21,6 +21,7 @@ InfluxDB driver for DBFlux.
 - **Per-query bucket routing** — the bucket used for each InfluxQL query comes from the source-context dropdown selection, not the connection profile. For Flux queries the bucket is embedded in the query text itself (`from(bucket: "...")`).
 - **Request row limit** — `execute()` enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so editor queries carry the editor row limit.
 - **Bucket-free ping** — the connection liveness check does not require a bucket: v1 uses `SHOW DATABASES` against the internal database; v2 fetches `/api/v2/buckets?limit=1`.
+- **Typed timestamps** — the InfluxQL `time` column arrives as a datetime value (`Value::DateTime`), so the data grid shows a formatted timestamp instead of epoch milliseconds, and charts still read it as the time axis.
 - **Time range macros** — InfluxQL and Flux queries support Grafana-compatible macro tokens that are substituted with the bound time-range window before the query is sent to the driver:
 
   | Token | Language | Expansion |

@@ -44,6 +44,10 @@ Driver de InfluxDB para DBFlux.
 - **Ping sin bucket** — la verificación de disponibilidad de la conexión no
   requiere un bucket: v1 usa `SHOW DATABASES` contra la database interna; v2
   obtiene `/api/v2/buckets?limit=1`.
+- **Timestamps tipados** — la columna `time` de InfluxQL llega como valor de
+  fecha y hora (`Value::DateTime`), así que la grilla de datos muestra un
+  timestamp formateado en lugar de milisegundos epoch, y los gráficos la siguen
+  usando como eje de tiempo.
 - **Macros de rango de tiempo** — las queries InfluxQL y Flux soportan tokens de
   macro compatibles con Grafana que se sustituyen por la ventana de rango de
   tiempo vinculada antes de enviar la query al driver:
