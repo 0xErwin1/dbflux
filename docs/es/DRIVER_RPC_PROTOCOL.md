@@ -114,6 +114,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
         ProtocolVersion::new(1, 6),
+        ProtocolVersion::new(1, 7),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
