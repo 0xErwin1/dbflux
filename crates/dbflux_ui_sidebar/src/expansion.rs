@@ -845,6 +845,7 @@ impl Sidebar {
                 crate::labels::listing_buckets_task_label(&profile_name),
                 Some(profile_id),
             );
+            state.tasks_mut().mark_uncancellable(task_id);
             task_id
         });
 

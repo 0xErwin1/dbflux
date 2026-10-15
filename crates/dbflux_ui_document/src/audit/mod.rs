@@ -1120,6 +1120,7 @@ impl AuditDocument {
                         crate::labels::audit_loading_event_stream_task_label(&self.title),
                         Some(*profile_id),
                     );
+                    state.tasks_mut().mark_uncancellable(task_id);
                     task_id
                 });
 
