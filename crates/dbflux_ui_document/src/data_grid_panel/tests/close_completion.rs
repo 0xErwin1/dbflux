@@ -561,3 +561,39 @@ fn apply_for_close_does_not_start_a_second_batch_operation(cx: &mut TestAppConte
         });
     });
 }
+
+/// A close request while a write is in flight must not ask the table to save
+/// again.
+///
+/// The pump sets `batch_op_in_flight` when it has a write running; the close
+/// returns without dispatching a Save All. The fake driver answers at once, so
+/// the in-flight state is staged directly instead of holding a real operation.
+#[gpui::test]
+fn apply_for_close_while_an_operation_is_in_flight_does_not_save_all_again(
+    cx: &mut TestAppContext,
+) {
+    let (panel, window, _seen) = staged_edit_panel(cx);
+    register_writable_connection(&panel, window);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            stage_row_edit(panel, cx);
+            panel.batch_op_in_flight = true;
+
+            assert!(
+                panel.apply_for_close(cx),
+                "a write in flight is an apply to wait on"
+            );
+        });
+    });
+
+    // Nothing was asked to save, so the staged row is still pending.
+    window.run_until_parked();
+
+    let counts = window.update(|_, app| panel.read(app).pending_edit_counts(app));
+    assert_eq!(
+        counts,
+        (0, 1, 0),
+        "the close must not dispatch a second Save All while a write is in flight"
+    );
+}

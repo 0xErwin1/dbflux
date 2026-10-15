@@ -151,15 +151,23 @@ fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> 
 impl DataGridPanel {
     // === Row Editing ===
 
-    pub(super) fn queue_refresh_after_mutation_success(&mut self, cx: &mut Context<Self>) {
-        self.batch_op_in_flight = false;
+    pub(super) fn queue_refresh_after_mutation_success(
+        &mut self,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if batch_owned {
+            self.batch_op_in_flight = false;
 
-        if self.pending_batch_remaining.is_some() {
-            self.process_next_batch_op(cx);
-        } else {
+            if self.pending_batch_remaining.is_some() {
+                self.process_next_batch_op(cx);
+                return;
+            }
+
             self.finish_close_after_apply(cx);
-            self.queue_reload_after_mutation(cx);
         }
+
+        self.queue_reload_after_mutation(cx);
     }
 
     /// Queue the reload that shows a landed mutation. Edits still staged on
@@ -403,7 +411,12 @@ impl DataGridPanel {
         .detach();
     }
 
-    pub(super) fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
+    pub(super) fn handle_save_row(
+        &mut self,
+        row_idx: usize,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
@@ -444,6 +457,7 @@ impl DataGridPanel {
                     table.clone(),
                     row_idx,
                     &changes_ref,
+                    batch_owned,
                     cx,
                 );
             }
@@ -452,12 +466,20 @@ impl DataGridPanel {
                 collection,
                 ..
             } => {
-                self.save_document(*profile_id, collection.clone(), row_idx, &changes_ref, cx);
+                self.save_document(
+                    *profile_id,
+                    collection.clone(),
+                    row_idx,
+                    &changes_ref,
+                    batch_owned,
+                    cx,
+                );
             }
             DataSource::QueryResult { .. } => {}
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn save_table_row(
         &mut self,
         profile_id: Uuid,
@@ -468,6 +490,7 @@ impl DataGridPanel {
             usize,
             &dbflux_components::components::data_table::model::CellValue,
         )],
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -503,13 +526,17 @@ impl DataGridPanel {
                 cx.notify();
             });
 
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
 
         if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,
@@ -547,7 +574,9 @@ impl DataGridPanel {
                 cx.notify();
             });
 
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
@@ -594,7 +623,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
                     });
                 });
                 return;
@@ -611,7 +642,7 @@ impl DataGridPanel {
                         Ok(_) => panel.runner.complete_mutation(task_id, cx),
                         Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
                     }
-                    panel.handle_save_result(row_idx, result, cx);
+                    panel.handle_save_result(row_idx, result, batch_owned, cx);
                 });
             });
         })
@@ -627,6 +658,7 @@ impl DataGridPanel {
             usize,
             &dbflux_components::components::data_table::model::CellValue,
         )],
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -659,7 +691,9 @@ impl DataGridPanel {
                 }
                 Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
                 _ => {
-                    self.abandon_close_apply(cx);
+                    if batch_owned {
+                        self.abandon_close_apply(cx);
+                    }
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
@@ -728,7 +762,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
 
                         if let Some(table_state) = &panel.grid_table.table_state {
                             table_state.update(cx, |state, cx| {
@@ -755,7 +791,7 @@ impl DataGridPanel {
                         Ok(_) => panel.runner.complete_mutation(task_id, cx),
                         Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
                     }
-                    panel.handle_save_result(row_idx, result, cx);
+                    panel.handle_save_result(row_idx, result, batch_owned, cx);
                 });
             });
         })
@@ -766,9 +802,12 @@ impl DataGridPanel {
         &mut self,
         row_idx: usize,
         result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
-        self.batch_op_in_flight = false;
+        if batch_owned {
+            self.batch_op_in_flight = false;
+        }
 
         let Some(table_state) = &self.grid_table.table_state else {
             return;
@@ -826,7 +865,9 @@ impl DataGridPanel {
                         .set_row_state(row_idx, RowState::Error(e.to_string()));
                     cx.notify();
                 });
-                self.abandon_close_apply(cx);
+                if batch_owned {
+                    self.abandon_close_apply(cx);
+                }
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Driver,
@@ -837,25 +878,40 @@ impl DataGridPanel {
             }
         }
 
-        // Chain to the next batch operation if in a pipeline
-        if self.pending_batch_remaining.is_some() {
-            self.process_next_batch_op(cx);
-        } else {
-            // The row that just landed was the batch's last one.
-            self.finish_close_after_apply(cx);
+        // Chain the next batch operation. An independent save (the value
+        // panel's Save, the toolbar's Save Row) must not advance or finish a
+        // batch it is not part of.
+        if batch_owned {
+            if self.pending_batch_remaining.is_some() {
+                self.process_next_batch_op(cx);
+            } else {
+                // The row that just landed was the batch's last one.
+                self.finish_close_after_apply(cx);
+            }
         }
 
         cx.notify();
     }
 
-    pub(super) fn handle_commit_insert(&mut self, insert_idx: usize, cx: &mut Context<Self>) {
+    pub(super) fn handle_commit_insert(
+        &mut self,
+        insert_idx: usize,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
         match &self.source {
             DataSource::Collection {
                 profile_id,
                 collection,
                 ..
             } => {
-                self.commit_insert_collection(*profile_id, collection.clone(), insert_idx, cx);
+                self.commit_insert_collection(
+                    *profile_id,
+                    collection.clone(),
+                    insert_idx,
+                    batch_owned,
+                    cx,
+                );
             }
             DataSource::Table {
                 profile_id,
@@ -868,6 +924,7 @@ impl DataGridPanel {
                     database.clone(),
                     table.clone(),
                     insert_idx,
+                    batch_owned,
                     cx,
                 );
             }
@@ -880,6 +937,7 @@ impl DataGridPanel {
         profile_id: Uuid,
         collection: CollectionRef,
         insert_idx: usize,
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -935,7 +993,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
                     });
                 });
                 return;
@@ -968,11 +1028,13 @@ impl DataGridPanel {
                                 ),
                                 is_error: false,
                             });
-                            panel.queue_refresh_after_mutation_success(cx);
+                            panel.queue_refresh_after_mutation_success(batch_owned, cx);
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.abandon_close_apply(cx);
+                            if batch_owned {
+                                panel.abandon_close_apply(cx);
+                            }
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
@@ -998,6 +1060,7 @@ impl DataGridPanel {
         database: Option<String>,
         table_ref: TableRef,
         insert_idx: usize,
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -1042,7 +1105,9 @@ impl DataGridPanel {
         };
 
         if assignments.is_empty() {
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -1087,7 +1152,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
                     });
                 });
                 return;
@@ -1120,11 +1187,13 @@ impl DataGridPanel {
                                 ),
                                 is_error: false,
                             });
-                            panel.queue_refresh_after_mutation_success(cx);
+                            panel.queue_refresh_after_mutation_success(batch_owned, cx);
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.abandon_close_apply(cx);
+                            if batch_owned {
+                                panel.abandon_close_apply(cx);
+                            }
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
@@ -1592,7 +1661,7 @@ impl DataGridPanel {
                 self.pending_batch_remaining = Some(remaining);
             }
             self.batch_op_in_flight = true;
-            self.handle_commit_insert(insert_idx, cx);
+            self.handle_commit_insert(insert_idx, true, cx);
             return;
         }
 
@@ -1602,7 +1671,7 @@ impl DataGridPanel {
                 self.pending_batch_remaining = Some(remaining);
             }
             self.batch_op_in_flight = true;
-            self.handle_save_row(row_idx, cx);
+            self.handle_save_row(row_idx, true, cx);
             return;
         }
 
