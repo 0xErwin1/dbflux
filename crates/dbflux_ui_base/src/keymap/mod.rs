@@ -36,6 +36,7 @@ use gpui::{
     KeyBindingMetaIndex, KeyContext, Keystroke, SharedString,
 };
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock};
 
 pub use dbflux_components::actions::RunCommand;
@@ -388,6 +389,18 @@ pub fn init_keymap(cx: &mut App) {
         Some(CODE_EDITOR_INPUT_PREDICATE),
     )]);
 
+    US_KEYBOARD_LAYOUT.store(
+        is_us_keyboard_layout(cx.keyboard_layout().id()),
+        Ordering::Relaxed,
+    );
+    cx.on_keyboard_layout_change(|cx| {
+        let is_us_layout = is_us_keyboard_layout(cx.keyboard_layout().id());
+        if US_KEYBOARD_LAYOUT.swap(is_us_layout, Ordering::Relaxed) != is_us_layout {
+            refresh_derived_keybindings(cx);
+        }
+    })
+    .detach();
+
     register_derived_keybindings(keymap_keybindings, cx);
 
     cx.set_global(dbflux_components::actions::ShortcutLabels(Box::new(
@@ -415,6 +428,18 @@ const CODE_EDITOR_REPLACE_KEYS: &str = "ctrl-shift-h";
 const CODE_EDITOR_INPUT_PREDICATE: &str = "CodeEditor > Input";
 
 pub use dbflux_components::actions::last_keystroke;
+
+/// Whether the active keyboard layout is US, kept current by [`init_keymap`]
+/// so the derived bindings can follow layout changes.
+static US_KEYBOARD_LAYOUT: AtomicBool = AtomicBool::new(false);
+
+/// Whether `layout_id` names a US layout. On Linux the id is the xkb layout
+/// name, the same on X11 and Wayland: `English (US)`, or `English (US, ...)`
+/// for a variant. Matching the name is brittle, but a miss only leaves the
+/// Shift+digit symbol copies unbound.
+fn is_us_keyboard_layout(layout_id: &str) -> bool {
+    layout_id == "English (US)" || layout_id.starts_with("English (US, ")
+}
 
 /// Registers `source` as a producer of native GPUI bindings generated from
 /// the effective keymap, and binds what it produces now. Every registered
@@ -490,21 +515,24 @@ pub fn keymap_keybindings() -> Vec<KeyBinding> {
         })
         .collect();
 
-    native_bindings(&bindings)
+    native_bindings(&bindings, US_KEYBOARD_LAYOUT.load(Ordering::Relaxed))
 }
 
 /// `bindings` as native GPUI bindings, preceded by the copies of the global
 /// chords the text entry roots keep (see [`global_chord_binding`]). The
 /// copies come first so that a root context's own binding on the same keys
-/// wins over them.
-fn native_bindings(bindings: &[EffectiveBinding]) -> Vec<KeyBinding> {
+/// wins over them. With `is_us_layout`, each binding is also preceded by its
+/// Shift+digit symbol copy (see [`shifted_symbol_binding`]).
+fn native_bindings(bindings: &[EffectiveBinding], is_us_layout: bool) -> Vec<KeyBinding> {
     let chords: Vec<EffectiveBinding> = bindings.iter().filter_map(global_chord_binding).collect();
 
     chords
         .iter()
         .chain(bindings)
         .flat_map(|binding| {
-            shifted_symbol_binding(binding)
+            is_us_layout
+                .then(|| shifted_symbol_binding(binding))
+                .flatten()
                 .into_iter()
                 .chain([binding.clone()])
         })
@@ -512,13 +540,12 @@ fn native_bindings(bindings: &[EffectiveBinding]) -> Vec<KeyBinding> {
         .collect()
 }
 
-/// A copy of `binding` with each Shift+digit chord written as the symbol the
-/// key types, without Shift, or `None` when it has no such chord.
-///
 /// GPUI's Linux backend reports Ctrl+Shift+5 as `ctrl-%` and its keyboard
 /// mapper does not translate bindings, so `ctrl-shift-5` alone never matches
 /// there. The copy comes first so the menus keep showing the original keys.
-// ponytail: US layout symbols only; other layouts need GPUI to map bindings per layout.
+/// The symbols are the US layout's: on another layout the same symbol can
+/// come from a different digit, so the copy is only bound with the US layout
+/// until GPUI maps bindings per layout.
 fn shifted_symbol_binding(binding: &EffectiveBinding) -> Option<EffectiveBinding> {
     if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
         return None;

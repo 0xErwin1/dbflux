@@ -1050,6 +1050,7 @@ fn global_chords_in_text_roots_follow_the_overrides() {
     let mut keymap = gpui::Keymap::default();
     keymap.add_bindings(native_bindings(
         &overrides.effective_bindings(default_keymap()),
+        false,
     ));
 
     let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
@@ -1073,16 +1074,29 @@ fn ctrl_shift_digit_focus_chords_are_native_bindings() {
     assert!(runs_command(action.as_ref(), Command::FocusEditor));
 }
 
+fn native_keymap_for_layout(is_us_layout: bool) -> gpui::Keymap {
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(native_bindings(
+        &KeymapOverrides::new().effective_bindings(default_keymap()),
+        is_us_layout,
+    ));
+    keymap
+}
+
 /// GPUI's Linux backend reports Ctrl+Shift+digit as Ctrl and the shifted
-/// symbol, so those keystrokes must reach the same commands.
+/// symbol, so with the US layout those keystrokes must reach the same
+/// commands.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[test]
 fn ctrl_shift_digit_chords_match_the_keystrokes_linux_reports() {
-    let keymap = native_keymap();
+    let keymap = native_keymap_for_layout(true);
     let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Sidebar, &[]);
 
     for (keys, command) in [
+        ("ctrl-!", Command::FocusSidebar),
         ("ctrl-@", Command::FocusEditor),
+        ("ctrl-#", Command::FocusResults),
+        ("ctrl-$", Command::FocusBackgroundTasks),
         ("ctrl-%", Command::ShowConnectionsView),
         ("ctrl-^", Command::ShowScriptsView),
         ("ctrl-&", Command::ShowDashboardsView),
@@ -1090,6 +1104,53 @@ fn ctrl_shift_digit_chords_match_the_keystrokes_linux_reports() {
         let action = top_action(&keymap, keys, std::slice::from_ref(&root))
             .unwrap_or_else(|| panic!("{keys} is unbound"));
         assert!(runs_command(action.as_ref(), command), "{keys}");
+    }
+}
+
+/// On another layout the same symbol can come from a different digit
+/// (Shift+6 types `&` on the Spanish layout), so no symbol copy is bound and
+/// the original chords keep their commands.
+#[test]
+fn ctrl_shift_digit_symbol_copies_are_not_bound_on_other_layouts() {
+    let keymap = native_keymap_for_layout(false);
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Sidebar, &[]);
+    let stack = std::slice::from_ref(&root);
+
+    for keys in [
+        "ctrl-!", "ctrl-@", "ctrl-#", "ctrl-$", "ctrl-%", "ctrl-^", "ctrl-&",
+    ] {
+        assert!(top_action(&keymap, keys, stack).is_none(), "{keys}");
+    }
+
+    for (keys, command) in [
+        ("ctrl-shift-1", Command::FocusSidebar),
+        ("ctrl-shift-2", Command::FocusEditor),
+        ("ctrl-shift-5", Command::ShowConnectionsView),
+        ("ctrl-shift-6", Command::ShowScriptsView),
+        ("ctrl-shift-7", Command::ShowDashboardsView),
+    ] {
+        let action =
+            top_action(&keymap, keys, stack).unwrap_or_else(|| panic!("{keys} is unbound"));
+        assert!(runs_command(action.as_ref(), command), "{keys}");
+    }
+}
+
+#[test]
+fn only_us_keyboard_layouts_are_classified_as_us() {
+    for layout in ["English (US)", "English (US, euro on 5)"] {
+        assert!(is_us_keyboard_layout(layout), "{layout}");
+    }
+
+    for layout in [
+        "Spanish",
+        "Spanish (Latin American)",
+        "German",
+        "French",
+        "English (UK)",
+        "unknown",
+        "",
+    ] {
+        assert!(!is_us_keyboard_layout(layout), "{layout}");
     }
 }
 
