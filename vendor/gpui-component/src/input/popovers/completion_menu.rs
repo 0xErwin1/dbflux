@@ -501,6 +501,61 @@ impl Render for CompletionMenu {
 mod tests {
     use super::*;
 
+    #[test]
+    fn width_measurement_is_bounded_and_keeps_long_candidates_anywhere_in_the_list() {
+        let mut items: Vec<_> = (0..10_000)
+            .map(|index| {
+                Rc::new(CompletionItem {
+                    label: format!("table_{index}"),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        for index in [0, 5_000, 9_999] {
+            items[index] = Rc::new(CompletionItem {
+                label: "table_with_a_long_name".repeat(10),
+                ..Default::default()
+            });
+        }
+        let candidates = width_measurement_candidates(&items);
+        assert_eq!(candidates.len(), MAX_WIDTH_CANDIDATES);
+        for index in [0, 5_000, 9_999] {
+            assert!(candidates.contains(&index));
+        }
+        assert_eq!(items.len(), 10_000, "all suggestions remain available");
+        assert!(width_measurement_candidates(&[]).is_empty());
+        assert_eq!(width_measurement_candidates(&items[..3]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn width_candidates_count_characters_and_include_details() {
+        let mut items = vec![
+            Rc::new(CompletionItem {
+                label: "abcdefghij".into(),
+                ..Default::default()
+            });
+            MAX_WIDTH_CANDIDATES
+        ];
+        items.push(Rc::new(CompletionItem {
+            label: "短".repeat(9),
+            ..Default::default()
+        }));
+        items.push(Rc::new(CompletionItem {
+            label: "id".into(),
+            detail: Some("a long column detail".into()),
+            ..Default::default()
+        }));
+        let candidates = width_measurement_candidates(&items);
+        assert!(
+            !candidates.contains(&MAX_WIDTH_CANDIDATES),
+            "UTF-8 bytes must not inflate character counts"
+        );
+        assert!(
+            candidates.contains(&(MAX_WIDTH_CANDIDATES + 1)),
+            "details contribute to the shortlist"
+        );
+    }
+
     #[gpui::test]
     fn hiding_an_old_menu_does_not_dismiss_a_new_completion_response(
         cx: &mut gpui::TestAppContext,

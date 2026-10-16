@@ -591,6 +591,68 @@ mod tests {
         state: Entity<crate::input::EditorState>,
     }
 
+    #[gpui::test]
+    #[ignore = "manual completion response performance comparison"]
+    fn completion_menu_large_response_performance(cx: &mut TestAppContext) {
+        struct EditorProbe(Entity<crate::input::EditorState>);
+
+        impl Render for EditorProbe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                crate::input::Editor::new(&self.0).h(gpui::px(400.))
+            }
+        }
+
+        cx.update(crate::init);
+        let input_slot = Rc::new(RefCell::new(None));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| {
+                crate::input::EditorState::new(window, cx).default_value("select * from ")
+            });
+            input.update(cx, |state, cx| {
+                state.lsp_mut().completion_menu.max_width = gpui::px(640.);
+                state.set_selected_range(14..14, cx);
+                state.focus(window, cx);
+            });
+            input_slot.replace(Some(input.clone()));
+            let view = cx.new(|_| EditorProbe(input));
+            Root::new(view, window, cx)
+        });
+        let input = input_slot.borrow().clone().expect("editor input");
+        window.run_until_parked();
+
+        for item_count in [100, 1_000, 10_000] {
+            let mut elapsed = Vec::new();
+            for iteration in 0..6 {
+                let items = (0..item_count)
+                    .map(|index| CompletionItem {
+                        label: format!("table_{index:05}_{}", "column".repeat(index % 10 + 1)),
+                        detail: Some("public".into()),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                let started = std::time::Instant::now();
+                window.update(|_, cx| {
+                    input.update(cx, |state, cx| {
+                        state.present_completion_items(14, "", items, cx);
+                    });
+                });
+                window.run_until_parked();
+                if iteration > 0 {
+                    elapsed.push(started.elapsed());
+                }
+                assert_eq!(
+                    input.read_with(window, |state, _| state.completion_menu_state().items.len()),
+                    item_count
+                );
+            }
+            elapsed.sort();
+            println!(
+                "completion response: items={item_count}, median={:?}, samples={elapsed:?}",
+                elapsed[2]
+            );
+        }
+    }
+
     impl Render for OverlayProbe {
         fn render(
             &mut self,
