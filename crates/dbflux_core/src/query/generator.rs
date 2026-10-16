@@ -434,6 +434,19 @@ pub trait QueryGenerator: Send + Sync {
         Ok(None)
     }
 
+    /// Render the rows of a table nearest to an anchor vector, closest first,
+    /// with their distance in a `distance` column.
+    ///
+    /// The default returns `Err(GeneratorError::Unsupported)`.
+    fn generate_nearest_neighbors(
+        &self,
+        _request: &crate::NearestNeighborRequest,
+    ) -> Result<GeneratedQuery, GeneratorError> {
+        Err(GeneratorError::Unsupported(
+            "this generator does not support nearest-neighbor search".to_string(),
+        ))
+    }
+
     /// Generate a parameterized UPDATE statement from a `VisualMutationSpec`.
     ///
     /// Returns `Err(GeneratorError::EmptyAssignments)` when the spec carries no

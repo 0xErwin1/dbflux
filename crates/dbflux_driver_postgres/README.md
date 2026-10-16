@@ -22,6 +22,7 @@ Advanced open-source relational database.
 - Server notices and warnings raised by a query (for example `WARNING: there is no transaction in progress` from a bare `COMMIT`, or `RAISE NOTICE`) are returned with its result; a batch attaches them all to the primary result, and a failed query drops them. A query keeps its first 100 notices, followed by one that counts the rest.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
+- Finds the rows nearest to a selected row on a table with a `pgvector` `vector` column, by L2 distance, cosine distance or negative inner product, and shows each neighbor with its `distance`. `halfvec` and `sparsevec` columns do not offer the search.
 - Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
 - Displays `numeric` values, including one-dimensional `numeric[]` arrays, as the exact decimal PostgreSQL stores.
 - Displays `infinity` and `-infinity` dates, timestamps, and their one-dimensional arrays as PostgreSQL's own text.

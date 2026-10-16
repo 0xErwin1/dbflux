@@ -2,6 +2,7 @@ pub(crate) mod builder;
 pub(crate) mod dependency_order;
 pub(crate) mod dependents;
 pub(crate) mod drift_check;
+pub(crate) mod facet;
 pub(crate) mod fingerprint;
 pub mod node_id;
 pub(crate) mod query_parser;
@@ -13,6 +14,9 @@ pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, Sche
 pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
 pub use drift_check::{DriftOutcome, TableKey, check_drift_sync, check_schema_drift};
+pub use facet::{
+    NearestNeighborRequest, ObjectFacet, VectorDistance, VectorFacet, default_collection_facets,
+};
 pub use fingerprint::SchemaFingerprint;
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};
