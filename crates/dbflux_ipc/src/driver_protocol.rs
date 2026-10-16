@@ -769,6 +769,70 @@ mod tests {
     }
 
     #[test]
+    fn table_info_with_indexes_roundtrips_over_postcard() {
+        let mut relational = nontrivial_table_info();
+        relational.indexes = Some(dbflux_core::IndexData::Relational(vec![
+            dbflux_core::IndexInfo {
+                name: "orders_pkey".into(),
+                columns: vec!["id".into()],
+                is_unique: true,
+                is_primary: true,
+            },
+        ]));
+        let bytes = postcard::to_allocvec(&DriverResponseBody::TableDetails { table: relational })
+            .expect("encode table details");
+        let decoded: DriverResponseBody =
+            postcard::from_bytes(&bytes).expect("decode table details");
+        let DriverResponseBody::TableDetails { table } = decoded else {
+            panic!("expected TableDetails, got {decoded:?}");
+        };
+        let Some(dbflux_core::IndexData::Relational(indexes)) = table.indexes else {
+            panic!("expected relational indexes, got {:?}", table.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "orders_pkey");
+        assert_eq!(indexes[0].columns, vec!["id".to_string()]);
+        assert!(indexes[0].is_unique);
+        assert!(indexes[0].is_primary);
+
+        let mut document = nontrivial_table_info();
+        document.indexes = Some(dbflux_core::IndexData::Document(vec![
+            dbflux_core::CollectionIndexInfo {
+                name: "created_at_ttl".into(),
+                keys: vec![("created_at".into(), dbflux_core::IndexDirection::Descending)],
+                is_unique: false,
+                is_sparse: true,
+                expire_after_seconds: Some(3600),
+            },
+        ]));
+        let bytes = postcard::to_allocvec(&DriverRequestBody::GenerateCode {
+            generator_id: "select".into(),
+            table: document,
+        })
+        .expect("encode generate code");
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&bytes).expect("decode generate code");
+        let DriverRequestBody::GenerateCode { table, .. } = decoded else {
+            panic!("expected GenerateCode, got {decoded:?}");
+        };
+        let Some(dbflux_core::IndexData::Document(indexes)) = table.indexes else {
+            panic!("expected document indexes, got {:?}", table.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "created_at_ttl");
+        assert_eq!(
+            indexes[0].keys,
+            vec![(
+                "created_at".to_string(),
+                dbflux_core::IndexDirection::Descending
+            )]
+        );
+        assert!(!indexes[0].is_unique);
+        assert!(indexes[0].is_sparse);
+        assert_eq!(indexes[0].expire_after_seconds, Some(3600));
+    }
+
+    #[test]
     fn query_request_dto_roundtrips_execution_context() {
         let request = QueryRequest {
             sql: "SELECT * FROM logs".into(),
@@ -981,8 +1045,8 @@ mod tests {
     /// Fixture shape for the golden byte tests below. Populated fields:
     /// `schema`, two `columns` (one with default and enum values, one with an
     /// empty `enum_values` list), `foreign_keys`, `constraints`, and
-    /// `storage_hints`. Deliberately left empty: `indexes` (postcard cannot
-    /// encode the internally tagged `IndexData` enum), `sample_fields`
+    /// `storage_hints`. Deliberately left empty: `indexes` (covered by
+    /// `table_info_with_indexes_roundtrips_over_postcard`), `sample_fields`
     /// (document-database only), and `child_items` (driver child sources).
     fn nontrivial_table_info() -> dbflux_core::TableInfo {
         dbflux_core::TableInfo {
@@ -1012,9 +1076,6 @@ mod tests {
                     enum_values: Some(vec!["new".into(), "paid".into()]),
                 },
             ]),
-            // `IndexData` is internally tagged (`#[serde(tag = "kind")]`),
-            // which postcard cannot encode (`SerdeSerCustom`), so wire-carried
-            // `TableInfo` always leaves `indexes` as `None`.
             indexes: None,
             foreign_keys: Some(vec![dbflux_core::ForeignKeyInfo {
                 name: "fk_orders_customer".into(),
