@@ -1022,6 +1022,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
+                            panel.renumber_queued_inserts_after_removal(insert_idx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.document_inserted"
@@ -1181,6 +1182,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
+                            panel.renumber_queued_inserts_after_removal(insert_idx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.row_inserted"
@@ -1717,6 +1719,30 @@ impl DataGridPanel {
                 let state = table_state.read(cx);
                 state.is_editable() && !state.edit_buffer().row_changes(row_idx).is_empty()
             })
+    }
+
+    /// Keeps the queued insert indices valid after one insert leaves the edit
+    /// buffer.
+    ///
+    /// `remove_pending_insert_by_idx` shifts every later insert down one, so the
+    /// indices the batch still holds would otherwise point at the wrong insert
+    /// or past the end.
+    pub(super) fn renumber_queued_inserts_after_removal(&mut self, removed_idx: usize) {
+        let Some(remaining) = self.pending_batch_remaining.as_mut() else {
+            return;
+        };
+
+        // The removed insert may still be queued (the user deleted a row the
+        // batch had not started). Drop it, then shift the ones above it.
+        remaining
+            .pending_inserts
+            .retain(|queued| *queued != removed_idx);
+
+        for queued in &mut remaining.pending_inserts {
+            if *queued > removed_idx {
+                *queued -= 1;
+            }
+        }
     }
 
     /// Reports a close that was waiting on the staged edits, once the batch has

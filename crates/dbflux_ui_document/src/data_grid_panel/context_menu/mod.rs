@@ -3188,6 +3188,8 @@ impl DataGridPanel {
 
         let base_row_count = self.result.rows.len();
 
+        let mut removed_insert = None;
+
         table_state.update(cx, |state, cx| {
             let buffer = state.edit_buffer_mut();
             buffer.set_base_row_count(base_row_count);
@@ -3200,12 +3202,17 @@ impl DataGridPanel {
                 }
                 Some(VisualRowSource::Insert(insert_idx)) => {
                     buffer.remove_pending_insert_by_idx(insert_idx);
+                    removed_insert = Some(insert_idx);
                 }
                 None => {}
             }
 
             cx.notify();
         });
+
+        if let Some(insert_idx) = removed_insert {
+            self.renumber_queued_inserts_after_removal(insert_idx);
+        }
     }
 
     // === Filter / Order from context menu ===
