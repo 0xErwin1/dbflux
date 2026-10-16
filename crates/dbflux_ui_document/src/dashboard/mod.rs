@@ -2810,7 +2810,7 @@ mod tests {
     //
     // These tests exercise `DashboardDocument` as a live GPUI entity inside a
     // window context. Fixture pattern copied from
-    // `data_grid_panel/mod.rs:2079-2120`.
+    // `data_grid_panel::tests` (`isolated_test_app_state`, `init_test_runtime`).
 
     fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> gpui::Entity<AppStateEntity> {
         cx.update(|cx| {

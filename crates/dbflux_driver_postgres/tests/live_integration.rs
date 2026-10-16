@@ -2568,3 +2568,118 @@ fn postgres_read_only_requests_are_refused_inside_an_open_transaction() -> Resul
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_server_notices_travel_with_the_result() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let commit = connection.execute(&QueryRequest::new("COMMIT"))?;
+        let notices = commit.server_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].severity, "WARNING");
+        assert!(
+            notices[0].message.contains("no transaction in progress"),
+            "{notices:?}"
+        );
+
+        let raise = "DO $$ BEGIN RAISE NOTICE 'hello'; END $$";
+        for request in [
+            QueryRequest::new(raise),
+            QueryRequest::new(raise).with_limit(10),
+        ] {
+            let notices = connection.execute(&request)?.server_notices();
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].severity, "NOTICE");
+            assert_eq!(notices[0].message, "hello");
+        }
+
+        let batch = connection.execute(&QueryRequest::new(format!("SELECT 1; {raise}")))?;
+        let notices = batch.server_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].message, "hello");
+
+        let bounded_batch =
+            connection.execute(&QueryRequest::new(format!("SELECT 1; {raise}")).with_limit(10))?;
+        assert_eq!(bounded_batch.server_notices().len(), 1);
+
+        let plain = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert!(plain.server_notices().is_empty());
+        assert!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1").with_limit(10))?
+                .server_notices()
+                .is_empty()
+        );
+
+        // The driver's own block handling around a user transaction raises
+        // no notice of its own.
+        connection.execute(&QueryRequest::new("CREATE TEMP TABLE device (id int)"))?;
+        let script =
+            "BEGIN;\nUPDATE device SET id = 1 WHERE id = 0;\nSELECT id FROM device;\nCOMMIT;";
+        for request in [
+            QueryRequest::new(script),
+            QueryRequest::new(script).with_limit(10),
+        ] {
+            let notices = connection.execute(&request)?.server_notices();
+            assert!(notices.is_empty(), "{notices:?}");
+        }
+
+        // A user `BEGIN` after earlier statements of a row-limited batch joins
+        // the block the driver opened for them, as PostgreSQL's implicit block
+        // does for the same script sent at once: no driver-made warning.
+        for script in [
+            "SELECT 1; BEGIN; SELECT 2; COMMIT",
+            "SELECT 1; START TRANSACTION; SELECT 2; COMMIT",
+        ] {
+            let notices = connection
+                .execute(&QueryRequest::new(script).with_limit(10))?
+                .server_notices();
+            assert!(notices.is_empty(), "{script}: {notices:?}");
+        }
+
+        // The adopted `BEGIN` reports what the same script sent at once does.
+        let limited = connection
+            .execute(&QueryRequest::new("SELECT 1; BEGIN; SELECT 2; COMMIT").with_limit(10))?;
+        let unlimited =
+            connection.execute(&QueryRequest::new("SELECT 1; BEGIN; SELECT 2; COMMIT"))?;
+        assert_eq!(limited.additional_results[0].affected_rows, Some(0));
+        assert_eq!(
+            limited.additional_results[0].affected_rows,
+            unlimited.additional_results[0].affected_rows
+        );
+
+        // The block the user `BEGIN` adopted stays open until the user's
+        // `COMMIT`: rows written before it commit with it.
+        connection.execute(
+            &QueryRequest::new(
+                "INSERT INTO device VALUES (7); BEGIN; INSERT INTO device VALUES (8); ROLLBACK",
+            )
+            .with_limit(10),
+        )?;
+        let kept = connection.execute(&QueryRequest::new(
+            "SELECT count(*) FROM device WHERE id IN (7, 8)",
+        ))?;
+        assert_eq!(
+            kept.rows[0][0],
+            Value::Int(0),
+            "the ROLLBACK undid both rows"
+        );
+
+        // A notice flood keeps a bounded number of notices.
+        let flood = connection.execute(&QueryRequest::new(
+            "DO $$ BEGIN FOR i IN 1..500 LOOP RAISE NOTICE 'n%', i; END LOOP; END $$",
+        ))?;
+        let notices = flood.server_notices();
+        assert_eq!(notices.len(), 101, "100 kept plus one that counts the rest");
+        assert_eq!(notices[0].message, "n1");
+        assert!(notices[100].message.contains("400"), "{:?}", notices[100]);
+
+        connection.schema()?;
+        let after_refresh = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert!(after_refresh.server_notices().is_empty());
+
+        Ok(())
+    })
+}

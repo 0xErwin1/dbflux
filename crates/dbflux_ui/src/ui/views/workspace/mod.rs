@@ -589,7 +589,8 @@ impl Workspace {
         )
         .detach();
 
-        // Subscribe: ModalTunnelAuth — handle passphrase provided or cancelled.
+        // Subscribe: ModalTunnelAuth — handle passphrase or connection password
+        // provided, or cancelled.
         cx.subscribe_in(
             &modal_tunnel_auth,
             window,
@@ -623,9 +624,22 @@ impl Workspace {
                             });
                         }
                     }
+                    TunnelAuthOutcome::PasswordProvided {
+                        profile_id,
+                        password,
+                        remember,
+                    } => {
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_to_profile_with_password(
+                                profile_id, password, remember, cx,
+                            );
+                        });
+                    }
+                    // Cancelling either prompt abandons the connect without an
+                    // error: the profile simply stays disconnected.
                     TunnelAuthOutcome::Cancelled => {
                         this.sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_tunnel_auth_profile_id = None;
+                            sidebar.clear_pending_tunnel_auth();
                             cx.notify();
                         });
                         this.app_state.update(cx, |_state, cx| {
@@ -1323,6 +1337,17 @@ impl Workspace {
                     };
                     this.modal_tunnel_auth.update(cx, |modal, cx| {
                         modal.open(req, window, cx);
+                    });
+                }
+                SidebarEvent::RequestConnectionPassword { prompt } => {
+                    use crate::ui::overlays::modals::ConnectionPasswordRequest;
+                    let request = ConnectionPasswordRequest {
+                        profile_id: prompt.profile_id,
+                        profile_name: prompt.profile_name.clone(),
+                        field_label: prompt.field_label.clone(),
+                    };
+                    this.modal_tunnel_auth.update(cx, |modal, cx| {
+                        modal.open_connection_password(request, window, cx);
                     });
                 }
                 SidebarEvent::RequestExportConnection { profile_id } => {

@@ -935,6 +935,9 @@ fn execution_audit_event(
 
             if let Some(extra) = &result.metadata_extra {
                 for (key, value) in extra {
+                    if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
+                        continue;
+                    }
                     details.insert(key.clone(), value.clone());
                 }
             }

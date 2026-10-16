@@ -24,7 +24,9 @@ consola de comandos debajo.
   String, Hash, List, Set, ZSet, Stream, JSON) se ejecuta en el servidor, así que
   cubre todo el keyspace. Una búsqueda filtrada sigue escaneando hasta tener una
   página de coincidencias; **Detener** la termina y **Buscar en todo el
-  keyspace** lee hasta el final.
+  keyspace** lee hasta el final. `Escape` o **Cancelar tarea** en el panel de
+  tareas también detienen un escaneo en curso: Redis se detiene entre round
+  trips de `SCAN`, los demás drivers antes de la página siguiente.
 - **Caducidad.** Haz clic en el TTL de la cabecera del valor, o pulsa `t`, para
   fijar la caducidad: **Nunca**, **En** una duración (`1h`, `24h`, `7d`, `30d` o
   cualquier valor tipo `1h30m`) o **El** una fecha y hora local. La hora absoluta

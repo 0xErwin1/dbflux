@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -71,7 +72,7 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_dashboards"))
             .collect();
 
         Ok(rows)
@@ -102,8 +103,11 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         Ok(rows.pop())
     }
@@ -181,13 +185,20 @@ impl DashboardsRepository {
                 source,
             })?;
 
-        let ids: Vec<Uuid> = stmt
+        let raw_ids: Vec<String> = stmt
             .query_map([chart_id.to_string()], |row| row.get::<_, String>(0))
             .map_err(|source| StorageError::Sqlite {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+
+        let ids: Vec<Uuid> = raw_ids
+            .into_iter()
             .filter_map(|s| {
                 Uuid::parse_str(&s)
                     .map_err(|e| {
@@ -230,7 +241,7 @@ impl DashboardsRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("viz_dashboards"))
             .collect();
 
         Ok(rows)

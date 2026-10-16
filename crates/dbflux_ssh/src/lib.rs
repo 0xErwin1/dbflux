@@ -247,6 +247,58 @@ impl SshTunnel {
     }
 }
 
+/// A started tunnel together with the SSH host it dials after config resolution.
+pub struct OpenedSshTunnel {
+    pub tunnel: SshTunnel,
+    /// The resolved SSH host, so a caller's log line names the target it actually dialed.
+    pub ssh_host: String,
+}
+
+/// Drivers connect to `127.0.0.1:tunnel.local_port()` with their own parameters
+/// and keep the tunnel alive for as long as the connection uses it.
+pub fn open_tunnel(
+    config: &SshTunnelConfig,
+    secret: Option<&str>,
+    db_host: &str,
+    db_port: u16,
+) -> Result<OpenedSshTunnel, DbError> {
+    // Resolve before logging, so a tunnel that references a host from the user's SSH
+    // config reports the target it actually dials.
+    let config = resolve_for_dial(config)?;
+
+    log::info!(
+        "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
+        config.user,
+        config.host,
+        config.port,
+        db_host,
+        db_port
+    );
+
+    let phase_start = std::time::Instant::now();
+    let session = establish_session(&config, secret)?;
+    log::info!(
+        "[CONNECT] SSH session phase completed in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    log::info!("[SSH] Setting up tunnel to {}:{}", db_host, db_port);
+    let phase_start = std::time::Instant::now();
+
+    let tunnel = SshTunnel::start(session, db_host.to_string(), db_port)?;
+
+    log::info!(
+        "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
+        tunnel.local_port(),
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    Ok(OpenedSshTunnel {
+        tunnel,
+        ssh_host: config.host,
+    })
+}
+
 struct SshConnector {
     session: Session,
 }
@@ -1174,6 +1226,32 @@ mod resolve_for_dial_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_tunnel_reports_an_unreachable_ssh_server() {
+        let closed_port = TcpListener::bind(("127.0.0.1", 0))
+            .and_then(|listener| listener.local_addr())
+            .map(|address| address.port())
+            .expect("bind an ephemeral port");
+        let config = SshTunnelConfig {
+            host: "127.0.0.1".to_string(),
+            port: closed_port,
+            user: "tester".to_string(),
+            auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
+        };
+
+        let Err(error) = open_tunnel(&config, None, "db.internal", 5432) else {
+            panic!("a closed SSH port must fail the tunnel setup");
+        };
+
+        assert!(
+            error.to_string().contains(&format!(
+                "Failed to connect to SSH server 127.0.0.1:{closed_port}"
+            )),
+            "unexpected error: {error}"
+        );
+    }
 
     #[test]
     fn insert_and_get_roundtrip() {

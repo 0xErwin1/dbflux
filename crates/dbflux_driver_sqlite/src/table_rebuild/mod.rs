@@ -3736,7 +3736,7 @@ fn native_drop_statement(table: &str, column: &str) -> String {
 }
 
 fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
+    dbflux_core::quote_double_quoted_identifier(identifier)
 }
 
 fn table_source_sql(

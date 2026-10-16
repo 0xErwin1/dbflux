@@ -29,7 +29,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mysql::prelude::*;
 use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 
@@ -1443,23 +1443,14 @@ impl MysqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials.
-        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
-
-        log::info!(
-            "[SSH] Starting dual tunnels to {}:{} via {}@{}:{}",
-            db_host,
-            db_port,
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port
-        );
+        log::info!("[SSH] Starting dual tunnels to {}:{}", db_host, db_port);
 
         // === Tunnel 1: Catalog connection ===
         log::info!("[SSH] Creating catalog tunnel (session 1/2)");
-        let session1 = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        let tunnel1 = SshTunnel::start(session1, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel {
+            tunnel: tunnel1,
+            ssh_host,
+        } = dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port1 = tunnel1.local_port();
         log::info!("[SSH] Catalog tunnel on local port {}", local_port1);
         let ssh_catalog_tunnel = Arc::new(std::sync::Mutex::new(tunnel1));
@@ -1515,8 +1506,9 @@ impl MysqlDriver {
 
         // === Tunnel 2: Query connection ===
         log::info!("[SSH] Creating query tunnel (session 2/2)");
-        let session2 = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        let tunnel2 = SshTunnel::start(session2, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel {
+            tunnel: tunnel2, ..
+        } = dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port2 = tunnel2.local_port();
         log::info!("[SSH] Query tunnel on local port {}", local_port2);
         let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
@@ -1550,7 +1542,7 @@ impl MysqlDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         let initial_database = initial_database_from_opts(&query_opts);

@@ -245,7 +245,8 @@ hasta el final de la línea sin unir líneas; `u` con contador deshace esa canti
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
-selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
+selección del editor, y un clic izquierdo simple vuelve al modo Normal con el cursor
+donde se hizo clic, como en Vim. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
 se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
 
@@ -568,6 +569,8 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 | `z`                                           | Alternar colapso del panel               |
 
 La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en una fila también la selecciona. El menú de acciones lista **Mostrar salida**, **Cancelar tarea** y **Descartar** de la tarea seleccionada, y después **Limpiar terminadas** y **Ocultar el panel de tareas**, cada una con su atajo; se maneja con las teclas del menú contextual. **Borrar tareas terminadas** también está en la paleta de comandos.
+
+**Cancelar tarea** solo se ofrece para el trabajo que se detiene al cancelarlo, como una consulta, una exportación o un escaneo de claves. Una escritura ya enviada al servidor, una lectura de clave o una única consulta de metadatos llega hasta el final y no muestra cancelar.
 
 ## Centro de notificaciones
 

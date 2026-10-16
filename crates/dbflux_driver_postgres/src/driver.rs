@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::ServerNotice;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
@@ -33,7 +34,7 @@ use dbflux_core::{
     strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
     with_help,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use half::f16;
 use native_tls::TlsConnector;
 use postgres::types::{Date as PgDate, FromSql, Kind, Timestamp as PgTimestamp, Type};
@@ -1074,6 +1075,81 @@ fn build_keyword_conn_string(
     pairs.join(" ")
 }
 
+/// Notices one request keeps; a loop raising a notice per row would
+/// otherwise hold every one of them in memory and in the result.
+const MAX_KEPT_NOTICES: usize = 100;
+
+/// Collects the notices and warnings the server sends on one client.
+#[derive(Clone, Default)]
+struct NoticeBuffer(Arc<Mutex<CollectedNotices>>);
+
+#[derive(Default)]
+struct CollectedNotices {
+    kept: Vec<ServerNotice>,
+    dropped: usize,
+}
+
+impl NoticeBuffer {
+    fn push(&self, notice: ServerNotice) {
+        let mut notices = self.lock();
+        if notices.kept.len() < MAX_KEPT_NOTICES {
+            notices.kept.push(notice);
+        } else {
+            notices.dropped += 1;
+        }
+    }
+
+    fn clear(&self) {
+        *self.lock() = CollectedNotices::default();
+    }
+
+    /// The notices kept since the last clear, followed by one that counts
+    /// those past the limit.
+    fn take(&self) -> Vec<ServerNotice> {
+        let CollectedNotices { mut kept, dropped } = std::mem::take(&mut *self.lock());
+        if dropped > 0 {
+            kept.push(ServerNotice {
+                severity: "INFO".to_string(),
+                message: format!("{dropped} more notices were not kept"),
+            });
+        }
+        kept
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, CollectedNotices> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+fn server_notice(notice: &postgres::error::DbError) -> ServerNotice {
+    ServerNotice {
+        severity: notice.severity().to_string(),
+        message: notice.message().to_string(),
+    }
+}
+
+/// Connects with a notice callback that records every server notice into
+/// `notices`; `Client::connect` would only log them.
+fn connect_client<T>(
+    conn_string: &str,
+    tls: T,
+    notices: &NoticeBuffer,
+) -> Result<Client, postgres::Error>
+where
+    T: postgres::tls::MakeTlsConnect<postgres::Socket> + 'static + Send,
+    T::TlsConnect: Send,
+    T::Stream: Send,
+    <T::TlsConnect as postgres::tls::TlsConnect<postgres::Socket>>::Future: Send,
+{
+    let notices = notices.clone();
+    conn_string
+        .parse::<postgres::Config>()?
+        .notice_callback(move |notice| notices.push(server_notice(&notice)))
+        .connect(tls)
+}
+
 /// Establishes a PostgreSQL connection using the native sslmode identifier from the profile.
 ///
 /// Maps sslmode string values directly to the appropriate TLS strategy, matching PostgreSQL's
@@ -1082,7 +1158,10 @@ fn build_keyword_conn_string(
 /// - `"allow"` / `"prefer"` — try TLS first, fall back to plain
 /// - `"require"` — TLS required, self-signed certs accepted
 /// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
-fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
+fn connect_postgres(
+    params: &PostgresConnectParams,
+    notices: &NoticeBuffer,
+) -> Result<Client, DbError> {
     let conn_string = with_client_identity(&build_keyword_conn_string(
         params.host,
         params.port,
@@ -1092,7 +1171,7 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
     ));
 
     match params.ssl_mode {
-        "disable" => Client::connect(&conn_string, NoTls)
+        "disable" => connect_client(&conn_string, NoTls, notices)
             .map_err(|e| format_pg_error(&e, params.host, params.port)),
 
         "allow" | "prefer" => {
@@ -1106,9 +1185,9 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 
             let tls = MakeTlsConnector::new(connector);
 
-            match Client::connect(&conn_string, tls) {
+            match connect_client(&conn_string, tls, notices) {
                 Ok(client) => Ok(client),
-                Err(_) => Client::connect(&conn_string, NoTls)
+                Err(_) => connect_client(&conn_string, NoTls, notices)
                     .map_err(|e| format_pg_error(&e, params.host, params.port)),
             }
         }
@@ -1123,7 +1202,7 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 
             let tls = MakeTlsConnector::new(connector);
 
-            Client::connect(&conn_string, tls)
+            connect_client(&conn_string, tls, notices)
                 .map_err(|e| format_pg_error(&e, params.host, params.port))
         }
 
@@ -1137,7 +1216,7 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 
             let tls = MakeTlsConnector::new(connector);
 
-            Client::connect(&conn_string, tls)
+            connect_client(&conn_string, tls, notices)
                 .map_err(|e| format_pg_error(&e, params.host, params.port))
         }
 
@@ -1152,9 +1231,9 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 
             let tls = MakeTlsConnector::new(connector);
 
-            match Client::connect(&conn_string, tls) {
+            match connect_client(&conn_string, tls, notices) {
                 Ok(client) => Ok(client),
-                Err(_) => Client::connect(&conn_string, NoTls)
+                Err(_) => connect_client(&conn_string, NoTls, notices)
                     .map_err(|e| format_pg_error(&e, params.host, params.port)),
             }
         }
@@ -1171,16 +1250,18 @@ impl PostgresDriver {
         let uri = with_client_identity(&uri);
 
         let ssl_mode = parse_pg_uri_sslmode(&uri);
+        let notices = NoticeBuffer::default();
 
         if ssl_mode == PgUriSslMode::Disable {
-            let client =
-                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?;
+            let client = connect_client(&uri, NoTls, &notices)
+                .map_err(|e| format_pg_uri_error(&e, base_uri))?;
 
             let cancel_token = client.cancel_token();
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
                 client: Arc::new(Mutex::new(client)),
+                notices,
                 ssh_tunnel: None,
                 cancel_token,
                 active_query: Arc::new(RwLock::new(None)),
@@ -1197,11 +1278,10 @@ impl PostgresDriver {
 
         let tls = MakeTlsConnector::new(connector);
 
-        let client = match Client::connect(&uri, tls) {
+        let client = match connect_client(&uri, tls, &notices) {
             Ok(c) => c,
-            Err(_) if ssl_mode == PgUriSslMode::Prefer => {
-                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?
-            }
+            Err(_) if ssl_mode == PgUriSslMode::Prefer => connect_client(&uri, NoTls, &notices)
+                .map_err(|e| format_pg_uri_error(&e, base_uri))?,
             Err(e) => return Err(format_pg_uri_error(&e, base_uri)),
         };
 
@@ -1210,6 +1290,7 @@ impl PostgresDriver {
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
+            notices,
             ssh_tunnel: None,
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -1234,20 +1315,25 @@ impl PostgresDriver {
             database
         );
 
-        let client = connect_postgres(&PostgresConnectParams {
-            host,
-            port,
-            user,
-            password,
-            database,
-            ssl_mode,
-        })?;
+        let notices = NoticeBuffer::default();
+        let client = connect_postgres(
+            &PostgresConnectParams {
+                host,
+                port,
+                user,
+                password,
+                database,
+                ssl_mode,
+            },
+            &notices,
+        )?;
 
         let cancel_token = client.cancel_token();
         log::info!("Successfully connected to {}:{}", host, port);
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
+            notices,
             ssh_tunnel: None,
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -1269,49 +1355,25 @@ impl PostgresDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials.
-        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
-
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            db_host,
-            db_port
-        );
-
-        let phase_start = Instant::now();
-        let ssh_session = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        log::info!(
-            "[CONNECT] SSH session phase completed in {:.2}ms",
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
-
-        log::info!("[SSH] Setting up tunnel to {}:{}", db_host, db_port);
-        let phase_start = Instant::now();
-
-        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         log::info!("[DB] Connecting to PostgreSQL via tunnel");
         let phase_start = Instant::now();
 
-        let client = connect_postgres(&PostgresConnectParams {
-            host: "127.0.0.1",
-            port: local_port,
-            user: db_user,
-            password: db_password,
-            database,
-            ssl_mode,
-        })?;
+        let notices = NoticeBuffer::default();
+        let client = connect_postgres(
+            &PostgresConnectParams {
+                host: "127.0.0.1",
+                port: local_port,
+                user: db_user,
+                password: db_password,
+                database,
+                ssl_mode,
+            },
+            &notices,
+        )?;
 
         let cancel_token = client.cancel_token();
 
@@ -1325,11 +1387,12 @@ impl PostgresDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
+            notices,
             ssh_tunnel: Some(tunnel),
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -1369,6 +1432,10 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
 
 pub struct PostgresConnection {
     client: Arc<Mutex<Client>>,
+    /// Notices the server sent on `client`. Only read under the `client`
+    /// lock, so a drain sees exactly the notices of the calls made while it
+    /// was held.
+    notices: NoticeBuffer,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
     cancel_token: PgCancelToken,
@@ -1781,33 +1848,54 @@ impl Connection for PostgresConnection {
             sql_preview.replace('\n', " ")
         );
 
-        if req.read_only.is_required() {
-            return execute_read_only_request(
+        // Everything the server sends from here on answers the user's
+        // request. The driver's own statements in the paths below (savepoint
+        // probes, the blocks it opens and ends, `BEGIN READ ONLY` outside any
+        // block) raise no notice on success, and an error result drops the
+        // notices, so the drained buffer holds only the user's statements.
+        self.notices.clear();
+
+        let routed = if req.read_only.is_required() {
+            Some(execute_read_only_request(
                 &mut client,
                 &req.sql,
                 req.limit,
                 query_id,
                 start,
                 &self.cancelled,
-            );
-        }
-
-        // A multi-statement batch cannot use the extended (prepared) protocol,
-        // which rejects more than one command per statement (SQLSTATE 42601).
-        // Route it through the simple query protocol, which executes the whole
-        // batch and returns one result set per statement.
-        if req.limit.is_none() && QueryLanguage::Sql.statement_count(&req.sql) > 1 {
-            return execute_statement_batch(&mut client, &req.sql, query_id, start, req.limit);
-        }
-        if let Some(limit) = req.limit {
-            return execute_bounded_request(
+            ))
+        } else if req.limit.is_none() && QueryLanguage::Sql.statement_count(&req.sql) > 1 {
+            // A multi-statement batch cannot use the extended (prepared)
+            // protocol, which rejects more than one command per statement
+            // (SQLSTATE 42601). Route it through the simple query protocol,
+            // which executes the whole batch and returns one result set per
+            // statement.
+            Some(execute_statement_batch(
                 &mut client,
                 &req.sql,
                 query_id,
                 start,
-                limit,
-                &self.cancelled,
-            );
+                req.limit,
+            ))
+        } else {
+            req.limit.map(|limit| {
+                execute_bounded_request(
+                    &mut client,
+                    &req.sql,
+                    query_id,
+                    start,
+                    limit,
+                    &self.cancelled,
+                )
+            })
+        };
+
+        if let Some(outcome) = routed {
+            let notices = self.notices.take();
+            return outcome.map(|mut result| {
+                result.set_server_notices(notices);
+                result
+            });
         }
 
         let (columns, rows) = {
@@ -1847,6 +1935,7 @@ impl Connection for PostgresConnection {
             (columns, rows)
         };
 
+        let notices = self.notices.take();
         drop(active_query_guard);
         drop(client);
 
@@ -1874,6 +1963,7 @@ impl Connection for PostgresConnection {
 
         let mut result = QueryResult::table(columns, result_rows, None, total_time);
         result.set_unsupported_types(unsupported_type_names(&result.rows));
+        result.set_server_notices(notices);
 
         Ok(result)
     }
@@ -5033,6 +5123,26 @@ fn statement_opens_transaction(statement: &str) -> bool {
     second_keyword.eq_ignore_ascii_case("TRANSACTION")
 }
 
+/// `BEGIN`, `BEGIN WORK`, `BEGIN TRANSACTION` or `START TRANSACTION` with no
+/// transaction modes, which would have to apply before the block's first
+/// statement.
+fn is_plain_begin(statement: &str) -> bool {
+    let words: Vec<String> = strip_leading_comments(statement)
+        .split(|character: char| character.is_whitespace() || character == ';')
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    matches!(
+        words
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["BEGIN"] | ["BEGIN", "WORK" | "TRANSACTION"] | ["START", "TRANSACTION"]
+    )
+}
+
 /// Splits the leading keyword, after any comments, from the rest of `sql`.
 fn split_leading_keyword(sql: &str) -> (&str, &str) {
     let stripped = strip_leading_comments(sql);
@@ -5656,6 +5766,24 @@ fn execute_bounded_batch(
             }
             log::info!("[QUERY] Batch query {} was cancelled", query_id);
             return Err(DbError::Cancelled);
+        }
+
+        // At a plain `BEGIN`, PostgreSQL's implicit block becomes the user's
+        // block. Running it inside the block the driver opened in its place
+        // would change nothing but raise `there is already a transaction in
+        // progress`, so the driver's block is adopted instead.
+        if *control == TransactionControl::Open
+            && block == BatchBlock::Implicit
+            && is_plain_begin(statement)
+        {
+            results.push(QueryResult::table(
+                Vec::new(),
+                Vec::new(),
+                Some(0),
+                start.elapsed(),
+            ));
+            block = BatchBlock::Explicit;
+            continue;
         }
 
         if opens {
@@ -8400,5 +8528,75 @@ mod read_only_tests {
                 .and_then(|formatted| formatted.hint.as_deref()),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod notice_buffer_tests {
+    use super::NoticeBuffer;
+    use dbflux_core::ServerNotice;
+
+    fn notice(message: &str) -> ServerNotice {
+        ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn take_drains_the_notices_recorded_through_any_clone() {
+        let buffer = NoticeBuffer::default();
+        buffer.clone().push(notice("first"));
+        buffer.clone().push(notice("second"));
+
+        assert_eq!(buffer.take(), vec![notice("first"), notice("second")]);
+        assert!(buffer.take().is_empty());
+    }
+
+    #[test]
+    fn a_flood_keeps_the_first_notices_and_counts_the_rest() {
+        let buffer = NoticeBuffer::default();
+        for index in 0..super::MAX_KEPT_NOTICES + 5 {
+            buffer.push(notice(&format!("n{index}")));
+        }
+
+        let notices = buffer.take();
+        assert_eq!(notices.len(), super::MAX_KEPT_NOTICES + 1);
+        assert_eq!(notices[0], notice("n0"));
+        assert_eq!(
+            notices[super::MAX_KEPT_NOTICES].message,
+            "5 more notices were not kept"
+        );
+        assert!(buffer.take().is_empty(), "take resets the count");
+    }
+
+    #[test]
+    fn only_a_begin_without_modes_is_plain() {
+        for statement in [
+            "BEGIN",
+            "begin work",
+            "BEGIN TRANSACTION",
+            "START TRANSACTION",
+            "-- go\nBEGIN",
+        ] {
+            assert!(super::is_plain_begin(statement), "{statement}");
+        }
+        for statement in [
+            "BEGIN ISOLATION LEVEL SERIALIZABLE",
+            "START TRANSACTION READ ONLY",
+            "COMMIT",
+        ] {
+            assert!(!super::is_plain_begin(statement), "{statement}");
+        }
+    }
+
+    #[test]
+    fn clear_discards_notices_recorded_before_a_request() {
+        let buffer = NoticeBuffer::default();
+        buffer.push(notice("from a schema refresh"));
+        buffer.clear();
+        buffer.push(notice("from the request"));
+
+        assert_eq!(buffer.take(), vec![notice("from the request")]);
     }
 }

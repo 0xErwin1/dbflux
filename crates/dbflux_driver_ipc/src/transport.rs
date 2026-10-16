@@ -278,6 +278,7 @@ impl RpcClient {
                 result,
                 rows_truncated,
             } => Ok(truncatable_result(result, rows_truncated)),
+            DriverResponseBody::ExecuteResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol("Unexpected response to Execute".into())),
         }
@@ -303,6 +304,9 @@ impl RpcClient {
                 result,
                 rows_truncated,
             } => Ok((handle_id, truncatable_result(result, rows_truncated))),
+            DriverResponseBody::ExecuteWithHandleResultSets { handle_id, results } => {
+                Ok((handle_id, results.into()))
+            }
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to ExecuteWithHandle".into(),
@@ -459,6 +463,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to BrowseTable".into(),
@@ -496,6 +501,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to BrowseCollection".into(),
@@ -533,6 +539,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol("Unexpected response to Explain".into())),
         }
@@ -550,6 +557,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to DescribeTable".into(),

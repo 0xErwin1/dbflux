@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use dbflux_core::{SchemaSnapshotRecord, SnapshotDepth, TableCreationMetadata, TableInfo};
@@ -193,8 +193,8 @@ impl SchemaSnapshotRepo {
         let rows = stmt
             .query_map(rusqlite::params![profile_id, database], map_summary_row)
             .map_err(sqlite_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(sqlite_err)?;
 
         Ok(rows)
     }
@@ -263,7 +263,8 @@ fn load_record(conn: &Connection, id: &str) -> Result<Option<SchemaSnapshotRecor
                 })
             },
         )
-        .ok();
+        .optional()
+        .map_err(sqlite_err)?;
 
     let root = match root {
         Some(r) => r,
@@ -290,8 +291,8 @@ fn load_record(conn: &Connection, id: &str) -> Result<Option<SchemaSnapshotRecor
             })
         })
         .map_err(sqlite_err)?
-        .filter_map(|r| r.ok())
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_err)?;
 
     let mut tables = Vec::with_capacity(rows.len());
     let mut creation_metadata = Vec::new();
@@ -436,6 +437,28 @@ mod tests {
             tables: vec![sample_table("users"), sample_table("orders")],
             creation_metadata: Vec::new(),
         }
+    }
+
+    #[test]
+    fn get_fails_when_a_table_row_of_the_snapshot_is_unreadable() {
+        let (conn, repo, profile_id) = setup("unreadable_table_row");
+        let record = sample_record(profile_id, Some("db1"), 1000);
+        repo.insert(&record).expect("insert");
+
+        // A BLOB keeps its storage class in a TEXT column, so reading
+        // `detail_json` as a String fails for this row only.
+        conn.lock()
+            .expect("lock connection")
+            .execute(
+                "UPDATE sch_snapshot_tables SET detail_json = X'00' WHERE name = 'orders'",
+                [],
+            )
+            .expect("corrupt one table row");
+
+        assert!(
+            repo.get(&record.id.to_string()).is_err(),
+            "a snapshot missing a table would diff as if the table were dropped"
+        );
     }
 
     #[test]
@@ -606,6 +629,74 @@ mod tests {
         assert_eq!(loaded.tables.len(), 2);
         assert!(loaded.tables.iter().any(|t| t.name == "users"));
         assert!(loaded.tables.iter().any(|t| t.name == "orders"));
+    }
+
+    #[test]
+    fn insert_and_get_roundtrip_preserves_table_indexes() {
+        let (_, repo, profile_id) = setup("insert_get_indexes");
+        let mut record = sample_record(profile_id, Some("app_db"), 1000);
+        record.tables[0].indexes = Some(dbflux_core::IndexData::Relational(vec![
+            dbflux_core::IndexInfo {
+                name: "users_pkey".to_string(),
+                columns: vec!["id".to_string()],
+                is_unique: true,
+                is_primary: true,
+            },
+        ]));
+        record.tables[1].indexes = Some(dbflux_core::IndexData::Document(vec![
+            dbflux_core::CollectionIndexInfo {
+                name: "created_at_ttl".to_string(),
+                keys: vec![(
+                    "created_at".to_string(),
+                    dbflux_core::IndexDirection::Descending,
+                )],
+                is_unique: false,
+                is_sparse: true,
+                expire_after_seconds: Some(3600),
+            },
+        ]));
+
+        repo.insert(&record).expect("insert");
+
+        let loaded = repo
+            .get(&record.id.to_string())
+            .expect("get")
+            .expect("exists");
+
+        let users = loaded
+            .tables
+            .iter()
+            .find(|table| table.name == "users")
+            .expect("users table");
+        let Some(dbflux_core::IndexData::Relational(indexes)) = &users.indexes else {
+            panic!("expected relational indexes, got {:?}", users.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "users_pkey");
+        assert_eq!(indexes[0].columns, vec!["id".to_string()]);
+        assert!(indexes[0].is_unique);
+        assert!(indexes[0].is_primary);
+
+        let orders = loaded
+            .tables
+            .iter()
+            .find(|table| table.name == "orders")
+            .expect("orders table");
+        let Some(dbflux_core::IndexData::Document(indexes)) = &orders.indexes else {
+            panic!("expected document indexes, got {:?}", orders.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "created_at_ttl");
+        assert_eq!(
+            indexes[0].keys,
+            vec![(
+                "created_at".to_string(),
+                dbflux_core::IndexDirection::Descending
+            )]
+        );
+        assert!(!indexes[0].is_unique);
+        assert!(indexes[0].is_sparse);
+        assert_eq!(indexes[0].expire_after_seconds, Some(3600));
     }
 
     #[test]

@@ -1313,6 +1313,11 @@ document:
         many: "No hay texto seleccionado, por lo que se ejecutará todo el script como %{count} sentencias en orden. ¿Continuar?"
       cancel: Cancelar
       run: Ejecutar script
+      run_statement: "Ejecutar solo esta sentencia"
+      transaction:
+        title: "Sentencia de transacción bajo el cursor"
+        message: "La sentencia bajo el cursor (línea %{line}) es \"%{statement}\", que solo abre o cierra una transacción. Ejecutarla sola no ejecuta el resto del script. ¿Ejecutar en su lugar todo el script de %{count} sentencias?"
+        message_statement_only: "La sentencia bajo el cursor (línea %{line}) es \"%{statement}\", que solo abre o cierra una transacción. Ejecutarla sola no ejecuta el resto del script, y esta conexión no puede ejecutar un script completo de una vez: seleccione las sentencias para ejecutarlas juntas. ¿Ejecutar solo esta sentencia?"
     dangerous_query:
       fallback:
         title: Advertencia
@@ -1725,6 +1730,10 @@ document:
         rows:
           one: "%{count} fila"
           many: "%{count} filas"
+        executed: "Sentencia ejecutada"
+        affected_rows:
+          one: "%{count} fila afectada"
+          many: "%{count} filas afectadas"
         limited_rows:
           first: "Primeras %{count} filas cargadas"
           of_total: "%{loaded}/%{total} filas cargadas"
@@ -3635,6 +3644,13 @@ modals:
     remember: Recordar durante esta sesión
     cancel: Cancelar
     connect: Conectar
+  connection_password:
+    title: "Se requiere la contraseña"
+    connection_label: "Conexión"
+    placeholder: "Contraseña"
+    show_password: "Mostrar contraseña"
+    hide_password: "Ocultar contraseña"
+    remember: "Recordar hasta cerrar DBFlux"
   unsaved_changes:
     title: Cambios sin guardar
     prompt: Tienes cambios sin guardar en los siguientes documentos. ¿Qué quieres hacer?

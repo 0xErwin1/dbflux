@@ -927,14 +927,37 @@ impl CodeDocument {
         let entity_run = cx.entity().clone();
         let entity_close = cx.entity().clone();
         let entity_confirm = cx.entity().clone();
+        let entity_statement = cx.entity().clone();
 
-        let statement_count = self
-            .pending
-            .script_confirm
-            .as_ref()
-            .map(|p| p.statement_count)
-            .unwrap_or(0);
-        let message = crate::labels::script_confirm_message_label(statement_count);
+        let pending = self.pending.script_confirm.as_ref();
+        let statement_count = pending.map(|p| p.statement_count).unwrap_or(0);
+        let cursor_statement = pending.and_then(|p| p.cursor_statement.as_ref());
+
+        let offers_script = cursor_statement.is_none_or(|statement| statement.offers_script);
+
+        let (title, message) = match cursor_statement {
+            Some(statement) if statement.offers_script => (
+                dbflux_i18n::t!("document.code.script_confirm.transaction.title"),
+                dbflux_i18n::t!(
+                    "document.code.script_confirm.transaction.message",
+                    line = statement.line,
+                    statement = statement.text,
+                    count = statement_count
+                ),
+            ),
+            Some(statement) => (
+                dbflux_i18n::t!("document.code.script_confirm.transaction.title"),
+                dbflux_i18n::t!(
+                    "document.code.script_confirm.transaction.message_statement_only",
+                    line = statement.line,
+                    statement = statement.text
+                ),
+            ),
+            None => (
+                dbflux_i18n::t!("document.code.script_confirm.title"),
+                crate::labels::script_confirm_message_label(statement_count),
+            ),
+        };
 
         let body = Text::caption(message).into_any_element();
 
@@ -952,21 +975,37 @@ impl CodeDocument {
                     });
                 }),
             )
-            .child(
-                Button::new(
-                    "script-confirm-run-btn",
-                    dbflux_i18n::t!("document.code.script_confirm.run"),
+            .when(cursor_statement.is_some(), |footer| {
+                footer.child(
+                    Button::new(
+                        "script-confirm-statement-btn",
+                        dbflux_i18n::t!("document.code.script_confirm.run_statement"),
+                    )
+                    .when(!offers_script, |button| button.primary())
+                    .on_click(move |_, window, cx| {
+                        entity_statement.update(cx, |doc, cx| {
+                            doc.confirm_cursor_statement(window, cx);
+                        });
+                    }),
                 )
-                .primary()
-                .on_click(move |_, window, cx| {
-                    entity_run.update(cx, |doc, cx| {
-                        doc.confirm_script_query(window, cx);
-                    });
-                }),
-            )
+            })
+            .when(offers_script, |footer| {
+                footer.child(
+                    Button::new(
+                        "script-confirm-run-btn",
+                        dbflux_i18n::t!("document.code.script_confirm.run"),
+                    )
+                    .primary()
+                    .on_click(move |_, window, cx| {
+                        entity_run.update(cx, |doc, cx| {
+                            doc.confirm_script_query(window, cx);
+                        });
+                    }),
+                )
+            })
             .into_any_element();
 
-        Modal::new(dbflux_i18n::t!("document.code.script_confirm.title"))
+        Modal::new(title)
             .body(body)
             .footer(footer)
             .icon(AppIcon::Play)

@@ -119,7 +119,7 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 
 ### 将此查询制作成图表
 
-数据网格的上下文菜单提供“将此查询制作成图表”项。该项由 `crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs` 中的 `can_chart_from_context_menu` 控制，需要同时满足：
+数据网格的上下文菜单提供“将此查询制作成图表”项。该项由 `crates/dbflux_ui_document/src/data_grid_panel/context_menu/mod.rs` 中的 `can_chart_from_context_menu` 控制，需要同时满足：
 
 1. 面板的来源是一个带有非空原始查询的 `QueryResult`；且
 2. 对当前结果调用 `detect_chart_columns` 返回 `Ok`。

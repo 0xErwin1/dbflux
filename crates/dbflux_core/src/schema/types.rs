@@ -797,12 +797,10 @@ pub struct ColumnInfo {
 
 /// Relational tables store [`IndexInfo`], document collections store
 /// [`CollectionIndexInfo`] with direction, sparse, and TTL metadata.
-///
-/// Externally tagged on purpose: serde's internally tagged representation
-/// cannot encode a newtype variant whose payload is a sequence, so postcard
-/// (the driver RPC codec) rejected every `IndexData` value.
+// Externally tagged on purpose: an internally tagged enum cannot serialize a
+// newtype variant holding a `Vec`, and postcard (driver RPC) cannot decode
+// internally or adjacently tagged enums.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum IndexData {
     Relational(Vec<IndexInfo>),
     Document(Vec<CollectionIndexInfo>),

@@ -65,18 +65,15 @@ impl TaskKind {
 
     /// Whether a user cancel request can stop the work behind a task of this kind.
     ///
-    /// Key-value scans, reads, and mutations run as one blocking
-    /// `KeyValueApi` call that takes no cancel token, and no key-value driver
-    /// exposes a cancel path for them. Cancelling such a task could only mark
-    /// it cancelled while the driver keeps working (and a mutation still
-    /// commits), so these kinds report `false` and the UI hides their cancel
-    /// control. Internal supersede logic may still cancel them to discard a
-    /// stale result.
+    /// Key scans pass their token to `KeyValueApi::scan_keys_with_cancel`,
+    /// which stops between server round trips. Key reads and mutations run as
+    /// one blocking `KeyValueApi` call with no cancel path: cancelling one
+    /// could only mark it cancelled while the driver keeps working (and a
+    /// mutation still commits), so these kinds report `false` and the UI hides
+    /// their cancel control. Internal supersede logic may still cancel them to
+    /// discard a stale result.
     pub fn supports_cancellation(&self) -> bool {
-        !matches!(
-            self,
-            TaskKind::KeyScan | TaskKind::KeyGet | TaskKind::KeyMutation
-        )
+        !matches!(self, TaskKind::KeyGet | TaskKind::KeyMutation)
     }
 }
 
@@ -148,6 +145,9 @@ pub struct Task {
     /// render do not copy a large script.
     pub query_text: Option<Arc<str>>,
     cancel_token: CancelToken,
+    /// Cleared by `TaskManager::mark_uncancellable` for work that never polls
+    /// its token, such as a write already sent to the server.
+    accepts_cancel: bool,
 }
 
 impl Task {
@@ -163,7 +163,9 @@ impl Task {
     }
 
     pub fn is_cancellable(&self) -> bool {
-        self.status == TaskStatus::Running && self.kind.supports_cancellation()
+        self.status == TaskStatus::Running
+            && self.accepts_cancel
+            && self.kind.supports_cancellation()
     }
 }
 
@@ -243,10 +245,21 @@ impl TaskManager {
             target,
             query_text: None,
             cancel_token: cancel_token.clone(),
+            accepts_cancel: true,
         };
 
         self.tasks.insert(id, task);
         (id, cancel_token)
+    }
+
+    /// Hides the cancel control of a task whose work does not observe its
+    /// cancel token, so the UI never offers a cancel that cannot stop it.
+    /// Internal supersede logic may still cancel the task to discard a stale
+    /// result.
+    pub fn mark_uncancellable(&mut self, id: TaskId) {
+        if let Some(task) = self.tasks.get_mut(&id) {
+            task.accepts_cancel = false;
+        }
     }
 
     /// Records the full query text of a task whose description is a
@@ -626,10 +639,18 @@ mod tests {
     }
 
     #[test]
-    fn key_value_tasks_are_not_cancellable_while_running() {
+    fn running_key_scan_task_is_cancellable() {
+        let mut manager = TaskManager::new();
+        let (id, _token) = manager.start(TaskKind::KeyScan, "SCAN 0");
+
+        assert!(manager.get(id).expect("task exists").is_cancellable);
+    }
+
+    #[test]
+    fn key_reads_and_writes_are_not_cancellable_while_running() {
         let mut manager = TaskManager::new();
 
-        for kind in [TaskKind::KeyScan, TaskKind::KeyGet, TaskKind::KeyMutation] {
+        for kind in [TaskKind::KeyGet, TaskKind::KeyMutation] {
             let (id, _token) = manager.start(kind, kind.label());
             let snapshot = manager.get(id).expect("task exists");
 
@@ -640,6 +661,18 @@ mod tests {
                 kind.label()
             );
         }
+    }
+
+    #[test]
+    fn a_task_marked_uncancellable_offers_no_cancel_while_running() {
+        let mut manager = TaskManager::new();
+        let (id, _token) = manager.start(TaskKind::Query, "UPDATE users SET name = 'a'");
+
+        manager.mark_uncancellable(id);
+
+        let snapshot = manager.get(id).expect("task exists");
+        assert_eq!(snapshot.status, TaskStatus::Running);
+        assert!(!snapshot.is_cancellable);
     }
 
     #[test]

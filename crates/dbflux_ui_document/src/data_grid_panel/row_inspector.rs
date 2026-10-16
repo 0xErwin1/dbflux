@@ -26,6 +26,7 @@
 //!   once the cursor rests on the row for `INCOMING_REFERENCES_DEBOUNCE`
 //!   (see `IncomingReferencesLoader`).
 
+use super::{DataGridEvent, DataGridPanel, DataSource, RowActionProvider};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, Icon, LoadingState, Text};
@@ -834,6 +835,123 @@ impl Render for RowInspectorContent {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+impl DataGridPanel {
+    /// Attach a row-action provider to this panel.
+    ///
+    /// When set, right-clicking a row emits `DataGridEvent::RowActionRequested`
+    /// for the first action returned by the provider, instead of the normal
+    /// context menu. Pass `metric_id` as the key; the provider returns the list
+    /// of actions from `InstanceCatalog::row_actions`.
+    pub fn set_row_action_provider(&mut self, provider: RowActionProvider) {
+        self.inspector.row_action_provider = Some(provider);
+    }
+
+    /// Returns the metric_id embedded in the `QueryResult` source string, or
+    /// `None` for table/collection sources.
+    ///
+    /// `DataGridPanel::new_for_result` stores the metric_id in `original_query`
+    /// when created by `InspectorPanel`. That field is reused here as the key
+    /// forwarded to the row-action provider.
+    fn row_action_metric_id(&self) -> Option<String> {
+        match &self.source {
+            DataSource::QueryResult { original_query, .. } => Some(original_query.clone()),
+            _ => None,
+        }
+    }
+
+    /// The driver-supplied row actions (e.g. Kill, Cancel) a row's context
+    /// menu lists at its end, whether the menu opened on a right click or
+    /// from the keyboard.
+    pub(crate) fn menu_row_actions(&self) -> Vec<dbflux_core::InspectorRowAction> {
+        match self.inspector.row_action_provider.as_ref() {
+            Some(provider) => {
+                let metric_id = self.row_action_metric_id();
+                provider(metric_id.as_deref().unwrap_or(""))
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Called by the workspace when the user dismisses the inspector rail
+    /// explicitly (× button or ESC fallback). Drops the cached coordinates so
+    /// the rail does not re-open on tab activation or refresh.
+    pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
+        self.inspector.follow_selection = false;
+        self.inspector.pinned = false;
+        self.inspector.inspector_row = None;
+        self.inspector.row_inspector_content = None;
+        self.inspector._row_inspector_subscription = None;
+        self.inspector.incoming_references.cancel();
+        self.inspector.document_inspector_content = None;
+        self.inspector._document_inspector_subscription = None;
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+        self.pending.row_inspector_action = None;
+        self.mark_builder_closed();
+        self.mark_document_builder_closed();
+    }
+
+    /// Whether the row inspector currently owns the shared rail for this grid.
+    pub fn row_inspector_is_open(&self) -> bool {
+        self.inspector.follow_selection && self.inspector.inspector_row.is_some()
+    }
+
+    /// Open the row inspector on the active cell, or close it if it is open
+    /// (`Command::ToggleRowInspector`).
+    pub fn toggle_row_inspector(&mut self, cx: &mut Context<Self>) {
+        if self.row_inspector_is_open() {
+            self.clear_inspector_state(cx);
+            cx.emit(DataGridEvent::CloseInspector);
+            cx.notify();
+            return;
+        }
+
+        if self.is_grouped_result() || self.builder.builder_open || self.collection.builder.open {
+            return;
+        }
+
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        if let Some(coord) = active {
+            self.inspector.value_panel_open = false;
+            self.pending.value_panel = None;
+            self.open_row_inspector(coord.row, coord.col, cx);
+        }
+    }
+
+    /// Whether the reload's own `SelectionChanged` emission has already
+    /// re-snapshotted the inspector rail.
+    ///
+    /// The handler runs on a cursor that the rail follows, so it needs an active
+    /// selection to have done the work; a cursor a reload cleared (paging) or a
+    /// rail that is not tracking leaves it to the caller.
+    pub(super) fn reload_refreshed_the_rail(&self, cx: &App) -> bool {
+        self.inspector.follow_selection
+            && self
+                .grid_table
+                .table_state
+                .as_ref()
+                .is_some_and(|state| state.read(cx).selection().active.is_some())
+    }
+
+    /// Whether the grid currently renders as a single-row record view.
+    pub fn row_inspector_is_tracking(&self) -> bool {
+        self.inspector.follow_selection
+    }
+
+    pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
+        if tracking && !self.builder.builder_open && !self.is_grouped_result() {
+            self.inspector.follow_selection = true;
+        } else if !tracking {
+            self.clear_inspector_state(cx);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

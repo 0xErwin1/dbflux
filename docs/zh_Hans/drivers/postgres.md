@@ -19,6 +19,7 @@
 - 通过 PostgreSQL 的取消令牌支持查询取消。
 - 包含 PostgreSQL 专属的 SQL/代码生成，面向 CRUD、索引、重建索引（reindex）、外键与类型操作。
 - 多语句脚本（若干以 `;` 分隔的语句）通过简单查询协议作为一个批次执行，每个语句返回一个结果集。
+- 查询引发的服务器通知和警告（例如单独的 `COMMIT` 产生的 `WARNING: there is no transaction in progress`，或 `RAISE NOTICE`）会随其结果一并返回；批次会把它们全部附加到主结果上，失败的查询会丢弃它们。每个查询保留前 100 条通知，并附加一条说明其余数量的通知。
 - 数据传输引擎：原生的多行 `INSERT` 批量装载（`BULK_INSERT`）、依据源表列生成的驱动程序原生 `CREATE TABLE` DDL、`TRUNCATE TABLE` 支持，以及用于外键安全迁移的参照完整性开关（`SET session_replication_role`）。
 - 以文本形式展示 `pgvector` 的 `vector`、`halfvec` 与 `sparsevec` 取值，包括经验证的一维数组。
 - 以 PostgreSQL 的规范文本形式展示全文检索的 `tsvector` 与 `tsquery` 取值，包括一维数组。

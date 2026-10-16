@@ -9,34 +9,33 @@
 //! `Value` payloads can be written but never read back.
 //!
 //! These tests round-trip every request and response variant with the
-//! version-1.7 envelope and assert that the decoded value re-encodes to the
+//! version-1.8 envelope and assert that the decoded value re-encodes to the
 //! exact bytes it came from, which catches both truncation and field
-//! omission. Targeted tests cover the payload shapes that regressed:
-//! `IndexData` (externally tagged so sequences are encodable), JSON documents
+//! omission. Targeted tests cover the payload shapes that regressed: JSON documents
 //! carried as `JsonText`, and every formerly-skipped field on a wire-crossing
 //! type.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGeneratorInfo, CollectionBrowseRequest,
-    CollectionCountRequest, CollectionIndexInfo, CollectionRef, ColumnInfo, ColumnKind, ColumnMeta,
-    CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
-    DriverFormDef, DriverMetadata, DriverMetadataBuilder, ExecutionContext, ExecutionSourceContext,
-    ExplainRequest, FormSection, FormTab, HashDeleteRequest, HashSetRequest, IndexData,
-    IndexDirection, IndexInfo, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
-    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
-    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, PlannedQuery,
-    QueryLanguage, QueryRequest, QueryResult, RelationalSchema, RowDelete, RowIdentity, RowInsert,
-    RowPatch, SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
-    SetAddRequest, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId,
-    StreamMaxLen, TableBrowseRequest, TableCountRequest, TableInfo, TableRef, Value, ValueRepr,
-    ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
+    CollectionCountRequest, CollectionRef, ColumnInfo, ColumnKind, ColumnMeta, CrudResult,
+    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
+    DriverMetadata, DriverMetadataBuilder, ExecutionContext, ExecutionSourceContext,
+    ExplainRequest, FormSection, FormTab, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest,
+    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
+    KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest,
+    KeyTtlRequest, KeyType, KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest,
+    ListSetRequest, PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema,
+    RowDelete, RowIdentity, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
+    StreamDeleteRequest, StreamEntryId, StreamMaxLen, TableBrowseRequest, TableCountRequest,
+    TableInfo, TableRef, Value, ValueRepr, ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{
     CollectionBrowseRequestDto, CollectionCountRequestDto, CrudResultDto, DocumentDeleteDto,
@@ -47,6 +46,7 @@ use dbflux_ipc::{
     DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
     DriverResponseEnvelope, DriverRpcError, DriverRpcErrorCode, EventCategoryDto, EventOutcomeDto,
     EventSeverityDto, ProtocolVersion, QueryRequestDto, QueryResultChunk, QueryResultDto,
+    QueryResultSetsDto, ResultSetDto,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -155,6 +155,19 @@ fn query_result_dto() -> QueryResultDto {
         Duration::from_millis(3),
     );
     QueryResultDto::from(&result)
+}
+
+fn query_result_sets_dto() -> QueryResultSetsDto {
+    QueryResultSetsDto {
+        primary: ResultSetDto {
+            result: query_result_dto(),
+            rows_truncated: true,
+        },
+        additional: vec![ResultSetDto {
+            result: query_result_dto(),
+            rows_truncated: false,
+        }],
+    }
 }
 
 fn dummy_table_info() -> TableInfo {
@@ -925,7 +938,206 @@ fn response_variants() -> Vec<(&'static str, DriverResponseBody)> {
                 rows_truncated: false,
             },
         ),
+        (
+            "ExecuteResultSets",
+            DriverResponseBody::ExecuteResultSets {
+                results: query_result_sets_dto(),
+            },
+        ),
+        (
+            "ExecuteWithHandleResultSets",
+            DriverResponseBody::ExecuteWithHandleResultSets {
+                handle_id: Uuid::from_u128(12),
+                results: query_result_sets_dto(),
+            },
+        ),
+        (
+            "BrowseResultSets",
+            DriverResponseBody::BrowseResultSets {
+                results: query_result_sets_dto(),
+            },
+        ),
     ]
+}
+
+/// Names a request variant. The match has no wildcard arm, so adding a
+/// `DriverRequestBody` variant fails to compile here until it is named, and
+/// `request_fixtures_cover_every_variant` then fails until it has a fixture.
+fn request_variant_name(body: &DriverRequestBody) -> &'static str {
+    match body {
+        DriverRequestBody::Hello(_) => "Hello",
+        DriverRequestBody::OpenSession { .. } => "OpenSession",
+        DriverRequestBody::CloseSession => "CloseSession",
+        DriverRequestBody::Ping => "Ping",
+        DriverRequestBody::Execute { .. } => "Execute",
+        DriverRequestBody::ExecuteWithHandle { .. } => "ExecuteWithHandle",
+        DriverRequestBody::Cancel { .. } => "Cancel",
+        DriverRequestBody::CancelActive => "CancelActive",
+        DriverRequestBody::CleanupAfterCancel => "CleanupAfterCancel",
+        DriverRequestBody::Schema => "Schema",
+        DriverRequestBody::ListDatabases => "ListDatabases",
+        DriverRequestBody::SchemaForDatabase { .. } => "SchemaForDatabase",
+        DriverRequestBody::TableDetails { .. } => "TableDetails",
+        DriverRequestBody::ViewDetails { .. } => "ViewDetails",
+        DriverRequestBody::SetActiveDatabase { .. } => "SetActiveDatabase",
+        DriverRequestBody::BrowseTable { .. } => "BrowseTable",
+        DriverRequestBody::CountTable { .. } => "CountTable",
+        DriverRequestBody::BrowseCollection { .. } => "BrowseCollection",
+        DriverRequestBody::CountCollection { .. } => "CountCollection",
+        DriverRequestBody::Explain { .. } => "Explain",
+        DriverRequestBody::DescribeTable { .. } => "DescribeTable",
+        DriverRequestBody::PlanSemantic { .. } => "PlanSemantic",
+        DriverRequestBody::UpdateRow { .. } => "UpdateRow",
+        DriverRequestBody::InsertRow { .. } => "InsertRow",
+        DriverRequestBody::DeleteRow { .. } => "DeleteRow",
+        DriverRequestBody::UpdateDocument { .. } => "UpdateDocument",
+        DriverRequestBody::InsertDocument { .. } => "InsertDocument",
+        DriverRequestBody::DeleteDocument { .. } => "DeleteDocument",
+        DriverRequestBody::SchemaTypes { .. } => "SchemaTypes",
+        DriverRequestBody::SchemaIndexes { .. } => "SchemaIndexes",
+        DriverRequestBody::SchemaForeignKeys { .. } => "SchemaForeignKeys",
+        DriverRequestBody::ActiveDatabase => "ActiveDatabase",
+        DriverRequestBody::KvScanKeys { .. } => "KvScanKeys",
+        DriverRequestBody::KvGetKey { .. } => "KvGetKey",
+        DriverRequestBody::KvSetKey { .. } => "KvSetKey",
+        DriverRequestBody::KvDeleteKey { .. } => "KvDeleteKey",
+        DriverRequestBody::KvExistsKey { .. } => "KvExistsKey",
+        DriverRequestBody::KvKeyType { .. } => "KvKeyType",
+        DriverRequestBody::KvKeyTtl { .. } => "KvKeyTtl",
+        DriverRequestBody::KvExpireKey { .. } => "KvExpireKey",
+        DriverRequestBody::KvPersistKey { .. } => "KvPersistKey",
+        DriverRequestBody::KvRenameKey { .. } => "KvRenameKey",
+        DriverRequestBody::KvBulkGet { .. } => "KvBulkGet",
+        DriverRequestBody::KvHashSet { .. } => "KvHashSet",
+        DriverRequestBody::KvHashDelete { .. } => "KvHashDelete",
+        DriverRequestBody::KvListSet { .. } => "KvListSet",
+        DriverRequestBody::KvListPush { .. } => "KvListPush",
+        DriverRequestBody::KvListRemove { .. } => "KvListRemove",
+        DriverRequestBody::KvSetAdd { .. } => "KvSetAdd",
+        DriverRequestBody::KvSetRemove { .. } => "KvSetRemove",
+        DriverRequestBody::KvZSetAdd { .. } => "KvZSetAdd",
+        DriverRequestBody::KvZSetRemove { .. } => "KvZSetRemove",
+        DriverRequestBody::KvStreamAdd { .. } => "KvStreamAdd",
+        DriverRequestBody::KvStreamDelete { .. } => "KvStreamDelete",
+        DriverRequestBody::CodeGenerators => "CodeGenerators",
+        DriverRequestBody::GenerateCode { .. } => "GenerateCode",
+        DriverRequestBody::SchemaColumns { .. } => "SchemaColumns",
+        DriverRequestBody::KvKeyCount { .. } => "KvKeyCount",
+    }
+}
+
+/// Names a response variant; see [`request_variant_name`].
+fn response_variant_name(body: &DriverResponseBody) -> &'static str {
+    match body {
+        DriverResponseBody::Hello(_) => "Hello",
+        DriverResponseBody::SessionOpened { .. } => "SessionOpened",
+        DriverResponseBody::SessionClosed => "SessionClosed",
+        DriverResponseBody::Pong => "Pong",
+        DriverResponseBody::ExecuteResult { .. } => "ExecuteResult",
+        DriverResponseBody::ExecuteWithHandleResult { .. } => "ExecuteWithHandleResult",
+        DriverResponseBody::QueryChunk(_) => "QueryChunk",
+        DriverResponseBody::Cancelled => "Cancelled",
+        DriverResponseBody::CleanupComplete => "CleanupComplete",
+        DriverResponseBody::Schema { .. } => "Schema",
+        DriverResponseBody::Databases { .. } => "Databases",
+        DriverResponseBody::SchemaForDatabase { .. } => "SchemaForDatabase",
+        DriverResponseBody::TableDetails { .. } => "TableDetails",
+        DriverResponseBody::ViewDetails { .. } => "ViewDetails",
+        DriverResponseBody::ActiveDatabaseSet => "ActiveDatabaseSet",
+        DriverResponseBody::BrowseResult { .. } => "BrowseResult",
+        DriverResponseBody::CountResult { .. } => "CountResult",
+        DriverResponseBody::SemanticPlan { .. } => "SemanticPlan",
+        DriverResponseBody::CrudResult { .. } => "CrudResult",
+        DriverResponseBody::SchemaTypes { .. } => "SchemaTypes",
+        DriverResponseBody::SchemaIndexes { .. } => "SchemaIndexes",
+        DriverResponseBody::SchemaForeignKeys { .. } => "SchemaForeignKeys",
+        DriverResponseBody::ActiveDatabaseResult { .. } => "ActiveDatabaseResult",
+        DriverResponseBody::KvScanResult { .. } => "KvScanResult",
+        DriverResponseBody::KvGetResult { .. } => "KvGetResult",
+        DriverResponseBody::KvBoolResult { .. } => "KvBoolResult",
+        DriverResponseBody::KvStringResult { .. } => "KvStringResult",
+        DriverResponseBody::KvU64Result { .. } => "KvU64Result",
+        DriverResponseBody::KvBulkGetResult { .. } => "KvBulkGetResult",
+        DriverResponseBody::CodeGeneratorsResult { .. } => "CodeGeneratorsResult",
+        DriverResponseBody::GenerateCodeResult { .. } => "GenerateCodeResult",
+        DriverResponseBody::EmitAuditEvent(_) => "EmitAuditEvent",
+        DriverResponseBody::Error(_) => "Error",
+        DriverResponseBody::SchemaColumns { .. } => "SchemaColumns",
+        DriverResponseBody::KvKeyCountResult { .. } => "KvKeyCountResult",
+        DriverResponseBody::ExecuteResultWithTruncation { .. } => "ExecuteResultWithTruncation",
+        DriverResponseBody::ExecuteWithHandleResultWithTruncation { .. } => {
+            "ExecuteWithHandleResultWithTruncation"
+        }
+        DriverResponseBody::ExecuteResultSets { .. } => "ExecuteResultSets",
+        DriverResponseBody::ExecuteWithHandleResultSets { .. } => "ExecuteWithHandleResultSets",
+        DriverResponseBody::BrowseResultSets { .. } => "BrowseResultSets",
+    }
+}
+
+/// Deserializer that only records the variant list serde derives for an enum,
+/// so the fixture lists can be checked against every variant the type has
+/// rather than against a list written by hand.
+struct EnumVariantNames(Option<&'static [&'static str]>);
+
+impl<'de> serde::Deserializer<'de> for &mut EnumVariantNames {
+    type Error = serde::de::value::Error;
+
+    fn deserialize_any<V: serde::de::Visitor<'de>>(
+        self,
+        _visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        Err(serde::de::Error::custom("only enums are inspected"))
+    }
+
+    fn deserialize_enum<V: serde::de::Visitor<'de>>(
+        self,
+        _name: &'static str,
+        variants: &'static [&'static str],
+        _visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0 = Some(variants);
+        Err(serde::de::Error::custom("variant names recorded"))
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+        option unit unit_struct newtype_struct seq tuple tuple_struct map struct identifier
+        ignored_any
+    }
+}
+
+fn enum_variant_names<T: DeserializeOwned>() -> BTreeSet<&'static str> {
+    let mut recorder = EnumVariantNames(None);
+    assert!(
+        T::deserialize(&mut recorder).is_err(),
+        "the recorder never produces a value"
+    );
+    recorder
+        .0
+        .expect("the type deserializes as an enum")
+        .iter()
+        .copied()
+        .collect()
+}
+
+#[test]
+fn request_fixtures_cover_every_variant() {
+    let mut covered = BTreeSet::new();
+    for (name, body) in request_variants() {
+        assert_eq!(name, request_variant_name(&body), "fixture label");
+        assert!(covered.insert(name), "duplicate fixture for {name}");
+    }
+    assert_eq!(covered, enum_variant_names::<DriverRequestBody>());
+}
+
+#[test]
+fn response_fixtures_cover_every_variant() {
+    let mut covered = BTreeSet::new();
+    for (name, body) in response_variants() {
+        assert_eq!(name, response_variant_name(&body), "fixture label");
+        assert!(covered.insert(name), "duplicate fixture for {name}");
+    }
+    assert_eq!(covered, enum_variant_names::<DriverResponseBody>());
 }
 
 #[test]
@@ -1147,82 +1359,6 @@ fn crud_result_without_metadata_round_trips() {
     assert_eq!(restored.affected_rows, 0);
     assert!(restored.returning_row.is_none());
     assert!(restored.metadata_extra.is_none());
-}
-
-#[test]
-fn index_data_round_trips_through_postcard() {
-    let document = IndexData::Document(vec![CollectionIndexInfo {
-        name: "status_1".to_string(),
-        keys: vec![
-            ("status".to_string(), IndexDirection::Ascending),
-            ("ts".to_string(), IndexDirection::Descending),
-        ],
-        is_unique: false,
-        is_sparse: true,
-        expire_after_seconds: Some(3_600),
-    }]);
-
-    assert_postcard_roundtrip(&document);
-
-    let encoded = postcard::to_allocvec(&document).expect("encode");
-    let decoded: IndexData = postcard::from_bytes(&encoded).expect("decode");
-    match decoded {
-        IndexData::Document(indexes) => {
-            assert_eq!(indexes.len(), 1);
-            assert_eq!(indexes[0].name, "status_1");
-            assert_eq!(indexes[0].keys.len(), 2);
-            assert_eq!(indexes[0].expire_after_seconds, Some(3_600));
-        }
-        other => panic!("expected document indexes, got {other:?}"),
-    }
-
-    let relational = IndexData::Relational(vec![IndexInfo {
-        name: "users_pkey".to_string(),
-        columns: vec!["id".to_string()],
-        is_unique: true,
-        is_primary: true,
-    }]);
-
-    assert_postcard_roundtrip(&relational);
-
-    let encoded = postcard::to_allocvec(&relational).expect("encode");
-    let decoded: IndexData = postcard::from_bytes(&encoded).expect("decode");
-    match decoded {
-        IndexData::Relational(indexes) => {
-            assert_eq!(indexes.len(), 1);
-            assert_eq!(indexes[0].name, "users_pkey");
-            assert!(indexes[0].is_primary);
-        }
-        other => panic!("expected relational indexes, got {other:?}"),
-    }
-}
-
-#[test]
-fn table_details_with_indexes_round_trips() {
-    let mut table = dummy_table_info();
-    table.indexes = Some(IndexData::Document(vec![CollectionIndexInfo {
-        name: "status_1".to_string(),
-        keys: vec![("status".to_string(), IndexDirection::Ascending)],
-        is_unique: false,
-        is_sparse: false,
-        expire_after_seconds: None,
-    }]));
-    let response = DriverResponseBody::TableDetails { table };
-
-    assert_postcard_roundtrip(&response);
-
-    let encoded = postcard::to_allocvec(&response).expect("encode");
-    let decoded: DriverResponseBody = postcard::from_bytes(&encoded).expect("decode");
-    match decoded {
-        DriverResponseBody::TableDetails { table } => match table.indexes {
-            Some(IndexData::Document(indexes)) => {
-                assert_eq!(indexes.len(), 1);
-                assert_eq!(indexes[0].name, "status_1");
-            }
-            other => panic!("expected document indexes, got {other:?}"),
-        },
-        other => panic!("unexpected response body: {other:?}"),
-    }
 }
 
 #[test]

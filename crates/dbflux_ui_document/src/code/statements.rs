@@ -69,6 +69,54 @@ pub(super) fn statement_at_cursor(ranges: &[Range<usize>], cursor: usize) -> Opt
         .cloned()
 }
 
+/// Whether `statement` only opens or ends a transaction: `BEGIN`,
+/// `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` or `ABORT`. Run alone out
+/// of a script, such a statement leaves the work it brackets undone, or a
+/// transaction open that the next run silently joins.
+pub(super) fn is_transaction_boundary(statement: &str) -> bool {
+    let statement = dbflux_core::strip_leading_comments(statement);
+    // A trailing comment is not part of the statement: `ROLLBACK -- to start`
+    // still ends the transaction.
+    let statement = [statement.find("--"), statement.find("/*")]
+        .into_iter()
+        .flatten()
+        .min()
+        .and_then(|comment| statement.get(..comment))
+        .unwrap_or(statement);
+
+    let words: Vec<String> = statement
+        .split(|character: char| character.is_whitespace() || character == ';')
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let rest = words.get(1..).unwrap_or_default();
+
+    match first.as_str() {
+        "BEGIN" | "END" | "ABORT" => true,
+        "START" => rest.first().is_some_and(|word| word == "TRANSACTION"),
+        // `COMMIT PREPARED` ends a prepared transaction, not the session's.
+        "COMMIT" => rest.first().is_none_or(|word| word != "PREPARED"),
+        // `ROLLBACK TO` returns to a savepoint and keeps the transaction open.
+        "ROLLBACK" => {
+            rest.first().is_none_or(|word| word != "PREPARED")
+                && !rest.iter().any(|word| word == "TO")
+        }
+        _ => false,
+    }
+}
+
+/// Whether the transaction-boundary confirmation offers to run the whole
+/// script: not on a driver that cannot run a batch.
+pub(super) fn guard_offers_script(capabilities: Option<dbflux_core::DriverCapabilities>) -> bool {
+    capabilities.is_none_or(|capabilities| {
+        capabilities.contains(dbflux_core::DriverCapabilities::MULTI_STATEMENT)
+    })
+}
+
 /// The context bar's run summary (IslEditor): "3 statements · last run
 /// 0.32 s", either part alone when the other is unknown, `None` when both
 /// are.
@@ -277,9 +325,74 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_statement, result_statement_captions, run_summary_label, statement_at_cursor,
+        cursor_statement, guard_offers_script, is_transaction_boundary, result_statement_captions,
+        run_summary_label, statement_at_cursor,
     };
     use dbflux_core::QueryLanguage;
+
+    #[test]
+    fn statements_that_open_or_end_a_transaction_are_boundaries() {
+        for statement in [
+            "BEGIN",
+            "begin transaction",
+            "BEGIN WORK",
+            "BEGIN TRAN",
+            "START TRANSACTION",
+            "start transaction isolation level serializable",
+            "COMMIT",
+            "commit work",
+            "END",
+            "ROLLBACK",
+            "ABORT",
+            "COMMIT;",
+            "-- Must return one row.\nCOMMIT",
+            "/* close */ ROLLBACK",
+            "ROLLBACK -- go to start",
+            "COMMIT /* to disk */",
+        ] {
+            assert!(
+                is_transaction_boundary(statement),
+                "{statement:?} opens or ends a transaction"
+            );
+        }
+    }
+
+    #[test]
+    fn the_script_is_offered_unless_the_driver_cannot_run_one() {
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            guard_offers_script(None),
+            "nothing runs without a connection"
+        );
+        assert!(guard_offers_script(Some(
+            DriverCapabilities::MULTI_STATEMENT
+        )));
+        assert!(!guard_offers_script(Some(DriverCapabilities::empty())));
+    }
+
+    #[test]
+    fn other_statements_are_not_transaction_boundaries() {
+        for statement in [
+            "SELECT 1",
+            "UPDATE device SET is_linked = false",
+            "ROLLBACK TO SAVEPOINT before_update",
+            "ROLLBACK TO before_update",
+            "SAVEPOINT before_update",
+            "RELEASE SAVEPOINT before_update",
+            "START REPLICATION",
+            "COMMIT PREPARED 'checkout'",
+            "ROLLBACK PREPARED 'checkout'",
+            "COMMITTED_AT",
+            "-- COMMIT\nSELECT 1",
+            "",
+        ] {
+            assert!(
+                !is_transaction_boundary(statement),
+                "{statement:?} is not a transaction boundary"
+            );
+        }
+    }
 
     const BUFFER: &str = "SELECT count(*) FROM orders;\n\nSELECT c.country,\n       o.total\nFROM orders o\nJOIN customers c ON c.id = o.customer_id;\n";
 
@@ -600,5 +713,223 @@ mod gutter_tests {
             );
             assert_eq!(document.statement_count(), None);
         });
+    }
+}
+
+#[cfg(test)]
+mod transaction_guard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::code::CodeDocument;
+    use dbflux_components::controls::InputPosition;
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::host_modal;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+
+    const SCRIPT: &str = "BEGIN;\n\nUPDATE device\nSET is_linked = false\nWHERE device_id = 'c0c72c29';\n\n-- Must return one row.\nSELECT device_id FROM device;\n\nCOMMIT;\n";
+
+    /// A SQL editor with no connection holding `SCRIPT`, its cursor on the
+    /// line `cursor_line` (zero-based). Running anything in it ends in the
+    /// "no active connection" toast, which tells a run apart.
+    fn open_editor(
+        cx: &mut TestAppContext,
+        cursor_line: u32,
+    ) -> (
+        Entity<CodeDocument>,
+        Entity<ToastHost>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let toasts = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let (document, _outside, window) = host_modal(cx, move |window, cx| {
+            CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+        });
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.set_content(SCRIPT, window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_cursor_position(InputPosition::new(cursor_line, 0), window, cx);
+                });
+            });
+        });
+        window.run_until_parked();
+
+        (document, toasts, window)
+    }
+
+    fn run(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+    }
+
+    fn ran_a_query(window: &mut VisualTestContext, toasts: &Entity<ToastHost>) -> bool {
+        let expected = dbflux_i18n::t!("document.code.execution.toast.no_active_connection");
+        window.update(|_, cx| toasts.read(cx).last_toast_title()) == Some(expected)
+    }
+
+    /// The transaction boundary the open confirmation offers to run alone,
+    /// with its one-based line.
+    fn guarded_statement(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> Option<(String, usize)> {
+        window.update(|_, cx| {
+            let pending = document.read(cx).pending.script_confirm.as_ref()?;
+            let statement = pending.cursor_statement.as_ref()?;
+            Some((statement.text.clone(), statement.line))
+        })
+    }
+
+    fn query_origin(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> Option<usize> {
+        window.update(|_, cx| document.read(cx).execution.query_origin)
+    }
+
+    const COMMIT_LINE: u32 = 9;
+
+    #[gpui::test]
+    fn a_commit_under_the_cursor_asks_before_running_alone(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, COMMIT_LINE);
+
+        run(window, &document);
+
+        assert_eq!(
+            guarded_statement(window, &document),
+            Some(("COMMIT".to_string(), 10))
+        );
+        assert_eq!(
+            window.update(|_, cx| document
+                .read(cx)
+                .pending
+                .script_confirm
+                .as_ref()
+                .map(|pending| pending.statement_count)),
+            Some(4)
+        );
+        assert!(
+            !ran_a_query(window, &toasts),
+            "nothing runs before the answer"
+        );
+    }
+
+    #[gpui::test]
+    fn a_begin_under_the_cursor_asks_before_running_alone(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, 0);
+
+        run(window, &document);
+
+        assert_eq!(
+            guarded_statement(window, &document),
+            Some(("BEGIN".to_string(), 1))
+        );
+        assert!(!ran_a_query(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn confirming_runs_the_whole_script(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, COMMIT_LINE);
+        run(window, &document);
+
+        window.simulate_keystrokes("enter");
+
+        assert!(guarded_statement(window, &document).is_none());
+        assert!(ran_a_query(window, &toasts));
+        assert_eq!(query_origin(window, &document), Some(0));
+    }
+
+    #[gpui::test]
+    fn the_statement_option_runs_only_the_boundary(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, COMMIT_LINE);
+        run(window, &document);
+        assert!(guarded_statement(window, &document).is_some());
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.confirm_cursor_statement(window, cx)
+            });
+        });
+        window.run_until_parked();
+
+        assert!(guarded_statement(window, &document).is_none());
+        assert!(ran_a_query(window, &toasts));
+        assert_eq!(
+            query_origin(window, &document),
+            Some(SCRIPT.find("COMMIT").expect("COMMIT in the script"))
+        );
+    }
+
+    #[gpui::test]
+    fn without_batch_support_enter_runs_only_the_boundary(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, COMMIT_LINE);
+        run(window, &document);
+        window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                if let Some(statement) = document
+                    .pending
+                    .script_confirm
+                    .as_mut()
+                    .and_then(|pending| pending.cursor_statement.as_mut())
+                {
+                    statement.offers_script = false;
+                }
+            });
+        });
+
+        window.simulate_keystrokes("enter");
+
+        assert!(guarded_statement(window, &document).is_none());
+        assert!(ran_a_query(window, &toasts));
+        assert_eq!(
+            query_origin(window, &document),
+            Some(SCRIPT.find("COMMIT").expect("COMMIT in the script")),
+            "a driver without batches never receives the whole script"
+        );
+    }
+
+    #[gpui::test]
+    fn escape_runs_nothing(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, COMMIT_LINE);
+        run(window, &document);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(guarded_statement(window, &document).is_none());
+        assert!(!ran_a_query(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn any_other_statement_under_the_cursor_runs_without_asking(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor(cx, 3);
+
+        run(window, &document);
+
+        assert!(window.update(|_, cx| document.read(cx).pending.script_confirm.is_none()));
+        assert!(ran_a_query(window, &toasts));
+        assert_eq!(
+            query_origin(window, &document),
+            Some(SCRIPT.find("UPDATE").expect("UPDATE in the script"))
+        );
     }
 }

@@ -1313,6 +1313,11 @@ document:
         many: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句执行。是否继续？"
       cancel: 取消
       run: 执行脚本
+      run_statement: "仅执行此语句"
+      transaction:
+        title: "光标处的事务语句"
+        message: "光标处的语句（第 %{line} 行）是 \"%{statement}\"，它只会开始或结束事务。单独执行它不会执行脚本的其余部分。是否改为执行包含 %{count} 条语句的整个脚本？"
+        message_statement_only: "光标处的语句（第 %{line} 行）是 \"%{statement}\"，它只会开始或结束事务。单独执行它不会执行脚本的其余部分，且此连接无法一次执行整个脚本：请选中这些语句以一起执行。是否仅执行此语句？"
     dangerous_query:
       fallback:
         title: 警告
@@ -1725,6 +1730,10 @@ document:
         rows:
           one: "%{count} 行"
           many: "%{count} 行"
+        executed: "语句已执行"
+        affected_rows:
+          one: "%{count} 行受影响"
+          many: "%{count} 行受影响"
         limited_rows:
           first: "已加载前 %{count} 行"
           of_total: "已加载 %{loaded}/%{total} 行"
@@ -3635,6 +3644,13 @@ modals:
     remember: 在此会话中记住
     cancel: 取消
     connect: 连接
+  connection_password:
+    title: "需要密码"
+    connection_label: "连接"
+    placeholder: "密码"
+    show_password: "显示密码"
+    hide_password: "隐藏密码"
+    remember: "在 DBFlux 关闭前记住"
   unsaved_changes:
     title: 未保存的更改
     prompt: 以下文档中有未保存的更改。您想怎么做？

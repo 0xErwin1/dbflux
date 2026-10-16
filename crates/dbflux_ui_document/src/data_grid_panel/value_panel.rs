@@ -24,6 +24,7 @@
 //! editor is unmodified — see `is_modified`. Otherwise moving the cursor would
 //! silently discard whatever the user had typed.
 
+use super::{DataGridEvent, DataGridPanel};
 use dbflux_components::components::value_format::{
     self, ValueFormat, compact_value, format_value, validate_value,
 };
@@ -668,6 +669,195 @@ impl ValuePanelContent {
                         })),
                     ),
             )
+    }
+}
+
+impl DataGridPanel {
+    /// Whether the value panel currently owns the shared inspector rail.
+    pub fn value_panel_is_open(&self) -> bool {
+        self.inspector.value_panel_open
+    }
+
+    /// Open the value panel on the active cell, or close it if already open.
+    pub fn toggle_value_panel(&mut self, cx: &mut Context<Self>) {
+        if self.inspector.value_panel_open {
+            self.close_value_panel(cx);
+            return;
+        }
+
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        if let Some(coord) = active {
+            self.request_value_panel(coord.row, coord.col, cx);
+        }
+    }
+
+    /// Queue the value panel to open on `(row, col)`.
+    ///
+    /// The builder and the row inspector share this rail, so taking it means
+    /// the row inspector must stop following the cursor — otherwise the two
+    /// would replace each other on every selection change.
+    pub(crate) fn request_value_panel(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        let Some(target) = self.value_panel_target(row, col, cx) else {
+            return;
+        };
+
+        self.inspector.follow_selection = false;
+        self.inspector.inspector_row = None;
+        self.inspector.value_panel_open = true;
+        self.mark_document_builder_closed();
+        self.pending.value_panel = Some(target);
+        cx.notify();
+    }
+
+    /// Carry the value panel's open state onto this tab.
+    ///
+    /// Called when the tab becomes active. Opening re-reads *this* grid's
+    /// selection, so the rail shows the new table's cell instead of whatever
+    /// the previous tab left there.
+    pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
+        if open && !self.builder.builder_open {
+            self.inspector.value_panel_open = true;
+        } else if !open {
+            self.inspector.value_panel_open = false;
+            self.pending.value_panel = None;
+        }
+    }
+
+    /// Point the value panel at the active cell of this grid.
+    ///
+    /// Returns false when there is nothing to show yet — a tab whose grid has
+    /// not loaded, or one with no selection.
+    pub(super) fn mount_value_panel_for_active_cell(&mut self, cx: &mut Context<Self>) -> bool {
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        let Some(coord) = active else {
+            return false;
+        };
+
+        let Some(target) = self.value_panel_target(coord.row, coord.col, cx) else {
+            return false;
+        };
+
+        self.pending.value_panel = Some(target);
+        cx.notify();
+        true
+    }
+
+    /// The value panel when it is open and holds an unsaved edit.
+    pub(crate) fn value_panel_pending_save(&self, cx: &App) -> Option<Entity<ValuePanelContent>> {
+        if !self.inspector.value_panel_open {
+            return None;
+        }
+
+        let panel = self.inspector.value_panel.as_ref()?;
+        panel.read(cx).is_modified(cx).then(|| panel.clone())
+    }
+
+    fn close_value_panel(&mut self, cx: &mut Context<Self>) {
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+        cx.emit(DataGridEvent::CloseInspector);
+        cx.notify();
+    }
+
+    /// Read the cell's current edit-buffer text and editability for the panel.
+    fn value_panel_target(&self, row: usize, col: usize, cx: &App) -> Option<ValuePanelTarget> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+        let table_state = self.grid_table.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let model = state.model();
+        let column = model.columns.get(col)?;
+
+        let edit_buffer = state.edit_buffer();
+        let null_cell = CellValue::null();
+
+        let value = match edit_buffer.compute_visual_order().get(row).copied()? {
+            VisualRowSource::Base(base_idx) => {
+                let base = model.cell(base_idx, col).unwrap_or(&null_cell);
+                edit_buffer.get_cell(base_idx, col, base).edit_text()
+            }
+            VisualRowSource::Insert(insert_idx) => edit_buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|data| data.get(col))
+                .map(|cell| cell.edit_text())
+                .unwrap_or_default(),
+        };
+
+        Some(ValuePanelTarget {
+            row,
+            col,
+            column_name: column.title.to_string(),
+            value,
+            editable: state.is_editable() && !state.readonly_columns().contains(&col),
+        })
+    }
+
+    /// Mount or update the value panel. Called from render, where a `Window`
+    /// is available to build the editor.
+    pub(crate) fn apply_pending_value_panel(
+        &mut self,
+        target: ValuePanelTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let content = match &self.inspector.value_panel {
+            Some(existing) => {
+                existing.update(cx, |panel, cx| panel.open(target, window, cx));
+                existing.clone()
+            }
+            None => {
+                let content = cx.new(|cx| ValuePanelContent::new(target, window, cx));
+                self.inspector._value_panel_subscription = Some(cx.subscribe(
+                    &content,
+                    |this, _, event: &ValuePanelSaveEvent, cx| {
+                        // Save in the panel means "write this value to the
+                        // database", not "stage it": having to confirm again in
+                        // the toolbar after pressing Save reads as the panel
+                        // having done nothing. The commit goes through the
+                        // normal row-save path, so mutation policy, approval,
+                        // and the task list all still apply.
+                        this.write_cell_value(event.row, event.col, &event.value, cx);
+
+                        if let Some(table_state) = this.grid_table.table_state.clone() {
+                            table_state.update(cx, |state, cx| {
+                                state.request_save_row_at(event.row, cx);
+                            });
+                        }
+                    },
+                ));
+                self.inspector.value_panel = Some(content.clone());
+                content
+            }
+        };
+
+        cx.emit(DataGridEvent::OpenInspector {
+            title: SharedString::from(dbflux_i18n::t!("components.value_panel.title")),
+            content: AnyView::from(content),
+            content_has_header: false,
+        });
+    }
+
+    /// Whether the panel may be re-pointed at `(row, col)`.
+    ///
+    /// An edited-but-unsaved panel stays pinned to its cell; following the
+    /// cursor there would throw the user's typing away without asking.
+    pub(super) fn value_panel_can_follow(&self, row: usize, col: usize, cx: &App) -> bool {
+        let Some(panel) = self.inspector.value_panel.as_ref() else {
+            return true;
+        };
+
+        let panel = panel.read(cx);
+        !panel.is_modified(cx) && panel.target_cell() != (row, col)
     }
 }
 

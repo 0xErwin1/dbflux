@@ -76,7 +76,7 @@ Notes:
 
 DBFlux connects and sends `Hello` first.
 
-The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are additive and are negotiated deterministically within that major line.
+The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below).
 
 Client request:
 
@@ -92,6 +92,8 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
         ProtocolVersion::new(1, 6),
+        ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -185,7 +187,35 @@ Both variants are appended after the last v1.4 variant of their enum, for the wi
 
 `Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`, the editor row limit. A host answers them with `ExecuteResultWithTruncation { result, rows_truncated }` and `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }` instead of `ExecuteResult` and `ExecuteWithHandleResult`, because `QueryResultDto` has no room for the flag. `rows_truncated` is `true` only when the driver dropped rows to honour the limit.
 
-Both response variants are appended after `KvKeyCountResult`, for the wire-index reason described above. A host sends them for execute calls only on sessions that negotiated v1.6 or newer; older sessions keep the v1.5 responses. See **Protected execution** below for which requests carry a limit.
+Both response variants are appended after `KvKeyCountResult`, for the wire-index reason described above. A host sends them for execute calls only on sessions that negotiated v1.6 exactly; v1.7 replaces them with the result-set responses below, and older sessions keep the v1.5 responses. See **Protected execution** below for which requests carry a limit.
+
+### Result sets (v1.7+)
+
+A statement batch or a stored procedure can return several result sets, and each of them can omit rows on its own. From v1.7 a host answers with every result set instead of only the first one:
+
+| Request | v1.7 response |
+| --- | --- |
+| `Execute` | `ExecuteResultSets { results }` |
+| `ExecuteWithHandle` | `ExecuteWithHandleResultSets { handle_id, results }` |
+| `BrowseTable`, `BrowseCollection`, `Explain`, `DescribeTable` | `BrowseResultSets { results }` |
+
+`results` is a `QueryResultSetsDto { primary, additional }`. Each entry is a `ResultSetDto { result, rows_truncated }`: `primary` is the first result set and `additional` holds the rest in the order the driver returned them. `rows_truncated` is `true` only when the driver dropped rows from that result set, so a driver that never caps rows always sends `false`.
+
+The three variants are appended after `ExecuteWithHandleResultWithTruncation`, for the wire-index reason described above. A host sends them only on sessions that negotiated v1.7 or newer. A v1.6 session keeps `ExecuteResultWithTruncation`, `ExecuteWithHandleResultWithTruncation` and `BrowseResult`, and an older session keeps the v1.5 responses; on those sessions only the primary result set crosses the wire. The client accepts every variant whatever the negotiated version, so a host never needs to know which client build it talks to.
+
+### Wire-format fix (v1.8)
+
+v1.8 adds no request or response variant. It changes how some existing payloads are encoded, so that every payload the protocol defines can be decoded with postcard:
+
+| Payload | v1.8 encoding |
+| --- | --- |
+| JSON documents: the `filter`, `projection` and `sort` of `BrowseCollection` (`CollectionBrowseRequestDto`), the `filter` of `CountCollection` (`CollectionCountRequestDto`), the filter and update of `UpdateDocument` (`DocumentUpdateDto`), the documents of `InsertDocument` (`DocumentInsertDto`), the filter of `DeleteDocument` (`DocumentDeleteDto`), and the `metadata_extra` values of `CrudResult` (`CrudResultDto`) | JSON text: a postcard string holding the serialized JSON, parsed back at the protocol boundary |
+| Optional and list fields that used to carry `skip_serializing_if`, such as `semantic_filter` and `columns` on browse and count requests, `enum_values` on `ColumnInfo`, `metadata_extra` on `CrudResult`, `type_name` on `ColumnAssignment`, `source` on `ExecutionContext` and `icon` on `FormSection` | always encoded, as `None` or an empty list when unset |
+| `IndexData` | externally tagged: the variant index, then the list of indexes |
+
+A raw `serde_json::Value` could be written but never read back, because it deserializes only through `deserialize_any`, which postcard does not support. A skipped field shortened the frame while the decoder still read it, so every later field shifted. An internally tagged `IndexData` could not be encoded at all, so `TableDetails` and `GenerateCode` failed for any table with indexes.
+
+The encoding is not gated by the negotiated version. A shape that decoded before v1.8 is byte-identical in v1.8; only shapes that no peer could decode change their bytes, so peers on older minors keep working.
 
 ## Auth-provider RPC contract
 
@@ -287,13 +317,13 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 | `OpenSession` → `SessionOpened` | open connection/session |
 | `CloseSession` → `SessionClosed` | close session |
 | `Ping` → `Pong` | liveness |
-| `Execute` → `ExecuteResult` | query execution |
+| `Execute` → `ExecuteResult` (`ExecuteResultSets` from v1.7) | query execution |
 | `Schema` → `Schema` | schema snapshot |
 | `ListDatabases` → `Databases` | database list |
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 
-**Protected execution:** on a session that negotiated v1.6 or newer, a driver whose metadata declares `DriverCapabilities::REQUEST_ROW_LIMIT` receives `QueryRequestDto::limit`. It must either enforce the limit while it collects rows, counting it once across all result sets, and set `rows_truncated` only when rows were dropped, or refuse the request before running anything. The host session refuses a limited request with `UnsupportedMethod` when the driver does not declare the capability. Below v1.6 the client never sends a limit: `IpcConnection` does not advertise `REQUEST_ROW_LIMIT` and rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`). On every version the client refuses a `statement_timeout` or read-only enforcement the same way, and the host refuses a `statement_timeout`. Only the primary result set crosses the wire, so additional result sets and their flags are dropped. The client trusts the driver's declaration: a driver that declares `REQUEST_ROW_LIMIT` and ignores the limit returns uncapped rows marked as not truncated. Browse and CRUD operations are unaffected.
+**Protected execution:** on a session that negotiated v1.6 or newer, a driver whose metadata declares `DriverCapabilities::REQUEST_ROW_LIMIT` receives `QueryRequestDto::limit`. It must either enforce the limit while it collects rows, counting it once across all result sets, and set `rows_truncated` only when rows were dropped, or refuse the request before running anything. The host session refuses a limited request with `UnsupportedMethod` when the driver does not declare the capability. Below v1.6 the client never sends a limit: `IpcConnection` does not advertise `REQUEST_ROW_LIMIT` and rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`). On every version the client refuses a `statement_timeout` or read-only enforcement the same way, and the host refuses a `statement_timeout`. Below v1.7 only the primary result set crosses the wire, so additional result sets and their flags are dropped; from v1.7 every result set crosses with its own flag (see **Result sets** above). The client trusts the driver's declaration: a driver that declares `REQUEST_ROW_LIMIT` and ignores the limit returns uncapped rows marked as not truncated. Browse and CRUD operations are unaffected.
 
 ## Audit emission from drivers (v1.2+)
 

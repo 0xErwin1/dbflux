@@ -6,8 +6,8 @@ use dbflux_core::{
 };
 use dbflux_ipc::ProtocolVersion;
 use dbflux_ipc::driver_protocol::{
-    DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto,
-    protocol_carries_request_row_limit,
+    DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto, QueryResultSetsDto,
+    protocol_carries_request_row_limit, protocol_carries_result_sets,
 };
 use uuid::Uuid;
 
@@ -57,6 +57,16 @@ pub(crate) fn dispatch(
     body: DriverRequestBody,
 ) -> DriverResponseBody {
     let reports_truncation = protocol_carries_request_row_limit(negotiated_version);
+    let carries_result_sets = protocol_carries_result_sets(negotiated_version);
+    let browse_response = |result: Result<dbflux_core::QueryResult, DbError>| match result {
+        Ok(result) if carries_result_sets => DriverResponseBody::BrowseResultSets {
+            results: QueryResultSetsDto::from(&result),
+        },
+        Ok(result) => DriverResponseBody::BrowseResult {
+            result: QueryResultDto::from(&result),
+        },
+        Err(e) => db_error_to_response(e),
+    };
     match body {
         DriverRequestBody::Ping => match conn.ping() {
             Ok(()) => DriverResponseBody::Pong,
@@ -74,6 +84,9 @@ pub(crate) fn dispatch(
                 return db_error_to_response(error);
             }
             match conn.execute(&req) {
+                Ok(result) if carries_result_sets => DriverResponseBody::ExecuteResultSets {
+                    results: QueryResultSetsDto::from(&result),
+                },
                 Ok(result) if reports_truncation => {
                     DriverResponseBody::ExecuteResultWithTruncation {
                         result: QueryResultDto::from(&result),
@@ -93,6 +106,12 @@ pub(crate) fn dispatch(
                 return db_error_to_response(error);
             }
             match conn.execute_with_handle(&req) {
+                Ok((handle, result)) if carries_result_sets => {
+                    DriverResponseBody::ExecuteWithHandleResultSets {
+                        handle_id: handle.id,
+                        results: QueryResultSetsDto::from(&result),
+                    }
+                }
                 Ok((handle, result)) if reports_truncation => {
                     DriverResponseBody::ExecuteWithHandleResultWithTruncation {
                         handle_id: handle.id,
@@ -168,12 +187,7 @@ pub(crate) fn dispatch(
         },
 
         // === Browse operations ===
-        DriverRequestBody::BrowseTable { request } => match conn.browse_table(&request) {
-            Ok(result) => DriverResponseBody::BrowseResult {
-                result: QueryResultDto::from(&result),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::BrowseTable { request } => browse_response(conn.browse_table(&request)),
 
         DriverRequestBody::CountTable { request } => match conn.count_table(&request) {
             Ok(count) => DriverResponseBody::CountResult { count },
@@ -182,12 +196,7 @@ pub(crate) fn dispatch(
 
         DriverRequestBody::BrowseCollection { request } => {
             let request: CollectionBrowseRequest = request.into();
-            match conn.browse_collection(&request) {
-                Ok(result) => DriverResponseBody::BrowseResult {
-                    result: QueryResultDto::from(&result),
-                },
-                Err(e) => db_error_to_response(e),
-            }
+            browse_response(conn.browse_collection(&request))
         }
 
         DriverRequestBody::CountCollection { request } => {
@@ -198,19 +207,11 @@ pub(crate) fn dispatch(
             }
         }
 
-        DriverRequestBody::Explain { request } => match conn.explain(&request) {
-            Ok(result) => DriverResponseBody::BrowseResult {
-                result: QueryResultDto::from(&result),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::Explain { request } => browse_response(conn.explain(&request)),
 
-        DriverRequestBody::DescribeTable { request } => match conn.describe_table(&request) {
-            Ok(result) => DriverResponseBody::BrowseResult {
-                result: QueryResultDto::from(&result),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::DescribeTable { request } => {
+            browse_response(conn.describe_table(&request))
+        }
 
         DriverRequestBody::PlanSemantic { request } => match conn.plan_semantic_request(&request) {
             Ok(plan) => DriverResponseBody::SemanticPlan { plan },
@@ -514,7 +515,7 @@ mod tests {
         SemanticPlan, SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef,
     };
     use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
-    use dbflux_ipc::{DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_VERSION};
+    use dbflux_ipc::{DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, DRIVER_RPC_VERSION};
     use std::{
         sync::{
             Arc, Mutex,
@@ -843,6 +844,195 @@ mod tests {
         }
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             &DefaultSqlDialect
+        }
+    }
+
+    /// Answers every query, execute and browse call with three result sets,
+    /// the first and last of them truncated.
+    struct MultiSetConnection {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl MultiSetConnection {
+        fn new() -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .build(),
+            }
+        }
+
+        fn result_sets() -> QueryResult {
+            let labelled = |label: &str, truncated: bool| {
+                let mut result = QueryResult::text(label.to_string(), Duration::from_millis(1));
+                result.set_rows_truncated(truncated);
+                result
+            };
+            let mut primary = labelled("primary", true);
+            primary.push_additional_result(labelled("second", false));
+            primary.push_additional_result(labelled("third", true));
+            primary
+        }
+    }
+
+    impl Connection for MultiSetConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Ok(Self::result_sets())
+        }
+        fn execute_with_handle(
+            &self,
+            _req: &QueryRequest,
+        ) -> Result<(dbflux_core::QueryHandle, QueryResult), DbError> {
+            Ok((
+                dbflux_core::QueryHandle {
+                    id: uuid::Uuid::nil(),
+                },
+                Self::result_sets(),
+            ))
+        }
+        fn browse_table(&self, _request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
+            Ok(Self::result_sets())
+        }
+        fn browse_collection(
+            &self,
+            _request: &dbflux_core::CollectionBrowseRequest,
+        ) -> Result<QueryResult, DbError> {
+            Ok(Self::result_sets())
+        }
+        fn explain(&self, _request: &dbflux_core::ExplainRequest) -> Result<QueryResult, DbError> {
+            Ok(Self::result_sets())
+        }
+        fn describe_table(
+            &self,
+            _request: &dbflux_core::DescribeRequest,
+        ) -> Result<QueryResult, DbError> {
+            Ok(Self::result_sets())
+        }
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+    }
+
+    /// Every request whose answer carries a `QueryResult`.
+    fn result_set_bodies() -> Vec<DriverRequestBody> {
+        let table = TableRef::new("events");
+        let mut bodies = execute_bodies(&QueryRequest::new("SELECT 1; SELECT 2")).to_vec();
+        bodies.extend([
+            DriverRequestBody::BrowseTable {
+                request: TableBrowseRequest::new(table.clone()),
+            },
+            DriverRequestBody::BrowseCollection {
+                request: dbflux_core::CollectionBrowseRequest::new(
+                    dbflux_core::CollectionRef::new("app", "events"),
+                )
+                .into(),
+            },
+            DriverRequestBody::Explain {
+                request: dbflux_core::ExplainRequest::new(table.clone()),
+            },
+            DriverRequestBody::DescribeTable {
+                request: dbflux_core::DescribeRequest::new(table),
+            },
+        ]);
+        bodies
+    }
+
+    #[test]
+    fn v1_7_host_sends_every_result_set_with_its_truncation_flag() {
+        let connection = MultiSetConnection::new();
+
+        for body in result_set_bodies() {
+            let results = match dispatch(&connection, DRIVER_RPC_V1_7, body) {
+                DriverResponseBody::ExecuteResultSets { results }
+                | DriverResponseBody::BrowseResultSets { results } => results,
+                DriverResponseBody::ExecuteWithHandleResultSets { handle_id, results } => {
+                    assert_eq!(handle_id, uuid::Uuid::nil());
+                    results
+                }
+                other => panic!("expected a result-sets response, got {other:?}"),
+            };
+            let restored = QueryResult::from(results);
+            let sets: Vec<(Option<&str>, bool)> = restored
+                .iter_result_sets()
+                .map(|set| (set.text_body.as_deref(), set.rows_truncated()))
+                .collect();
+            assert_eq!(
+                sets,
+                vec![
+                    (Some("primary"), true),
+                    (Some("second"), false),
+                    (Some("third"), true),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn v1_6_host_keeps_the_v1_6_responses_for_a_v1_6_peer() {
+        let connection = MultiSetConnection::new();
+
+        let responses: Vec<DriverResponseBody> = result_set_bodies()
+            .into_iter()
+            .map(|body| dispatch(&connection, DRIVER_RPC_V1_6, body))
+            .collect();
+
+        match &responses[..] {
+            [
+                DriverResponseBody::ExecuteResultWithTruncation {
+                    result: execute,
+                    rows_truncated: true,
+                },
+                DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                    result: execute_with_handle,
+                    rows_truncated: true,
+                    ..
+                },
+                DriverResponseBody::BrowseResult {
+                    result: browse_table,
+                },
+                DriverResponseBody::BrowseResult {
+                    result: browse_collection,
+                },
+                DriverResponseBody::BrowseResult { result: explain },
+                DriverResponseBody::BrowseResult { result: describe },
+            ] => {
+                for result in [
+                    execute,
+                    execute_with_handle,
+                    browse_table,
+                    browse_collection,
+                    explain,
+                    describe,
+                ] {
+                    assert_eq!(result.text_body.as_deref(), Some("primary"));
+                }
+            }
+            other => panic!("expected the v1.6 responses, got {other:?}"),
         }
     }
 

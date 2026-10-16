@@ -13,6 +13,20 @@ pub(crate) const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
 /// completeness.
 pub(crate) const ROWS_TRUNCATED_METADATA_KEY: &str = "rows_truncated";
 
+/// `metadata_extra` key holding the notices and warnings the server raised
+/// while running the statement that produced the result. It is presentation
+/// data and must not be forwarded into audit details.
+pub const SERVER_NOTICES_METADATA_KEY: &str = "server_notices";
+
+/// A non-error message the server sent while running a statement, such as a
+/// PostgreSQL `WARNING` or `NOTICE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerNotice {
+    /// Severity as reported by the server (`WARNING`, `NOTICE`, `INFO`, ...).
+    pub severity: String,
+    pub message: String,
+}
+
 pub(crate) fn encode_unsupported_types(
     metadata: &mut Option<HashMap<String, serde_json::Value>>,
     type_names: impl IntoIterator<Item = String>,
@@ -525,6 +539,41 @@ impl QueryResult {
         );
     }
 
+    /// Replaces the server notices attached to this result. An empty input
+    /// removes the entry; unrelated `metadata_extra` entries are preserved.
+    pub fn set_server_notices(&mut self, notices: impl IntoIterator<Item = ServerNotice>) {
+        let notices: Vec<ServerNotice> = notices.into_iter().collect();
+
+        if notices.is_empty() {
+            if let Some(metadata) = self.metadata_extra.as_mut() {
+                metadata.remove(SERVER_NOTICES_METADATA_KEY);
+                if metadata.is_empty() {
+                    self.metadata_extra = None;
+                }
+            }
+            return;
+        }
+
+        match serde_json::to_value(notices) {
+            Ok(value) => {
+                self.metadata_extra
+                    .get_or_insert_with(HashMap::new)
+                    .insert(SERVER_NOTICES_METADATA_KEY.to_string(), value);
+            }
+            Err(error) => log::warn!("Failed to encode server notices: {error}"),
+        }
+    }
+
+    /// Reads the server notices without consuming them. A missing or
+    /// malformed entry reads as no notices.
+    pub fn server_notices(&self) -> Vec<ServerNotice> {
+        self.metadata_extra
+            .as_ref()
+            .and_then(|metadata| metadata.get(SERVER_NOTICES_METADATA_KEY))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -705,6 +754,56 @@ mod tests {
             .map(|r| r.columns[0].name.clone())
             .collect();
         assert_eq!(labels, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn server_notices_round_trip_without_consuming() {
+        let mut result = QueryResult::empty();
+        let notice = ServerNotice {
+            severity: "WARNING".to_string(),
+            message: "there is no transaction in progress".to_string(),
+        };
+        result.set_server_notices([notice.clone()]);
+
+        assert_eq!(result.server_notices(), vec![notice.clone()]);
+        assert_eq!(result.server_notices(), vec![notice]);
+    }
+
+    #[test]
+    fn empty_server_notices_remove_the_key() {
+        let mut result = QueryResult::empty();
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "hello".to_string(),
+        }]);
+        result.set_server_notices(Vec::new());
+
+        assert!(result.server_notices().is_empty());
+        assert!(result.metadata_extra.is_none());
+    }
+
+    #[test]
+    fn malformed_server_notices_read_as_empty() {
+        let mut result = QueryResult::empty();
+        result.metadata_extra = Some(HashMap::from([(
+            SERVER_NOTICES_METADATA_KEY.to_string(),
+            serde_json::json!("not a list"),
+        )]));
+
+        assert!(result.server_notices().is_empty());
+    }
+
+    #[test]
+    fn server_notices_preserve_unrelated_metadata() {
+        let mut result = QueryResult::empty();
+        result.set_rows_truncated(true);
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "hello".to_string(),
+        }]);
+        result.set_server_notices(Vec::new());
+
+        assert!(result.rows_truncated());
     }
 
     #[test]

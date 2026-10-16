@@ -5,7 +5,7 @@
 //! `dbflux_storage`. Keeps in-memory caches for synchronous reads.
 //! All writes go to the repository first; caches are updated only on success.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
@@ -389,6 +389,10 @@ fn next_free_row(panels: &[DashboardPanel]) -> u32 {
 pub struct DashboardManager {
     dashboards: Vec<Dashboard>,
     panels: HashMap<Uuid, Vec<DashboardPanel>>,
+    /// Dashboards with a panel that could not be read. Panel writes replace
+    /// the whole stored set, so writing the incomplete cache would delete the
+    /// unread panels; writes to these dashboards are refused instead.
+    incompletely_loaded: HashSet<Uuid>,
     dashboards_repo: Arc<DashboardsRepository>,
     panels_repo: Arc<DashboardPanelsRepository>,
 }
@@ -417,6 +421,7 @@ impl DashboardManager {
         };
 
         let mut panels: HashMap<Uuid, Vec<DashboardPanel>> = HashMap::new();
+        let mut incompletely_loaded = HashSet::new();
 
         for dashboard in &dashboards {
             match panels_repo.list_for_dashboard(dashboard.id) {
@@ -430,6 +435,7 @@ impl DashboardManager {
                                     "DashboardManager: skipping panel for {}: {e}",
                                     dashboard.id
                                 );
+                                incompletely_loaded.insert(dashboard.id);
                                 None
                             }
                         })
@@ -442,6 +448,7 @@ impl DashboardManager {
                         dashboard.id
                     );
                     panels.insert(dashboard.id, Vec::new());
+                    incompletely_loaded.insert(dashboard.id);
                 }
             }
         }
@@ -449,6 +456,7 @@ impl DashboardManager {
         Self {
             dashboards,
             panels,
+            incompletely_loaded,
             dashboards_repo,
             panels_repo,
         }
@@ -483,6 +491,8 @@ impl DashboardManager {
         dashboard_id: Uuid,
         panels: Vec<DashboardPanel>,
     ) -> Result<(), StorageError> {
+        self.ensure_panels_writable(dashboard_id)?;
+
         let dtos: Vec<DashboardPanelDto> = panels.iter().map(panel_to_dto).collect();
 
         self.panels_repo
@@ -490,6 +500,25 @@ impl DashboardManager {
 
         self.panels.insert(dashboard_id, panels);
         Ok(())
+    }
+
+    /// Fails when some panels of `dashboard_id` could not be read on load.
+    fn ensure_panels_writable(&self, dashboard_id: Uuid) -> Result<(), StorageError> {
+        if self.incompletely_loaded.contains(&dashboard_id) {
+            return Err(StorageError::Data(format!(
+                "some panels of dashboard {dashboard_id} could not be read; \
+                 refusing to change its panels so they are not overwritten"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// The cached panels of `dashboard_id`, to be modified and written back.
+    fn writable_panels(&self, dashboard_id: Uuid) -> Result<Vec<DashboardPanel>, StorageError> {
+        self.ensure_panels_writable(dashboard_id)?;
+
+        Ok(self.panels.get(&dashboard_id).cloned().unwrap_or_default())
     }
 
     /// Every loaded dashboard, whatever its profile.
@@ -603,7 +632,7 @@ impl DashboardManager {
             .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?
             .clone();
 
-        let src_panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let src_panels = self.writable_panels(dashboard_id)?;
 
         let new_id = Uuid::new_v4();
         let now = Utc::now();
@@ -723,7 +752,7 @@ impl DashboardManager {
             )));
         }
 
-        let current_panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let current_panels = self.writable_panels(dashboard_id)?;
         let base_index = current_panels.len() as u32;
         let mut next_row = next_free_row(&current_panels);
 
@@ -791,7 +820,7 @@ impl DashboardManager {
         grid_width: u32,
         grid_height: u32,
     ) -> Result<(), StorageError> {
-        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let mut panels = self.writable_panels(dashboard_id)?;
         let panel = panels
             .iter_mut()
             .find(|p| p.panel_index == panel_index)
@@ -828,7 +857,7 @@ impl DashboardManager {
             .map(|d| d.grid_columns)
             .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
 
-        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let mut panels = self.writable_panels(dashboard_id)?;
 
         // Sort by panel_index to ensure deterministic removal.
         panels.sort_by_key(|p| p.panel_index);
@@ -871,7 +900,7 @@ impl DashboardManager {
             .map(|d| d.grid_columns)
             .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
 
-        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let mut panels = self.writable_panels(dashboard_id)?;
         panels.sort_by_key(|p| p.panel_index);
 
         if from_index as usize >= panels.len() || to_index as usize > panels.len() {
@@ -927,7 +956,7 @@ impl DashboardManager {
         let clamped_width = new_width.clamp(1, grid_columns);
         let clamped_height = new_height.clamp(1, 4);
 
-        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let mut panels = self.writable_panels(dashboard_id)?;
         let panel = panels
             .iter_mut()
             .find(|p| p.panel_index == panel_index)
@@ -956,7 +985,7 @@ impl DashboardManager {
         panel_index: u32,
         override_text: Option<String>,
     ) -> Result<(), StorageError> {
-        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let mut panels = self.writable_panels(dashboard_id)?;
         let panel = panels
             .iter_mut()
             .find(|p| p.panel_index == panel_index)
@@ -1060,6 +1089,73 @@ mod tests {
         )
         .unwrap();
         id
+    }
+
+    #[test]
+    fn a_dashboard_whose_panels_failed_to_load_refuses_panel_writes() {
+        let rt = StorageRuntime::in_memory().unwrap();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
+        let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&conn)));
+        let panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&conn)));
+
+        let mut writer =
+            DashboardManager::new(Arc::clone(&dashboards_repo), Arc::clone(&panels_repo));
+        let dashboard = sample_dashboard("damaged");
+        let dashboard_id = dashboard.id;
+        writer
+            .upsert_dashboard(dashboard)
+            .expect("upsert dashboard");
+        writer
+            .replace_panels(
+                dashboard_id,
+                vec![
+                    sample_panel(dashboard_id, Uuid::new_v4(), 0),
+                    sample_panel(dashboard_id, Uuid::new_v4(), 1),
+                ],
+            )
+            .expect("store two panels");
+
+        // A BLOB keeps its storage class in a TEXT column, so reading
+        // `title_override` fails for this panel row only.
+        conn.lock()
+            .unwrap()
+            .execute(
+                "UPDATE viz_dashboard_panels SET title_override = X'00' WHERE panel_index = 1",
+                [],
+            )
+            .unwrap();
+
+        let mut manager =
+            DashboardManager::new(Arc::clone(&dashboards_repo), Arc::clone(&panels_repo));
+
+        assert!(manager.remove_panel(dashboard_id, 0).is_err());
+        assert!(
+            manager
+                .append_panels(
+                    dashboard_id,
+                    vec![DashboardPanelDraft::Chart {
+                        saved_chart_id: Uuid::new_v4(),
+                        layout: None,
+                    }],
+                )
+                .is_err()
+        );
+
+        let stored_panels: i64 = conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM viz_dashboard_panels WHERE dashboard_id = ?1",
+                [dashboard_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored_panels, 2,
+            "a refused write must leave the stored panels alone"
+        );
     }
 
     // ---- create_dashboard ---------------------------------------------------

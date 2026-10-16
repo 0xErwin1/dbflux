@@ -234,7 +234,8 @@ of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of
 the line; after a nonzero digit it remains part of the count (for example,
 `20w`). An interrupted count does not carry over to the next command. In
-Visual mode, counted motions extend the editor selection. `gg` and `G` place the
+Visual mode, counted motions extend the editor selection, and a plain left
+click returns to Normal mode with the cursor where you clicked, as in Vim. `gg` and `G` place the
 cursor at the first non-blank character of the destination logical line; `G`
 is a single uppercase key. A pending `g` clears if interrupted or focus leaves
 the editor. In Normal mode, `d` / `y` / `c` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
@@ -543,6 +544,8 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 | `z` | Toggle panel collapse |
 
 The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** is also a command palette entry.
+
+**Cancel task** is offered only for work that stops when cancelled, such as a query, an export or a key scan. A write already sent to the server, a key read, or a single metadata request runs to the end and shows no cancel.
 
 ## Notifications center
 
