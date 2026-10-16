@@ -494,7 +494,9 @@ impl RpcClient {
     ) -> Result<dbflux_core::QueryResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::BrowseCollection { request },
+            DriverRequestBody::BrowseCollection {
+                request: request.into(),
+            },
         )?;
 
         match body {
@@ -514,7 +516,9 @@ impl RpcClient {
     ) -> Result<u64, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::CountCollection { request },
+            DriverRequestBody::CountCollection {
+                request: request.into(),
+            },
         )?;
 
         match body {
@@ -571,7 +575,7 @@ impl RpcClient {
         let body = self.call(Some(session_id), DriverRequestBody::UpdateRow { patch })?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to UpdateRow".into(),
@@ -587,7 +591,7 @@ impl RpcClient {
         let body = self.call(Some(session_id), DriverRequestBody::InsertRow { insert })?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to InsertRow".into(),
@@ -603,7 +607,7 @@ impl RpcClient {
         let body = self.call(Some(session_id), DriverRequestBody::DeleteRow { delete })?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to DeleteRow".into(),
@@ -620,11 +624,13 @@ impl RpcClient {
     ) -> Result<dbflux_core::CrudResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::UpdateDocument { update },
+            DriverRequestBody::UpdateDocument {
+                update: update.into(),
+            },
         )?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to UpdateDocument".into(),
@@ -639,11 +645,13 @@ impl RpcClient {
     ) -> Result<dbflux_core::CrudResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::InsertDocument { insert },
+            DriverRequestBody::InsertDocument {
+                insert: insert.into(),
+            },
         )?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to InsertDocument".into(),
@@ -658,11 +666,13 @@ impl RpcClient {
     ) -> Result<dbflux_core::CrudResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::DeleteDocument { delete },
+            DriverRequestBody::DeleteDocument {
+                delete: delete.into(),
+            },
         )?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to DeleteDocument".into(),

@@ -41,10 +41,10 @@ pub use envelope::{
     APP_CONTROL_VERSION, AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS,
     AUTH_PROVIDER_RPC_V1_0, AUTH_PROVIDER_RPC_V1_1, AUTH_PROVIDER_RPC_V1_2, AUTH_PROVIDER_RPC_V1_3,
     AUTH_PROVIDER_RPC_VERSION, DRIVER_RPC_API_CONTRACT, DRIVER_RPC_SUPPORTED_VERSIONS,
-    DRIVER_RPC_V1_0, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2, DRIVER_RPC_V1_5, DRIVER_RPC_V1_6,
-    DRIVER_RPC_V1_7, DRIVER_RPC_VERSION, ProtocolVersion, RpcApiContract, RpcApiFamily,
-    auth_provider_rpc_supported_versions, driver_rpc_supported_versions,
-    negotiate_highest_mutual_version,
+    DRIVER_RPC_V1_0, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2, DRIVER_RPC_V1_3, DRIVER_RPC_V1_4,
+    DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, DRIVER_RPC_V1_8, DRIVER_RPC_VERSION,
+    ProtocolVersion, RpcApiContract, RpcApiFamily, auth_provider_rpc_supported_versions,
+    driver_rpc_supported_versions, negotiate_highest_mutual_version,
 };
 pub use framing::{recv_msg, send_msg};
 pub use protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse};

@@ -97,8 +97,11 @@ La familia activa de la API driver RPC es `driver_rpc`. En el transporte driver
 RPC dedicado actual, esa familia es implícita en el propio protocolo en lugar de
 transmitirse por el cable durante `Hello`. La compatibilidad se hace cumplir
 mediante el endpoint driver RPC más la versión mayor de protocolo seleccionada;
-las versiones menores son aditivas y se negocian de forma determinista dentro de
-esa línea mayor.
+las versiones menores se negocian de forma determinista dentro de esa línea
+mayor. Hasta v1.7 las versiones menores son aditivas; v1.8 es una corrección
+del formato de wire que cambia cómo se codifican algunos payloads existentes, y
+toda forma que se decodificaba antes es idéntica byte a byte (ver **Corrección
+del formato de wire** más abajo).
 
 Solicitud del cliente:
 
@@ -115,6 +118,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 5),
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -308,6 +312,30 @@ anterior conserva las respuestas de v1.5; en esas sesiones solo el conjunto de
 resultados principal cruza el wire. El cliente acepta todas las variantes sea
 cual sea la versión negociada, así que un host nunca necesita saber con qué
 build del cliente habla.
+
+### Corrección del formato de wire (v1.8)
+
+v1.8 no agrega ninguna variante de solicitud ni de respuesta. Cambia cómo se
+codifican algunos payloads existentes, para que postcard pueda decodificar
+todos los payloads que define el protocolo:
+
+| Payload | Codificación de v1.8 |
+| --- | --- |
+| Documentos JSON: `filter`, `projection` y `sort` de `BrowseCollection` (`CollectionBrowseRequestDto`), `filter` de `CountCollection` (`CollectionCountRequestDto`), el filtro y la actualización de `UpdateDocument` (`DocumentUpdateDto`), los documentos de `InsertDocument` (`DocumentInsertDto`), el filtro de `DeleteDocument` (`DocumentDeleteDto`) y los valores de `metadata_extra` de `CrudResult` (`CrudResultDto`) | Texto JSON: un string de postcard con el JSON serializado, que se vuelve a parsear en el límite del protocolo |
+| Campos opcionales y de lista que antes llevaban `skip_serializing_if`, como `semantic_filter` y `columns` en las solicitudes de browse y count, `enum_values` en `ColumnInfo`, `metadata_extra` en `CrudResult`, `type_name` en `ColumnAssignment`, `source` en `ExecutionContext` e `icon` en `FormSection` | Siempre se codifican, como `None` o una lista vacía cuando no tienen valor |
+| `IndexData` | Etiquetado externo: el índice de la variante y después la lista de índices |
+
+Un `serde_json::Value` crudo se podía escribir pero nunca volver a leer, porque
+solo se deserializa mediante `deserialize_any`, que postcard no admite. Un
+campo omitido acortaba el frame mientras el decodificador lo seguía leyendo,
+así que todos los campos posteriores se desplazaban. Un `IndexData` con
+etiquetado interno no se podía codificar, así que `TableDetails` y
+`GenerateCode` fallaban para cualquier tabla con índices.
+
+La codificación no depende de la versión negociada. Una forma que se
+decodificaba antes de v1.8 es idéntica byte a byte en v1.8; solo cambian los
+bytes de las formas que ningún peer podía decodificar, así que los peers con
+versiones menores anteriores siguen funcionando.
 
 ## Contrato RPC de auth-provider
 

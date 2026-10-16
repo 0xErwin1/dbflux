@@ -76,7 +76,7 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 DBFlux 先建立连接并发送 `Hello`。
 
-当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号是追加式的，在同一主版本线内以确定方式协商得出。
+当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号在同一主版本线内以确定方式协商得出。v1.7 及之前的次版本号是追加式的；v1.8 是一次线路格式修正，改变了部分现有载荷的编码方式，而之前能够解码的所有形态都逐字节相同（见下文的**线路格式修正**）。
 
 客户端请求：
 
@@ -93,6 +93,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 5),
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -201,6 +202,20 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `results` 是一个 `QueryResultSetsDto { primary, additional }`。每一项都是 `ResultSetDto { result, rows_truncated }`：`primary` 是第一个结果集，`additional` 按驱动返回的顺序保存其余结果集。只有当驱动从该结果集中丢弃了行时，`rows_truncated` 才为 `true`，因此从不限制行数的驱动总是发送 `false`。
 
 出于上文所述的线路索引原因，这三个变体追加在 `ExecuteWithHandleResultWithTruncation` 之后。宿主只在协商为 v1.7 或更高版本的会话中发送它们。v1.6 会话继续使用 `ExecuteResultWithTruncation`、`ExecuteWithHandleResultWithTruncation` 和 `BrowseResult`，更早的会话继续使用 v1.5 的响应；在这些会话中只有主结果集会通过线路传输。无论协商的版本如何，客户端都接受所有变体，因此宿主无需知道自己在与哪个客户端构建通信。
+
+### 线路格式修正（v1.8）
+
+v1.8 没有新增任何请求或响应变体。它改变了部分现有载荷的编码方式，使协议定义的每一种载荷都能用 postcard 解码：
+
+| 载荷 | v1.8 编码 |
+| --- | --- |
+| JSON 文档：`BrowseCollection`（`CollectionBrowseRequestDto`）的 `filter`、`projection` 和 `sort`，`CountCollection`（`CollectionCountRequestDto`）的 `filter`，`UpdateDocument`（`DocumentUpdateDto`）的过滤条件和更新内容，`InsertDocument`（`DocumentInsertDto`）的文档，`DeleteDocument`（`DocumentDeleteDto`）的过滤条件，以及 `CrudResult`（`CrudResultDto`）的 `metadata_extra` 值 | JSON 文本：一个存放序列化后 JSON 的 postcard 字符串，在协议边界处重新解析 |
+| 过去带有 `skip_serializing_if` 的可选字段和列表字段，例如 browse 和 count 请求的 `semantic_filter` 与 `columns`、`ColumnInfo` 的 `enum_values`、`CrudResult` 的 `metadata_extra`、`ColumnAssignment` 的 `type_name`、`ExecutionContext` 的 `source` 以及 `FormSection` 的 `icon` | 始终编码，未设置时编码为 `None` 或空列表 |
+| `IndexData` | 外部标记：先是变体索引，然后是索引列表 |
+
+原始的 `serde_json::Value` 只能通过 `deserialize_any` 反序列化，而 postcard 不支持它，因此这类值能写入却永远读不回来。被跳过的字段会让帧变短，而解码器仍会读取该字段，导致其后的所有字段错位。内部标记的 `IndexData` 根本无法编码，因此任何带索引的表的 `TableDetails` 和 `GenerateCode` 都会失败。
+
+该编码不受协商版本的控制。在 v1.8 之前能够解码的形态，在 v1.8 中逐字节相同；只有任何对端都无法解码的形态，其字节才会改变，因此使用更早次版本的对端仍可正常工作。
 
 ## 认证提供程序 RPC 契约
 

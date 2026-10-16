@@ -787,7 +787,11 @@ pub struct ColumnInfo {
     /// For enum/set columns: the list of allowed values.
     /// Populated by drivers that support custom types (PostgreSQL enums,
     /// MySQL ENUM/SET).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub enum_values: Option<Vec<String>>,
 }
 

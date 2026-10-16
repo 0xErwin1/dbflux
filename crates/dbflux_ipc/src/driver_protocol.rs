@@ -2,12 +2,13 @@ use crate::audit::AuditEventEmitDto;
 use crate::envelope::{DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, ProtocolVersion};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
-    ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
-    DocumentDelete, DocumentInsert, DocumentUpdate, DriverFormDef, DriverMetadata,
-    ExecutionContext, ExplainRequest, QueryRequest, QueryResult, QueryResultShape, RowDelete,
-    RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    CollectionRef, ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
+    DriverMetadata, ExecutionContext, ExplainRequest, Pagination, QueryRequest, QueryResult,
+    QueryResultShape, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticFilter,
+    SemanticPlan, SemanticRequest, TableBrowseRequest, TableCountRequest, TableInfo, Value,
+    ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -52,6 +53,305 @@ pub struct DriverRpcError {
     pub code: DriverRpcErrorCode,
     pub message: String,
     pub retriable: bool,
+}
+
+/// A JSON document carried over the driver RPC as JSON text.
+///
+/// `postcard` rejects `deserialize_any`, and `serde_json::Value` deserializes
+/// exclusively through it, so a raw `Value` field can be written to a frame but
+/// never read back. The IPC request/response types carry the JSON text and
+/// parse it here, at the protocol boundary, leaving the `dbflux_core` types
+/// (and their JSON representation for MCP and the rest of the application)
+/// untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonText(serde_json::Value);
+
+impl JsonText {
+    pub fn new(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+
+    pub fn value(&self) -> &serde_json::Value {
+        &self.0
+    }
+
+    pub fn into_value(self) -> serde_json::Value {
+        self.0
+    }
+}
+
+impl From<serde_json::Value> for JsonText {
+    fn from(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
+impl From<JsonText> for serde_json::Value {
+    fn from(value: JsonText) -> Self {
+        value.0
+    }
+}
+
+impl serde::Serialize for JsonText {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for JsonText {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        serde_json::from_str(&text)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentFilter` with a [`JsonText`] payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentFilterDto {
+    pub filter: JsonText,
+}
+
+impl From<DocumentFilter> for DocumentFilterDto {
+    fn from(value: DocumentFilter) -> Self {
+        Self {
+            filter: value.filter.into(),
+        }
+    }
+}
+
+impl From<DocumentFilterDto> for DocumentFilter {
+    fn from(value: DocumentFilterDto) -> Self {
+        Self {
+            filter: value.filter.into(),
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentUpdate`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentUpdateDto {
+    pub collection: String,
+    pub database: Option<String>,
+    pub filter: DocumentFilterDto,
+    pub update: JsonText,
+    pub many: bool,
+    pub upsert: bool,
+}
+
+impl From<DocumentUpdate> for DocumentUpdateDto {
+    fn from(value: DocumentUpdate) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            update: value.update.into(),
+            many: value.many,
+            upsert: value.upsert,
+        }
+    }
+}
+
+impl From<DocumentUpdateDto> for DocumentUpdate {
+    fn from(value: DocumentUpdateDto) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            update: value.update.into(),
+            many: value.many,
+            upsert: value.upsert,
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentInsert`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentInsertDto {
+    pub collection: String,
+    pub database: Option<String>,
+    pub documents: Vec<JsonText>,
+}
+
+impl From<DocumentInsert> for DocumentInsertDto {
+    fn from(value: DocumentInsert) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            documents: value.documents.into_iter().map(JsonText::new).collect(),
+        }
+    }
+}
+
+impl From<DocumentInsertDto> for DocumentInsert {
+    fn from(value: DocumentInsertDto) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            documents: value
+                .documents
+                .into_iter()
+                .map(JsonText::into_value)
+                .collect(),
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentDelete`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentDeleteDto {
+    pub collection: String,
+    pub database: Option<String>,
+    pub filter: DocumentFilterDto,
+    pub many: bool,
+}
+
+impl From<DocumentDelete> for DocumentDeleteDto {
+    fn from(value: DocumentDelete) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            many: value.many,
+        }
+    }
+}
+
+impl From<DocumentDeleteDto> for DocumentDelete {
+    fn from(value: DocumentDeleteDto) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            many: value.many,
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::CollectionBrowseRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionBrowseRequestDto {
+    pub collection: CollectionRef,
+    pub pagination: Pagination,
+    #[serde(default)]
+    pub filter: Option<JsonText>,
+    #[serde(default)]
+    pub semantic_filter: Option<SemanticFilter>,
+    #[serde(default)]
+    pub projection: Option<JsonText>,
+    #[serde(default)]
+    pub sort: Option<JsonText>,
+}
+
+impl From<CollectionBrowseRequest> for CollectionBrowseRequestDto {
+    fn from(value: CollectionBrowseRequest) -> Self {
+        let CollectionBrowseRequest {
+            collection,
+            pagination,
+            filter,
+            semantic_filter,
+            projection,
+            sort,
+        } = value;
+
+        Self {
+            collection,
+            pagination,
+            filter: filter.map(JsonText::new),
+            semantic_filter,
+            projection: projection.map(JsonText::new),
+            sort: sort.map(JsonText::new),
+        }
+    }
+}
+
+impl From<CollectionBrowseRequestDto> for CollectionBrowseRequest {
+    fn from(value: CollectionBrowseRequestDto) -> Self {
+        Self {
+            collection: value.collection,
+            pagination: value.pagination,
+            filter: value.filter.map(JsonText::into_value),
+            semantic_filter: value.semantic_filter,
+            projection: value.projection.map(JsonText::into_value),
+            sort: value.sort.map(JsonText::into_value),
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::CollectionCountRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionCountRequestDto {
+    pub collection: CollectionRef,
+    #[serde(default)]
+    pub filter: Option<JsonText>,
+    #[serde(default)]
+    pub semantic_filter: Option<SemanticFilter>,
+}
+
+impl From<CollectionCountRequest> for CollectionCountRequestDto {
+    fn from(value: CollectionCountRequest) -> Self {
+        Self {
+            collection: value.collection,
+            filter: value.filter.map(JsonText::new),
+            semantic_filter: value.semantic_filter,
+        }
+    }
+}
+
+impl From<CollectionCountRequestDto> for CollectionCountRequest {
+    fn from(value: CollectionCountRequestDto) -> Self {
+        Self {
+            collection: value.collection,
+            filter: value.filter.map(JsonText::into_value),
+            semantic_filter: value.semantic_filter,
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::CrudResult`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrudResultDto {
+    pub affected_rows: u64,
+    pub returning_row: Option<Row>,
+    #[serde(default)]
+    pub metadata_extra: Option<std::collections::HashMap<String, JsonText>>,
+}
+
+impl From<CrudResult> for CrudResultDto {
+    fn from(value: CrudResult) -> Self {
+        Self {
+            affected_rows: value.affected_rows,
+            returning_row: value.returning_row,
+            metadata_extra: value.metadata_extra.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, JsonText::new(value)))
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl From<CrudResultDto> for CrudResult {
+    fn from(value: CrudResultDto) -> Self {
+        Self {
+            affected_rows: value.affected_rows,
+            returning_row: value.returning_row,
+            metadata_extra: value.metadata_extra.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, value.into_value()))
+                    .collect()
+            }),
+        }
+    }
 }
 
 /// Serializable representation of `QueryRequest`.
@@ -341,10 +641,10 @@ pub enum DriverRequestBody {
         request: TableCountRequest,
     },
     BrowseCollection {
-        request: CollectionBrowseRequest,
+        request: CollectionBrowseRequestDto,
     },
     CountCollection {
-        request: CollectionCountRequest,
+        request: CollectionCountRequestDto,
     },
     Explain {
         request: ExplainRequest,
@@ -367,13 +667,13 @@ pub enum DriverRequestBody {
     },
     // === Document mutations ===
     UpdateDocument {
-        update: DocumentUpdate,
+        update: DocumentUpdateDto,
     },
     InsertDocument {
-        insert: DocumentInsert,
+        insert: DocumentInsertDto,
     },
     DeleteDocument {
-        delete: DocumentDelete,
+        delete: DocumentDeleteDto,
     },
     // === Schema extras ===
     SchemaTypes {
@@ -564,7 +864,7 @@ pub enum DriverResponseBody {
     },
     // === CRUD results ===
     CrudResult {
-        result: CrudResult,
+        result: CrudResultDto,
     },
     // === Document results ===
     // Same as CrudResult, no separate variant needed
@@ -748,14 +1048,14 @@ mod tests {
         let filter = SemanticFilter::compare("id", WhereOperator::Eq, Value::Int(1));
 
         // The shape an external driver RPC actually sends for a browse: no
-        // projection at all. Only the encoded bytes are compared here, because
-        // an empty projection has a pre-existing trailing-skip hazard of its
-        // own that the last assertion in this test does not touch.
+        // projection and no semantic filter. Both fields always encode from
+        // v1.8, so the bare shape decodes like any other.
         let bare = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"));
         let bare_scoped = bare.clone().with_database(Some("reporting".to_string()));
+        let bare_bytes = postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
+            .expect("serialize bare browse");
         assert_eq!(
-            postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
-                .expect("serialize bare browse"),
+            bare_bytes,
             postcard::to_allocvec(&DriverRequestBody::BrowseTable {
                 request: bare_scoped,
             })
@@ -763,18 +1063,26 @@ mod tests {
             "the database must be zero-width even with no projection"
         );
 
-        // A count with a string filter and no semantic filter, which is also a
-        // pre-existing undecodable shape, so again bytes only.
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&bare_bytes).expect("decode bare browse");
+        let DriverRequestBody::BrowseTable { request } = decoded else {
+            panic!("expected BrowseTable");
+        };
+        assert!(request.semantic_filter.is_none());
+        assert!(request.columns.is_empty());
+
+        // A count with a string filter and no semantic filter decodes as well.
         let plain_count =
             TableCountRequest::new(TableRef::with_schema("dbo", "events")).with_filter("id = 1");
         let plain_count_scoped = plain_count
             .clone()
             .with_database(Some("reporting".to_string()));
+        let plain_count_bytes = postcard::to_allocvec(&DriverRequestBody::CountTable {
+            request: plain_count,
+        })
+        .expect("serialize plain count");
         assert_eq!(
-            postcard::to_allocvec(&DriverRequestBody::CountTable {
-                request: plain_count,
-            })
-            .expect("serialize plain count"),
+            plain_count_bytes,
             postcard::to_allocvec(&DriverRequestBody::CountTable {
                 request: plain_count_scoped,
             })
@@ -782,9 +1090,16 @@ mod tests {
             "the database must be zero-width with no semantic filter"
         );
 
-        // A projection is part of the fixture because an empty one carries a
-        // postcard hazard of its own, independent of this field: `columns` has
-        // `skip_serializing_if`, so an empty vector shifts whatever follows it.
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&plain_count_bytes).expect("decode plain count");
+        let DriverRequestBody::CountTable { request } = decoded else {
+            panic!("expected CountTable");
+        };
+        assert!(request.semantic_filter.is_none());
+
+        // A populated projection is part of the fixture: `columns` used to be
+        // skipped when empty (which shifted the fields after it), and v1.8
+        // always encodes it.
         let browse = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"))
             .with_pagination(Pagination::Offset {
                 limit: 10,
@@ -1153,6 +1468,10 @@ mod tests {
     /// `storage_hints`. Deliberately left empty: `indexes` (covered by
     /// `table_info_with_indexes_roundtrips_over_postcard`), `sample_fields`
     /// (document-database only), and `child_items` (driver child sources).
+    ///
+    /// The populated `enum_values`/`Some` choices predate the v1.8 wire-format
+    /// fix and are kept so the captured bytes stay valid legacy fixtures; see
+    /// `tests/driver_wire_roundtrip.rs` for the live round-trip coverage.
     fn nontrivial_table_info() -> dbflux_core::TableInfo {
         dbflux_core::TableInfo {
             name: "orders".into(),
@@ -1164,12 +1483,11 @@ mod tests {
                     nullable: false,
                     is_primary_key: true,
                     default_value: None,
-                    // NOTE: `enum_values` carries `skip_serializing_if`,
-                    // which postcard cannot round-trip (a skipped field
-                    // misaligns every later byte on decode). The fixture
-                    // keeps it `Some` so the bytes are decodable; real
-                    // multi-column payloads with a `None` here have the same
-                    // pre-existing decode hazard.
+                    // Legacy fixture value: `enum_values` used to carry
+                    // `skip_serializing_if`, so only `Some` frames were
+                    // decodable. Kept `Some` to preserve the captured bytes;
+                    // v1.8 always encodes the field and no longer has this
+                    // hazard.
                     enum_values: Some(Vec::new()),
                 },
                 dbflux_core::ColumnInfo {

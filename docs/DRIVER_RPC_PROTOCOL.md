@@ -76,7 +76,7 @@ Notes:
 
 DBFlux connects and sends `Hello` first.
 
-The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are additive and are negotiated deterministically within that major line.
+The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below).
 
 Client request:
 
@@ -93,6 +93,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 5),
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -201,6 +202,20 @@ A statement batch or a stored procedure can return several result sets, and each
 `results` is a `QueryResultSetsDto { primary, additional }`. Each entry is a `ResultSetDto { result, rows_truncated }`: `primary` is the first result set and `additional` holds the rest in the order the driver returned them. `rows_truncated` is `true` only when the driver dropped rows from that result set, so a driver that never caps rows always sends `false`.
 
 The three variants are appended after `ExecuteWithHandleResultWithTruncation`, for the wire-index reason described above. A host sends them only on sessions that negotiated v1.7 or newer. A v1.6 session keeps `ExecuteResultWithTruncation`, `ExecuteWithHandleResultWithTruncation` and `BrowseResult`, and an older session keeps the v1.5 responses; on those sessions only the primary result set crosses the wire. The client accepts every variant whatever the negotiated version, so a host never needs to know which client build it talks to.
+
+### Wire-format fix (v1.8)
+
+v1.8 adds no request or response variant. It changes how some existing payloads are encoded, so that every payload the protocol defines can be decoded with postcard:
+
+| Payload | v1.8 encoding |
+| --- | --- |
+| JSON documents: the `filter`, `projection` and `sort` of `BrowseCollection` (`CollectionBrowseRequestDto`), the `filter` of `CountCollection` (`CollectionCountRequestDto`), the filter and update of `UpdateDocument` (`DocumentUpdateDto`), the documents of `InsertDocument` (`DocumentInsertDto`), the filter of `DeleteDocument` (`DocumentDeleteDto`), and the `metadata_extra` values of `CrudResult` (`CrudResultDto`) | JSON text: a postcard string holding the serialized JSON, parsed back at the protocol boundary |
+| Optional and list fields that used to carry `skip_serializing_if`, such as `semantic_filter` and `columns` on browse and count requests, `enum_values` on `ColumnInfo`, `metadata_extra` on `CrudResult`, `type_name` on `ColumnAssignment`, `source` on `ExecutionContext` and `icon` on `FormSection` | always encoded, as `None` or an empty list when unset |
+| `IndexData` | externally tagged: the variant index, then the list of indexes |
+
+A raw `serde_json::Value` could be written but never read back, because it deserializes only through `deserialize_any`, which postcard does not support. A skipped field shortened the frame while the decoder still read it, so every later field shifted. An internally tagged `IndexData` could not be encoded at all, so `TableDetails` and `GenerateCode` failed for any table with indexes.
+
+The encoding is not gated by the negotiated version. A shape that decoded before v1.8 is byte-identical in v1.8; only shapes that no peer could decode change their bytes, so peers on older minors keep working.
 
 ## Auth-provider RPC contract
 

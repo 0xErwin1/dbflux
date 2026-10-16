@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use dbflux_core::{Connection, DbError, KeyValueApi};
+use dbflux_core::{
+    CollectionBrowseRequest, CollectionCountRequest, Connection, DbError, DocumentDelete,
+    DocumentInsert, DocumentUpdate, KeyValueApi,
+};
 use dbflux_ipc::ProtocolVersion;
 use dbflux_ipc::driver_protocol::{
     DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto, QueryResultSetsDto,
@@ -192,13 +195,17 @@ pub(crate) fn dispatch(
         },
 
         DriverRequestBody::BrowseCollection { request } => {
+            let request: CollectionBrowseRequest = request.into();
             browse_response(conn.browse_collection(&request))
         }
 
-        DriverRequestBody::CountCollection { request } => match conn.count_collection(&request) {
-            Ok(count) => DriverResponseBody::CountResult { count },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::CountCollection { request } => {
+            let request: CollectionCountRequest = request.into();
+            match conn.count_collection(&request) {
+                Ok(count) => DriverResponseBody::CountResult { count },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
         DriverRequestBody::Explain { request } => browse_response(conn.explain(&request)),
 
@@ -213,35 +220,56 @@ pub(crate) fn dispatch(
 
         // === CRUD operations ===
         DriverRequestBody::UpdateRow { patch } => match conn.update_row(&patch) {
-            Ok(result) => DriverResponseBody::CrudResult { result },
+            Ok(result) => DriverResponseBody::CrudResult {
+                result: result.into(),
+            },
             Err(e) => db_error_to_response(e),
         },
 
         DriverRequestBody::InsertRow { insert } => match conn.insert_row(&insert) {
-            Ok(result) => DriverResponseBody::CrudResult { result },
+            Ok(result) => DriverResponseBody::CrudResult {
+                result: result.into(),
+            },
             Err(e) => db_error_to_response(e),
         },
 
         DriverRequestBody::DeleteRow { delete } => match conn.delete_row(&delete) {
-            Ok(result) => DriverResponseBody::CrudResult { result },
+            Ok(result) => DriverResponseBody::CrudResult {
+                result: result.into(),
+            },
             Err(e) => db_error_to_response(e),
         },
 
         // === Document mutations ===
-        DriverRequestBody::UpdateDocument { update } => match conn.update_document(&update) {
-            Ok(result) => DriverResponseBody::CrudResult { result },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::UpdateDocument { update } => {
+            let update: DocumentUpdate = update.into();
+            match conn.update_document(&update) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
-        DriverRequestBody::InsertDocument { insert } => match conn.insert_document(&insert) {
-            Ok(result) => DriverResponseBody::CrudResult { result },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::InsertDocument { insert } => {
+            let insert: DocumentInsert = insert.into();
+            match conn.insert_document(&insert) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
-        DriverRequestBody::DeleteDocument { delete } => match conn.delete_document(&delete) {
-            Ok(result) => DriverResponseBody::CrudResult { result },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::DeleteDocument { delete } => {
+            let delete: DocumentDelete = delete.into();
+            match conn.delete_document(&delete) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
         // === Schema extras ===
         DriverRequestBody::SchemaTypes { database, schema } => {
@@ -921,7 +949,8 @@ mod tests {
             DriverRequestBody::BrowseCollection {
                 request: dbflux_core::CollectionBrowseRequest::new(
                     dbflux_core::CollectionRef::new("app", "events"),
-                ),
+                )
+                .into(),
             },
             DriverRequestBody::Explain {
                 request: dbflux_core::ExplainRequest::new(table.clone()),

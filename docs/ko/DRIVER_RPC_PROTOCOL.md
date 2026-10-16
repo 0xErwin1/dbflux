@@ -76,7 +76,7 @@ DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
 DBFlux가 먼저 연결한 뒤 `Hello`를 보냅니다.
 
-현재 활성 드라이버 RPC API 패밀리는 `driver_rpc`입니다. 현재의 전용 드라이버 RPC 전송에서는 이 패밀리가 `Hello` 동안 와이어로 전송되는 대신 프로토콜 자체에 암묵적으로 포함됩니다. 호환성은 드라이버 RPC 엔드포인트와 선택된 프로토콜 메이저 버전으로 강제되며, 마이너 버전은 추가 확장(additive)이며 해당 메이저 라인 안에서 결정적으로 협상됩니다.
+현재 활성 드라이버 RPC API 패밀리는 `driver_rpc`입니다. 현재의 전용 드라이버 RPC 전송에서는 이 패밀리가 `Hello` 동안 와이어로 전송되는 대신 프로토콜 자체에 암묵적으로 포함됩니다. 호환성은 드라이버 RPC 엔드포인트와 선택된 프로토콜 메이저 버전으로 강제되며, 마이너 버전은 해당 메이저 라인 안에서 결정적으로 협상됩니다. v1.7까지의 마이너 버전은 추가 확장(additive)입니다. v1.8은 일부 기존 페이로드의 인코딩 방식을 바꾸는 와이어 형식 수정이며, 이전에 디코딩되던 모든 형태는 바이트 단위로 동일합니다(아래 **와이어 형식 수정** 참고).
 
 클라이언트 요청:
 
@@ -93,6 +93,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 5),
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -201,6 +202,20 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `results`는 `QueryResultSetsDto { primary, additional }`입니다. 각 항목은 `ResultSetDto { result, rows_truncated }`이며, `primary`는 첫 번째 결과 집합이고 `additional`은 나머지를 드라이버가 반환한 순서대로 담습니다. `rows_truncated`는 드라이버가 해당 결과 집합에서 행을 버렸을 때만 `true`이므로, 행을 제한하지 않는 드라이버는 항상 `false`를 보냅니다.
 
 세 변형은 위에서 설명한 와이어 인덱스 이유로 `ExecuteWithHandleResultWithTruncation` 뒤에 덧붙여집니다. 호스트는 v1.7 이상을 협상한 세션에서만 이 변형을 보냅니다. v1.6 세션은 `ExecuteResultWithTruncation`, `ExecuteWithHandleResultWithTruncation`, `BrowseResult`를 유지하고, 그보다 이전 세션은 v1.5 응답을 유지하며, 이런 세션에서는 기본 결과 집합만 와이어를 건너갑니다. 클라이언트는 협상된 버전과 관계없이 모든 변형을 받아들이므로, 호스트는 어떤 클라이언트 빌드와 통신하는지 알 필요가 없습니다.
+
+### 와이어 형식 수정 (v1.8)
+
+v1.8은 요청 변형이나 응답 변형을 추가하지 않습니다. 대신 일부 기존 페이로드의 인코딩 방식을 바꿔, 프로토콜이 정의하는 모든 페이로드를 postcard로 디코딩할 수 있게 합니다:
+
+| 페이로드 | v1.8 인코딩 |
+| --- | --- |
+| JSON 문서: `BrowseCollection`(`CollectionBrowseRequestDto`)의 `filter`, `projection`, `sort`, `CountCollection`(`CollectionCountRequestDto`)의 `filter`, `UpdateDocument`(`DocumentUpdateDto`)의 필터와 업데이트, `InsertDocument`(`DocumentInsertDto`)의 문서, `DeleteDocument`(`DocumentDeleteDto`)의 필터, `CrudResult`(`CrudResultDto`)의 `metadata_extra` 값 | JSON 텍스트: 직렬화된 JSON을 담은 postcard 문자열이며, 프로토콜 경계에서 다시 파싱됩니다 |
+| 이전에 `skip_serializing_if`가 붙어 있던 선택 필드와 목록 필드. 예: browse 및 count 요청의 `semantic_filter`와 `columns`, `ColumnInfo`의 `enum_values`, `CrudResult`의 `metadata_extra`, `ColumnAssignment`의 `type_name`, `ExecutionContext`의 `source`, `FormSection`의 `icon` | 항상 인코딩되며, 값이 없으면 `None` 또는 빈 목록으로 인코딩됩니다 |
+| `IndexData` | 외부 태그 방식: 변형 인덱스 다음에 인덱스 목록이 옵니다 |
+
+원시 `serde_json::Value`는 `deserialize_any`를 통해서만 역직렬화되는데 postcard가 이를 지원하지 않으므로, 쓸 수는 있어도 다시 읽을 수는 없었습니다. 생략된 필드는 디코더가 여전히 읽으려는 상태에서 프레임을 짧게 만들어, 그 뒤의 모든 필드가 밀려났습니다. 내부 태그 방식의 `IndexData`는 아예 인코딩할 수 없어서, 인덱스가 있는 테이블에 대한 `TableDetails`와 `GenerateCode`가 실패했습니다.
+
+이 인코딩은 협상된 버전에 따라 달라지지 않습니다. v1.8 이전에 디코딩되던 형태는 v1.8에서도 바이트 단위로 동일하며, 어떤 피어도 디코딩할 수 없던 형태의 바이트만 바뀌므로 이전 마이너 버전의 피어도 계속 동작합니다.
 
 ## 인증 프로바이더 RPC 계약
 
