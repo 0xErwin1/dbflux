@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cmp::Reverse, collections::BinaryHeap, rc::Rc};
 
 use fuzzy_matcher::FuzzyMatcher as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -14,6 +14,28 @@ use std::ops::Range;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
+const MAX_WIDTH_CANDIDATES: usize = 32;
+
+fn width_measurement_candidates(items: &[Rc<CompletionItem>]) -> Vec<usize> {
+    let mut candidates = BinaryHeap::with_capacity(MAX_WIDTH_CANDIDATES + 1);
+    for (index, item) in items.iter().enumerate() {
+        let character_count = item.label.chars().count()
+            + item
+                .detail
+                .as_deref()
+                .map_or(0, |detail| detail.chars().count());
+        candidates.push(Reverse((character_count, index)));
+        if candidates.len() > MAX_WIDTH_CANDIDATES {
+            candidates.pop();
+        }
+    }
+    let mut indices: Vec<_> = candidates
+        .into_iter()
+        .map(|Reverse((_, index))| index)
+        .collect();
+    indices.sort_unstable();
+    indices
+}
 
 use crate::{
     ActiveTheme, IndexPath, Selectable, actions, h_flex,
@@ -363,7 +385,12 @@ impl CompletionMenu {
             // keep a new response as narrow as an earlier, shorter one.
             let mut widest_index = 0;
             let mut content_width = px(120.);
-            for (index, item) in this.delegate().items.iter().enumerate() {
+            // Prefix matches can contain an entire schema. Character counts
+            // shortlist likely widest rows without laying out thousands of items.
+            // Measuring several candidates also handles proportional fonts better
+            // than measuring only the single longest label.
+            for index in width_measurement_candidates(&this.delegate().items) {
+                let item = &this.delegate().items[index];
                 let width = editor_popover("completion-menu-measure", cx)
                     .child(CompletionMenuItem::new(index, item.clone()))
                     .into_any_element()
