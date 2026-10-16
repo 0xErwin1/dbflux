@@ -3474,11 +3474,35 @@ fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppConte
         }
     }
 
-    struct SpacedEditor(Entity<gpui_component::input::EditorState>);
+    struct SpacedEditor {
+        input: Entity<gpui_component::input::EditorState>,
+        expected_width: Rc<std::cell::Cell<Option<gpui::Pixels>>>,
+    }
 
     impl Render for SpacedEditor {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            gpui_component::input::Editor::new(&self.0)
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            use gpui_component::ActiveTheme as _;
+
+            // Measure outside the completion menu so its width cap cannot mask clipping.
+            let expected_width = div()
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_xs()
+                .letter_spacing(gpui::px(8.)) // guardrail-allow: match the fixture's exaggerated test typography.
+                .p_1()
+                .child(div().p_1().child("tbl_verification_tracking"))
+                .into_any_element()
+                .layout_as_root(
+                    gpui::size(
+                        gpui::AvailableSpace::MaxContent,
+                        gpui::AvailableSpace::MaxContent,
+                    ),
+                    window,
+                    cx,
+                )
+                .width;
+            self.expected_width.set(Some(expected_width));
+
+            gpui_component::input::Editor::new(&self.input)
                 .letter_spacing(gpui::px(8.)) // guardrail-allow: exaggerated test typography verifies completion width includes letter spacing.
                 .h(gpui::px(400.))
         }
@@ -3486,6 +3510,7 @@ fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppConte
 
     init_runtime(cx);
     let menu_width = std::sync::Arc::new(MenuWidths::default());
+    let expected_width = Rc::new(std::cell::Cell::new(None));
     let input_slot = Rc::new(RefCell::new(None));
     let (_, window) = cx.add_window_view(|window, cx| {
         window.observe_frames(&menu_width);
@@ -3499,7 +3524,10 @@ fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppConte
             state.focus(window, cx);
         });
         input_slot.replace(Some(input.clone()));
-        let view = cx.new(|_| SpacedEditor(input));
+        let view = cx.new(|_| SpacedEditor {
+            input,
+            expected_width: expected_width.clone(),
+        });
         Root::new(view, window, cx)
     });
     let input = input_slot.borrow().clone().expect("editor input");
@@ -3521,9 +3549,14 @@ fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppConte
         );
     }
 
+    let expected_width = expected_width.get().expect("reference label is measured");
     assert!(
-        widths[0] > gpui::px(300.),
-        "measurement must include the editor typography: {widths:?}"
+        expected_width > gpui::px(320.),
+        "the fixture must expose clipping at the old width cap: {expected_width:?}"
+    );
+    assert!(
+        widths[0] >= expected_width - gpui::px(1.),
+        "the longest label and menu padding must fit: expected {expected_width:?}, got {widths:?}"
     );
     for width in &widths {
         assert_eq!(
