@@ -81,7 +81,10 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
     límite de página: el cursor de cada nodo se rastrea de forma
     independiente, y el cursor agregado viaja como un objeto JSON opaco que
     mapea `"<host>:<port>"` a su cursor `SCAN` pendiente. El escaneo completo
-    termina cuando todos los masters reportan cursor 0.
+    termina cuando todos los masters reportan cursor 0. Cancelar un escaneo de
+    claves detiene la página antes de su siguiente round trip de `SCAN`
+    (`KeyValueApi::scan_keys_with_cancel`); un round trip ya enviado termina
+    primero.
   - Total de claves del keyspace (`key_count`): `DBSIZE` sobre la base de datos
     seleccionada; en una conexión Cluster, la suma de `DBSIZE` de todos los
     masters. El explorador de claves lo muestra en su cabecera y como cifra

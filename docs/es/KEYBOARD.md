@@ -570,6 +570,8 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 
 La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en una fila también la selecciona. El menú de acciones lista **Mostrar salida**, **Cancelar tarea** y **Descartar** de la tarea seleccionada, y después **Limpiar terminadas** y **Ocultar el panel de tareas**, cada una con su atajo; se maneja con las teclas del menú contextual. **Borrar tareas terminadas** también está en la paleta de comandos.
 
+**Cancelar tarea** solo se ofrece para el trabajo que se detiene al cancelarlo, como una consulta, una exportación o un escaneo de claves. Una escritura ya enviada al servidor, una lectura de clave o una única consulta de metadatos llega hasta el final y no muestra cancelar.
+
 ## Centro de notificaciones
 
 La campana del extremo derecho de la barra de título abre el centro de

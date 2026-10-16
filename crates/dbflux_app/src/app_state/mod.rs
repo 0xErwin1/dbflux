@@ -94,6 +94,16 @@ pub struct ScriptsDirectoryDiagnostic {
     pub message: String,
 }
 
+/// What the password prompt shows before connecting a profile whose password is
+/// neither saved nor supplied by a value source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionPasswordPrompt {
+    pub profile_id: Uuid,
+    pub profile_name: String,
+    /// Driver-provided name of the secret field, when it is not a password.
+    pub field_label: Option<String>,
+}
+
 pub struct AppState {
     pub facade: SessionFacade,
     external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
@@ -132,6 +142,10 @@ pub struct AppState {
     /// Passphrases entered via the modal prompt are held here for the process
     /// lifetime. Never serialized, logged, or written to disk.
     pub session_passphrase_vault: Arc<RwLock<dbflux_ssh::SessionPassphraseVault>>,
+    /// Connection passwords the user asked to remember for this session, keyed
+    /// by profile. Held only in memory; never serialized, logged, or written
+    /// to the keyring.
+    remembered_connection_passwords: HashMap<Uuid, SecretString>,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 
@@ -615,6 +629,88 @@ impl AppState {
             },
             proxy_secret,
         )
+    }
+
+    /// Like `prepare_connect_profile_with_passphrase`, also carrying the
+    /// password the user typed into the connect prompt. That password is used
+    /// instead of the keyring for this connect.
+    pub fn prepare_connect_profile_with_secrets(
+        &self,
+        profile_id: Uuid,
+        override_passphrase: Option<&str>,
+        password: Option<SecretString>,
+    ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
+        let mut params =
+            self.prepare_connect_profile_with_passphrase(profile_id, override_passphrase)?;
+        params.password_override = password;
+        Ok(params)
+    }
+
+    /// The prompt to show before connecting `profile_id`, or `None` when the
+    /// driver needs no password, the keyring or a value source supplies it, or
+    /// the user asked DBFlux to remember it for this session.
+    pub fn connection_password_prompt(&self, profile_id: Uuid) -> Option<ConnectionPasswordPrompt> {
+        if self
+            .remembered_connection_passwords
+            .contains_key(&profile_id)
+        {
+            return None;
+        }
+
+        let profile = self.password_prompt_profile(profile_id)?;
+        let field_label = self
+            .driver_for_profile(profile)
+            .and_then(|driver| driver.secret_field_label(&driver.extract_values(&profile.config)));
+
+        Some(ConnectionPasswordPrompt {
+            profile_id,
+            profile_name: profile.name.clone(),
+            field_label,
+        })
+    }
+
+    /// The password remembered for this session, while the profile still has
+    /// no other password source.
+    pub fn remembered_connection_password(&self, profile_id: Uuid) -> Option<SecretString> {
+        self.password_prompt_profile(profile_id)?;
+        self.remembered_connection_passwords
+            .get(&profile_id)
+            .cloned()
+    }
+
+    /// Keeps a prompted password in memory until DBFlux exits. It is never
+    /// written to the keyring or to disk.
+    pub fn remember_connection_password(&mut self, profile_id: Uuid, password: SecretString) {
+        self.remembered_connection_passwords
+            .insert(profile_id, password);
+    }
+
+    pub fn forget_connection_password(&mut self, profile_id: Uuid) {
+        self.remembered_connection_passwords.remove(&profile_id);
+    }
+
+    /// Keeps the password a profile connected with for its live session, so
+    /// per-database connections and database switches reuse it.
+    pub fn set_session_password(&mut self, profile_id: Uuid, password: SecretString) {
+        self.facade
+            .connections
+            .set_session_password(profile_id, password);
+    }
+
+    fn password_prompt_profile(&self, profile_id: Uuid) -> Option<&ConnectionProfile> {
+        let profile = self
+            .facade
+            .profiles
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)?;
+        let driver_requires_password = self
+            .driver_for_profile(profile)
+            .is_some_and(|driver| driver.requires_password());
+
+        profile
+            .requires_password_prompt(driver_requires_password)
+            .then_some(profile)
     }
 
     /// Resolve the SSH tunnel profile ID associated with a connection profile, if any.
@@ -1184,6 +1280,7 @@ impl AppState {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
         self.facade.connections.clear_connect_failure(profile.id);
+        self.remembered_connection_passwords.remove(&profile.id);
 
         // The navigator view and the database filter only lay out the
         // sidebar, so an open connection takes them at once instead of
@@ -3623,6 +3720,180 @@ mod tests {
             Some("example-sso-profile")
         );
         assert!(input.auth_provider.is_some());
+    }
+
+    // --- Password prompt for profiles that do not save their password ---
+
+    use dbflux_core::secrecy::ExposeSecret;
+
+    static PASSWORD_TEST_FORM: std::sync::LazyLock<dbflux_core::DriverFormDef> =
+        std::sync::LazyLock::new(|| dbflux_core::DriverFormDef { tabs: vec![] });
+
+    struct PasswordTestDriver {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl DbDriver for PasswordTestDriver {
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::Postgres
+        }
+
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+            &PASSWORD_TEST_FORM
+        }
+
+        fn driver_key(&self) -> dbflux_core::DriverKey {
+            "builtin:password-test".into()
+        }
+
+        fn build_config(
+            &self,
+            _values: &dbflux_core::FormValues,
+        ) -> Result<DbConfig, dbflux_core::DbError> {
+            Ok(DbConfig::default_postgres())
+        }
+
+        fn extract_values(&self, _config: &DbConfig) -> dbflux_core::FormValues {
+            dbflux_core::FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            _profile: &ConnectionProfile,
+            _password: Option<&SecretString>,
+            _ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("test driver".into()))
+        }
+
+        fn test_connection(
+            &self,
+            _profile: &ConnectionProfile,
+        ) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+    }
+
+    fn password_test_drivers(requires_password: bool) -> HashMap<String, Arc<dyn DbDriver>> {
+        let capabilities = if requires_password {
+            dbflux_core::DriverCapabilities::AUTHENTICATION
+        } else {
+            dbflux_core::DriverCapabilities::empty()
+        };
+        let metadata = dbflux_core::DriverMetadataBuilder::new(
+            "password-test",
+            "PasswordTest",
+            dbflux_core::DatabaseCategory::Relational,
+            dbflux_core::QueryLanguage::Sql,
+        )
+        .capabilities(capabilities)
+        .build();
+
+        HashMap::from([(
+            "postgres".to_string(),
+            Arc::new(PasswordTestDriver { metadata }) as Arc<dyn DbDriver>,
+        )])
+    }
+
+    fn unsaved_password_profile() -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new("orders", DbConfig::default_postgres());
+        profile.save_password = false;
+        profile
+    }
+
+    #[test]
+    fn password_prompt_is_requested_for_an_unsaved_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let state = test_state_with_profiles(password_test_drivers(true), vec![profile]);
+
+        let prompt = state
+            .connection_password_prompt(profile_id)
+            .expect("an unsaved password must be prompted");
+
+        assert_eq!(prompt.profile_id, profile_id);
+        assert_eq!(prompt.profile_name, "orders");
+    }
+
+    #[test]
+    fn password_prompt_is_skipped_when_the_driver_needs_no_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let state = test_state_with_profiles(password_test_drivers(false), vec![profile]);
+
+        assert!(state.connection_password_prompt(profile_id).is_none());
+    }
+
+    #[test]
+    fn password_prompt_is_skipped_for_saved_or_sourced_passwords() {
+        let mut saved = unsaved_password_profile();
+        saved.save_password = true;
+        let mut sourced = unsaved_password_profile();
+        sourced.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::env("DB_PASSWORD"),
+        );
+        let (saved_id, sourced_id) = (saved.id, sourced.id);
+        let state = test_state_with_profiles(password_test_drivers(true), vec![saved, sourced]);
+
+        assert!(state.connection_password_prompt(saved_id).is_none());
+        assert!(state.connection_password_prompt(sourced_id).is_none());
+    }
+
+    #[test]
+    fn remembered_password_suppresses_the_prompt_and_is_used_to_connect() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let mut state = test_state_with_profiles(password_test_drivers(true), vec![profile]);
+
+        state.remember_connection_password(profile_id, SecretString::from("typed"));
+
+        assert!(state.connection_password_prompt(profile_id).is_none());
+        let remembered = state
+            .remembered_connection_password(profile_id)
+            .expect("remembered password");
+        assert_eq!(remembered.expose_secret(), "typed");
+
+        state.forget_connection_password(profile_id);
+        assert!(state.connection_password_prompt(profile_id).is_some());
+    }
+
+    #[test]
+    fn remembered_password_is_ignored_once_the_profile_saves_its_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let mut state =
+            test_state_with_profiles(password_test_drivers(true), vec![profile.clone()]);
+        state.remember_connection_password(profile_id, SecretString::from("typed"));
+
+        let mut saved = profile;
+        saved.save_password = true;
+        state.update_profile(saved);
+
+        assert!(state.remembered_connection_password(profile_id).is_none());
+    }
+
+    #[test]
+    fn prepared_connect_carries_the_provided_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let state = test_state_with_profiles(password_test_drivers(true), vec![profile]);
+
+        let params = state
+            .prepare_connect_profile_with_secrets(profile_id, None, Some(SecretString::from("")))
+            .unwrap_or_else(|error| panic!("prepare should succeed: {error:?}"));
+
+        assert_eq!(
+            params
+                .password_override
+                .as_ref()
+                .map(|password| password.expose_secret().to_string()),
+            Some(String::new())
+        );
     }
 
     #[test]

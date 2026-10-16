@@ -1,4 +1,5 @@
 use super::*;
+use crate::data_grid_panel::PendingBatchRemaining;
 
 // === #629 — the completion path a close waits on ===
 
@@ -406,9 +407,19 @@ fn register_writable_connection(
     panel: &gpui::Entity<DataGridPanel>,
     window: &mut VisualTestContext,
 ) {
+    let _driver = register_writable_connection_with_driver(panel, window);
+}
+
+/// The same connection, with its driver kept so a test can count what ran.
+fn register_writable_connection_with_driver(
+    panel: &gpui::Entity<DataGridPanel>,
+    window: &mut VisualTestContext,
+) -> dbflux_test_support::fake_driver::FakeDriver {
     use dbflux_core::{ConnectedProfile, DbConfig, DbKind, MutationPolicy};
     use dbflux_test_support::fake_driver::FakeDriver;
     use std::path::PathBuf;
+
+    let driver = FakeDriver::new(DbKind::SQLite);
 
     window.update(|_, app| {
         let app_state = panel.read(app).app_state.clone();
@@ -421,7 +432,7 @@ fn register_writable_connection(
                     connection_id: None,
                 },
             );
-            let connection = FakeDriver::new(DbKind::SQLite)
+            let connection = driver
                 .connect_arc(&profile)
                 .expect("the fake driver connects");
 
@@ -450,9 +461,11 @@ fn register_writable_connection(
             );
         });
     });
+
+    driver
 }
 
-/// One staged row edit that lands is what lets the close through.
+/// One staged row edit that is what lets the close through.
 #[gpui::test]
 fn a_staged_edit_that_lands_asks_the_close_to_proceed(cx: &mut TestAppContext) {
     let (panel, window, seen) = staged_edit_panel(cx);
@@ -522,5 +535,210 @@ fn a_delete_only_apply_that_lands_asks_the_close_to_proceed(cx: &mut TestAppCont
     assert!(
         asked_to_close(&seen),
         "a landed delete must let the tab it was closing go"
+    );
+}
+
+/// A close request must not re-enter the batch pump while an operation is
+/// already in flight.
+///
+/// While the pump writes one row, the rows it has not started yet stay in
+/// `pending_batch_remaining`. A second `apply_for_close` used to call the pump
+/// again, starting a second write at the same time; the operation that landed
+/// first could then report the close before the other reached the database.
+///
+/// The fake driver answers immediately, so a real operation cannot be held in
+/// flight long enough to observe. The test stages the pump's in-flight shape
+/// directly instead: one edit still to write, and the held row waiting.
+#[gpui::test]
+fn apply_for_close_does_not_start_a_second_batch_operation(cx: &mut TestAppContext) {
+    let (panel, window, _seen) = staged_edit_panel(cx);
+    register_writable_connection(&panel, window);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            stage_row_edit(panel, cx);
+            panel.pending_batch_remaining = Some(PendingBatchRemaining {
+                pending_inserts: Vec::new(),
+                dirty_rows: vec![0],
+            });
+
+            assert!(
+                panel.apply_for_close(cx),
+                "a staged row with a batch in flight is an apply to wait on"
+            );
+            assert!(
+                panel.pending_batch_remaining.is_some(),
+                "the held row must still be waiting when the close request returns"
+            );
+        });
+    });
+}
+
+/// A close request while a write is in flight must not ask the table to save
+/// again.
+///
+/// The pump sets `batch_op_in_flight` when it has a write running; the close
+/// returns without dispatching a Save All. The fake driver answers at once, so
+/// the in-flight state is staged directly instead of holding a real operation.
+#[gpui::test]
+fn apply_for_close_while_an_operation_is_in_flight_does_not_save_all_again(
+    cx: &mut TestAppContext,
+) {
+    let (panel, window, _seen) = staged_edit_panel(cx);
+    register_writable_connection(&panel, window);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            stage_row_edit(panel, cx);
+            panel.batch_op_in_flight = true;
+
+            assert!(
+                panel.apply_for_close(cx),
+                "a write in flight is an apply to wait on"
+            );
+        });
+    });
+
+    // Nothing was asked to save, so the staged row is still pending.
+    window.run_until_parked();
+
+    let counts = window.update(|_, app| panel.read(app).pending_edit_counts(app));
+    assert_eq!(
+        counts,
+        (0, 1, 0),
+        "the close must not dispatch a second Save All while a write is in flight"
+    );
+}
+
+/// A close after a batch operation failed must resume or report, not park.
+///
+/// The failed insert abandons the batch; the rows it still held must not look
+/// like a write in flight to the next close.
+#[gpui::test]
+fn a_close_after_a_failed_batch_reports_back(cx: &mut TestAppContext) {
+    // No connection is registered, so the first insert fails with "No connection".
+    let (panel, window, seen) = staged_edit_panel(cx);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            let table_state = panel.grid_table.table_state.clone().expect("table state");
+            table_state.update(cx, |state, cx| {
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    dbflux_components::components::data_table::model::CellValue::int(1),
+                ]);
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    dbflux_components::components::data_table::model::CellValue::int(2),
+                ]);
+                cx.notify();
+            });
+            assert!(
+                panel.apply_for_close(cx),
+                "two staged inserts are an apply to wait on"
+            );
+        });
+    });
+    window.run_until_parked();
+
+    // Drop the first attempt's `landed: false`.
+    seen.borrow_mut().clear();
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            assert!(
+                panel.apply_for_close(cx),
+                "the remaining insert is still an apply to wait on"
+            );
+        });
+    });
+    window.run_until_parked();
+
+    assert!(
+        !seen.borrow().is_empty(),
+        "the second close must resume or report, not park; got {:?}",
+        event_kinds(&seen)
+    );
+}
+
+/// A queued row whose edits were cleared before the pump reached it must not
+/// park the close.
+///
+/// The pump marked it in flight and the save handler then returned with nothing
+/// to write, leaving no completion to advance or finish the batch.
+#[gpui::test]
+fn a_queued_row_that_lost_its_edits_does_not_park_the_close(cx: &mut TestAppContext) {
+    let (panel, window, seen) = staged_edit_panel(cx);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            // A close waiting on a batch whose one queued row has no edits left.
+            panel.close_after_apply = true;
+            panel.pending_batch_remaining = Some(PendingBatchRemaining {
+                pending_inserts: Vec::new(),
+                dirty_rows: vec![0],
+            });
+            panel.process_next_batch_op(cx);
+        });
+    });
+
+    assert!(
+        asked_to_close(&seen),
+        "a queued row with no edits must let the close through; got {:?}",
+        event_kinds(&seen)
+    );
+}
+
+/// A batch of pending inserts must save every one of them.
+///
+/// The batch pumps positional indices from a snapshot, and each landed insert is
+/// removed from the edit buffer, which shifts the indices the pump still holds.
+#[gpui::test]
+fn a_batch_of_inserts_saves_every_row(cx: &mut TestAppContext) {
+    let (panel, window, seen) = staged_edit_panel(cx);
+    let driver = register_writable_connection_with_driver(&panel, window);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            let table_state = panel.grid_table.table_state.clone().expect("table state");
+            table_state.update(cx, |state, cx| {
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    dbflux_components::components::data_table::model::CellValue::int(1),
+                ]);
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    dbflux_components::components::data_table::model::CellValue::int(2),
+                ]);
+                cx.notify();
+            });
+            assert!(
+                panel.apply_for_close(cx),
+                "two staged inserts are an apply to wait on"
+            );
+        });
+    });
+    window.run_until_parked();
+
+    let inserted: Vec<i64> = driver
+        .stats()
+        .crud_ops
+        .iter()
+        .filter_map(|op| match op {
+            dbflux_test_support::fake_driver::CrudOp::Insert(insert) => insert
+                .assignments
+                .iter()
+                .find_map(|assignment| match assignment.value {
+                    dbflux_core::Value::Int(value) => Some(value),
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        inserted,
+        vec![1, 2],
+        "both staged inserts must reach the driver, in order"
+    );
+    assert!(
+        asked_to_close(&seen),
+        "the batch must let the close through; got {:?}",
+        event_kinds(&seen)
     );
 }

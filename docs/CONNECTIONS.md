@@ -308,6 +308,13 @@ switches between them.
 - **One access method per connection.** Switching methods clears the others.
 - **Secrets live in your OS keyring**, never in the DBFlux database. If the
   keyring is unavailable, "Save" checkboxes disappear and secrets aren't kept.
+- **An unsaved password is asked for when you connect.** If a connection's
+  password is neither saved in the keyring nor taken from a value source,
+  DBFlux asks for it before connecting, and every database that connection
+  opens uses it until you disconnect. Leave it empty for servers that need no
+  password. **Remember until DBFlux closes** keeps it in memory, never in the
+  keyring, so later connects do not ask again; Cancel leaves the connection
+  closed.
 - **A disabled proxy or a No-Proxy match silently connects directly.**
 - **`No Proxy` does not support CIDR** — list hosts/suffixes, not IP ranges.
 - **SSM and auth-backed value sources both require an Auth Profile.**

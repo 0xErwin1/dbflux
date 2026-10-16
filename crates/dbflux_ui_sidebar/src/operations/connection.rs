@@ -3,6 +3,7 @@ use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 use dbflux_core::observability::actions::{
     CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED, CONNECTION_CONNECTING, CONNECTION_DISCONNECT,
 };
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{DatabaseConnection, DbSchemaInfo, HookPhase, PrepareConnectError, TaskKind};
 use dbflux_ssh::is_passphrase_required_error_str;
 use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
@@ -154,7 +155,27 @@ async fn wait_for_connection_teardown(
 
 impl Sidebar {
     pub fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        self.connect_to_profile_inner(profile_id, None, false, cx);
+        let (prompt, remembered_password) = {
+            let state = self.app_state.read(cx);
+            let idle = !state.connections().contains_key(&profile_id)
+                && !state.is_operation_pending(profile_id, None);
+
+            match state.remembered_connection_password(profile_id) {
+                Some(password) => (None, Some(password)),
+                None => (
+                    idle.then(|| state.connection_password_prompt(profile_id))
+                        .flatten(),
+                    None,
+                ),
+            }
+        };
+
+        if let Some(prompt) = prompt {
+            cx.emit(SidebarEvent::RequestConnectionPassword { prompt });
+            return;
+        }
+
+        self.connect_to_profile_inner(profile_id, None, false, remembered_password, cx);
     }
 
     /// Disconnect a live session and reconnect once the connection has fully
@@ -208,6 +229,27 @@ impl Sidebar {
         .detach();
     }
 
+    /// Connect with the password the user typed into the connect prompt.
+    ///
+    /// The password serves this connection's whole live session. With
+    /// `remember`, it is also kept in memory until DBFlux exits, so later
+    /// connects skip the prompt; it is never written to the keyring.
+    pub fn connect_to_profile_with_password(
+        &mut self,
+        profile_id: Uuid,
+        password: SecretString,
+        remember: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if remember {
+            self.app_state.update(cx, |state, _cx| {
+                state.remember_connection_password(profile_id, password.clone());
+            });
+        }
+
+        self.connect_to_profile_inner(profile_id, None, false, Some(password), cx);
+    }
+
     /// Retry a connection with an explicit SSH passphrase supplied by the user via the modal.
     ///
     /// If this attempt also fails with a passphrase error, the modal will reopen showing
@@ -219,9 +261,10 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         self.pending_tunnel_auth_profile_id = None;
+        let password = self.pending_tunnel_auth_password.take();
         // Pass last_attempt_failed=true so that if this attempt also fails with a passphrase
         // error, the re-opened modal shows the "Incorrect passphrase" error banner.
-        self.connect_to_profile_inner(profile_id, Some(passphrase), true, cx);
+        self.connect_to_profile_inner(profile_id, Some(passphrase), true, password, cx);
     }
 
     fn connect_to_profile_inner(
@@ -229,6 +272,7 @@ impl Sidebar {
         profile_id: Uuid,
         override_passphrase: Option<String>,
         last_attempt_failed: bool,
+        password: Option<SecretString>,
         cx: &mut Context<Self>,
     ) {
         let uses_pipeline = {
@@ -242,7 +286,7 @@ impl Sidebar {
         };
 
         if uses_pipeline {
-            self.connect_via_pipeline(profile_id, cx);
+            self.connect_via_pipeline(profile_id, password, cx);
             return;
         }
 
@@ -257,8 +301,11 @@ impl Sidebar {
                     });
                 }
 
-                let result =
-                    state.prepare_connect_profile_with_passphrase(profile_id, passphrase_ref);
+                let result = state.prepare_connect_profile_with_secrets(
+                    profile_id,
+                    passphrase_ref,
+                    password.clone(),
+                );
 
                 if result.is_ok() && !state.start_pending_operation(profile_id, None) {
                     return Err(PendingToast {
@@ -334,6 +381,7 @@ impl Sidebar {
         let sidebar = cx.entity().clone();
 
         let detached_hook_scope = DetachedHookScope::default();
+        let session_password = password;
 
         cx.spawn(async move |_this, cx| {
             let mut hook_warnings = Vec::new();
@@ -477,6 +525,7 @@ impl Sidebar {
                     let profile_name_for_audit = profile_name.clone();
                     let profile_id_for_audit = profile_id;
                     let is_passphrase_error = is_passphrase_required_error_str(&error);
+                    let password_for_retry = session_password.clone();
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
@@ -514,6 +563,11 @@ impl Sidebar {
                             }
 
                             state.cancel_detached_hook_tasks(profile_id);
+                            if !is_passphrase_error {
+                                // A remembered password may be the reason the
+                                // connect failed; ask again next time.
+                                state.forget_connection_password(profile_id);
+                            }
                             state.record_connect_failure(profile_id, error_clone.clone());
                             state.fail_task(task_id, error_clone);
                             state.finish_pending_operation(profile_id, None);
@@ -552,6 +606,7 @@ impl Sidebar {
                             if let Some((tunnel_id, tunnel_name, host, port, user)) = tunnel_info {
                                 sidebar.update(cx, |sidebar, cx| {
                                     sidebar.pending_tunnel_auth_profile_id = Some(profile_id);
+                                    sidebar.pending_tunnel_auth_password = password_for_retry;
                                     cx.emit(SidebarEvent::RequestTunnelAuth {
                                         profile_id,
                                         tunnel_id,
@@ -709,6 +764,9 @@ impl Sidebar {
                         false,
                         connected.probe,
                     );
+                    if let Some(password) = session_password {
+                        state.set_session_password(profile_id, password);
+                    }
                     cx.emit(AppStateChanged);
                     cx.notify();
                 });
@@ -1346,5 +1404,273 @@ mod tests {
         );
 
         release_gate(&gate);
+    }
+
+    // --- Prompting for a password that is neither saved nor sourced ---
+
+    use crate::Sidebar;
+    use crate::table_loading::object_tree_adapter_tests::{AdapterFakeConnection, test_app_state};
+    use dbflux_core::secrecy::{ExposeSecret, SecretString};
+    use dbflux_ui_base::app_state_entity::AppStateEntity;
+    use gpui::{Entity, VisualTestContext};
+    use std::sync::LazyLock;
+    use uuid::Uuid;
+
+    type RecordedPasswords = Arc<Mutex<Vec<Option<String>>>>;
+
+    static PASSWORD_DRIVER_FORM: LazyLock<dbflux_core::DriverFormDef> =
+        LazyLock::new(|| dbflux_core::DriverFormDef { tabs: vec![] });
+
+    /// A driver that authenticates with a password and records the password
+    /// every connect receives.
+    struct PasswordRecordingDriver {
+        metadata: dbflux_core::DriverMetadata,
+        passwords: RecordedPasswords,
+    }
+
+    impl dbflux_core::DbDriver for PasswordRecordingDriver {
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::Postgres
+        }
+
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+            &PASSWORD_DRIVER_FORM
+        }
+
+        fn driver_key(&self) -> dbflux_core::DriverKey {
+            "builtin:sidebar-password-test".into()
+        }
+
+        fn build_config(
+            &self,
+            _: &dbflux_core::FormValues,
+        ) -> Result<dbflux_core::DbConfig, dbflux_core::DbError> {
+            Ok(dbflux_core::DbConfig::default_postgres())
+        }
+
+        fn extract_values(&self, _: &dbflux_core::DbConfig) -> dbflux_core::FormValues {
+            dbflux_core::FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            _: &dbflux_core::ConnectionProfile,
+            password: Option<&SecretString>,
+            _: Option<&SecretString>,
+        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            self.passwords
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(password.map(|password| password.expose_secret().to_string()));
+
+            match Arc::try_unwrap(AdapterFakeConnection::lazy()) {
+                Ok(connection) => Ok(Box::new(connection)),
+                Err(_) => Err(dbflux_core::DbError::NotSupported(
+                    "fake connection shared".into(),
+                )),
+            }
+        }
+
+        fn test_connection(
+            &self,
+            _: &dbflux_core::ConnectionProfile,
+        ) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+    }
+
+    struct PasswordFixture {
+        state: Entity<AppStateEntity>,
+        sidebar: Entity<Sidebar>,
+        profile_id: Uuid,
+        passwords: RecordedPasswords,
+        prompts: Arc<Mutex<Vec<Uuid>>>,
+    }
+
+    fn password_fixture(
+        save_password: bool,
+        cx: &mut TestAppContext,
+    ) -> (PasswordFixture, &mut VisualTestContext) {
+        let state = test_app_state(cx);
+        let passwords: RecordedPasswords = Arc::new(Mutex::new(Vec::new()));
+        let metadata = dbflux_core::DriverMetadataBuilder::new(
+            "sidebar-password-test",
+            "SidebarPasswordTest",
+            dbflux_core::DatabaseCategory::Relational,
+            dbflux_core::QueryLanguage::Sql,
+        )
+        .capabilities(dbflux_core::DriverCapabilities::AUTHENTICATION)
+        .build();
+
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "orders",
+            dbflux_core::DbConfig::default_postgres(),
+        );
+        profile.save_password = save_password;
+        let profile_id = profile.id;
+
+        state.update(cx, |state, _| {
+            state.inner.facade.connections.drivers.insert(
+                "postgres".into(),
+                Arc::new(PasswordRecordingDriver {
+                    metadata,
+                    passwords: passwords.clone(),
+                }),
+            );
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        cx.update(|_, cx| {
+            let prompts = prompts.clone();
+            cx.subscribe(&sidebar, move |_, event: &crate::SidebarEvent, _| {
+                if let crate::SidebarEvent::RequestConnectionPassword { prompt } = event {
+                    prompts.lock().expect("prompts").push(prompt.profile_id);
+                }
+            })
+            .detach();
+        });
+
+        (
+            PasswordFixture {
+                state,
+                sidebar,
+                profile_id,
+                passwords,
+                prompts,
+            },
+            cx,
+        )
+    }
+
+    fn recorded(passwords: &RecordedPasswords) -> Vec<Option<String>> {
+        passwords.lock().expect("recorded passwords").clone()
+    }
+
+    #[gpui::test]
+    fn connect_asks_for_an_unsaved_password_before_connecting(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert_eq!(*fixture.prompts.lock().expect("prompts"), vec![profile_id]);
+        assert!(
+            recorded(&fixture.passwords).is_empty(),
+            "nothing connects before the prompt"
+        );
+        fixture.state.read_with(cx, |state, _| {
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
+    }
+
+    #[gpui::test]
+    fn prompted_password_connects_and_serves_the_live_session(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_to_profile_with_password(profile_id, SecretString::from(""), false, cx)
+        });
+        cx.run_until_parked();
+
+        assert_eq!(recorded(&fixture.passwords), vec![Some(String::new())]);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+            assert_eq!(
+                state
+                    .inner
+                    .facade
+                    .connections
+                    .session_password(profile_id)
+                    .map(|password| password.expose_secret().to_string()),
+                Some(String::new()),
+                "per-database connections and switches reuse the prompted password"
+            );
+            assert!(
+                state.remembered_connection_password(profile_id).is_none(),
+                "an unchecked remember box keeps nothing past the session"
+            );
+        });
+        assert!(fixture.prompts.lock().expect("prompts").is_empty());
+    }
+
+    #[gpui::test]
+    fn remembered_password_connects_without_asking_again(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture.state.update(cx, |state, _| {
+            state.remember_connection_password(profile_id, SecretString::from("typed"));
+        });
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert!(fixture.prompts.lock().expect("prompts").is_empty());
+        assert_eq!(
+            recorded(&fixture.passwords),
+            vec![Some("typed".to_string())]
+        );
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id))
+        });
+    }
+
+    #[gpui::test]
+    fn remember_box_keeps_the_prompted_password_for_the_session(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_to_profile_with_password(
+                profile_id,
+                SecretString::from("typed"),
+                true,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        fixture.state.read_with(cx, |state, _| {
+            assert_eq!(
+                state
+                    .remembered_connection_password(profile_id)
+                    .map(|password| password.expose_secret().to_string()),
+                Some("typed".to_string())
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn saved_password_profile_connects_without_asking(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert!(fixture.prompts.lock().expect("prompts").is_empty());
+        assert_eq!(recorded(&fixture.passwords).len(), 1);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id))
+        });
     }
 }

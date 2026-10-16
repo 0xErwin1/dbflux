@@ -8,10 +8,11 @@ use std::sync::RwLock;
 use std::time::Instant;
 
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionCountRequest, Connection, DatabaseInfo, DbError, DbKind,
-    DefaultSqlDialect, DriverMetadata, ExecutionSourceContext, InfluxVersion, InstanceCatalog,
-    LanguageService, MeasurementInfo, QueryLanguage, QueryRequest, QueryResult, ResolvedWindow,
-    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionPresentation, Connection,
+    DatabaseInfo, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, DriverMetadata,
+    ExecutionSourceContext, InfluxVersion, InstanceCatalog, LanguageService, MeasurementInfo,
+    QueryLanguage, QueryRequest, QueryResult, ResolvedWindow, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
     TimeSeriesSchema, contains_time_macros,
 };
 
@@ -581,14 +582,18 @@ impl Connection for InfluxConnection {
                 let resp = self
                     .http
                     .execute_influxql_v1("_internal", "SHOW DATABASES")
-                    .map_err(map_http_error)?;
+                    .map_err(map_http_error)
+                    .and_then(reject_error_status)?;
                 parse_influxql_string_list(&resp.body, "name")
             }
             InfluxVersion::V2 => {
                 let org = self.org.as_deref().unwrap_or("");
                 let base = self.http.base_url.trim_end_matches('/');
                 let url = format!("{base}/api/v2/buckets?org={}", urlencoding::encode(org));
-                let http_resp = self.http_get_raw(&url).map_err(map_http_error)?;
+                let http_resp = self
+                    .http_get_raw(&url)
+                    .map_err(map_http_error)
+                    .and_then(reject_error_status)?;
                 parse_v2_buckets_response(&http_resp)
             }
         }
@@ -598,8 +603,40 @@ impl Connection for InfluxConnection {
         DbKind::InfluxDB
     }
 
+    /// Every bucket (v2) or database (v1) is reachable over the same HTTP
+    /// client, so measurements load per bucket on demand instead of only for
+    /// the profile default.
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
-        SchemaLoadingStrategy::SingleDatabase
+        SchemaLoadingStrategy::LazyPerDatabase
+    }
+
+    /// Lists a bucket's measurements as the `tables` of a `DbSchemaInfo`,
+    /// which is how lazily loaded time-series databases are cached.
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        let tables = self
+            .fetch_measurement_names(database)?
+            .into_iter()
+            .map(|name| TableInfo {
+                name,
+                schema: Some(database.to_string()),
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: CollectionPresentation::default(),
+                child_items: None,
+                storage_hints: None,
+                pseudo_columns: Box::default(),
+            })
+            .collect();
+
+        Ok(DbSchemaInfo {
+            name: database.to_string(),
+            tables,
+            views: Vec::new(),
+            custom_types: None,
+        })
     }
 
     fn schema_features(&self) -> SchemaFeatures {
@@ -881,17 +918,8 @@ impl InfluxConnection {
             return Ok(vec![]);
         };
 
-        // v1 uses native InfluxQL `SHOW MEASUREMENTS`. v2 cannot rely on the InfluxQL
-        // compatibility endpoint here because it requires a DBRP mapping between the
-        // bucket and a v1 database name — those mappings are not created automatically
-        // for every bucket. The Flux `schema.measurements` query works against any v2
-        // bucket regardless of DBRP configuration.
-        let names = match self.version {
-            InfluxVersion::V1 => self.fetch_measurements_v1(bucket)?,
-            InfluxVersion::V2 => self.fetch_measurements_v2_flux(bucket)?,
-        };
-
-        Ok(names
+        Ok(self
+            .fetch_measurement_names(bucket)?
             .into_iter()
             .map(|name| MeasurementInfo {
                 name,
@@ -901,11 +929,24 @@ impl InfluxConnection {
             .collect())
     }
 
+    fn fetch_measurement_names(&self, bucket: &str) -> Result<Vec<String>, DbError> {
+        // v1 uses native InfluxQL `SHOW MEASUREMENTS`. v2 cannot rely on the InfluxQL
+        // compatibility endpoint here because it requires a DBRP mapping between the
+        // bucket and a v1 database name — those mappings are not created automatically
+        // for every bucket. The Flux `schema.measurements` query works against any v2
+        // bucket regardless of DBRP configuration.
+        match self.version {
+            InfluxVersion::V1 => self.fetch_measurements_v1(bucket),
+            InfluxVersion::V2 => self.fetch_measurements_v2_flux(bucket),
+        }
+    }
+
     fn fetch_measurements_v1(&self, bucket: &str) -> Result<Vec<String>, DbError> {
         let resp = self
             .http
             .execute_influxql_v1(bucket, "SHOW MEASUREMENTS")
-            .map_err(map_http_error)?;
+            .map_err(map_http_error)
+            .and_then(reject_error_status)?;
 
         let result =
             parse_influxql_json(&resp.body).map_err(|e| DbError::query_failed(e.to_string()))?;
@@ -932,7 +973,8 @@ impl InfluxConnection {
         let resp = self
             .http
             .execute_flux_v2(org, &query)
-            .map_err(map_http_error)?;
+            .map_err(map_http_error)
+            .and_then(reject_error_status)?;
 
         let result =
             parse_flux_csv(&resp.body).map_err(|e| DbError::query_failed(e.to_string()))?;
@@ -1021,6 +1063,23 @@ fn map_http_error(e: HttpError) -> DbError {
 }
 
 /// Parse a flat InfluxQL string list from a SHOW DATABASES / SHOW MEASUREMENTS result.
+/// Turns an HTTP error status into a `DbError` carrying the server's message,
+/// so an error body is never parsed as an empty listing.
+fn reject_error_status(
+    resp: crate::http::HttpResponseBody,
+) -> Result<crate::http::HttpResponseBody, DbError> {
+    if resp.status < 400 {
+        return Ok(resp);
+    }
+
+    let formatted = InfluxErrorFormatter::format_http_error(resp.status, &resp.body);
+    Err(if resp.status == 401 || resp.status == 403 {
+        DbError::AuthFailed(formatted)
+    } else {
+        DbError::QueryFailed(formatted)
+    })
+}
+
 fn parse_influxql_string_list(
     body: &str,
     _column_name: &str,
@@ -1249,6 +1308,155 @@ mod tests {
         assert!(!result.rows_truncated());
         assert_eq!(received.load(Ordering::SeqCst), 3);
         server.join().expect("server thread");
+    }
+
+    /// Serves one canned HTTP response and returns the raw request it received.
+    fn serve_once(
+        content_type: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        serve_once_with_status("200 OK", content_type, body)
+    }
+
+    fn serve_once_with_status(
+        status: &'static str,
+        content_type: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("read timeout");
+
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            loop {
+                let read = stream.read(&mut buffer).expect("request bytes");
+                request.extend_from_slice(buffer.get(..read).unwrap_or_default());
+                let text = String::from_utf8_lossy(&request);
+                let Some(header_end) = text.find("\r\n\r\n") else {
+                    continue;
+                };
+                let content_length = text
+                    .get(..header_end)
+                    .unwrap_or_default()
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if read == 0 || request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("response");
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (format!("http://{address}"), server)
+    }
+
+    #[test]
+    fn schema_for_database_lists_the_requested_bucket_measurements() {
+        let (endpoint, server) = serve_once(
+            "text/csv",
+            "#datatype,string,long,string\r\n#group,false,false,false\r\n#default,_result,,\r\n,result,table,_value\r\n,,0,cpu\r\n,,0,disk\r\n",
+        );
+        let http = HttpClient::new(endpoint, crate::http::AuthCreds::None, InfluxVersion::V2)
+            .expect("client");
+        let conn = InfluxConnection::new(
+            http,
+            InfluxVersion::V2,
+            QueryLanguage::InfluxQuery,
+            None,
+            Some("org".into()),
+        );
+
+        assert_eq!(
+            conn.schema_loading_strategy(),
+            SchemaLoadingStrategy::LazyPerDatabase
+        );
+
+        let schema = conn
+            .schema_for_database("metrics")
+            .expect("schema for a bucket that is not the profile default");
+        let request = server.join().expect("server thread");
+
+        assert!(
+            request.contains("schema.measurements(bucket: \\\"metrics\\\")"),
+            "the measurement listing must target the requested bucket: {request}"
+        );
+        assert_eq!(schema.name, "metrics");
+        let names: Vec<&str> = schema
+            .tables
+            .iter()
+            .map(|table| table.name.as_str())
+            .collect();
+        assert_eq!(names, ["cpu", "disk"]);
+        assert!(
+            schema
+                .tables
+                .iter()
+                .all(|table| table.schema.as_deref() == Some("metrics"))
+        );
+        assert!(schema.views.is_empty());
+    }
+
+    fn unauthorized_v2_connection() -> (InfluxConnection, std::thread::JoinHandle<String>) {
+        let (endpoint, server) = serve_once_with_status(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"code":"unauthorized","message":"unauthorized access"}"#,
+        );
+        let http = HttpClient::new(endpoint, crate::http::AuthCreds::None, InfluxVersion::V2)
+            .expect("client");
+        let conn = InfluxConnection::new(
+            http,
+            InfluxVersion::V2,
+            QueryLanguage::InfluxQuery,
+            None,
+            Some("org".into()),
+        );
+        (conn, server)
+    }
+
+    #[test]
+    fn list_databases_reports_a_rejected_token_as_an_auth_failure() {
+        let (conn, server) = unauthorized_v2_connection();
+
+        let error = conn
+            .list_databases()
+            .expect_err("a 401 must not be read as a bucket list");
+        server.join().expect("server thread");
+
+        assert!(matches!(error, DbError::AuthFailed(_)), "{error:?}");
+        assert!(
+            error.to_string().contains("unauthorized access"),
+            "the server's message must reach the user: {error}"
+        );
+    }
+
+    #[test]
+    fn schema_for_database_reports_a_rejected_token_as_an_auth_failure() {
+        let (conn, server) = unauthorized_v2_connection();
+
+        let error = conn
+            .schema_for_database("metrics")
+            .expect_err("a 401 must not be read as an empty measurement list");
+        server.join().expect("server thread");
+
+        assert!(matches!(error, DbError::AuthFailed(_)), "{error:?}");
     }
 
     fn result_with_rows(count: usize) -> QueryResult {

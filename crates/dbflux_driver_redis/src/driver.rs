@@ -11,16 +11,16 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 
 use crate::language_service::RedisLanguageService;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
-    ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog, KeyBulkDeleteRequest,
-    KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest,
-    KeyGetRequest, KeyGetResult, KeyLoadState, KeyMetadata, KeyMetadataRequest, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
-    KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
+    CancelToken, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    EditorDiagnostic, ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab,
+    FormValues, FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog,
+    KeyBulkDeleteRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyMetadata, KeyMetadataRequest,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
+    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
     KeyValuePrefixRequest, KeyValueSchema, LanguageService, ListEnd, ListPushRequest,
     ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, PaginationStyle,
     QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
@@ -1268,6 +1268,95 @@ impl RedisConnection {
         })
     }
 
+    /// Scans one key page on a standalone, Sentinel or cluster transport,
+    /// checking `cancel` between `SCAN` round trips.
+    fn scan_key_page(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        let is_cluster = {
+            let transport = self
+                .connection
+                .lock()
+                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+            matches!(&*transport, RedisTransport::Cluster(_))
+        };
+
+        if is_cluster {
+            return self.scan_keys_cluster(request, cancel);
+        }
+
+        let cursor = request
+            .cursor
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .map_err(|_| DbError::InvalidProfile("Invalid key scan cursor".to_string()))?;
+
+        let limit = key_page_limit(request.limit);
+        let filter = request
+            .filter
+            .as_deref()
+            .filter(|filter| !filter.is_empty());
+        let type_name = request.type_filter.and_then(redis_type_name);
+
+        // Budget and page are created inside the closure so a Sentinel retry
+        // restarts the page from `cursor` with a fresh budget.
+        self.with_connection(request.keyspace, |conn| {
+            let mut budget = ScanBudget::for_key_page();
+            let mut page = ScanPageKeys::default();
+
+            let next_cursor = fill_scan_page(
+                cursor,
+                limit,
+                &mut budget,
+                &mut page,
+                cancel,
+                |batch_cursor| {
+                    scan_command(batch_cursor, filter, limit, type_name)
+                        .query::<(u64, Vec<String>)>(conn)
+                        .map_err(|e| format_redis_query_error(&e))
+                },
+            )?;
+
+            let scanned_keys = scanned_key_estimate(budget.round_trips(), limit);
+            let keys = page.into_keys();
+
+            let entries = match request.type_filter.filter(|_| type_name.is_some()) {
+                Some(key_type) => key_entries_of_type(keys, key_type),
+                None => {
+                    let type_names = if keys.is_empty() {
+                        Vec::new()
+                    } else {
+                        let mut pipeline = redis::pipe();
+                        for key in &keys {
+                            pipeline.cmd("TYPE").arg(key);
+                        }
+
+                        pipeline
+                            .query::<Vec<String>>(conn)
+                            .map_err(|e| format_redis_query_error(&e))?
+                    };
+
+                    key_entries_with_types(keys, type_names)?
+                }
+            };
+
+            let next_cursor = if next_cursor == 0 {
+                None
+            } else {
+                Some(next_cursor.to_string())
+            };
+
+            Ok(KeyScanPage {
+                entries,
+                next_cursor,
+                scanned_keys: Some(scanned_keys),
+            })
+        })
+    }
+
     /// Fans a key scan out across every Redis Cluster master, since a plain
     /// `SCAN` is unroutable against a `ClusterConnection` (redis-rs has no
     /// single-node "current" concept for it, unlike single-key commands).
@@ -1278,7 +1367,11 @@ impl RedisConnection {
     /// returned cursor is tracked independently and round-tripped via
     /// `ClusterScanCursor`; the overall scan is exhausted once every node
     /// has reported cursor 0.
-    fn scan_keys_cluster(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+    fn scan_keys_cluster(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
         validate_cluster_database(request.keyspace)?;
 
         let mut transport = self
@@ -1333,8 +1426,13 @@ impl RedisConnection {
             let (host, port) = split_host_port(&address)?;
             let node_cursor = cursor_state.cursor_for(&address);
 
-            let next_cursor =
-                fill_scan_page(node_cursor, limit, &mut budget, &mut page, |batch_cursor| {
+            let next_cursor = fill_scan_page(
+                node_cursor,
+                limit,
+                &mut budget,
+                &mut page,
+                cancel,
+                |batch_cursor| {
                     let routing = RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress {
                         host: host.clone(),
                         port,
@@ -1349,7 +1447,8 @@ impl RedisConnection {
 
                     redis::FromRedisValue::from_redis_value(&value)
                         .map_err(|e| format_redis_query_error(&e))
-                })?;
+                },
+            )?;
 
             cursor_state.record_result(&address, next_cursor);
         }
@@ -1825,80 +1924,15 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
-        let is_cluster = {
-            let transport = self
-                .connection
-                .lock()
-                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
-            matches!(&*transport, RedisTransport::Cluster(_))
-        };
+        self.scan_key_page(request, &CancelToken::new())
+    }
 
-        if is_cluster {
-            return self.scan_keys_cluster(request);
-        }
-
-        let cursor = request
-            .cursor
-            .as_deref()
-            .unwrap_or("0")
-            .parse::<u64>()
-            .map_err(|_| DbError::InvalidProfile("Invalid key scan cursor".to_string()))?;
-
-        let limit = key_page_limit(request.limit);
-        let filter = request
-            .filter
-            .as_deref()
-            .filter(|filter| !filter.is_empty());
-        let type_name = request.type_filter.and_then(redis_type_name);
-
-        // Budget and page are created inside the closure so a Sentinel retry
-        // restarts the page from `cursor` with a fresh budget.
-        self.with_connection(request.keyspace, |conn| {
-            let mut budget = ScanBudget::for_key_page();
-            let mut page = ScanPageKeys::default();
-
-            let next_cursor =
-                fill_scan_page(cursor, limit, &mut budget, &mut page, |batch_cursor| {
-                    scan_command(batch_cursor, filter, limit, type_name)
-                        .query::<(u64, Vec<String>)>(conn)
-                        .map_err(|e| format_redis_query_error(&e))
-                })?;
-
-            let scanned_keys = scanned_key_estimate(budget.round_trips(), limit);
-            let keys = page.into_keys();
-
-            let entries = match request.type_filter.filter(|_| type_name.is_some()) {
-                Some(key_type) => key_entries_of_type(keys, key_type),
-                None => {
-                    let type_names = if keys.is_empty() {
-                        Vec::new()
-                    } else {
-                        let mut pipeline = redis::pipe();
-                        for key in &keys {
-                            pipeline.cmd("TYPE").arg(key);
-                        }
-
-                        pipeline
-                            .query::<Vec<String>>(conn)
-                            .map_err(|e| format_redis_query_error(&e))?
-                    };
-
-                    key_entries_with_types(keys, type_names)?
-                }
-            };
-
-            let next_cursor = if next_cursor == 0 {
-                None
-            } else {
-                Some(next_cursor.to_string())
-            };
-
-            Ok(KeyScanPage {
-                entries,
-                next_cursor,
-                scanned_keys: Some(scanned_keys),
-            })
-        })
+    fn scan_keys_with_cancel(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        self.scan_key_page(request, cancel)
     }
 
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
@@ -4086,21 +4120,28 @@ impl ScanPageKeys {
 /// Fills `page` from consecutive `SCAN` batches starting at `start_cursor`
 /// and returns the cursor to resume from (0 once the scan is complete).
 ///
-/// Always issues at least one batch, then stops as soon as the page holds
-/// `limit` keys, the cursor returns to 0, or `budget` is exhausted. A batch
-/// that is empty but carries a non-zero cursor does not end the page. Every
-/// key of the last batch is kept even when that overshoots `limit`, because
-/// the returned cursor has already moved past them.
+/// Issues at least one batch unless `cancel` is already set, then stops as
+/// soon as the page holds `limit` keys, the cursor returns to 0, or `budget`
+/// is exhausted. A batch that is empty but carries a non-zero cursor does not
+/// end the page. Every key of the last batch is kept even when that
+/// overshoots `limit`, because the returned cursor has already moved past
+/// them. `cancel` is checked before every batch and ends the page with
+/// `DbError::Cancelled`.
 fn fill_scan_page(
     start_cursor: u64,
     limit: usize,
     budget: &mut ScanBudget,
     page: &mut ScanPageKeys,
+    cancel: &CancelToken,
     mut scan_batch: impl FnMut(u64) -> Result<(u64, Vec<String>), DbError>,
 ) -> Result<u64, DbError> {
     let mut cursor = start_cursor;
 
     loop {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
         let (next_cursor, batch) = scan_batch(cursor)?;
         budget.record_round_trip();
 
@@ -4775,6 +4816,49 @@ mod tests {
     }
 
     #[test]
+    fn fill_scan_page_stops_before_the_next_batch_once_cancelled() {
+        let token = CancelToken::new();
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let result = fill_scan_page(0, 10, &mut budget, &mut page, &token, |cursor| {
+            requested_cursors.push(cursor);
+            token.cancel();
+            Ok((7, vec!["session:1".to_string()]))
+        });
+
+        assert!(
+            matches!(result, Err(DbError::Cancelled)),
+            "a cancel between batches must end the page, got: {:?}",
+            result
+        );
+        assert_eq!(requested_cursors, vec![0]);
+    }
+
+    #[test]
+    fn fill_scan_page_issues_no_batch_when_already_cancelled() {
+        let token = CancelToken::new();
+        token.cancel();
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let result = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            &token,
+            scripted_scan(vec![(0, vec!["session:1"])], &mut requested_cursors),
+        );
+
+        assert!(matches!(result, Err(DbError::Cancelled)));
+        assert!(requested_cursors.is_empty());
+        assert_eq!(page.len(), 0);
+    }
+
+    #[test]
     fn fill_scan_page_continues_past_empty_batches_until_a_match() -> Result<(), DbError> {
         let mut requested_cursors = Vec::new();
         let mut budget = generous_scan_budget();
@@ -4785,6 +4869,7 @@ mod tests {
             1,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(7, vec![]), (12, vec![]), (19, vec!["leaderboard:weekly"])],
                 &mut requested_cursors,
@@ -4808,6 +4893,7 @@ mod tests {
             10,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(4, vec!["a", "b"]), (0, vec!["b", "c", "a"])],
                 &mut requested_cursors,
@@ -4833,6 +4919,7 @@ mod tests {
             100,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(vec![(0, vec!["only"])], &mut requested_cursors),
         )?;
 
@@ -4853,6 +4940,7 @@ mod tests {
             10,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(1, vec![]), (2, vec![]), (3, vec![]), (4, vec!["late"])],
                 &mut requested_cursors,
@@ -4877,6 +4965,7 @@ mod tests {
             10,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(vec![(8, vec![]), (9, vec![])], &mut requested_cursors),
         )?;
 
@@ -4896,6 +4985,7 @@ mod tests {
             2,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(6, vec!["a"]), (11, vec!["b", "c", "d"]), (0, vec!["e"])],
                 &mut requested_cursors,
@@ -4920,9 +5010,14 @@ mod tests {
         let mut budget = generous_scan_budget();
         let mut page = ScanPageKeys::default();
 
-        let outcome = fill_scan_page(0, 10, &mut budget, &mut page, |_cursor| {
-            Err(DbError::query_failed("scan failed"))
-        });
+        let outcome = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            &CancelToken::new(),
+            |_cursor| Err(DbError::query_failed("scan failed")),
+        );
 
         assert!(outcome.is_err());
     }

@@ -3644,6 +3644,13 @@ modals:
     remember: 在此会话中记住
     cancel: 取消
     connect: 连接
+  connection_password:
+    title: "需要密码"
+    connection_label: "连接"
+    placeholder: "密码"
+    show_password: "显示密码"
+    hide_password: "隐藏密码"
+    remember: "在 DBFlux 关闭前记住"
   unsaved_changes:
     title: 未保存的更改
     prompt: 以下文档中有未保存的更改。您想怎么做？

@@ -193,6 +193,7 @@ fn save_table_row_issues_one_update_for_editable_builder_result(cx: &mut TestApp
                 TableRef::with_schema("public", "users"),
                 0,
                 &[(1, &new_cell)],
+                false,
                 cx,
             );
         });

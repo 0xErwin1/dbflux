@@ -105,6 +105,7 @@ fn a_saved_row_wider_than_the_grid_keeps_each_value_in_its_column(cx: &mut TestA
                     dbflux_core::Value::Int(5),
                     dbflux_core::Value::Text("saved".to_string()),
                 ])),
+                false,
                 cx,
             )
         })
@@ -130,6 +131,7 @@ fn a_saved_row_matching_the_grid_replaces_the_row(cx: &mut TestAppContext) {
                     dbflux_core::Value::Int(1),
                     dbflux_core::Value::Text("from the server".to_string()),
                 ])),
+                false,
                 cx,
             )
         })

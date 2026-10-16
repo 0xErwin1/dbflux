@@ -202,7 +202,7 @@ de gráfico.
 
 El menú contextual de un data grid ofrece un elemento "Chart this query". El
 elemento está condicionado por `can_chart_from_context_menu` en
-`crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs`, que requiere
+`crates/dbflux_ui_document/src/data_grid_panel/context_menu/mod.rs`, que requiere
 ambas condiciones:
 
 1. La fuente del panel es un `QueryResult` con una query original no vacía, y

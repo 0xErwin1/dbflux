@@ -911,7 +911,7 @@ para leer los campos de vuelta, devolviendo las cláusulas que no puede
 representar como `UnrepresentableClause`, de modo que la UI muestra un
 conflicto de sincronización en lugar de sobrescribirlas. La UI vive en
 `crates/dbflux_ui_document/src/document_builder/` y
-`data_grid_panel/documents/builder.rs`: Find escribe los campos y se ejecuta con
+`data_grid_panel/documents/builder/mod.rs`: Find escribe los campos y se ejecuta con
 `browse_collection`, así que los resultados siguen siendo editables, mientras
 que el modo Aggregate (gated también en `DocumentFeatures::AGGREGATE`) ejecuta
 el pipeline en la vista Agregación con resultados de solo lectura. Las

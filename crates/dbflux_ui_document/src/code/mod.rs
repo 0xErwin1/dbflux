@@ -63,6 +63,8 @@ use uuid::Uuid;
 mod code_actions;
 mod comment;
 mod completion;
+#[cfg(test)]
+mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
@@ -807,11 +809,15 @@ impl CodeDocument {
         };
 
         let input_state = cx.new(|cx| {
-            GpuiEditorState::new(window, cx)
+            let mut state = GpuiEditorState::new(window, cx)
                 .language(editor_mode)
                 .line_number(true)
                 .soft_wrap(false)
-                .placeholder(placeholder)
+                .placeholder(placeholder);
+            // The menu sizes itself to its longest item; allow database identifiers
+            // more room than the component's 320 px default, while keeping a cap.
+            state.lsp_mut().completion_menu.max_width = px(640.);
+            state
         });
 
         let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));

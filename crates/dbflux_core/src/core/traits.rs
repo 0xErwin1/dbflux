@@ -533,6 +533,25 @@ pub trait KeyValueApi: Send + Sync {
     /// Scan keys with cursor-based pagination.
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError>;
 
+    /// Scan one key page, stopping with `DbError::Cancelled` once `cancel`
+    /// is set.
+    ///
+    /// Drivers that fill a page from several server round trips override this
+    /// to check the token between them. The default can only refuse a token
+    /// that is already cancelled, so an in-flight `scan_keys` call still runs
+    /// to completion.
+    fn scan_keys_with_cancel(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &crate::CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
+        self.scan_keys(request)
+    }
+
     /// Get key value plus metadata.
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError>;
 
@@ -2430,6 +2449,32 @@ mod tests {
         fn exists_key(&self, _request: &KeyExistsRequest) -> Result<bool, DbError> {
             Err(DbError::NotSupported("stub".to_string()))
         }
+    }
+
+    #[test]
+    fn scan_keys_with_cancel_default_refuses_a_cancelled_token_before_scanning() {
+        let token = crate::CancelToken::new();
+        token.cancel();
+
+        let result = StubKeyValue.scan_keys_with_cancel(&KeyScanRequest::new(10), &token);
+
+        assert!(
+            matches!(result, Err(DbError::Cancelled)),
+            "a cancelled token must stop the scan before the driver call, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn scan_keys_with_cancel_default_delegates_to_scan_keys_while_not_cancelled() {
+        let result = StubKeyValue
+            .scan_keys_with_cancel(&KeyScanRequest::new(10), &crate::CancelToken::new());
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "a live token must reach scan_keys, got: {:?}",
+            result
+        );
     }
 
     #[test]

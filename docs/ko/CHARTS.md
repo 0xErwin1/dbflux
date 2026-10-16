@@ -173,7 +173,7 @@ query") 액션으로 만든 차트 문서는 아직 저장된 ID에 연결되지
 ### 이 쿼리를 차트로 만들기(Chart this query)
 
 데이터 그리드의 상황에 맞는 메뉴는 "이 쿼리를 차트로 만들기"("Chart this query") 항목을
-제공합니다. 이 항목은 `crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs`의
+제공합니다. 이 항목은 `crates/dbflux_ui_document/src/data_grid_panel/context_menu/mod.rs`의
 `can_chart_from_context_menu`에 의해 게이트되며, 다음 둘 모두를 요구합니다:
 
 1. 패널의 소스가 비어 있지 않은 원본 쿼리를 가진 `QueryResult`이고

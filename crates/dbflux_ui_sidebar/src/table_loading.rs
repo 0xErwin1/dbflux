@@ -432,6 +432,7 @@ impl Sidebar {
                 task_description,
                 Some(profile_id),
             );
+            state.tasks_mut().mark_uncancellable(task_id);
             task_id
         });
 
@@ -2797,6 +2798,71 @@ pub(crate) mod object_tree_adapter_tests {
             !build_items(&window, cx)
                 .iter()
                 .any(|(id, _, _)| id == &retry_id)
+        );
+    }
+
+    #[gpui::test]
+    async fn failed_database_list_is_cleared_by_reconnect(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::lazy();
+        fake.list_failures.store(1, Ordering::SeqCst);
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![])),
+        );
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.set_expanded(&profile_item, true, cx)
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        let retry_id = format!("object-retry|{profile_item}");
+        assert!(
+            build_items(&window, cx)
+                .iter()
+                .any(|(id, _, _)| id == &retry_id)
+        );
+
+        state.update(cx, |state, _| {
+            let _teardown = state.disconnect(profile_id);
+        });
+        state.update(cx, |state, _| {
+            state
+                .profiles_mut()
+                .retain(|profile| profile.id != profile_id);
+        });
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![])),
+        );
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_tree(cx);
+                sidebar.set_expanded(&profile_item, false, cx);
+                sidebar.set_expanded(&profile_item, true, cx);
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+
+        assert_eq!(
+            fake.list_calls(),
+            2,
+            "the first expansion after reconnect must fetch the list again"
+        );
+        assert!(
+            !build_items(&window, cx)
+                .iter()
+                .any(|(id, _, _)| id == &retry_id),
+            "a failure from the previous session must not survive reconnect"
         );
     }
 
