@@ -794,7 +794,9 @@ pub struct ColumnInfo {
 /// Relational tables store [`IndexInfo`], document collections store
 /// [`CollectionIndexInfo`] with direction, sparse, and TTL metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+// Adjacently tagged because an internally tagged enum cannot carry a
+// sequence: serializing a newtype variant holding a `Vec` fails.
+#[serde(tag = "kind", content = "items")]
 pub enum IndexData {
     Relational(Vec<IndexInfo>),
     Document(Vec<CollectionIndexInfo>),

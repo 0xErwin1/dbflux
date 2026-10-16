@@ -1087,7 +1087,7 @@ mod tests {
     /// `schema`, two `columns` (one with default and enum values, one with an
     /// empty `enum_values` list), `foreign_keys`, `constraints`, and
     /// `storage_hints`. Deliberately left empty: `indexes` (postcard cannot
-    /// encode the internally tagged `IndexData` enum), `sample_fields`
+    /// decode the adjacently tagged `IndexData` enum), `sample_fields`
     /// (document-database only), and `child_items` (driver child sources).
     fn nontrivial_table_info() -> dbflux_core::TableInfo {
         dbflux_core::TableInfo {
@@ -1117,8 +1117,9 @@ mod tests {
                     enum_values: Some(vec!["new".into(), "paid".into()]),
                 },
             ]),
-            // `IndexData` is internally tagged (`#[serde(tag = "kind")]`),
-            // which postcard cannot encode (`SerdeSerCustom`), so wire-carried
+            // `IndexData` is adjacently tagged
+            // (`#[serde(tag = "kind", content = "items")]`), which postcard
+            // encodes but cannot decode (`WontImplement`), so wire-carried
             // `TableInfo` always leaves `indexes` as `None`.
             indexes: None,
             foreign_keys: Some(vec![dbflux_core::ForeignKeyInfo {

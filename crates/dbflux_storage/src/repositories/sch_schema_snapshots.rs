@@ -632,6 +632,74 @@ mod tests {
     }
 
     #[test]
+    fn insert_and_get_roundtrip_preserves_table_indexes() {
+        let (_, repo, profile_id) = setup("insert_get_indexes");
+        let mut record = sample_record(profile_id, Some("app_db"), 1000);
+        record.tables[0].indexes = Some(dbflux_core::IndexData::Relational(vec![
+            dbflux_core::IndexInfo {
+                name: "users_pkey".to_string(),
+                columns: vec!["id".to_string()],
+                is_unique: true,
+                is_primary: true,
+            },
+        ]));
+        record.tables[1].indexes = Some(dbflux_core::IndexData::Document(vec![
+            dbflux_core::CollectionIndexInfo {
+                name: "created_at_ttl".to_string(),
+                keys: vec![(
+                    "created_at".to_string(),
+                    dbflux_core::IndexDirection::Descending,
+                )],
+                is_unique: false,
+                is_sparse: true,
+                expire_after_seconds: Some(3600),
+            },
+        ]));
+
+        repo.insert(&record).expect("insert");
+
+        let loaded = repo
+            .get(&record.id.to_string())
+            .expect("get")
+            .expect("exists");
+
+        let users = loaded
+            .tables
+            .iter()
+            .find(|table| table.name == "users")
+            .expect("users table");
+        let Some(dbflux_core::IndexData::Relational(indexes)) = &users.indexes else {
+            panic!("expected relational indexes, got {:?}", users.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "users_pkey");
+        assert_eq!(indexes[0].columns, vec!["id".to_string()]);
+        assert!(indexes[0].is_unique);
+        assert!(indexes[0].is_primary);
+
+        let orders = loaded
+            .tables
+            .iter()
+            .find(|table| table.name == "orders")
+            .expect("orders table");
+        let Some(dbflux_core::IndexData::Document(indexes)) = &orders.indexes else {
+            panic!("expected document indexes, got {:?}", orders.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "created_at_ttl");
+        assert_eq!(
+            indexes[0].keys,
+            vec![(
+                "created_at".to_string(),
+                dbflux_core::IndexDirection::Descending
+            )]
+        );
+        assert!(!indexes[0].is_unique);
+        assert!(indexes[0].is_sparse);
+        assert_eq!(indexes[0].expire_after_seconds, Some(3600));
+    }
+
+    #[test]
     fn get_missing_id_returns_none() {
         let (_, repo, _) = setup("get_missing");
         let result = repo.get(&Uuid::now_v7().to_string()).expect("get");
