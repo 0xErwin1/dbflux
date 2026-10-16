@@ -1,15 +1,38 @@
-use std::rc::Rc;
+use std::{cmp::Reverse, collections::BinaryHeap, rc::Rc};
 
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
-    Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
-    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
+    Action, AnyElement, App, AppContext, AvailableSpace, Context, DismissEvent, Empty, Entity,
+    EventEmitter, Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement,
+    Pixels, Point, Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity,
+    Window,
     deferred, div, prelude::FluentBuilder, px, relative,
 };
 use lsp_types::CompletionItem;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
+const MAX_WIDTH_CANDIDATES: usize = 32;
+
+fn width_measurement_candidates(items: &[Rc<CompletionItem>]) -> Vec<usize> {
+    let mut candidates = BinaryHeap::with_capacity(MAX_WIDTH_CANDIDATES + 1);
+    for (index, item) in items.iter().enumerate() {
+        let character_count = item.label.chars().count()
+            + item
+                .detail
+                .as_deref()
+                .map_or(0, |detail| detail.chars().count());
+        candidates.push(Reverse((character_count, index)));
+        if candidates.len() > MAX_WIDTH_CANDIDATES {
+            candidates.pop();
+        }
+    }
+    let mut indices: Vec<_> = candidates
+        .into_iter()
+        .map(|Reverse((_, index))| index)
+        .collect();
+    indices.sort_unstable();
+    indices
+}
 
 use crate::{
     ActiveTheme, IndexPath, Selectable, actions, h_flex,
@@ -171,6 +194,7 @@ pub struct CompletionMenu {
     offset: usize,
     editor: WeakEntity<EditorState>,
     list: Entity<ListState<ContextMenuDelegate>>,
+    content_width: Pixels,
     open: bool,
 
     /// The offset of the first character that triggered the completion.
@@ -216,6 +240,7 @@ impl CompletionMenu {
                 offset: 0,
                 editor: editor.downgrade(),
                 list,
+                content_width: px(120.),
                 open: false,
                 trigger_start_offset: None,
                 query: SharedString::default(),
@@ -319,20 +344,36 @@ impl CompletionMenu {
         let items = items.into();
         self.offset = offset;
         self.open = true;
-        self.list.update(cx, |this, cx| {
-            let longest_ix = items
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, item)| {
-                    item.label.len() + item.detail.as_ref().map(|d| d.len()).unwrap_or(0)
-                })
-                .map(|(ix, _)| ix)
-                .unwrap_or(0);
-
+        self.content_width = self.list.update(cx, |this, cx| {
             this.delegate_mut().query = self.query.clone();
             this.delegate_mut().set_items(items);
+            // The virtual list measures at its previous viewport width, which can
+            // keep a new response as narrow as an earlier, shorter one.
+            let mut widest_index = 0;
+            let mut content_width = px(120.);
+            // Prefix matches can contain an entire schema. Character counts
+            // shortlist likely widest rows without laying out thousands of items.
+            // Measuring several candidates also handles proportional fonts better
+            // than measuring only the single longest label.
+            for index in width_measurement_candidates(&this.delegate().items) {
+                let item = &this.delegate().items[index];
+                let width = editor_popover("completion-menu-measure", cx)
+                    .child(CompletionMenuItem::new(index, item.clone()))
+                    .into_any_element()
+                    .layout_as_root(
+                        gpui::size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                        window,
+                        cx,
+                    )
+                    .width;
+                if width > content_width {
+                    content_width = width;
+                    widest_index = index;
+                }
+            }
             this.set_selected_index(Some(IndexPath::new(0)), window, cx);
-            this.set_item_to_measure_index(IndexPath::new(longest_ix), window, cx);
+            this.set_item_to_measure_index(IndexPath::new(widest_index), window, cx);
+            content_width
         });
 
         cx.notify();
@@ -381,6 +422,7 @@ impl Render for CompletionMenu {
             return Empty.into_any_element();
         };
         let configured_max = editor.read(cx).lsp().completion_menu.max_width;
+        let content_width = self.content_width;
         let max_width = configured_max.min(window.bounds().size.width - pos.x);
         let abs_pos = editor.read(cx).input_bounds().origin + pos;
         let vertical_layout =
@@ -399,6 +441,7 @@ impl Render for CompletionMenu {
                 .when(vertical_layout, |this| this.flex_col())
                 .child(
                     editor_popover("completion-menu", cx)
+                        .w(content_width.min(max_width))
                         .max_w(max_width)
                         .min_w(px(120.))
                         .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT)),
@@ -426,5 +469,65 @@ impl Render for CompletionMenu {
                 })),
         )
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn width_measurement_is_bounded_and_keeps_long_candidates_anywhere_in_the_list() {
+        let mut items: Vec<_> = (0..10_000)
+            .map(|index| {
+                Rc::new(CompletionItem {
+                    label: format!("table_{index}"),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        for index in [0, 5_000, 9_999] {
+            items[index] = Rc::new(CompletionItem {
+                label: "table_with_a_long_name".repeat(10),
+                ..Default::default()
+            });
+        }
+        let candidates = width_measurement_candidates(&items);
+        assert_eq!(candidates.len(), MAX_WIDTH_CANDIDATES);
+        for index in [0, 5_000, 9_999] {
+            assert!(candidates.contains(&index));
+        }
+        assert_eq!(items.len(), 10_000, "all suggestions remain available");
+        assert!(width_measurement_candidates(&[]).is_empty());
+        assert_eq!(width_measurement_candidates(&items[..3]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn width_candidates_count_characters_and_include_details() {
+        let mut items = vec![
+            Rc::new(CompletionItem {
+                label: "abcdefghij".into(),
+                ..Default::default()
+            });
+            MAX_WIDTH_CANDIDATES
+        ];
+        items.push(Rc::new(CompletionItem {
+            label: "短".repeat(9),
+            ..Default::default()
+        }));
+        items.push(Rc::new(CompletionItem {
+            label: "id".into(),
+            detail: Some("a long column detail".into()),
+            ..Default::default()
+        }));
+        let candidates = width_measurement_candidates(&items);
+        assert!(
+            !candidates.contains(&MAX_WIDTH_CANDIDATES),
+            "UTF-8 bytes must not inflate character counts"
+        );
+        assert!(
+            candidates.contains(&(MAX_WIDTH_CANDIDATES + 1)),
+            "details contribute to the shortlist"
+        );
     }
 }

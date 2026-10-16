@@ -482,7 +482,11 @@ impl RenderOnce for Input {
             }),
             cx,
         );
-        let overlays = state.render_overlays(window, cx);
+        // Overlay content is measured during synchronization, before the input's
+        // styled container applies its font and spacing to the element tree.
+        let overlays = window.with_text_style(Some(self.style.text.clone()), |window| {
+            state.render_overlays(window, cx)
+        });
 
         let presentation = state.presentation(cx);
         let content_type = self.content_type;

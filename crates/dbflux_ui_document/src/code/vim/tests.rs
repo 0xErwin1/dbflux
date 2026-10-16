@@ -3366,6 +3366,77 @@ fn escape_leaves_insert_mode_and_keeps_focus(cx: &mut TestAppContext) {
     );
 }
 
+#[derive(Default)]
+struct MenuWidths(std::sync::Mutex<Option<gpui::Pixels>>);
+
+impl gpui::FrameObserver for MenuWidths {
+    fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+        *self.0.lock().expect("menu width lock") = frame
+            .nodes()
+            .find(|(_, node)| node.id() == "completion-menu")
+            .map(|(_, node)| node.bounds().size.width);
+    }
+}
+
+#[gpui::test]
+fn completion_menu_fits_long_labels_and_caps_its_width(cx: &mut TestAppContext) {
+    let editor = open_editor(cx, "select * from ", false);
+    let document = editor.document.clone();
+    let menu_width = std::sync::Arc::new(MenuWidths::default());
+    editor
+        .window
+        .update(|window, _| window.observe_frames(&menu_width));
+    let mut widths = Vec::new();
+
+    for label in [
+        "users".to_string(),
+        "table_".repeat(10),
+        "table_".repeat(40),
+        "users".to_string(),
+    ] {
+        editor.window.update(|_, cx| {
+            let input = document.read(cx).editor.input_state.clone();
+            input.update(cx, |state, cx| {
+                state.present_completion_items(
+                    14,
+                    "",
+                    vec![
+                        lsp_types::CompletionItem {
+                            label: "id".to_string(),
+                            ..Default::default()
+                        },
+                        lsp_types::CompletionItem {
+                            label,
+                            ..Default::default()
+                        },
+                    ],
+                    cx,
+                );
+            });
+        });
+        editor.window.run_until_parked();
+        widths.push(
+            menu_width
+                .0
+                .lock()
+                .expect("menu width lock")
+                .expect("completion menu is rendered"),
+        );
+    }
+
+    assert!(widths[0] < gpui::px(320.), "short labels stay compact");
+    assert!(
+        widths[1] > gpui::px(320.),
+        "long labels exceed the old cap: {widths:?}"
+    );
+    assert!(widths[2] > widths[1], "the menu grows with its content");
+    assert!(
+        widths[2] <= gpui::px(640.),
+        "very long labels respect the cap"
+    );
+    assert_eq!(widths[3], widths[0], "the menu shrinks for short results");
+}
+
 #[gpui::test]
 fn escape_with_an_open_completion_menu_closes_it_and_stays_in_insert(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "sel", true);
