@@ -19,6 +19,7 @@ pub mod semantic;
 pub mod tokens;
 pub mod typography;
 
+pub mod category;
 pub mod chart;
 pub mod common;
 pub mod components;
