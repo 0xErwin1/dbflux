@@ -12,7 +12,7 @@ use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
 use crate::data_grid_panel::table_views::TableTab;
 use crate::data_grid_panel::value_panel::ValuePanelButton;
-use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
+use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource, ReferencedRowTarget};
 use crate::result_view::ResultViewMode;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::AxisPill;
@@ -97,6 +97,9 @@ pub(crate) enum ToolbarAction {
     ConflictApply,
     /// The pin button of the open row inspector.
     PinRowInspector,
+    /// Go to the row the active cell's foreign key points at, or the
+    /// first outgoing reference of the open row inspector.
+    GoToReferencedRow,
     /// A button of the open value panel.
     ValuePanel(ValuePanelButton),
     /// Maximize or restore in the embedded panel's header.
@@ -182,6 +185,7 @@ impl ToolbarAction {
             ToolbarAction::ConflictReload => "conflict-reload",
             ToolbarAction::ConflictApply => "conflict-apply",
             ToolbarAction::PinRowInspector => "pin-row-inspector",
+            ToolbarAction::GoToReferencedRow => "go-to-referenced-row",
             ToolbarAction::ValuePanel(ValuePanelButton::Format(ValueFormat::Json)) => {
                 "value-format-json"
             }
@@ -239,6 +243,7 @@ impl ToolbarAction {
             ToolbarAction::ConflictReload => AppIcon::RefreshCcw,
             ToolbarAction::ConflictApply => AppIcon::Check,
             ToolbarAction::PinRowInspector => AppIcon::Pin,
+            ToolbarAction::GoToReferencedRow => AppIcon::Cable,
             ToolbarAction::ValuePanel(ValuePanelButton::Format(_)) => AppIcon::Braces,
             ToolbarAction::ValuePanel(ValuePanelButton::Wrap) => AppIcon::ScrollText,
             ToolbarAction::ValuePanel(ValuePanelButton::PrettyPrint)
@@ -419,6 +424,17 @@ impl DataGridPanel {
             actions.push(ToolbarAction::PinRowInspector);
         }
 
+        let inspector_lists_an_outgoing_reference = self.row_inspector_is_open()
+            && self
+                .inspector
+                .row_inspector_content
+                .as_ref()
+                .is_some_and(|content| content.read(cx).first_outgoing_reference().is_some());
+
+        if self.active_fk_target(cx).is_some() || inspector_lists_an_outgoing_reference {
+            actions.push(ToolbarAction::GoToReferencedRow);
+        }
+
         if self.inspector.value_panel_open
             && let Some(value_panel) = &self.inspector.value_panel
         {
@@ -445,6 +461,20 @@ impl DataGridPanel {
         }
 
         actions
+    }
+
+    /// The referenced-row target of the active cell, when it sits on a
+    /// single-column foreign key with a non-null value.
+    fn active_fk_target(&self, cx: &App) -> Option<ReferencedRowTarget> {
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()?
+            .read(cx)
+            .selection()
+            .active?;
+
+        self.fk_target_for_cell(active.row, active.col, cx)
     }
 
     /// The query bar and view row of a document collection: Find and the
@@ -639,6 +669,9 @@ impl DataGridPanel {
             }
             ToolbarAction::PinRowInspector => {
                 dbflux_i18n::t!("document.data.row_inspector.action.pin")
+            }
+            ToolbarAction::GoToReferencedRow => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.go_to_referenced_row")
             }
             ToolbarAction::ValuePanel(ValuePanelButton::Format(format)) => dbflux_i18n::t!(
                 "document.data.context_menu.toolbar.value_format",
@@ -846,6 +879,23 @@ impl DataGridPanel {
                 crate::data_grid_panel::row_inspector::RowInspectorContentEvent::TogglePin,
                 cx,
             ),
+            ToolbarAction::GoToReferencedRow => {
+                let target = self.active_fk_target(cx).or_else(|| {
+                    if !self.row_inspector_is_open() {
+                        return None;
+                    }
+
+                    self.inspector
+                        .row_inspector_content
+                        .as_ref()
+                        .and_then(|content| content.read(cx).first_outgoing_reference().cloned())
+                        .and_then(|reference| self.reference_target(&reference))
+                });
+
+                if let Some(target) = target {
+                    self.navigate_to_reference(target, cx);
+                }
+            }
             ToolbarAction::ValuePanel(button) => {
                 if let Some(value_panel) = self.inspector.value_panel.clone() {
                     value_panel.update(cx, |value_panel, cx| value_panel.press(button, window, cx));
@@ -1280,6 +1330,7 @@ mod tests {
             "refresh_profile",
             "sample_profile",
             "refresh_partitions",
+            "go_to_referenced_row",
         ];
 
         for key in keys {

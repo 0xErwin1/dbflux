@@ -40,6 +40,7 @@ pub(super) enum GeneralFormRow {
     VimLeader,
     TableAlias,
     TableAliasUseAs,
+    GridFkLabels,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -1970,6 +1971,7 @@ mod tests {
                 "table-alias-as",
                 "settings.general.table_alias_use_as.label",
             ),
+            ("grid-fk-labels", "settings.general.grid_fk_labels.label"),
             ("restore-session", "settings.general.restore_session.label"),
             ("reopen-conns", "settings.general.reopen_connections.label"),
             (

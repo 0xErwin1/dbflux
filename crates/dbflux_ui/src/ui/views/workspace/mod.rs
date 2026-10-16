@@ -1589,6 +1589,9 @@ impl Workspace {
                     } => {
                         this.open_chart_from_query(query.clone(), *connection_id, window, cx);
                     }
+                    TabManagerEvent::OpenReferencedRow { target } => {
+                        this.open_table_at_referenced_row(target.clone(), window, cx);
+                    }
                     TabManagerEvent::RequestAddPanel { dashboard_id } => {
                         this.open_add_panel_picker(*dashboard_id, window, cx);
                     }

@@ -274,6 +274,21 @@ impl From<&Value> for CellValue {
 
 const MAX_DISPLAY_LEN: usize = 200;
 
+/// How many characters of a foreign-key id are drawn beside its label; a
+/// longer id (a uuid) shows this many and an ellipsis instead.
+const FK_ID_DISPLAY_LEN: usize = 8;
+
+/// `text` cut at `limit` characters with an ellipsis, for display only.
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+
+    let mut cut: String = text.chars().take(limit).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
 impl CellValue {
     pub fn null() -> Self {
         Self {
@@ -435,17 +450,21 @@ impl CellValue {
     /// other respect — the editor opens on the id, mutations and the
     /// clipboard carry it, and it compares equal to a text cell holding the
     /// same id. A label that is empty or the id itself falls back to a plain
-    /// text cell, so the id is never drawn twice.
+    /// text cell, so the id is never drawn twice. A long id (a uuid) is cut
+    /// to [`FK_ID_DISPLAY_LEN`] characters for display only, so it cannot
+    /// crowd the label out of the cell.
     pub fn fk_reference(display_value: &str, raw_id: &str) -> Self {
         if display_value.is_empty() || display_value == raw_id {
             return Self::text(raw_id);
         }
 
+        let id_for_display = truncate_chars(raw_id, FK_ID_DISPLAY_LEN);
+
         Self {
             kind: CellKind::Text(raw_id.into()),
-            display_text: format!("{display_value} · #{raw_id}").into(),
+            display_text: format!("{display_value} · #{id_for_display}").into(),
             placeholder: false,
-            fk_spans: Some((display_value.into(), format!(" · #{raw_id}").into())),
+            fk_spans: Some((display_value.into(), format!(" · #{id_for_display}").into())),
         }
     }
 
@@ -2395,6 +2414,20 @@ mod tests {
                 .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
             Some(("María López".to_string(), " · #8".to_string()))
         );
+    }
+
+    #[test]
+    fn an_fk_reference_cuts_a_long_id_to_its_leading_characters() {
+        let uuid = "44444444-0000-4000-8000-000000000001";
+        let cell = CellValue::fk_reference("María López", uuid);
+
+        assert_eq!(cell.display_text().as_ref(), "María López · #44444444…");
+        assert_eq!(
+            cell.fk_spans()
+                .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
+            Some(("María López".to_string(), " · #44444444…".to_string()))
+        );
+        assert_eq!(cell.edit_text(), uuid, "editing carries the full id");
     }
 
     #[test]

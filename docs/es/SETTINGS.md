@@ -87,6 +87,12 @@ y permanece en English por ahora.
 | **Add an alias to table completions** | On | Al aceptar una tabla, vista o CTE del autocompletado SQL después de `FROM` o `JOIN` se inserta con un alias formado por las iniciales de su nombre: `access_control` pasa a ser `access_control ac` y `public.order_items` pasa a ser `public.order_items oi`. Un alias ya usado en la sentencia, una palabra reservada o el nombre de una tabla conocida recibe un número (`ac2`). No se añade alias cuando ya hay uno después del cursor, ni después de `INSERT INTO`. La tabla destino de `UPDATE` y `DELETE FROM` solo recibe alias en las bases de datos que lo aceptan ahí: PostgreSQL y DuckDB, y SQLite y Turso con `AS`. |
 | **Write the alias with AS** | Off | Inserta `access_control AS ac` en lugar de `access_control ac`. |
 
+### Cuadrícula de datos
+
+| Setting                      | Default | Qué hace |
+| ---------------------------- | ------- | -------- |
+| **Show referenced-row labels in foreign-key cells** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+
 ### Inicio y sesión
 
 | Setting                        | Default | Qué hace                                                         |

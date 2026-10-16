@@ -112,6 +112,7 @@ pub fn save_general_settings(
         grid_font_family: settings.grid_font_family.clone(),
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
+        grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1126,6 +1127,7 @@ fn load_general_settings(
         ),
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
+        grid_fk_labels: dto.grid_fk_labels != 0,
     }
 }
 
@@ -2584,6 +2586,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -2681,6 +2684,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
         runtime
@@ -3029,6 +3033,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
         runtime

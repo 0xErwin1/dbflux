@@ -2,31 +2,31 @@
 //!
 //! [`DataGridPanel::resolve_fk_display_values`] runs after a page of a table
 //! lands (and again when FK metadata arrives): for every single-column
-//! foreign key of the browsed table it fetches the referenced rows through
-//! `Connection::fetch_row_by_pk` — [`MAX_CONCURRENT_FK_LOOKUPS`] at a time —
-//! and swaps the raw-id text cell for `CellValue::fk_reference`, which draws
-//! the referenced row's display column beside the id while editing, copying
-//! and mutations keep carrying the id.
+//! foreign key of the browsed table it groups the distinct unresolved ids by
+//! referenced table and fetches each group through one
+//! `Connection::fetch_rows_by_pks` batch, projected down to the referenced
+//! table's pk and display columns. When every group of the round has landed
+//! it swaps the raw-id text cells for `CellValue::fk_reference` in a single
+//! model swap, which draws the referenced row's display column beside the id
+//! while editing, copying and mutations keep carrying the id.
+//!
+//! The whole pass is gated on the `grid_fk_labels` setting (off by default):
+//! with it off the grid shows raw ids and starts no resolution fetches. The
+//! row inspector resolves its references regardless of the setting.
 //!
 //! Ids already resolved live in [`FkDisplayLoader::cache`] and are applied
 //! without a query; an id no row answered for is cached as `None` so it is
-//! not fetched again. Fetches that land after another page replaced the rows
-//! are dropped (see [`FkDisplayLoader::generation`]).
+//! not fetched again. A round that lands after another page replaced the
+//! rows still feeds the cache but never swaps the model (see
+//! [`FkDisplayLoader::generation`]).
 
 use super::*;
 use dbflux_components::components::data_table::model::{CellKind, CellValue};
 use dbflux_core::{ColumnInfo, SchemaForeignKeyInfo};
 
-/// Most referenced rows fetched at the same time for one page.
-const MAX_CONCURRENT_FK_LOOKUPS: usize = 4;
-
 /// (referenced schema, referenced table, raw id text) of one foreign-key
 /// cell.
 type FkDisplayKey = (Option<String>, String, String);
-
-/// One `fetch_row_by_pk` answer: the referenced row keyed by its columns,
-/// or the error text when the lookup failed.
-type FetchOutcome = Result<Option<HashMap<String, Value>>, String>;
 
 /// A single-column foreign key of the browsed table, mapped onto the grid's
 /// columns.
@@ -59,6 +59,37 @@ pub(super) struct FkDisplayLoader {
     /// answered for, so it is not fetched again. Entries survive page turns
     /// of the same table: an id keeps naming the same referenced row.
     cache: HashMap<FkDisplayKey, Option<String>>,
+}
+
+impl FkDisplayLoader {
+    /// The label the cache resolved for the referenced row `id` of `table`,
+    /// when the cache holds one. Ids are keyed by the text the grid's cell
+    /// edits carry, so only the id kinds ([`Value::Int`], [`Value::Float`],
+    /// [`Value::Text`]) can match.
+    pub(super) fn cached_label(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        id: &Value,
+    ) -> Option<String> {
+        let id_text = id_text(id)?;
+
+        self.cache
+            .get(&(schema.map(str::to_string), table.to_string(), id_text))
+            .cloned()
+            .flatten()
+    }
+}
+
+/// The text an id value keys a lookup by: the one the grid's cell edits
+/// carry. `None` for the kinds an id column does not take.
+pub(super) fn id_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Int(number) => Some(number.to_string()),
+        Value::Float(number) => Some(number.to_string()),
+        Value::Text(text) => Some(text.clone()),
+        _ => None,
+    }
 }
 
 /// Maps one schema foreign key onto the result's columns when it is
@@ -95,7 +126,7 @@ fn fk_cell_value(cell: &CellValue) -> Option<Value> {
 }
 
 /// The label a referenced row's display value contributes; `None` for null.
-fn display_label(value: &Value) -> Option<String> {
+pub(super) fn display_label(value: &Value) -> Option<String> {
     match value {
         Value::Null => None,
         Value::Text(label) => Some(label.clone()),
@@ -105,7 +136,7 @@ fn display_label(value: &Value) -> Option<String> {
 
 /// The column a referenced row is named by: its first textual
 /// non-primary-key column, else its first non-primary-key column.
-fn pick_display_column(columns: &[ColumnInfo]) -> Option<String> {
+pub(super) fn pick_display_column(columns: &[ColumnInfo]) -> Option<String> {
     let is_textual = |column: &ColumnInfo| {
         let type_name = column.type_name.to_lowercase();
         type_name.contains("text") || type_name.contains("char")
@@ -159,6 +190,13 @@ fn substitute_fk_references(
 }
 
 impl DataGridPanel {
+    /// Whether the grid resolves foreign-key cells into readable labels
+    /// (`grid_fk_labels`). The row inspector resolves its references
+    /// regardless of this setting.
+    pub(super) fn fk_labels_enabled(&self, cx: &App) -> bool {
+        self.app_state.read(cx).general_settings().grid_fk_labels
+    }
+
     /// The grid's single-column foreign keys, from the panel's FK cache.
     /// Empty for non-table sources and while the cache is not `Ready`.
     fn fk_display_targets(&self) -> Vec<FkTarget> {
@@ -181,11 +219,19 @@ impl DataGridPanel {
 
     /// Resolves the readable values behind the foreign-key cells of the
     /// current page: ids the cache already knows are applied at once, the
-    /// distinct unresolved ones are fetched in the background and applied as
-    /// they arrive. A no-op for non-table sources, missing FK metadata and
-    /// connections without row lookups.
+    /// distinct unresolved ones are fetched in the background — one batch
+    /// per referenced table — and every label of the round lands in a single
+    /// model swap once the batches finish. A no-op for non-table sources,
+    /// missing FK metadata and connections without row lookups.
     pub(super) fn resolve_fk_display_values(&mut self, cx: &mut Context<Self>) {
         self.fk_display.generation += 1;
+
+        // The setting is read per page load, so toggling it applies to the
+        // pages loaded afterwards without recreating the panel.
+        if !self.fk_labels_enabled(cx) {
+            return;
+        }
+
         let generation = self.fk_display.generation;
 
         let targets = self.fk_display_targets();
@@ -202,11 +248,8 @@ impl DataGridPanel {
                 profile_id,
                 database,
                 ..
-            } => (*profile_id, database.clone()),
+            } => (*profile_id, database.as_deref()),
             _ => return,
-        };
-        let Some(database) = database else {
-            return;
         };
 
         let (connection, resolved_database) = {
@@ -214,17 +257,11 @@ impl DataGridPanel {
                 return;
             };
 
-            let resolved = Self::table_details_database(connected, Some(database.as_str()));
+            let resolved = Self::table_details_database(connected, database);
             (connected.connection_for_database(&resolved), resolved)
         };
 
         let model = table_state.read(cx).model_arc().clone();
-
-        // Ids the cache already knows land on the cells without a query.
-        if let Some(new_model) = substitute_fk_references(&model, &targets, &self.fk_display.cache)
-        {
-            self.swap_table_model_keep_chrome(new_model, cx);
-        }
 
         // One fetch per distinct unresolved id.
         let mut seen: HashSet<FkDisplayKey> = HashSet::new();
@@ -256,8 +293,29 @@ impl DataGridPanel {
             }
         }
 
+        // Nothing left to fetch: the ids the cache already knows land on the
+        // cells without a query, and this swap is the round's only one.
         if lookups.is_empty() {
+            if let Some(new_model) =
+                substitute_fk_references(&model, &targets, &self.fk_display.cache)
+            {
+                self.swap_table_model_keep_chrome(new_model, cx);
+            }
             return;
+        }
+
+        // One batch per distinct referenced table and pk column — two
+        // foreign keys into the same table share the group. No chunking on
+        // top: a group is bounded by one page's distinct ids and the driver
+        // already splits the IN list.
+        let mut groups: HashMap<(Option<String>, String, String), Vec<FkLookup>> = HashMap::new();
+        for lookup in lookups {
+            let group_key = (
+                lookup.key.0.clone(),
+                lookup.key.1.clone(),
+                lookup.pk_column.clone(),
+            );
+            groups.entry(group_key).or_default().push(lookup);
         }
 
         // The display column of each referenced table, from the cached table
@@ -310,6 +368,15 @@ impl DataGridPanel {
         self.fk_display.task = Some(cx.spawn(async move |this, cx| {
             let executor = cx.background_executor().clone();
 
+            // A round a newer page already outran skips its metadata
+            // queries, not just its group fetches.
+            let still_current = this
+                .update(cx, |panel, _| panel.fk_display.generation == generation)
+                .unwrap_or(false);
+            if !still_current {
+                return;
+            }
+
             for (schema, table) in &unknown_tables {
                 let connection = connection.clone();
                 let database = resolved_database.clone();
@@ -353,87 +420,107 @@ impl DataGridPanel {
                 display_columns.insert((schema.clone(), table.clone()), column);
             }
 
-            for group in lookups.chunks(MAX_CONCURRENT_FK_LOOKUPS) {
+            // One batch per referenced table, in sequence: a page references
+            // a handful of tables, and the plain loop keeps the generation
+            // check a `break`. The round's labels accumulate here and swap
+            // into the model once at the end.
+            let mut resolved: Vec<(FkDisplayKey, Option<String>)> = Vec::new();
+
+            for ((schema, table, pk_column), lookups) in &groups {
                 let still_current = this
                     .update(cx, |panel, _| panel.fk_display.generation == generation)
                     .unwrap_or(false);
                 if !still_current {
-                    return;
+                    break;
                 }
 
-                let pending: Vec<Task<FetchOutcome>> = group
-                    .iter()
-                    .map(|lookup| {
-                        let connection = connection.clone();
-                        let database = resolved_database.clone();
-                        let schema = lookup.key.0.clone();
-                        let table = lookup.key.1.clone();
-                        let pk_column = lookup.pk_column.clone();
-                        let value = lookup.value.clone();
+                let display_column = display_columns
+                    .get(&(schema.clone(), table.clone()))
+                    .cloned()
+                    .flatten();
+                let mut projection = vec![pk_column.clone()];
+                if let Some(column) = &display_column {
+                    projection.push(column.clone());
+                }
+                let values: Vec<Value> =
+                    lookups.iter().map(|lookup| lookup.value.clone()).collect();
 
-                        executor.spawn(async move {
-                            connection
-                                .fetch_row_by_pk(
-                                    &database,
-                                    schema.as_deref().unwrap_or(""),
-                                    &table,
-                                    &pk_column,
-                                    &value,
-                                )
-                                .map_err(|error| error.to_string())
-                        })
+                let connection = connection.clone();
+                let database = resolved_database.clone();
+                let schema_for_task = schema.clone();
+                let table_for_task = table.clone();
+                let pk_for_task = pk_column.clone();
+
+                let rows = executor
+                    .spawn(async move {
+                        connection.fetch_rows_by_pks(
+                            &database,
+                            schema_for_task.as_deref().unwrap_or(""),
+                            &table_for_task,
+                            &pk_for_task,
+                            &values,
+                            Some(&projection),
+                        )
                     })
-                    .collect();
+                    .await;
 
-                let mut resolved: Vec<(&FkLookup, FetchOutcome)> = Vec::new();
-                for (lookup, task) in group.iter().zip(pending) {
-                    resolved.push((lookup, task.await));
+                match rows {
+                    Ok(rows) => {
+                        // The batch answers unordered, so every row is keyed
+                        // by its pk's text — the same text the cache keys
+                        // lookups by. A requested id no row answered for
+                        // stays a `None` miss, so it is not fetched again.
+                        let mut labels_by_pk: HashMap<String, Option<String>> = HashMap::new();
+                        for row in rows {
+                            let Some(pk) = row.get(pk_column).and_then(id_text) else {
+                                continue;
+                            };
+                            let label = display_column
+                                .as_deref()
+                                .and_then(|column| row.get(column))
+                                .and_then(display_label);
+                            labels_by_pk.insert(pk, label);
+                        }
+
+                        for lookup in lookups {
+                            let label = labels_by_pk.get(&lookup.key.2).cloned().flatten();
+                            resolved.push((lookup.key.clone(), label));
+                        }
+                    }
+                    Err(error) => {
+                        // A failed batch is transient: the ids stay uncached
+                        // and the next page retries them.
+                        log::debug!(
+                            "fk display: could not fetch rows of {table} for {} ids: {error}",
+                            lookups.len()
+                        );
+                    }
                 }
-
-                this.update(cx, |panel, cx| {
-                    panel.apply_fk_display_batch(generation, resolved, &display_columns, cx);
-                })
-                .ok();
             }
+
+            this.update(cx, |panel, cx| {
+                panel.apply_fk_display_batch(generation, resolved, cx);
+            })
+            .ok();
         }));
     }
 
-    /// Records a group of fetched referenced rows in the cache and, when
-    /// they belong to the current round, swaps the resolved labels into the
-    /// grid's model.
+    /// Records the round's resolved labels in the cache and, when the round
+    /// is still current, swaps every resolved foreign-key cell into the
+    /// grid's model — the round's single swap.
     fn apply_fk_display_batch(
         &mut self,
         generation: u64,
-        resolved: Vec<(&FkLookup, FetchOutcome)>,
-        display_columns: &HashMap<(Option<String>, String), Option<String>>,
+        resolved: Vec<(FkDisplayKey, Option<String>)>,
         cx: &mut Context<Self>,
     ) {
-        for (lookup, result) in resolved {
-            let label = match result {
-                Ok(Some(row)) => display_columns
-                    .get(&(lookup.key.0.clone(), lookup.key.1.clone()))
-                    .cloned()
-                    .flatten()
-                    .and_then(|column| row.get(&column))
-                    .and_then(display_label),
-                // No row answers this id: cache the miss so it is not
-                // fetched again; the cell keeps showing the raw id.
-                Ok(None) => None,
-                Err(error) => {
-                    // A failed lookup is transient, so the id stays uncached
-                    // and the next page retries it.
-                    log::debug!(
-                        "fk display: could not fetch a row of {} for id {}: {error}",
-                        lookup.key.1,
-                        lookup.key.2
-                    );
-                    continue;
-                }
-            };
-
-            self.fk_display.cache.insert(lookup.key.clone(), label);
+        for (key, label) in resolved {
+            self.fk_display.cache.insert(key, label);
         }
 
+        // A round a newer page outran still feeds the cache — the labels
+        // name the same referenced rows — but must not touch the rows on
+        // screen.
         if self.fk_display.generation != generation {
             return;
         }
