@@ -1103,6 +1103,63 @@ impl Connection for SqliteConnection {
         Ok(Some(map))
     }
 
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        _database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[dbflux_core::Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| SQLITE_DIALECT.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let literals = chunk
+                .iter()
+                .map(|value| SQLITE_DIALECT.value_to_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {} FROM {} WHERE {} IN ({})",
+                select_list,
+                SQLITE_DIALECT.quote_identifier(table),
+                SQLITE_DIALECT.quote_identifier(pk_column),
+                literals,
+            );
+
+            let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(col, val)| (col.name.clone(), val))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
+    }
+
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
         Some(dbflux_core::extract_referenced_tables(query))
     }
@@ -2932,6 +2989,76 @@ mod tests {
         assert_eq!(*pseudo_columns("notes"), ["rowid", "oid", "_rowid_"]);
         assert_eq!(*pseudo_columns("items"), ["rowid", "oid", "_rowid_"]);
         assert!(pseudo_columns("codes").is_empty());
+    }
+
+    /// `fetch_rows_by_pks` batches key lookups into `WHERE pk IN (...)`
+    /// statements: misses are absent, `projection` is honored, and inputs
+    /// beyond 100 keys are chunked into a second statement.
+    #[test]
+    fn fetch_rows_by_pks_batches_misses_projection_and_chunks() {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let raw = RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        raw.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);
+             INSERT INTO items (id, label)
+             WITH RECURSIVE seq(i) AS (
+                 SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < 150
+             )
+             SELECT i, 'row ' || i FROM seq;",
+        )
+        .expect("seed the table");
+
+        let connection =
+            SqliteConnection::for_test(Arc::new(Mutex::new(SqliteConnectionState::new(raw))));
+
+        let empty = connection
+            .fetch_rows_by_pks("main", "", "items", "id", &[], None)
+            .expect("empty batch returns without querying");
+        assert!(empty.is_empty());
+
+        let mixed = vec![Value::Int(1), Value::Int(999), Value::Int(3)];
+        let rows = connection
+            .fetch_rows_by_pks("main", "", "items", "id", &mixed, None)
+            .expect("batch with a miss");
+        let mut ids = rows
+            .iter()
+            .filter_map(|row| match row.get("id") {
+                Some(Value::Int(id)) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<i64>>();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3], "the missing key stays absent");
+
+        let projected = connection
+            .fetch_rows_by_pks(
+                "main",
+                "",
+                "items",
+                "id",
+                &[Value::Int(2)],
+                Some(&["label".to_string()]),
+            )
+            .expect("projected batch");
+        assert_eq!(projected.len(), 1);
+        assert_eq!(
+            projected[0].keys().collect::<Vec<_>>(),
+            [&"label"],
+            "projection limits the fetched columns"
+        );
+        assert_eq!(
+            projected[0].get("label"),
+            Some(&Value::Text("row 2".to_string()))
+        );
+
+        let all = (1..=150).map(Value::Int).collect::<Vec<_>>();
+        let rows = connection
+            .fetch_rows_by_pks("main", "", "items", "id", &all, None)
+            .expect("batch larger than one chunk");
+        assert_eq!(rows.len(), 150, "every key resolves across chunks");
     }
 
     fn engine_names_connection() -> super::SqliteConnection {
