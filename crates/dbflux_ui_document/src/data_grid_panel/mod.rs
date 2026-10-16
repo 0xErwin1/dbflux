@@ -186,6 +186,18 @@ fn resolve_orderable_sort_key(columns: &[ColumnMeta]) -> Option<String> {
     primary_key_columns.last().map(|column| column.name.clone())
 }
 
+/// A row of another table that a foreign-key value points at, for the
+/// workspace to open as a filtered grid.
+#[derive(Clone, Debug)]
+pub struct ReferencedRowTarget {
+    pub profile_id: Uuid,
+    pub database: Option<String>,
+    pub table: TableRef,
+    /// PK column of the target table the foreign key points at.
+    pub key_column: String,
+    pub key_value: Value,
+}
+
 /// Events emitted by DataGridPanel.
 #[derive(Clone, Debug)]
 pub enum DataGridEvent {
@@ -270,6 +282,10 @@ pub enum DataGridEvent {
     /// Run the query behind a result the row limit cut short again, without
     /// the limit. Only emitted when the host offered it.
     LoadAllRowsRequested,
+
+    /// Open the row a foreign-key value points at (see
+    /// [`ReferencedRowTarget`]).
+    OpenReferencedRow { target: ReferencedRowTarget },
 }
 
 /// What the footer offers for a query result the editor row limit cut short.
@@ -968,7 +984,11 @@ impl DataGridPanel {
         panel.fetch_table_details_for_pk(profile_id, &table, cx);
 
         panel.ensure_filter_source_columns_loaded(cx);
-        panel.ensure_fk_cache_loaded(cx);
+        // With the setting off the FK cache stays cold until the filter bar
+        // or the builder needs it; page loads re-evaluate (apply_table_result).
+        if panel.fk_labels_enabled(cx) {
+            panel.ensure_fk_cache_loaded(cx);
+        }
 
         panel
     }

@@ -305,6 +305,11 @@ impl DataDocument {
                     sql: sql.clone(),
                 });
             }
+            DataGridEvent::OpenReferencedRow { target } => {
+                cx.emit(DocumentEvent::OpenReferencedRow {
+                    target: target.clone(),
+                });
+            }
             DataGridEvent::MutationFinished { landed } => {
                 cx.emit(DocumentEvent::MutationFinished { landed: *landed });
             }

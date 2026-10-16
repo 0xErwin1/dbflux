@@ -122,6 +122,49 @@ impl Workspace {
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
     }
 
+    /// Opens the table a foreign-key value points at, positioned on the
+    /// referenced row: reuses (or opens) the table's tab, then replaces its
+    /// filter with an equality on the key column. A missing connection is
+    /// reported by [`Self::open_table_document`]; a tab that cannot be found
+    /// afterwards is left alone.
+    pub(in crate::ui::views::workspace) fn open_table_at_referenced_row(
+        &mut self,
+        target: crate::ui::document::ReferencedRowTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_table_document(
+            target.profile_id,
+            target.table.clone(),
+            target.database.clone(),
+            TabPlacement::ReuseExisting,
+            window,
+            cx,
+        );
+
+        let doc_id = self.tab_manager.read(cx).find_by_key(
+            &crate::ui::document::DocumentKey::Table {
+                profile_id: target.profile_id,
+                database: target.database.clone(),
+                table: target.table.clone(),
+            },
+            cx,
+        );
+
+        if let Some(doc_id) = doc_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                if let Some(tab) = mgr.document(doc_id) {
+                    tab.as_pane().apply_table_filter(
+                        &target.key_column,
+                        &target.key_value,
+                        window,
+                        cx,
+                    );
+                }
+            });
+        }
+    }
+
     pub(in crate::ui::views::workspace) fn open_collection_document(
         &mut self,
         profile_id: uuid::Uuid,
@@ -1496,6 +1539,43 @@ mod tests {
                     .document(id)
                     .is_none(),
                 "the scratch tab closes without a file to delete"
+            );
+        });
+    }
+
+    /// Opening a referenced row on a profile without a connection must not
+    /// panic: `open_table_document` reports the error through its toast and no
+    /// tab is opened, so the positioning step finds nothing and stays quiet.
+    #[gpui::test]
+    fn opening_a_referenced_row_without_a_connection_does_not_panic(cx: &mut TestAppContext) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_table_at_referenced_row(
+                    crate::ui::document::ReferencedRowTarget {
+                        profile_id: uuid::Uuid::new_v4(),
+                        database: None,
+                        table: dbflux_core::TableRef::new("orders"),
+                        key_column: "id".to_string(),
+                        key_value: dbflux_core::Value::Int(7),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document_ids()
+                    .is_empty(),
+                "no tab opens for a profile without a connection"
             );
         });
     }

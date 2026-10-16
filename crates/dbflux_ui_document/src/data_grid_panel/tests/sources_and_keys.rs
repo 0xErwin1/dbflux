@@ -716,3 +716,162 @@ fn successful_insert_refresh_runtime_keeps_filter_and_can_stay_visually_empty(
     assert_eq!(row_count, 0, "filtered refresh may still be visually empty");
     assert_eq!(col_count, 2, "filtered refresh should keep headers visible");
 }
+
+/// Connection stub for the key-focus test: it answers a table browse with a
+/// fixed page and speaks the core default (ANSI, double-quote) dialect, so
+/// the filter text `focus_row_by_key` writes can be pinned exactly.
+struct FocusRowConnection {
+    page: QueryResult,
+}
+
+impl dbflux_core::Connection for FocusRowConnection {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        use dbflux_core::{
+            DatabaseCategory, DriverCapabilities, DriverMetadata, Icon as CoreIcon, QueryLanguage,
+            TransferFamily,
+        };
+
+        static META: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
+        META.get_or_init(|| DriverMetadata {
+            id: "stub-focus-row".to_string(),
+            display_name: "Stub".to_string(),
+            description: "test".to_string(),
+            category: DatabaseCategory::Relational,
+            transfer_family: TransferFamily::Sql,
+            deployment_class: None,
+            query_language: QueryLanguage::Sql,
+            capabilities: DriverCapabilities::empty(),
+            default_port: None,
+            uri_scheme: "stub".to_string(),
+            icon: CoreIcon::Database,
+            syntax: None,
+            query: None,
+            mutation: None,
+            ddl: None,
+            transactions: None,
+            limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
+            classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
+            editor_profile: None,
+        })
+    }
+
+    fn kind(&self) -> dbflux_core::DbKind {
+        dbflux_core::DbKind::SQLite
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        dbflux_core::SchemaLoadingStrategy::SingleDatabase
+    }
+
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        &dbflux_core::DefaultSqlDialect
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn execute(&self, _: &dbflux_core::QueryRequest) -> Result<QueryResult, dbflux_core::DbError> {
+        Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+    }
+
+    fn browse_table(
+        &self,
+        _: &dbflux_core::TableBrowseRequest,
+    ) -> Result<QueryResult, dbflux_core::DbError> {
+        Ok(self.page.clone())
+    }
+
+    fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        Ok(dbflux_core::SchemaSnapshot::default())
+    }
+}
+
+#[gpui::test]
+fn focus_row_by_key_replaces_the_filter_with_a_quoted_equality(cx: &mut TestAppContext) {
+    let orders_columns = || vec![key_column("customer_id", true), key_column("name", false)];
+    let focused_page = QueryResult::table(
+        orders_columns(),
+        vec![vec![
+            dbflux_core::Value::Int(8),
+            dbflux_core::Value::Text("alice".to_string()),
+        ]],
+        None,
+        Duration::ZERO,
+    );
+
+    let (app_state, profile_id) =
+        register_stub_connection(cx, Arc::new(FocusRowConnection { page: focused_page }));
+    let window = cx.add_empty_window();
+
+    let panel = window.update(|window, app| {
+        let source = DataSource::Table {
+            profile_id,
+            database: Some("app".to_string()),
+            table: TableRef::with_schema("public", "orders"),
+            pagination: Pagination::default(),
+            order_by: Vec::new(),
+            total_rows: Some(2),
+        };
+
+        app.new(|cx| {
+            let mut panel = DataGridPanel::new_internal(
+                source,
+                app_state,
+                vec!["customer_id".to_string()],
+                window,
+                cx,
+            );
+            panel.set_result(
+                QueryResult::table(
+                    orders_columns(),
+                    (7..=8)
+                        .map(|customer_id| {
+                            vec![
+                                dbflux_core::Value::Int(customer_id),
+                                dbflux_core::Value::Text(format!("row {customer_id}")),
+                            ]
+                        })
+                        .collect(),
+                    None,
+                    Duration::ZERO,
+                ),
+                cx,
+            );
+            panel
+        })
+    });
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.focus_row_by_key("customer_id", &dbflux_core::Value::Int(8), window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert_eq!(
+            panel.filter_bar.filter_input.read(app).value().to_string(),
+            "\"customer_id\" = 8",
+            "the equality must be quoted by the driver dialect"
+        );
+        assert_eq!(
+            panel.result.row_count(),
+            1,
+            "the reload must run under the filter"
+        );
+    });
+}

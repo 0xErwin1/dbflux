@@ -42,7 +42,7 @@ impl GeneralSettingsRepository {
                        key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
-                       updated_at
+                       grid_fk_labels, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -83,7 +83,8 @@ impl GeneralSettingsRepository {
                 grid_font_family: row.get(27)?,
                 grid_font_size: row.get(28)?,
                 toast_auto_dismiss_secs: row.get(29)?,
-                updated_at: row.get(30)?,
+                grid_fk_labels: row.get(30)?,
+                updated_at: row.get(31)?,
             })
         });
 
@@ -114,8 +115,8 @@ impl GeneralSettingsRepository {
                     key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
-                    updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, datetime('now'))
+                    grid_fk_labels, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -146,6 +147,7 @@ impl GeneralSettingsRepository {
                     grid_font_family = excluded.grid_font_family,
                     grid_font_size = excluded.grid_font_size,
                     toast_auto_dismiss_secs = excluded.toast_auto_dismiss_secs,
+                    grid_fk_labels = excluded.grid_fk_labels,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -178,6 +180,7 @@ impl GeneralSettingsRepository {
                     settings.grid_font_family,
                     settings.grid_font_size,
                     settings.toast_auto_dismiss_secs,
+                    settings.grid_fk_labels,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -245,6 +248,9 @@ pub struct GeneralSettingsDto {
     /// Auto-dismiss delay for toasts, in seconds; `0` keeps them until the
     /// user dismisses them.
     pub toast_auto_dismiss_secs: i64,
+    /// Whether foreign-key grid cells resolve to the referenced row's label:
+    /// 1 on, 0 off.
+    pub grid_fk_labels: i32,
     pub updated_at: String,
 }
 
@@ -309,6 +315,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -368,6 +375,7 @@ mod tests {
                 grid_font_family: None,
                 grid_font_size: 12.5,
                 toast_auto_dismiss_secs: 8,
+                grid_fk_labels: 0,
                 updated_at: String::new(),
             };
 
@@ -447,6 +455,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -490,6 +499,10 @@ mod tests {
             "key_value_size_limit_mib column default should be 10"
         );
         assert_eq!(fetched.vim_mode, 0, "vim_mode column default should be 0");
+        assert_eq!(
+            fetched.grid_fk_labels, 0,
+            "grid_fk_labels column default should be 0"
+        );
         assert_eq!(
             fetched.vim_leader, "space",
             "vim_leader column default should be 'space'"
@@ -540,6 +553,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -593,6 +607,7 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -678,6 +693,7 @@ mod tests {
             grid_font_family: Some("Fira Code".to_string()),
             grid_font_size: 14.0,
             toast_auto_dismiss_secs: 8,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 

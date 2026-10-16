@@ -782,6 +782,8 @@ impl DataGridPanel {
             .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
             .unwrap_or(false);
 
+        // Must match `render_context_menu`, so the keyboard walks the same
+        // item list the menu draws.
         let table_queries = self.offers_table_query_actions();
         let has_filter = table_queries && self.has_filter_submenu(backend, is_document_view, cx);
         let has_order =
@@ -2027,9 +2029,10 @@ impl DataGridPanel {
         let pinned = self.inspector.pinned;
         content.update(cx, |c, cx| {
             c.set_pinned(pinned, cx);
-            c.set_outgoing_references(outgoing_references, cx);
+            c.set_outgoing_references(outgoing_references.clone(), cx);
         });
 
+        self.load_outgoing_reference_labels(&outgoing_references, content.clone(), cx);
         self.load_incoming_references(&cells, content.clone(), cx);
 
         // Remember the active coordinates so refresh / tab activation /
@@ -2071,6 +2074,20 @@ impl DataGridPanel {
                     content.update(cx, |c, cx| c.set_pinned(pinned, cx));
                 }
             }
+            RowInspectorContentEvent::NavigateReference { index } => {
+                let reference = self
+                    .inspector
+                    .row_inspector_content
+                    .as_ref()
+                    .and_then(|content| content.read(cx).reference(index).cloned());
+
+                if let Some(target) = reference
+                    .as_ref()
+                    .and_then(|reference| self.reference_target(reference))
+                {
+                    self.navigate_to_reference(target, cx);
+                }
+            }
             RowInspectorContentEvent::Edit
             | RowInspectorContentEvent::Duplicate
             | RowInspectorContentEvent::Delete => {
@@ -2100,7 +2117,9 @@ impl DataGridPanel {
             RowInspectorContentEvent::Edit => self.handle_edit(row, col, window, cx),
             RowInspectorContentEvent::Duplicate => self.handle_duplicate_row(row, false, cx),
             RowInspectorContentEvent::Delete => self.handle_delete_row(row, cx),
-            RowInspectorContentEvent::Close | RowInspectorContentEvent::TogglePin => {}
+            RowInspectorContentEvent::Close
+            | RowInspectorContentEvent::TogglePin
+            | RowInspectorContentEvent::NavigateReference { .. } => {}
         }
     }
 
@@ -2166,6 +2185,13 @@ impl DataGridPanel {
                 target_table: fk.referenced_table.clone(),
                 target_pk: ref_col.clone(),
                 value: cell.value.clone(),
+                // The grid resolves the same referenced rows for its FK
+                // cells; a cache hit names the row without a query.
+                display_label: self.fk_display.cached_label(
+                    fk.referenced_schema.as_deref(),
+                    &fk.referenced_table,
+                    &cell.value,
+                ),
                 kind: ReferenceKind::Outgoing,
             });
         }
@@ -2303,6 +2329,99 @@ impl DataGridPanel {
         };
 
         self.inspector.incoming_references.schedule(job, cx);
+    }
+
+    /// Resolves the readable label behind each outgoing REFERENCES entry
+    /// the panel's FK display cache could not seed: the referenced row
+    /// loads through `fetch_row_by_pk` in the background and is named by
+    /// its table's display column (cached table details, fetched when
+    /// missing). A row that no longer answers, or a failed fetch, keeps
+    /// the raw id.
+    fn load_outgoing_reference_labels(
+        &self,
+        references: &[super::row_inspector::FkReference],
+        content: Entity<super::row_inspector::RowInspectorContent>,
+        cx: &mut Context<Self>,
+    ) {
+        let is_unresolved = |reference: &super::row_inspector::FkReference| {
+            matches!(
+                reference.kind,
+                super::row_inspector::ReferenceKind::Outgoing
+            ) && reference.display_label.is_none()
+        };
+        if !references.iter().any(is_unresolved) {
+            return;
+        }
+
+        let Some(ReferenceLookupTarget {
+            profile_id,
+            database,
+            connection,
+            ..
+        }) = self.reference_lookup_target(cx)
+        else {
+            return;
+        };
+
+        let generation = content.read(cx).generation();
+        let app_state = self.app_state.clone();
+        let references: Vec<super::row_inspector::FkReference> = references.to_vec();
+
+        let mut tables: Vec<(Option<String>, String)> = Vec::new();
+        for reference in references
+            .iter()
+            .filter(|reference| is_unresolved(reference))
+        {
+            let table = (
+                reference.target_schema.clone(),
+                reference.target_table.clone(),
+            );
+            if !tables.contains(&table) {
+                tables.push(table);
+            }
+        }
+
+        cx.spawn(async move |_, cx| {
+            let display_columns = reference_display_columns(
+                &app_state,
+                profile_id,
+                &database,
+                &tables,
+                &connection,
+                cx,
+            )
+            .await;
+
+            super::row_inspector::resolve_outgoing_labels(
+                &content,
+                generation,
+                &references,
+                &display_columns,
+                |reference, executor| {
+                    let connection = connection.clone();
+                    let database = database.clone();
+                    let schema = reference.target_schema.clone();
+                    let table = reference.target_table.clone();
+                    let pk_column = reference.target_pk.clone();
+                    let value = reference.value.clone();
+
+                    executor.spawn(async move {
+                        connection
+                            .fetch_row_by_pk(
+                                &database,
+                                schema.as_deref().unwrap_or(""),
+                                &table,
+                                &pk_column,
+                                &value,
+                            )
+                            .map_err(|error| error.to_string())
+                    })
+                },
+                cx,
+            )
+            .await;
+        })
+        .detach();
     }
 
     /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
@@ -4311,6 +4430,95 @@ async fn cached_or_fetched_schema_foreign_keys(
     });
 
     Ok(foreign_keys)
+}
+
+/// The display column of each referenced table, from the connection's
+/// cached details when it has them — keyed by the referenced schema first
+/// and without one second, the shape MySQL writes — otherwise fetched on
+/// the background executor and cached for the next reader. A table whose
+/// details cannot be read has no display column and keeps naming its rows
+/// by id.
+async fn reference_display_columns(
+    app_state: &Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: uuid::Uuid,
+    database: &str,
+    tables: &[(Option<String>, String)],
+    connection: &std::sync::Arc<dyn dbflux_core::Connection>,
+    cx: &mut AsyncApp,
+) -> std::collections::HashMap<(Option<String>, String), Option<String>> {
+    let mut display_columns: std::collections::HashMap<(Option<String>, String), Option<String>> =
+        std::collections::HashMap::new();
+
+    for (schema, table) in tables {
+        let cached = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .and_then(|connected| {
+                    connected
+                        .table_details
+                        .get(&(database.to_string(), schema.clone(), table.clone()))
+                        .or_else(|| {
+                            connected.table_details.get(&(
+                                database.to_string(),
+                                None,
+                                table.clone(),
+                            ))
+                        })
+                        .cloned()
+                })
+        });
+
+        let column = match cached {
+            Some(details) => details
+                .columns
+                .as_deref()
+                .and_then(super::fk_display::pick_display_column),
+            None => {
+                let request = {
+                    let connection = connection.clone();
+                    let database = database.to_string();
+                    let schema = schema.clone();
+                    let table = table.clone();
+                    cx.background_executor().spawn(async move {
+                        connection.table_details(&database, schema.as_deref(), &table)
+                    })
+                };
+
+                match request.await {
+                    Ok(details) => {
+                        let column = details
+                            .columns
+                            .as_deref()
+                            .and_then(super::fk_display::pick_display_column);
+                        cx.update(|cx| {
+                            app_state.update(cx, |state, _| {
+                                state.set_table_details(
+                                    profile_id,
+                                    database.to_string(),
+                                    schema.clone(),
+                                    table.clone(),
+                                    details,
+                                );
+                            });
+                        });
+                        column
+                    }
+                    Err(error) => {
+                        log::debug!(
+                            "row inspector: no column metadata for referenced table {table}: {error}"
+                        );
+                        None
+                    }
+                }
+            }
+        };
+
+        display_columns.insert((schema.clone(), table.clone()), column);
+    }
+
+    display_columns
 }
 
 #[cfg(test)]

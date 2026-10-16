@@ -70,7 +70,7 @@ pub use code::CodeDocument;
 pub use console_document::ConsoleDocument;
 pub use dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
 pub use data_document::DataDocument;
-pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
+pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource, ReferencedRowTarget};
 pub use data_view::{DataViewConfig, DataViewMode};
 pub use data_view_trait::DataView;
 pub use document_builder::inspector_min_width;

@@ -70,13 +70,29 @@ as you move through the grid, except while it holds an unsaved change.
 
 Press `Ctrl+Space`, or right-click a row and choose **Inspect Row**, to open
 the selected row in the inspector rail on the right. It lists every column of
-the row with its value, marks primary and foreign key columns, and under
-**References** names the table each single-column foreign key points at, with
-the referenced row once it resolves. The inspector follows the selected row as
-you move through the grid; the pin button in its header keeps it on the current
-row instead. **Edit**, **Duplicate** and **Delete** at its foot act on the
-inspected row when the result is editable. Press `Ctrl+Space` again, or the
-close button, to dismiss it.
+the row with its value and marks primary and foreign key columns. The inspector
+follows the selected row as you move through the grid; the pin button in its
+header keeps it on the current row instead. **Edit**, **Duplicate** and
+**Delete** at its foot act on the inspected row when the result is editable.
+Press `Ctrl+Space` again, or the close button, to dismiss it.
+
+Under **References** the inspector lists the row's foreign keys in both
+directions:
+
+- **Outgoing** — a single-column foreign key of this row points at another
+  table. The entry names that table and the row it points at, by its readable
+  label once resolved ("María López · #8"), or by its key until then. Click it
+  to open the referenced table on that row: DBFlux reuses the table's existing
+  tab — opening one if none is open — and replaces its filter with a
+  primary-key equality, so the referenced row is the one in view.
+- **Incoming** — other tables hold foreign keys that point at this row. Each
+  entry names the table and counts how many of its rows reference this one;
+  counts load in the background. These entries are informational only.
+
+Foreign-key cells in the grid can show the same referenced-row label next to
+the id: turn on **Show referenced-row labels in foreign-key cells** in
+[Settings](SETTINGS.md). The row inspector resolves references regardless of
+that setting.
 
 ## Filtering results
 

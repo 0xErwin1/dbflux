@@ -1660,6 +1660,7 @@ document:
         nearest_distance: "Change the distance (now %{distance})"
         nearest_clear: "Back to the table rows"
         nearest_column: "Change the vector column"
+        go_to_referenced_row: "Go to referenced row"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -3944,6 +3945,11 @@ settings:
       no_matches: "No fonts match"
     editor:
       group: "Editor"
+    data_grid:
+      group: "Data grid"
+    grid_fk_labels:
+      label: "Show referenced-row labels in foreign-key cells"
+      hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

@@ -401,6 +401,12 @@ pub struct GeneralSettings {
     #[serde(default = "default_vim_leader")]
     pub vim_leader: String,
 
+    // -- Data grid --
+    /// Resolve foreign-key cells to the referenced row's label in the data
+    /// grid. Off by default; the row inspector always resolves references.
+    #[serde(default)]
+    pub grid_fk_labels: bool,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -527,6 +533,7 @@ impl Default for GeneralSettings {
             toast_auto_dismiss_secs: Self::DEFAULT_TOAST_AUTO_DISMISS_SECS,
             vim_mode: false,
             vim_leader: default_vim_leader(),
+            grid_fk_labels: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -553,6 +560,7 @@ mod font_settings_tests {
         assert_eq!(settings.grid_font_size, 12.5);
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
+        assert!(!legacy.grid_fk_labels);
         assert_eq!(legacy, settings);
     }
 
