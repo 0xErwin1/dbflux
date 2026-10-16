@@ -42,27 +42,8 @@ impl Sidebar {
                     schema.retention_policies.clear();
                 }
             }
-            dbflux_core::DataStructure::Vector(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.collections.clear();
-                }
-            }
-            dbflux_core::DataStructure::MultiModel(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.tables.clear();
-                    schema.collections.clear();
-                    schema.graphs.clear();
-                }
-            }
             dbflux_core::DataStructure::KeyValue(_)
-            | dbflux_core::DataStructure::WideColumn(_)
-            | dbflux_core::DataStructure::Search(_) => {}
+            | dbflux_core::DataStructure::ReservedWideColumn => {}
         }
     }
 
@@ -121,32 +102,10 @@ impl Sidebar {
                     schema.collections.retain(|entry| entry.name != target.name);
                 }
             }
-            dbflux_core::DataStructure::MultiModel(schema) => {
-                let matches_current_database = target
-                    .database
-                    .as_deref()
-                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
-
-                if !matches_current_database {
-                    return;
-                }
-
-                match target.kind {
-                    SchemaObjectKind::Table => {
-                        schema.tables.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::Collection => {
-                        schema.collections.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::View | SchemaObjectKind::Database => {}
-                }
-            }
             dbflux_core::DataStructure::KeyValue(_)
             | dbflux_core::DataStructure::Graph(_)
-            | dbflux_core::DataStructure::WideColumn(_)
-            | dbflux_core::DataStructure::TimeSeries(_)
-            | dbflux_core::DataStructure::Search(_)
-            | dbflux_core::DataStructure::Vector(_) => {}
+            | dbflux_core::DataStructure::ReservedWideColumn
+            | dbflux_core::DataStructure::TimeSeries(_) => {}
         }
     }
 

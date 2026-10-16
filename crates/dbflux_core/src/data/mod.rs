@@ -5,7 +5,6 @@ pub(crate) mod document_edit;
 pub(crate) mod document_schema;
 pub(crate) mod key_value;
 pub(crate) mod value_decoder;
-pub(crate) mod view;
 
 pub use column_profile::{
     ColumnBadge, ColumnProfile, ColumnProjection, DEFAULT_PAGE_ROWS,
@@ -51,4 +50,3 @@ pub use value_decoder::{
     DecodeOutcome, DecodedPayload, DecodedValue, Encoding, decode, decode_as, detect,
     probe_message_pack,
 };
-pub use view::DataViewKind;
