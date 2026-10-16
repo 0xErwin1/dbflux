@@ -63,6 +63,8 @@ use uuid::Uuid;
 mod code_actions;
 mod comment;
 mod completion;
+#[cfg(test)]
+mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
