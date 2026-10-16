@@ -12169,9 +12169,19 @@ mod tests {
         panel: &gpui::Entity<DataGridPanel>,
         window: &mut VisualTestContext,
     ) {
+        let _driver = register_writable_connection_with_driver(panel, window);
+    }
+
+    /// The same connection, with its driver kept so a test can count what ran.
+    fn register_writable_connection_with_driver(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) -> dbflux_test_support::fake_driver::FakeDriver {
         use dbflux_core::{ConnectedProfile, DbConfig, DbKind, MutationPolicy};
         use dbflux_test_support::fake_driver::FakeDriver;
         use std::path::PathBuf;
+
+        let driver = FakeDriver::new(DbKind::SQLite);
 
         window.update(|_, app| {
             let app_state = panel.read(app).app_state.clone();
@@ -12184,7 +12194,7 @@ mod tests {
                         connection_id: None,
                     },
                 );
-                let connection = FakeDriver::new(DbKind::SQLite)
+                let connection = driver
                     .connect_arc(&profile)
                     .expect("the fake driver connects");
 
@@ -12213,6 +12223,8 @@ mod tests {
                 );
             });
         });
+
+        driver
     }
 
     /// One staged row edit that lands is what lets the close through.
@@ -12433,6 +12445,62 @@ mod tests {
         assert!(
             asked_to_close(&seen),
             "a queued row with no edits must let the close through; got {:?}",
+            event_kinds(&seen)
+        );
+    }
+
+    /// A batch of pending inserts must save every one of them.
+    ///
+    /// The batch pumps positional indices from a snapshot, and each landed insert is
+    /// removed from the edit buffer, which shifts the indices the pump still holds.
+    #[gpui::test]
+    fn a_batch_of_inserts_saves_every_row(cx: &mut TestAppContext) {
+        let (panel, window, seen) = staged_edit_panel(cx);
+        let driver = register_writable_connection_with_driver(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, cx| {
+                    state.edit_buffer_mut().add_pending_insert(vec![
+                        dbflux_components::components::data_table::model::CellValue::int(1),
+                    ]);
+                    state.edit_buffer_mut().add_pending_insert(vec![
+                        dbflux_components::components::data_table::model::CellValue::int(2),
+                    ]);
+                    cx.notify();
+                });
+                assert!(
+                    panel.apply_for_close(cx),
+                    "two staged inserts are an apply to wait on"
+                );
+            });
+        });
+        window.run_until_parked();
+
+        let inserted: Vec<i64> = driver
+            .stats()
+            .crud_ops
+            .iter()
+            .filter_map(|op| match op {
+                dbflux_test_support::fake_driver::CrudOp::Insert(insert) => insert
+                    .assignments
+                    .iter()
+                    .find_map(|assignment| match assignment.value {
+                        dbflux_core::Value::Int(value) => Some(value),
+                        _ => None,
+                    }),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            inserted,
+            vec![1, 2],
+            "both staged inserts must reach the driver, in order"
+        );
+        assert!(
+            asked_to_close(&seen),
+            "the batch must let the close through; got {:?}",
             event_kinds(&seen)
         );
     }
