@@ -3479,7 +3479,7 @@ fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppConte
     impl Render for SpacedEditor {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             gpui_component::input::Editor::new(&self.0)
-                .letter_spacing(gpui::px(8.))
+                .letter_spacing(gpui::px(8.)) // guardrail-allow: exaggerated test typography verifies completion width includes letter spacing.
                 .h(gpui::px(400.))
         }
     }
