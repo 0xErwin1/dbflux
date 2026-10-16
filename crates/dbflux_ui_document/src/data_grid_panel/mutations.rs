@@ -1732,6 +1732,12 @@ impl DataGridPanel {
             return;
         };
 
+        // The removed insert may still be queued (the user deleted a row the
+        // batch had not started). Drop it, then shift the ones above it.
+        remaining
+            .pending_inserts
+            .retain(|queued| *queued != removed_idx);
+
         for queued in &mut remaining.pending_inserts {
             if *queued > removed_idx {
                 *queued -= 1;

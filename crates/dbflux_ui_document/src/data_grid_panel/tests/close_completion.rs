@@ -716,15 +716,25 @@ fn a_batch_of_inserts_saves_every_row(cx: &mut TestAppContext) {
     });
     window.run_until_parked();
 
-    let inserts = driver
+    let inserted: Vec<i64> = driver
         .stats()
         .crud_ops
         .iter()
-        .filter(|op| matches!(op, dbflux_test_support::fake_driver::CrudOp::Insert(_)))
-        .count();
+        .filter_map(|op| match op {
+            dbflux_test_support::fake_driver::CrudOp::Insert(insert) => insert
+                .assignments
+                .iter()
+                .find_map(|assignment| match assignment.value {
+                    dbflux_core::Value::Int(value) => Some(value),
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        inserts, 2,
-        "both staged inserts must reach the driver; the batch skipped one"
+        inserted,
+        vec![1, 2],
+        "both staged inserts must reach the driver, in order"
     );
     assert!(
         asked_to_close(&seen),
