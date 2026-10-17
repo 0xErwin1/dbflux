@@ -10,6 +10,7 @@ pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
 mod mutations;
 mod navigation;
+mod nearest_neighbors;
 mod primary_key;
 mod query;
 mod refresh;
@@ -838,6 +839,9 @@ pub struct DataGridPanel {
     /// in key order. The rows on screen were built without the key, so the
     /// banner waits for the reordered page instead of flashing until it lands.
     pk_requery_pending: bool,
+    /// The rows on screen are the nearest neighbors of a row, not a page of
+    /// the table. Cleared by any other result.
+    nearest_neighbors: Option<nearest_neighbors::NearestNeighborSearch>,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
@@ -1418,6 +1422,7 @@ impl DataGridPanel {
             panel_size: Size::default(),
             pk_details_pending: false,
             pk_requery_pending: false,
+            nearest_neighbors: None,
             view_config,
             context_menu: None,
             is_active_tab: true,

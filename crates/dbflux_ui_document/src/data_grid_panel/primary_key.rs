@@ -351,7 +351,8 @@ impl DataGridPanel {
     /// rows have no row identity) or when no primary key columns are known
     /// (preventing UPDATE/DELETE target identification).
     pub fn mutations_enabled(&self) -> bool {
-        if self.is_grouped_result() {
+        // Neighbor rows carry a computed `distance` column the table lacks.
+        if self.is_grouped_result() || self.nearest_neighbors.is_some() {
             return false;
         }
 

@@ -796,20 +796,24 @@ impl DataGridPanel {
         //   [sep + Toolbar]?          (if the grid shows any toolbar button)
         let inspect_row_enabled = !self.is_grouped_result();
 
-        let base_items = if is_column_header {
-            Vec::new()
-        } else {
-            self.adapt_menu_items_for_documents(
-                Self::build_context_menu_items(
-                    is_editable,
+        let base_items = match self.context_menu.as_ref() {
+            Some(menu) if !is_column_header => self.with_find_similar_rows(
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
+                        is_document_view,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
+                    ),
                     is_document_view,
-                    has_row_target,
-                    can_chart,
-                    inspect_row_enabled,
+                    cx,
                 ),
-                is_document_view,
+                menu,
+                has_row_target,
                 cx,
-            )
+            ),
+            _ => Vec::new(),
         };
         let base_count = base_items.len();
 
@@ -1170,6 +1174,7 @@ impl DataGridPanel {
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::UnsetField
                 | ContextMenuAction::RevertCell
+                | ContextMenuAction::FindSimilarRows
                 | ContextMenuAction::DuplicateRow
                 | ContextMenuAction::DeleteRow
                 | ContextMenuAction::GenerateSelectWhere
@@ -1644,15 +1649,20 @@ impl DataGridPanel {
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = self.adapt_menu_items_for_documents(
-                Self::build_context_menu_items(
-                    is_editable,
+            let visible_items = self.with_find_similar_rows(
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
+                        menu.is_document_view,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
+                    ),
                     menu.is_document_view,
-                    has_row_target,
-                    can_chart,
-                    inspect_row_enabled,
+                    cx,
                 ),
-                menu.is_document_view,
+                menu,
+                has_row_target,
                 cx,
             );
             let mut menu_items: Vec<AnyElement> = Vec::new();
@@ -1883,6 +1893,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::InspectRow => {
                 self.open_row_inspector(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::FindSimilarRows => {
+                self.find_similar_rows_at(menu.row, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);
@@ -2504,6 +2517,36 @@ impl DataGridPanel {
 
             cx.notify();
         });
+    }
+
+    /// Adds "Find similar rows" after "View value" when the table has a
+    /// vector column and the menu is on a row of the grid.
+    pub(in crate::data_grid_panel) fn with_find_similar_rows(
+        &self,
+        mut items: Vec<ContextMenuItem>,
+        menu: &TableContextMenu,
+        has_row_target: bool,
+        cx: &Context<Self>,
+    ) -> Vec<ContextMenuItem> {
+        if menu.is_document_view || !has_row_target || !self.can_find_similar_rows(menu.col, cx) {
+            return items;
+        }
+
+        let position = items
+            .iter()
+            .position(|item| item.action == Some(ContextMenuAction::ViewValue))
+            .map_or(items.len(), |index| index + 1);
+        items.insert(
+            position,
+            ContextMenuItem {
+                label: dbflux_i18n::t!("document.data.context_menu.item.find_similar_rows").into(),
+                action: Some(ContextMenuAction::FindSimilarRows),
+                icon: Some(AppIcon::Search),
+                is_separator: false,
+                is_danger: false,
+            },
+        );
+        items
     }
 
     /// In a document grid the column-default entry has no meaning: it becomes

@@ -910,6 +910,7 @@ impl DataGridPanel {
                 self.toggle_row_inspector(cx);
                 true
             }
+            Command::FindSimilarRows => self.find_similar_rows(cx),
             _ => false,
         }
     }

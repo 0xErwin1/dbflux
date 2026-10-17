@@ -26,6 +26,7 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        self.nearest_neighbors = None;
         let category = Self::connection_category(&self.source, &self.app_state, cx);
         self.view_config = Self::view_config_for(&self.source, category);
         self.chrome.derived_json = None;

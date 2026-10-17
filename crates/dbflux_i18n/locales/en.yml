@@ -1600,6 +1600,7 @@ document:
         set_null: Set to NULL
         add_row: Add row
         inspect_row: Inspect row
+        find_similar_rows: Find similar rows
         view_value: View value
         duplicate_row: Duplicate row
         delete_row: Delete row
@@ -1657,6 +1658,8 @@ document:
         refresh_profile: "Refresh column statistics"
         sample_profile: "Profile the first rows"
         refresh_partitions: "Refresh partitions"
+        nearest_distance: "Change the distance (now %{distance})"
+        nearest_clear: "Back to the table rows"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1781,6 +1784,16 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+      nearest:
+        notice: "Rows nearest to the selected row by %{column} · k = %{limit}"
+        back_to_table: Back to table
+        distance:
+          l2: L2
+          cosine: Cosine
+          inner_product: Inner product
+        error:
+          no_vector: "The selected row has no value in %{column}"
+          failed: "Finding similar rows failed: %{error}"
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
@@ -4127,6 +4140,7 @@ settings:
       cycle_result_view: "Cycle result view"
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
+      find_similar_rows: Find similar rows
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions

@@ -1600,6 +1600,7 @@ document:
         set_null: Establecer NULL
         add_row: Agregar fila
         inspect_row: Inspeccionar fila
+        find_similar_rows: Buscar filas similares
         view_value: Ver valor
         duplicate_row: Duplicar fila
         delete_row: Eliminar fila
@@ -1657,6 +1658,8 @@ document:
         refresh_profile: "Actualizar estadísticas de columnas"
         sample_profile: "Perfilar las primeras filas"
         refresh_partitions: "Actualizar particiones"
+        nearest_distance: "Cambiar la distancia (actual: %{distance})"
+        nearest_clear: "Volver a las filas de la tabla"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido
@@ -1781,6 +1784,16 @@ document:
         builder_notice: Las filas vienen de la consulta del generador
         edit_in_builder: Editar en el generador
         reset_builder: Restablecer
+      nearest:
+        notice: "Filas más cercanas a la fila seleccionada por %{column} · k = %{limit}"
+        back_to_table: Volver a la tabla
+        distance:
+          l2: L2
+          cosine: Coseno
+          inner_product: Producto interno
+        error:
+          no_vector: "La fila seleccionada no tiene valor en %{column}"
+          failed: "No se pudieron buscar filas similares: %{error}"
       toast:
         query_imported: Consulta importada correctamente
         mutation_queued: Mutación en cola para aprobación.
@@ -4127,6 +4140,7 @@ settings:
       cycle_result_view: "Alternar vista del resultado"
       toggle_value_panel: Alternar panel de valor
       toggle_row_inspector: Alternar inspector de fila
+      find_similar_rows: Buscar filas similares
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
       open_pane_actions: Abrir acciones del panel

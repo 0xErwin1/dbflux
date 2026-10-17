@@ -1600,6 +1600,7 @@ document:
         set_null: NULL로 설정
         add_row: 행 추가
         inspect_row: 행 검사
+        find_similar_rows: 유사한 행 찾기
         view_value: 값 보기
         duplicate_row: 행 복제
         delete_row: 행 삭제
@@ -1657,6 +1658,8 @@ document:
         refresh_profile: "열 통계 새로 고침"
         sample_profile: "처음 행 프로파일링"
         refresh_partitions: "파티션 새로 고침"
+        nearest_distance: "거리 변경 (현재 %{distance})"
+        nearest_clear: "테이블 행으로 돌아가기"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -1781,6 +1784,16 @@ document:
         builder_notice: 행은 빌더 쿼리에서 가져옵니다
         edit_in_builder: 빌더에서 편집
         reset_builder: 초기화
+      nearest:
+        notice: "%{column} 기준 선택한 행과 가장 가까운 행 · k = %{limit}"
+        back_to_table: 테이블로 돌아가기
+        distance:
+          l2: L2
+          cosine: 코사인
+          inner_product: 내적
+        error:
+          no_vector: "선택한 행의 %{column} 값이 없습니다"
+          failed: "유사한 행 찾기 실패: %{error}"
       toast:
         query_imported: 쿼리를 성공적으로 가져왔습니다
         mutation_queued: 변경 작업이 승인 대기열에 추가되었습니다.
@@ -4127,6 +4140,7 @@ settings:
       cycle_result_view: "결과 보기 전환"
       toggle_value_panel: 값 패널 전환
       toggle_row_inspector: 행 검사기 전환
+      find_similar_rows: 유사한 행 찾기
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
       open_pane_actions: 패널 작업 열기

@@ -114,6 +114,8 @@ pub enum Command {
     CycleResultView,
     ToggleValuePanel,
     ToggleRowInspector,
+    /// Shows the rows nearest to the active row by its vector column.
+    FindSimilarRows,
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
@@ -417,6 +419,7 @@ impl Command {
             Command::CycleResultView => "Cycle result view",
             Command::ToggleValuePanel => "Toggle value panel",
             Command::ToggleRowInspector => "Toggle row inspector",
+            Command::FindSimilarRows => "Find similar rows",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenPaneActions => "Open pane actions",
@@ -616,6 +619,7 @@ impl Command {
             Command::CycleResultView => "cycle_result_view",
             Command::ToggleValuePanel => "toggle_value_panel",
             Command::ToggleRowInspector => "toggle_row_inspector",
+            Command::FindSimilarRows => "find_similar_rows",
             Command::ResultsSetNull => "results_set_null",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenPaneActions => "open_pane_actions",
@@ -832,6 +836,7 @@ impl Command {
             Command::CycleResultView,
             Command::ToggleValuePanel,
             Command::ToggleRowInspector,
+            Command::FindSimilarRows,
             Command::ResultsSetNull,
             Command::OpenContextMenu,
             Command::OpenPaneActions,
@@ -1023,6 +1028,7 @@ impl Command {
             | Command::CycleResultView
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
+            | Command::FindSimilarRows
             | Command::ResultsSetNull
             | Command::OpenContextMenu
             | Command::MenuUp
