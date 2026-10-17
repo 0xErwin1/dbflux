@@ -310,7 +310,7 @@ impl DataGridPanel {
             actions.push(ToolbarAction::ClearNearest);
         }
 
-        if filter_row_shown && self.can_toggle_view() {
+        if filter_row_shown && self.can_toggle_view(cx) {
             actions.push(ToolbarAction::ToggleView);
         }
 

@@ -157,6 +157,8 @@ impl DataGridPanel {
     /// table, so editability and any committed builder binding see them.
     pub(super) fn apply_pk_details(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
         self.pk_details_pending = false;
+        // The details carry the table's facets (a hypertable's time axis).
+        self.sync_source_facets(cx);
         cx.notify();
         if !pk_names.is_empty() {
             self.pk_columns = pk_names;

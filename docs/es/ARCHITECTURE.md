@@ -1105,12 +1105,20 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   - `CollectionPresentation` le indica a la UI cómo se abre una
     collection/container (por ejemplo data grid vs event stream).
   - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) nombra los
-    paradigmas que expone un objeto: `Tabular`, `Document`, `Vector`.
-    `CollectionPresentation` elige qué document se abre; los facets eligen los
-    modos de vista dentro del data document. `Connection::object_facets`
-    devuelve `[Tabular]` por defecto y los drivers lo sobrescriben (PostgreSQL
-    agrega un `Vector` por cada columna `vector(n)`); las collections derivan
-    los suyos de `default_collection_facets(category)`. El enum es exhaustivo,
+    paradigmas que expone un objeto: `Tabular`, `Document`, `Vector`,
+    `TimeSeries`. `CollectionPresentation` elige qué document se abre; los
+    facets eligen los modos de vista, los gates y el texto del filtro dentro
+    del data document. `Connection::object_facets` (tablas) y
+    `Connection::collection_facets` (collections) devuelven `[Tabular]` por
+    defecto y los drivers los sobrescriben: PostgreSQL agrega `Document` por una
+    columna `json`/`jsonb`, `TimeSeries` por una hypertable de TimescaleDB y un
+    `Vector` por cada columna `vector(n)`; MongoDB y DynamoDB declaran
+    `[Document, Tabular]`; InfluxDB declara `TimeSeries` sobre `time`. Solo el
+    adaptador RPC deriva facets de la categoría declarada
+    (`category_collection_facets`), porque el wire no los transporta.
+    `TimeSeries` abre el gráfico sobre su columna de tiempo junto a las filas;
+    `Document` en una tabla abre un árbol de documentos de solo lectura con los
+    valores JSON expandidos. El enum es exhaustivo,
     así que un facet nuevo no compila hasta que `DataViewMode::for_facet`
     (`crates/dbflux_ui_document/src/data_view.rs`) lo maneje. El SQL de
     vecinos más cercanos sigue siendo propiedad del driver vía

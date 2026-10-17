@@ -93,6 +93,14 @@ fn init_test_runtime(cx: &mut TestAppContext) {
 struct StubConnection;
 
 impl dbflux_core::Connection for StubConnection {
+    /// Facets as a driver of the stub's category declares them.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        dbflux_core::category_collection_facets(self.metadata().category)
+    }
+
     fn metadata(&self) -> &dbflux_core::DriverMetadata {
         use dbflux_core::{
             DatabaseCategory, DriverCapabilities, DriverMetadata, Icon as CoreIcon, QueryLanguage,
@@ -479,6 +487,14 @@ struct StubBuilderConnection {
 }
 
 impl dbflux_core::Connection for StubBuilderConnection {
+    /// Facets as a driver of the stub's category declares them.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        dbflux_core::category_collection_facets(self.metadata().category)
+    }
+
     fn metadata(&self) -> &dbflux_core::DriverMetadata {
         &self.metadata
     }
@@ -656,6 +672,7 @@ mod builder_draft_and_fk;
 mod builder_mutations;
 mod close_completion;
 mod collection_views;
+mod facets;
 mod reload_pending_edits;
 mod reload_state;
 mod sources_and_keys;

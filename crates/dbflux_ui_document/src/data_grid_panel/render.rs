@@ -1285,7 +1285,7 @@ impl DataGridPanel {
                     .child(field)
                     .when_some(toolbar_error, |d, err| d.child(err)),
             )
-            .when(self.can_toggle_view(), |d| {
+            .when(self.can_toggle_view(cx), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {
                     DataViewMode::Table => AppIcon::Table,

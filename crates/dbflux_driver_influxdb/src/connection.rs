@@ -305,6 +305,19 @@ fn apply_row_budget(result: &mut QueryResult, limit: Option<u32>) {
 // ---------------------------------------------------------------------------
 
 impl Connection for InfluxConnection {
+    /// Every measurement is indexed by its `time` column.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        vec![
+            dbflux_core::ObjectFacet::TimeSeries(dbflux_core::TimeSeriesFacet {
+                time_column: Some("time".to_string()),
+            }),
+            dbflux_core::ObjectFacet::Tabular,
+        ]
+    }
+
     fn metadata(&self) -> &DriverMetadata {
         &crate::driver::INFLUXDB_METADATA
     }

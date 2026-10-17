@@ -207,9 +207,9 @@ impl DataGridPanel {
     /// source must be a relational `Table` or a document `Collection`, the
     /// driver's `category` must be `Relational` or `Document`, and the driver
     /// must publish at least one non-logical predicate operator. A `Collection`
-    /// is only eligible when the category is `Document` (relational drivers open
-    /// as `Table`; key-value drivers publish no predicate operators and are thus
-    /// excluded on both counts).
+    /// is only eligible when its driver declares the `Document` facet (relational
+    /// drivers open as `Table`; key-value drivers publish no predicate operators
+    /// and are thus excluded on both counts).
     pub fn can_open_builder(&self, cx: &App) -> bool {
         let (profile_id, is_collection) = match &self.source {
             DataSource::Table { profile_id, .. } => (*profile_id, false),
@@ -228,9 +228,9 @@ impl DataGridPanel {
             DatabaseCategory::Relational | DatabaseCategory::Document
         );
 
-        // A collection source only makes sense for a document store; a relational
-        // table source is served by `DataSource::Table`.
-        if is_collection && !matches!(metadata.category, DatabaseCategory::Document) {
+        // A collection source only makes sense when its driver declares it holds
+        // documents; a relational table source is served by `DataSource::Table`.
+        if is_collection && !self.has_document_facet(cx) {
             return false;
         }
 

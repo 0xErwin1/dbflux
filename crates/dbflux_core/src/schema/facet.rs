@@ -3,9 +3,10 @@
 //! A facet names one way an object can be viewed. One table can carry
 //! several: a PostgreSQL table with a `vector` column is both tabular and a
 //! vector set. Facets are computed on demand by
-//! [`Connection::object_facets`](crate::Connection::object_facets), never
-//! stored in `TableInfo`, so the RPC wire and persisted snapshots keep their
-//! shape.
+//! [`Connection::object_facets`](crate::Connection::object_facets) for tables
+//! and [`Connection::collection_facets`](crate::Connection::collection_facets)
+//! for collections, never stored in `TableInfo`, so the RPC wire and persisted
+//! snapshots keep their shape.
 
 use crate::{DatabaseCategory, TableRef, Value};
 
@@ -22,6 +23,17 @@ pub enum ObjectFacet {
     Document,
     /// A column of embeddings that supports nearest-neighbor search.
     Vector(VectorFacet),
+    /// Rows indexed by time: the data document opens the chart over the time
+    /// column next to the rows.
+    TimeSeries(TimeSeriesFacet),
+}
+
+/// The time axis of a time-series object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeSeriesFacet {
+    /// The column rows are indexed by. `None` when the driver does not know
+    /// it; the chart then takes the first timestamp column of the result.
+    pub time_column: Option<String>,
 }
 
 /// A vector column of a table.
@@ -32,13 +44,19 @@ pub struct VectorFacet {
     pub dimension: Option<u32>,
 }
 
-/// Facets of a collection, derived from the category of its connection.
+/// Collection facets derived from a connection's declared category.
 ///
-/// A document database's collection opens in the document tree and can also
-/// be shown as a grid; every other collection holds flat rows.
-pub fn default_collection_facets(category: Option<DatabaseCategory>) -> Vec<ObjectFacet> {
+/// Only for drivers that cannot declare facets per collection: external
+/// drivers on the RPC protocol, whose wire carries no facets. Every in-process
+/// driver declares its own through
+/// [`Connection::collection_facets`](crate::Connection::collection_facets).
+pub fn category_collection_facets(category: DatabaseCategory) -> Vec<ObjectFacet> {
     match category {
-        Some(DatabaseCategory::Document) => vec![ObjectFacet::Document, ObjectFacet::Tabular],
+        DatabaseCategory::Document => vec![ObjectFacet::Document, ObjectFacet::Tabular],
+        DatabaseCategory::TimeSeries => vec![
+            ObjectFacet::TimeSeries(TimeSeriesFacet { time_column: None }),
+            ObjectFacet::Tabular,
+        ],
         _ => vec![ObjectFacet::Tabular],
     }
 }
@@ -82,23 +100,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn document_collections_open_as_documents_and_can_show_a_grid() {
+    fn a_document_category_declares_documents_and_a_grid() {
         assert_eq!(
-            default_collection_facets(Some(DatabaseCategory::Document)),
+            category_collection_facets(DatabaseCategory::Document),
             vec![ObjectFacet::Document, ObjectFacet::Tabular]
         );
     }
 
     #[test]
-    fn other_collections_are_tabular() {
+    fn a_time_series_category_declares_a_time_axis_it_does_not_know() {
+        assert_eq!(
+            category_collection_facets(DatabaseCategory::TimeSeries),
+            vec![
+                ObjectFacet::TimeSeries(TimeSeriesFacet { time_column: None }),
+                ObjectFacet::Tabular
+            ]
+        );
+    }
+
+    #[test]
+    fn other_categories_declare_a_grid() {
         for category in [
-            None,
-            Some(DatabaseCategory::Relational),
-            Some(DatabaseCategory::KeyValue),
-            Some(DatabaseCategory::TimeSeries),
+            DatabaseCategory::Relational,
+            DatabaseCategory::KeyValue,
+            DatabaseCategory::LogStream,
+            DatabaseCategory::ObjectStorage,
         ] {
             assert_eq!(
-                default_collection_facets(category),
+                category_collection_facets(category),
                 vec![ObjectFacet::Tabular],
                 "{category:?}"
             );

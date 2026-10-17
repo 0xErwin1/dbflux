@@ -23,6 +23,8 @@
 - 데이터 전송 엔진: 네이티브 다중 행 `INSERT` 대량 적재(`BULK_INSERT`), 원본 테이블의 열을 기반으로 한 드라이버 네이티브 `CREATE TABLE` DDL, `TRUNCATE TABLE` 지원, FK 안전 마이그레이션을 위한 참조 무결성 토글(`SET session_replication_role`).
 - 검증된 1차원 배열을 포함해 `pgvector`의 `vector`, `halfvec`, `sparsevec` 값을 텍스트 결과로 표시합니다.
 - `pgvector` `vector` 열이 있는 테이블에서 선택한 행과 가장 가까운 행을 L2 거리, 코사인 거리 또는 음의 내적으로 찾고, 각 이웃을 `nearest_distance`와 함께 표시합니다. `halfvec`와 `sparsevec` 열은 이 검색을 제공하지 않습니다.
+- `json` 또는 `jsonb` 열이 있는 테이블은 그리드 옆에 문서 보기를 제공합니다. 각 행은 JSON 값이 펼쳐진 문서로 열립니다. 트리는 읽기 전용이며 편집은 그리드에서 합니다.
+- TimescaleDB 하이퍼테이블은 시계열로 읽힙니다. 세부 정보에 시간 차원을 지정하는 `Hypertable` 저장 힌트가 붙고, 테이블은 행 옆에 그 열을 축으로 한 차트와 함께 열립니다. TimescaleDB가 없는 서버에서는 달라지는 것이 없습니다.
 - 1차원 배열을 포함해 전문 검색의 `tsvector`와 `tsquery` 값을 PostgreSQL의 정규 텍스트 형태로 표시합니다.
 - 1차원 `numeric[]` 배열을 포함해 `numeric` 값을 PostgreSQL이 저장한 정확한 십진수로 표시합니다.
 - `infinity`와 `-infinity` 날짜와 타임스탬프, 그리고 그 1차원 배열을 PostgreSQL 자체의 텍스트로 표시합니다.

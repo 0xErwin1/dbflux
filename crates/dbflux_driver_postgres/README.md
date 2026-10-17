@@ -23,6 +23,8 @@ Advanced open-source relational database.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
 - Finds the rows nearest to a selected row on a table with a `pgvector` `vector` column, by L2 distance, cosine distance or negative inner product, and shows each neighbor with its `nearest_distance`. `halfvec` and `sparsevec` columns do not offer the search.
+- A table with a `json` or `jsonb` column offers a Document view next to the grid: each row opens as a document with its JSON values expanded. The tree is read-only; edits go through the grid.
+- A TimescaleDB hypertable is read as a time series: its details carry a `Hypertable` storage hint naming the time dimension, and the table opens with a chart over that column next to the rows. On a server without TimescaleDB nothing changes.
 - Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
 - Displays `numeric` values, including one-dimensional `numeric[]` arrays, as the exact decimal PostgreSQL stores.
 - Displays `infinity` and `-infinity` dates, timestamps, and their one-dimensional arrays as PostgreSQL's own text.

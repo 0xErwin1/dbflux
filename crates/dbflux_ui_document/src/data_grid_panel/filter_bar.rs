@@ -2,7 +2,7 @@ use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_core::VisualQuerySpec;
+use dbflux_core::{ObjectFacet, VisualQuerySpec};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -240,50 +240,24 @@ pub(crate) fn filter_input_has_error(state: &RelationalFilterState) -> bool {
 impl DataGridPanel {
     // === Filter bar presentation helpers ===
 
-    /// Resolve the database category for the connection backing this data source.
-    ///
-    /// `QueryResult` sources carry an optional `profile_id` because the host
-    /// (CodeDocument, ScriptDocument) knows which connection produced the
-    /// result; this is what allows category-driven UI gates (chart toggle,
-    /// filter labels) to work on query results. Returns `None` when the
-    /// profile is unknown or no longer registered.
-    pub(crate) fn connection_category(
-        source: &DataSource,
-        app_state: &Entity<AppStateEntity>,
-        cx: &App,
-    ) -> Option<DatabaseCategory> {
-        let profile_id = match source {
-            DataSource::Table { profile_id, .. } => *profile_id,
-            DataSource::Collection { profile_id, .. } => *profile_id,
-            DataSource::QueryResult { profile_id, .. } => (*profile_id)?,
-        };
-
-        app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .map(|connected| connected.connection.metadata().category)
-    }
-
     /// Filter verb and filter keyword ("SELECT * FROM" / "find" / "FROM") shown
     /// in the toolbar to the left of the source name and to the left of the filter
     /// input, respectively.
     ///
-    /// Derived purely from `DatabaseCategory` — no driver-id branching.
+    /// Derived from the source's facets: a collection its driver declares as
+    /// documents is read with `find`; every other source is read with SQL.
     pub(crate) fn filter_labels_for_source(
         source: &DataSource,
         app_state: &Entity<AppStateEntity>,
         cx: &App,
     ) -> (&'static str, &'static str) {
-        if source.is_table() {
-            return ("SELECT * FROM", "WHERE");
+        if !source.is_table()
+            && Self::source_facets(source, app_state, cx).contains(&ObjectFacet::Document)
+        {
+            return ("find", "WHERE");
         }
 
-        match Self::connection_category(source, app_state, cx) {
-            Some(DatabaseCategory::Document) => ("find", "WHERE"),
-            Some(DatabaseCategory::TimeSeries) => ("SELECT * FROM", "WHERE"),
-            _ => ("SELECT * FROM", "WHERE"),
-        }
+        ("SELECT * FROM", "WHERE")
     }
 
     /// Caption and label that name the source left of the filter input.
@@ -309,24 +283,29 @@ impl DataGridPanel {
         (prefix, source_name)
     }
 
-    /// Filter input placeholder text, derived from `DatabaseCategory`.
+    /// Filter input placeholder text, derived from the source's facets.
     ///
-    /// Returns an empty string for `TimeSeries` sources because `browse_collection`
-    /// on InfluxDB ignores the filter field — showing a misleading placeholder
-    /// would lie to the user.
+    /// Returns an empty string for a time-series collection because its
+    /// `browse_collection` ignores the filter field (InfluxDB) — showing a
+    /// misleading placeholder would lie to the user.
     pub(super) fn filter_placeholder_for_source(
         source: &DataSource,
         app_state: &Entity<AppStateEntity>,
         cx: &App,
     ) -> &'static str {
+        const SQL_EXAMPLE: &str = "e.g. id > 10 AND name LIKE '%test%'";
+
         if source.is_table() {
-            return "e.g. id > 10 AND name LIKE '%test%'";
+            return SQL_EXAMPLE;
         }
 
-        match Self::connection_category(source, app_state, cx) {
-            Some(DatabaseCategory::Document) => r#"e.g. {"name": {"$regex": "test"}}"#,
-            Some(DatabaseCategory::TimeSeries) => "",
-            _ => "e.g. id > 10 AND name LIKE '%test%'",
+        let facets = Self::source_facets(source, app_state, cx);
+        if facets.contains(&ObjectFacet::Document) {
+            r#"e.g. {"name": {"$regex": "test"}}"#
+        } else if super::facets::time_series_facet(&facets).is_some() {
+            ""
+        } else {
+            SQL_EXAMPLE
         }
     }
 }

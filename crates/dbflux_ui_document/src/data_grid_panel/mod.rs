@@ -4,6 +4,7 @@ mod chrome;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
+mod facets;
 pub(crate) mod filter_bar;
 mod grid;
 pub(crate) mod mutation_confirm;
@@ -18,6 +19,7 @@ mod render;
 mod result_search;
 pub(crate) mod row_inspector;
 pub(crate) mod side_island;
+mod table_documents;
 mod table_views;
 mod utils;
 pub(crate) mod value_panel;
@@ -659,9 +661,14 @@ struct ChartState {
     chart_source_time_range_panel:
         Option<Entity<dbflux_components::common::time_range::view::TimeRangePanel>>,
 
-    /// The source is a collection on a `TimeSeries` connection. Such a source
-    /// offers the Data / Chart / JSON result views and opens as a chart.
-    time_series_collection: bool,
+    /// The source carries a time-series facet. Such a source offers the
+    /// Data / Chart / JSON result views and opens as a chart.
+    time_series_source: bool,
+
+    /// The column a time-series source is indexed by, when its driver names
+    /// it. The chart puts it on the time axis instead of the first timestamp
+    /// column.
+    time_series_column: Option<String>,
 
     /// Whether the time-series collection already received its first result.
     /// Only that first result picks the chart view and seeds the axis bindings.
@@ -1236,10 +1243,11 @@ impl DataGridPanel {
         )
         .detach();
 
-        let category = Self::connection_category(&source, &app_state, cx);
-        let time_series_collection = matches!(source, DataSource::Collection { .. })
-            && category == Some(DatabaseCategory::TimeSeries);
-        let view_config = Self::view_config_for(&source, category);
+        let source_facets = Self::source_facets(&source, &app_state, cx);
+        let time_series = facets::time_series_facet(&source_facets).cloned();
+        let time_series_source = time_series.is_some();
+        let time_series_column = time_series.and_then(|facet| facet.time_column);
+        let view_config = Self::view_config_for(&source, &source_facets);
         let result_view_mode = ResultViewMode::Table;
 
         let connection_id = match &source {
@@ -1358,7 +1366,8 @@ impl DataGridPanel {
             chart: ChartState {
                 chart_shell: None,
                 chart_source_time_range_panel: None,
-                time_series_collection,
+                time_series_source,
+                time_series_column,
                 time_series_result_seen: false,
             },
             mutation_confirm: MutationConfirmState {
@@ -1502,21 +1511,20 @@ impl DataGridPanel {
         }
     }
 
-    /// View configuration a source opens with, given the category of the
-    /// connection behind it.
+    /// View configuration a source opens with, given its facets.
     ///
     /// A collection opens in the view of its first facet: the document tree
-    /// for a document database, the grid otherwise (a time-series collection
-    /// holds flat rows). Every other source keeps its own recommended view.
+    /// when its driver declares documents first, the grid otherwise. Every
+    /// other source keeps its own recommended view.
     fn view_config_for(
         source: &DataSource,
-        category: Option<DatabaseCategory>,
+        facets: &[dbflux_core::ObjectFacet],
     ) -> super::data_view::DataViewConfig {
         use super::data_view::{DataViewConfig, DataViewMode};
 
         match source {
             DataSource::Collection { .. } => DataViewConfig {
-                mode: DataViewMode::for_facets(&dbflux_core::default_collection_facets(category))
+                mode: DataViewMode::for_facets(facets)
                     .first()
                     .copied()
                     .unwrap_or_default(),

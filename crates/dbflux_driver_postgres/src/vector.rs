@@ -9,21 +9,21 @@ use dbflux_core::{
 
 use crate::driver::{POSTGRES_DIALECT, pg_quote_ident, pg_quote_string, value_to_pg_literal};
 
-/// Facets of a PostgreSQL table: tabular, plus one vector facet per
-/// pgvector `vector` column.
-pub(crate) fn table_facets(table: &TableInfo) -> Vec<ObjectFacet> {
-    let mut facets = vec![ObjectFacet::Tabular];
-
-    for column in table.columns.iter().flatten() {
-        if let Some(dimension) = parse_vector_type(&column.type_name) {
-            facets.push(ObjectFacet::Vector(VectorFacet {
-                column: column.name.clone(),
-                dimension,
-            }));
-        }
-    }
-
-    facets
+/// One vector facet per pgvector `vector` column of `table`.
+pub(crate) fn vector_facets(table: &TableInfo) -> Vec<ObjectFacet> {
+    table
+        .columns
+        .iter()
+        .flatten()
+        .filter_map(|column| {
+            parse_vector_type(&column.type_name).map(|dimension| {
+                ObjectFacet::Vector(VectorFacet {
+                    column: column.name.clone(),
+                    dimension,
+                })
+            })
+        })
+        .collect()
 }
 
 /// `Some(dimension)` when `type_name` is pgvector's `vector` or `vector(n)`.
@@ -238,34 +238,7 @@ impl QueryGenerator for PostgresQueryGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{CollectionPresentation, ColumnInfo, TableRef};
-
-    fn column(name: &str, type_name: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.to_string(),
-            type_name: type_name.to_string(),
-            nullable: true,
-            is_primary_key: false,
-            default_value: None,
-            enum_values: None,
-        }
-    }
-
-    fn table(columns: Vec<ColumnInfo>) -> TableInfo {
-        TableInfo {
-            name: "items".to_string(),
-            schema: Some("public".to_string()),
-            columns: Some(columns),
-            pseudo_columns: Box::default(),
-            indexes: None,
-            foreign_keys: None,
-            constraints: None,
-            sample_fields: None,
-            presentation: CollectionPresentation::default(),
-            child_items: None,
-            storage_hints: None,
-        }
-    }
+    use dbflux_core::TableRef;
 
     fn request(distance: VectorDistance, exclude: Vec<(String, Value)>) -> NearestNeighborRequest {
         NearestNeighborRequest {
@@ -277,43 +250,6 @@ mod tests {
             limit: 10,
             exclude_primary_key: exclude,
         }
-    }
-
-    #[test]
-    fn a_vector_column_adds_a_vector_facet() {
-        let facets = table_facets(&table(vec![
-            column("id", "integer"),
-            column("embedding", "vector(3)"),
-            column("unsized", "vector"),
-        ]));
-
-        assert_eq!(
-            facets,
-            vec![
-                ObjectFacet::Tabular,
-                ObjectFacet::Vector(VectorFacet {
-                    column: "embedding".to_string(),
-                    dimension: Some(3),
-                }),
-                ObjectFacet::Vector(VectorFacet {
-                    column: "unsized".to_string(),
-                    dimension: None,
-                }),
-            ]
-        );
-    }
-
-    #[test]
-    fn other_column_types_add_no_facet() {
-        let facets = table_facets(&table(vec![
-            column("id", "integer"),
-            column("half", "halfvec(3)"),
-            column("sparse", "sparsevec(3)"),
-            column("vectors", "vector_store"),
-            column("tags", "text[]"),
-        ]));
-
-        assert_eq!(facets, vec![ObjectFacet::Tabular]);
     }
 
     #[test]

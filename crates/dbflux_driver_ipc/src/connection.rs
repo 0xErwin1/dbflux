@@ -102,6 +102,15 @@ impl IpcConnection {
 }
 
 impl Connection for IpcConnection {
+    /// The RPC protocol carries no facets, so they come from the category the
+    /// external driver declared.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        dbflux_core::category_collection_facets(self.metadata().category)
+    }
+
     fn metadata(&self) -> &DriverMetadata {
         &self.metadata
     }

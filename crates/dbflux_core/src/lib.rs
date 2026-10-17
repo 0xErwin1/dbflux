@@ -254,10 +254,10 @@ pub use schema::{
     SchemaFingerprint, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
     SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SchemaSnapshotRecord,
     SnapshotDepth, TableAlterNormalizationError, TableChange, TableCreationMetadata, TableInfo,
-    TableKey, TableStorageHint, TimeSeriesFieldInfo, TimeSeriesSchema, VectorDistance, VectorFacet,
-    ViewInfo, check_drift_sync, check_schema_drift, classify_table_added, classify_table_removed,
-    default_collection_facets, diff_schema, diff_table_info, extract_referenced_tables,
-    normalize_selected_table_alter, topological_order,
+    TableKey, TableStorageHint, TimeSeriesFacet, TimeSeriesFieldInfo, TimeSeriesSchema,
+    VectorDistance, VectorFacet, ViewInfo, category_collection_facets, check_drift_sync,
+    check_schema_drift, classify_table_added, classify_table_removed, diff_schema, diff_table_info,
+    extract_referenced_tables, normalize_selected_table_alter, topological_order,
 };
 
 pub use sql::{

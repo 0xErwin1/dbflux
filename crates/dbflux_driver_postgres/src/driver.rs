@@ -2113,7 +2113,7 @@ impl Connection for PostgresConnection {
     }
 
     fn object_facets(&self, table: &TableInfo) -> Vec<dbflux_core::ObjectFacet> {
-        crate::vector::table_facets(table)
+        crate::facets::table_facets(table)
     }
 
     fn table_details(
@@ -2168,6 +2168,17 @@ impl Connection for PostgresConnection {
                 Box::default()
             }
         };
+        // A missing or unreadable TimescaleDB catalog only loses the time
+        // series view; the table details still load.
+        let hypertable = match crate::facets::hypertable_hint(&mut client, schema_name, table) {
+            Ok(hint) => hint,
+            Err(error) => {
+                log::warn!(
+                    "[SCHEMA] Cannot read the TimescaleDB dimensions of {schema_name}.{table}: {error}"
+                );
+                None
+            }
+        };
 
         log::debug!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -2189,7 +2200,7 @@ impl Connection for PostgresConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
-            storage_hints: None,
+            storage_hints: hypertable.map(|hint| vec![hint]),
             pseudo_columns,
         })
     }
