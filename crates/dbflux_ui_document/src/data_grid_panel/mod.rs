@@ -1500,21 +1500,21 @@ impl DataGridPanel {
     /// View configuration a source opens with, given the category of the
     /// connection behind it.
     ///
-    /// A collection of a document database opens in the document tree. A
-    /// time-series collection holds flat rows (time, tags, fields), so it opens
-    /// in the grid. Every other source keeps its own recommended view.
+    /// A collection opens in the view of its first facet: the document tree
+    /// for a document database, the grid otherwise (a time-series collection
+    /// holds flat rows). Every other source keeps its own recommended view.
     fn view_config_for(
         source: &DataSource,
         category: Option<DatabaseCategory>,
     ) -> super::data_view::DataViewConfig {
         use super::data_view::{DataViewConfig, DataViewMode};
 
-        match (source, category) {
-            (DataSource::Collection { .. }, Some(DatabaseCategory::Document)) => DataViewConfig {
-                mode: DataViewMode::Document,
-            },
-            (DataSource::Collection { .. }, Some(DatabaseCategory::TimeSeries)) => DataViewConfig {
-                mode: DataViewMode::Table,
+        match source {
+            DataSource::Collection { .. } => DataViewConfig {
+                mode: DataViewMode::for_facets(&dbflux_core::default_collection_facets(category))
+                    .first()
+                    .copied()
+                    .unwrap_or_default(),
             },
             _ => DataViewConfig::for_source(source),
         }

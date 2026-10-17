@@ -1,5 +1,5 @@
 use super::data_grid_panel::DataSource;
-use dbflux_core::QueryResultShape;
+use dbflux_core::{ObjectFacet, QueryResultShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DataViewMode {
@@ -26,10 +26,36 @@ impl DataViewMode {
         }
     }
 
+    /// The view a facet opens in, or `None` for a facet that is an action on
+    /// the grid rather than a view of its own (a vector column).
+    pub fn for_facet(facet: &ObjectFacet) -> Option<Self> {
+        match facet {
+            ObjectFacet::Tabular => Some(DataViewMode::Table),
+            ObjectFacet::Document => Some(DataViewMode::Document),
+            ObjectFacet::Vector(_) => None,
+            _ => None,
+        }
+    }
+
+    /// Views of an object with `facets`, in facet order, without repeats.
+    pub fn for_facets(facets: &[ObjectFacet]) -> Vec<Self> {
+        let mut modes = Vec::new();
+        for mode in facets.iter().filter_map(Self::for_facet) {
+            if !modes.contains(&mode) {
+                modes.push(mode);
+            }
+        }
+        modes
+    }
+
     pub fn available_for(source: &DataSource) -> Vec<Self> {
         match source {
-            DataSource::Table { .. } => vec![DataViewMode::Table],
-            DataSource::Collection { .. } => vec![DataViewMode::Document, DataViewMode::Table],
+            DataSource::Table { .. } => Self::for_facets(&[ObjectFacet::Tabular]),
+            // Any collection can be toggled to the document tree; the category
+            // only decides which view it opens in (`view_config_for`).
+            DataSource::Collection { .. } => {
+                Self::for_facets(&[ObjectFacet::Document, ObjectFacet::Tabular])
+            }
             DataSource::QueryResult { result, .. } => {
                 if result.shape == QueryResultShape::Json {
                     vec![DataViewMode::Table, DataViewMode::Document]
@@ -73,6 +99,25 @@ impl DataViewConfig {
 #[cfg(test)]
 mod tests {
     use super::DataViewMode;
+    use dbflux_core::{ObjectFacet, VectorFacet};
+
+    #[test]
+    fn facets_map_to_views_in_order_and_vectors_add_none() {
+        assert_eq!(
+            DataViewMode::for_facets(&[
+                ObjectFacet::Tabular,
+                ObjectFacet::Vector(VectorFacet {
+                    column: "embedding".to_string(),
+                    dimension: Some(3),
+                }),
+            ]),
+            vec![DataViewMode::Table]
+        );
+        assert_eq!(
+            DataViewMode::for_facets(&[ObjectFacet::Document, ObjectFacet::Tabular]),
+            vec![DataViewMode::Document, DataViewMode::Table]
+        );
+    }
     use crate::data_grid_panel::DataSource;
     use dbflux_core::{CollectionRef, Pagination, QueryResult, TableRef};
     use std::sync::Arc;
