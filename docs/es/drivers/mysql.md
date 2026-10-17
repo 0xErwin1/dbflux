@@ -21,6 +21,9 @@ Base de datos relacional open-source popular.
   consola llevan el límite de filas del editor.
 - Soporta ejecución de SQL, descubrimiento de schema, índices, foreign keys,
   constraints CHECK, y constraints UNIQUE.
+- Los valores `DECIMAL` se leen de forma exacta: el driver conserva como
+  `Value::Decimal` el texto que envía el servidor, así que no se redondean los
+  dígitos que un número de punto flotante no puede representar.
 - Soporta autenticación, túnel SSH, y modos de conexión URI/manual.
 - TLS con los cinco modos SSL nativos (`DISABLED`, `PREFERRED`, `REQUIRED`,
   `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifica la cadena del servidor
@@ -96,6 +99,10 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   acota bytes, trabajo del servidor, asignación de memoria del motor ni tiempo
   transcurrido. No se verificó MariaDB alojado.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
+- Las columnas `DECIMAL` se reportan como `ColumnKind::Float`, porque no existe
+  un tipo de columna decimal: los gráficos y otros usos del tipo de columna las
+  tratan como números de punto flotante, aunque los valores en sí se mantienen
+  exactos.
 
 - Instance Metrics devuelve un único dato por llamada (snapshot actual de `SHOW
   GLOBAL STATUS`), no una serie temporal histórica. Los contadores acumulativos
