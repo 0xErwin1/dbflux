@@ -1496,3 +1496,28 @@ fn form_section_without_icon_round_trips() {
     let response = DriverResponseBody::Hello(hello_response());
     assert_postcard_roundtrip(&response);
 }
+
+#[test]
+fn data_structure_variants_keep_their_postcard_indices() {
+    use dbflux_core::{
+        DataStructure, DocumentSchema, GraphSchema, KeyValueSchema, TimeSeriesSchema,
+    };
+
+    let cases = [
+        (DataStructure::Relational(RelationalSchema::default()), 0u8),
+        (DataStructure::Document(DocumentSchema::default()), 1),
+        (DataStructure::KeyValue(KeyValueSchema::default()), 2),
+        (DataStructure::Graph(GraphSchema::default()), 3),
+        (DataStructure::ReservedWideColumn, 4),
+        (DataStructure::TimeSeries(TimeSeriesSchema::default()), 5),
+    ];
+
+    for (structure, expected_index) in cases {
+        let bytes = postcard::to_allocvec(&structure).expect("encode data structure");
+        assert_eq!(bytes.first(), Some(&expected_index), "{structure:?}");
+
+        let decoded: DataStructure = postcard::from_bytes(&bytes).expect("decode data structure");
+        let reencoded = postcard::to_allocvec(&decoded).expect("re-encode data structure");
+        assert_eq!(reencoded, bytes, "{structure:?}");
+    }
+}

@@ -332,7 +332,7 @@ impl SqlDialect for PostgresDialect {
     }
 }
 
-static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
+pub(crate) static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
 
 // =============================================================================
 // PostgreSQL Code Generator
@@ -2112,6 +2112,10 @@ impl Connection for PostgresConnection {
         SchemaLoadingStrategy::ConnectionPerDatabase
     }
 
+    fn object_facets(&self, table: &TableInfo) -> Vec<dbflux_core::ObjectFacet> {
+        crate::vector::table_facets(table)
+    }
+
     fn table_details(
         &self,
         _database: &str,
@@ -2605,8 +2609,7 @@ impl Connection for PostgresConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
-        Some(&GENERATOR)
+        Some(&crate::vector::POSTGRES_QUERY_GENERATOR)
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
@@ -3484,7 +3487,7 @@ fn json_value_to_pg_literal(value: &JsonValue) -> String {
 /// Convert a Value to a safe PostgreSQL literal string.
 ///
 /// Uses escaped single-quoted literals for readable generated SQL.
-fn value_to_pg_literal(value: &Value) -> String {
+pub(crate) fn value_to_pg_literal(value: &Value) -> String {
     match value {
         Value::Null => "NULL".to_string(),
         Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
@@ -3528,7 +3531,7 @@ fn pg_escape_string(s: &str) -> String {
 }
 
 /// Quote a string as a PostgreSQL literal.
-fn pg_quote_string(s: &str) -> String {
+pub(crate) fn pg_quote_string(s: &str) -> String {
     format!("'{}'", pg_escape_string(s))
 }
 
@@ -6036,7 +6039,7 @@ fn has_application_name(conn_str: &str) -> bool {
     })
 }
 
-fn pg_quote_ident(ident: &str) -> String {
+pub(crate) fn pg_quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
     format!("\"{}\"", ident.replace('"', "\"\""))
 }

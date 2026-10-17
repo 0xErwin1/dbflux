@@ -116,6 +116,8 @@ pub enum ContextMenuAction {
     UnsetField,
     /// Drop the staged edit of one cell.
     RevertCell,
+    /// Show the rows nearest to this row by its vector column.
+    FindSimilarRows,
 }
 
 /// Events emitted by the DataTable component.

@@ -75,6 +75,7 @@ fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> 
     let command = match action {
         ContextMenuAction::InspectRow => Command::ToggleRowInspector,
         ContextMenuAction::ViewValue => Command::ToggleValuePanel,
+        ContextMenuAction::FindSimilarRows => Command::FindSimilarRows,
         _ => return None,
     };
 

@@ -8,10 +8,11 @@
 
 use dbflux_core::{
     CollectionRef, ColumnAssignment, ConnectionProfile, DbConfig, DbDriver, DbError,
-    DescribeRequest, ExplainRequest, MutationRequest, OrderByColumn, Pagination, QueryRequest,
-    ReadOnlyEnforcement, RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy,
-    SemanticFilter, SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableBrowseRequest,
-    TableCountRequest, TableRef, TransactionStateNote, Value, WhereOperator,
+    DescribeRequest, ExplainRequest, MutationRequest, NearestNeighborRequest, ObjectFacet,
+    OrderByColumn, Pagination, QueryRequest, ReadOnlyEnforcement, RecordIdentity, RowDelete,
+    RowInsert, RowPatch, SchemaLoadingStrategy, SemanticFilter, SemanticRequest, SqlUpdateRequest,
+    SqlUpsertRequest, TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote, Value,
+    VectorDistance, VectorFacet, WhereOperator,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -482,6 +483,118 @@ fn postgres_pgvector_text_matches_server_output_and_crud_returning() -> Result<(
         assert_eq!(
             deleted.returning_row.as_ref().and_then(|row| row.get(1)),
             Some(&server_value)
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon and the pinned pgvector PostgreSQL 16 image"]
+fn postgres_vector_column_finds_nearest_neighbors() -> Result<(), DbError> {
+    containers::with_pgvector_postgres_16_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE EXTENSION vector"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE embeddings (id INTEGER PRIMARY KEY, label TEXT, embedding vector(3))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO embeddings VALUES
+                (1, 'anchor', '[1,0,0]'),
+                (2, 'far', '[2,0,0]'),
+                (3, 'farthest', '[0,3,0]'),
+                (4, 'near', '[1,0.5,0]')",
+        ))?;
+
+        let details = connection.table_details("postgres", Some("public"), "embeddings")?;
+        assert_eq!(
+            connection.object_facets(&details),
+            vec![
+                ObjectFacet::Tabular,
+                ObjectFacet::Vector(VectorFacet {
+                    column: "embedding".to_string(),
+                    dimension: Some(3),
+                }),
+            ]
+        );
+
+        let anchor = connection.execute(&QueryRequest::new(
+            "SELECT embedding FROM embeddings WHERE id = 1",
+        ))?;
+        let generated = connection
+            .query_generator()
+            .expect("PostgreSQL has a query generator")
+            .generate_nearest_neighbors(&NearestNeighborRequest {
+                table: TableRef::with_schema("public", "embeddings"),
+                database: Some("postgres".to_string()),
+                column: "embedding".to_string(),
+                anchor: anchor.rows[0][0].clone(),
+                distance: VectorDistance::L2,
+                limit: 10,
+                exclude_primary_key: vec![("id".to_string(), Value::Int(1))],
+            })
+            .expect("nearest-neighbor SQL renders");
+
+        let result = connection.execute(&QueryRequest::new(generated.text))?;
+        let id_index = result.columns.iter().position(|c| c.name == "id").unwrap();
+        let distance_index = result
+            .columns
+            .iter()
+            .position(|c| c.name == "nearest_distance")
+            .expect("the result carries a nearest_distance column");
+
+        let ids: Vec<Value> = result
+            .rows
+            .iter()
+            .map(|row| row[id_index].clone())
+            .collect();
+        assert_eq!(ids, vec![Value::Int(4), Value::Int(2), Value::Int(3)]);
+
+        let distances: Vec<f64> = result
+            .rows
+            .iter()
+            .map(|row| match &row[distance_index] {
+                Value::Float(distance) => *distance,
+                other => panic!("distance is not a float: {other:?}"),
+            })
+            .collect();
+        let expected = [0.5, 1.0, 10f64.sqrt()];
+        for (actual, expected) in distances.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+        }
+
+        // A table with its own `distance` column must still order by the
+        // computed distance without an ambiguity error.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE scored (id INT PRIMARY KEY, distance REAL, embedding vector(3))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO scored VALUES (1, 9, '[1,0,0]'), (2, 8, '[2,0,0]'), (3, 7, NULL)",
+        ))?;
+        let generated = connection
+            .query_generator()
+            .expect("PostgreSQL has a query generator")
+            .generate_nearest_neighbors(&NearestNeighborRequest {
+                table: TableRef::with_schema("public", "scored"),
+                database: Some("postgres".to_string()),
+                column: "embedding".to_string(),
+                anchor: Value::Text("[1,0,0]".to_string()),
+                distance: VectorDistance::L2,
+                limit: 10,
+                exclude_primary_key: vec![("id".to_string(), Value::Int(1))],
+            })
+            .expect("nearest-neighbor SQL renders");
+        let scored = connection.execute(&QueryRequest::new(generated.text))?;
+        assert_eq!(
+            scored.rows.len(),
+            1,
+            "the NULL vector row is not a neighbor"
+        );
+        let names: Vec<&str> = scored.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["id", "distance", "embedding", "nearest_distance"]
         );
 
         Ok(())

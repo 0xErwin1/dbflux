@@ -5,30 +5,8 @@ use dbflux_core::{DatabaseCategory, PipelineState, RelationKind, SchemaObjectKin
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
 pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -> String {
-    match category {
-        DatabaseCategory::Relational => {
-            dbflux_i18n::t!("sidebar.tree.container.relational", count = count)
-        }
-        DatabaseCategory::Document => {
-            dbflux_i18n::t!("sidebar.tree.container.document", count = count)
-        }
-        DatabaseCategory::KeyValue => {
-            dbflux_i18n::t!("sidebar.tree.container.key_value", count = count)
-        }
-        DatabaseCategory::Graph => dbflux_i18n::t!("sidebar.tree.container.graph", count = count),
-        DatabaseCategory::TimeSeries => {
-            dbflux_i18n::t!("sidebar.tree.container.time_series", count = count)
-        }
-        DatabaseCategory::WideColumn => {
-            dbflux_i18n::t!("sidebar.tree.container.wide_column", count = count)
-        }
-        DatabaseCategory::LogStream => {
-            dbflux_i18n::t!("sidebar.tree.container.log_stream", count = count)
-        }
-        DatabaseCategory::ObjectStorage => {
-            dbflux_i18n::t!("sidebar.tree.container.object_storage", count = count)
-        }
-    }
+    let key = dbflux_components::category::category_presentation(category).container_label_key;
+    dbflux_i18n::t!(key, count = count)
 }
 
 /// Translated page indicator for the collection child picker, e.g.

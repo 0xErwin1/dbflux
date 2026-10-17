@@ -342,16 +342,7 @@ impl AppIcon {
             Icon::Duckdb => Self::BrandDuckdb,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
-            Icon::Database => match category {
-                DatabaseCategory::Document => Self::Braces,
-                DatabaseCategory::KeyValue => Self::KeyRound,
-                DatabaseCategory::ObjectStorage => Self::Boxes,
-                DatabaseCategory::Relational
-                | DatabaseCategory::Graph
-                | DatabaseCategory::TimeSeries
-                | DatabaseCategory::WideColumn
-                | DatabaseCategory::LogStream => Self::Database,
-            },
+            Icon::Database => crate::category::category_presentation(category).fallback_icon,
         }
     }
 }
@@ -385,15 +376,7 @@ impl DriverIconTone {
             Icon::Redis => Self::Danger,
             Icon::Influxdb => Self::Violet,
             Icon::S3 | Icon::Logs => Self::Warning,
-            Icon::Database => match category {
-                DatabaseCategory::Relational
-                | DatabaseCategory::Graph
-                | DatabaseCategory::WideColumn => Self::Info,
-                DatabaseCategory::Document => Self::Success,
-                DatabaseCategory::KeyValue => Self::Danger,
-                DatabaseCategory::TimeSeries => Self::Violet,
-                DatabaseCategory::ObjectStorage | DatabaseCategory::LogStream => Self::Warning,
-            },
+            Icon::Database => crate::category::category_presentation(category).fallback_tone,
         }
     }
 

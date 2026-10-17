@@ -856,6 +856,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         self.pk_requery_pending = false;
+        self.nearest_neighbors = None;
 
         // Determine sort state from order_by for visual indicator
         let initial_sort = order_by.first().and_then(|col| {

@@ -312,6 +312,16 @@ fn results_layer_owns_navigation_and_crud_letters() {
     }
 }
 
+#[test]
+fn results_layer_binds_shift_s_to_find_similar_rows() {
+    let keymap = default_keymap();
+    let chord = KeyChord::new("s", Modifiers::shift());
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &chord),
+        Some(Command::FindSimilarRows),
+    );
+}
+
 /// `space` in the Results layer must resolve to `ExpandCollapse`, matching
 /// the Sidebar layer's binding, so the object browser's "Space
 /// preview"/"Space properties" footer hints are actually live.

@@ -1277,6 +1277,14 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Paradigm facets of a table whose details are loaded.
+    ///
+    /// The default is tabular only. A driver adds facets it can derive from
+    /// the table's columns, such as a vector column.
+    fn object_facets(&self, _table: &TableInfo) -> Vec<crate::ObjectFacet> {
+        vec![crate::ObjectFacet::Tabular]
+    }
+
     /// Fetch columns and indexes for a table.
     fn table_details(
         &self,
@@ -2220,6 +2228,28 @@ pub trait ConnectionExt {
 mod tests {
     use super::*;
     use crate::{DbError, DbKind, DriverMetadata, QueryRequest, QueryResult, SchemaSnapshot};
+
+    #[test]
+    fn object_facets_default_to_tabular() {
+        let table = TableInfo {
+            name: "items".to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            pseudo_columns: Box::default(),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: crate::CollectionPresentation::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+
+        assert_eq!(
+            StubConnection.object_facets(&table),
+            vec![crate::ObjectFacet::Tabular]
+        );
+    }
 
     /// Minimal Connection stub that only implements the required methods and
     /// relies on default impls for everything else.

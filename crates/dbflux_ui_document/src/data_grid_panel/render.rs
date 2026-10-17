@@ -1279,6 +1279,9 @@ impl DataGridPanel {
                     .when(self.builder_notice_visible(), |d| {
                         d.child(self.render_builder_notice(theme, cx))
                     })
+                    .when_some(self.nearest_neighbor_search().cloned(), |d, search| {
+                        d.child(self.render_nearest_neighbors_notice(&search, theme, cx))
+                    })
                     .child(field)
                     .when_some(toolbar_error, |d, err| d.child(err)),
             )

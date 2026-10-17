@@ -43,6 +43,10 @@ pub(crate) enum ToolbarAction {
     OpenBuilder,
     /// Reset in the "rows come from the builder query" notice.
     ResetBuilder,
+    /// The distance button of the nearest-neighbors notice.
+    NearestDistance,
+    /// Back to table in the nearest-neighbors notice.
+    ClearNearest,
     /// Save in the edit bar.
     SaveChanges,
     /// Revert in the edit bar.
@@ -138,6 +142,8 @@ impl ToolbarAction {
             ToolbarAction::ResultView(ResultViewMode::Raw) => "result-view-raw",
             ToolbarAction::OpenBuilder => "open-builder",
             ToolbarAction::ResetBuilder => "reset-builder",
+            ToolbarAction::NearestDistance => "nearest-neighbors-distance",
+            ToolbarAction::ClearNearest => "nearest-neighbors-clear",
             ToolbarAction::SaveChanges => "save-changes",
             ToolbarAction::RevertChanges => "revert-changes",
             ToolbarAction::AutoRefresh => "auto-refresh",
@@ -202,6 +208,8 @@ impl ToolbarAction {
             ToolbarAction::ResultView(mode) => DataGridPanel::result_mode_icon(mode),
             ToolbarAction::OpenBuilder => AppIcon::ListFilter,
             ToolbarAction::ResetBuilder => AppIcon::RotateCcw,
+            ToolbarAction::NearestDistance => AppIcon::Search,
+            ToolbarAction::ClearNearest => AppIcon::X,
             ToolbarAction::SaveChanges => AppIcon::Save,
             ToolbarAction::RevertChanges => AppIcon::RotateCcw,
             ToolbarAction::AutoRefresh => AppIcon::Clock,
@@ -295,6 +303,11 @@ impl DataGridPanel {
 
         if filter_row_shown && self.builder_notice_visible() {
             actions.push(ToolbarAction::ResetBuilder);
+        }
+
+        if filter_row_shown && self.nearest_neighbor_search().is_some() {
+            actions.push(ToolbarAction::NearestDistance);
+            actions.push(ToolbarAction::ClearNearest);
         }
 
         if filter_row_shown && self.can_toggle_view() {
@@ -502,6 +515,16 @@ impl DataGridPanel {
             ToolbarAction::ResetBuilder => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.reset_builder")
             }
+            ToolbarAction::NearestDistance => dbflux_i18n::t!(
+                "document.data.context_menu.toolbar.nearest_distance",
+                distance = self
+                    .nearest_neighbor_search()
+                    .map(|search| super::super::nearest_neighbors::distance_label(search.distance))
+                    .unwrap_or_default()
+            ),
+            ToolbarAction::ClearNearest => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_clear")
+            }
             ToolbarAction::SaveChanges => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.save_changes")
             }
@@ -704,6 +727,8 @@ impl DataGridPanel {
                 self.reset_builder_query(window, cx);
                 cx.notify();
             }
+            ToolbarAction::NearestDistance => self.cycle_nearest_neighbor_distance(cx),
+            ToolbarAction::ClearNearest => self.clear_nearest_neighbors(window, cx),
             // A document collection commits and reverts through its edit
             // bar's Commit and Revert, which patch fields per document.
             ToolbarAction::SaveChanges if self.commits_document_patches(cx) => {
