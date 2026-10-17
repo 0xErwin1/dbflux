@@ -6,9 +6,9 @@
 //! referenced table and fetches each group through one
 //! `Connection::fetch_rows_by_pks` batch, projected down to the referenced
 //! table's pk and display columns. When every group of the round has landed
-//! it swaps the raw-id text cells for `CellValue::fk_reference` in a single
-//! model swap, which draws the referenced row's display column beside the id
-//! while editing, copying and mutations keep carrying the id.
+//! it attaches the resolved labels to the raw-id cells in a single model
+//! swap, which draws the referenced row's display column beside the id
+//! while editing, copying and mutations keep carrying the typed id.
 //!
 //! The whole pass is gated on the `grid_fk_labels` setting (off by default):
 //! with it off the grid shows raw ids and starts no resolution fetches. The
@@ -194,8 +194,8 @@ fn participates_in_foreign_key(name: &str, foreign_keys: &[ForeignKeyInfo]) -> b
 }
 
 /// The model with every foreign-key cell whose id the cache resolved
-/// showing `CellValue::fk_reference`, and every other cell unchanged.
-/// `None` when no cell changed.
+/// carrying its label through [`CellValue::with_fk_label`], and every other
+/// cell unchanged. `None` when no cell changed.
 fn substitute_fk_references(
     model: &TableModel,
     targets: &[FkTarget],
@@ -213,8 +213,11 @@ fn substitute_fk_references(
                 continue;
             }
 
-            let raw_id = cell.edit_text();
-            let key = (target.schema.clone(), target.table.clone(), raw_id.clone());
+            let key = (
+                target.schema.clone(),
+                target.table.clone(),
+                cell.edit_text(),
+            );
             let Some(label) = cache.get(&key).cloned().flatten() else {
                 continue;
             };
@@ -225,7 +228,7 @@ fn substitute_fk_references(
                 .get_mut(row_ix)
                 .and_then(|row| row.cells.get_mut(target.col))
             {
-                *cell = CellValue::fk_reference(&label, &raw_id);
+                *cell = cell.clone().with_fk_label(&label);
             }
         }
     }
@@ -905,6 +908,38 @@ mod tests {
                 .is_none(),
             "a column that is not a foreign key stays untouched"
         );
+    }
+
+    #[test]
+    fn substitute_keeps_the_fk_cells_typed_value() {
+        let result = QueryResult::table(
+            vec![result_column("id"), result_column("customer_id")],
+            vec![vec![Value::Int(1), Value::Int(8)]],
+            None,
+            Duration::ZERO,
+        );
+        let model = TableModel::from(&result);
+        let targets = [FkTarget {
+            col: 1,
+            schema: None,
+            table: "customers".to_string(),
+            pk_column: "id".to_string(),
+        }];
+        let cache = HashMap::from([(
+            (None, "customers".to_string(), "8".to_string()),
+            Some("Alice".to_string()),
+        )]);
+
+        let new_model = substitute_fk_references(&model, &targets, &cache).expect("cells resolve");
+
+        let resolved = new_model.cell(0, 1).expect("the cell exists");
+        assert_eq!(
+            resolved.to_value(),
+            Value::Int(8),
+            "the label must not change the cell's kind"
+        );
+        assert_eq!(resolved.edit_text(), "8");
+        assert_eq!(resolved.display_text().as_ref(), "Alice · #8");
     }
 
     #[test]
