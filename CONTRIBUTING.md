@@ -75,9 +75,13 @@ Scope is the affected area: a driver name (`postgres`, `mongodb`), `ui`, `mcp`, 
 2. Fill in the [PR template](.github/pull_request_template.md): summary, what it resolves, how it was solved, validation evidence, and where it was tested.
 3. Link the issue it closes with `Resolves #N` in the description.
 4. Apply the labels that describe the change. See [Label Guide](#label-guide) below.
-5. Keep diffs reviewable. PRs over ~400 changed lines should be split into stacked/chained PRs unless the maintainer approves a `size:exception`.
+5. Keep diffs reviewable, around 400 changed lines per PR. Split a larger feature into several PRs that each branch from `main` and stand on their own, merged in order. Avoid long stacks of PRs based on each other: PRs are squash-merged, so every merge rewrites the base of the next one and the stack conflicts again. A larger PR needs a maintainer-approved `size:exception`.
 6. CI must pass (`tests.yml`, `style.yml`). Re-run locally before pushing if anything fails.
-7. A documentation change ships with its translations. When you edit a page under `docs/`, a driver README, or a root document the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`), apply the same change to every existing counterpart under `docs/es/` and `docs/zh_Hans/` in the same PR. A page with no counterpart yet needs none. See [Translations](docs/TRANSLATIONS.md).
+7. A documentation change ships with its translations. When you edit a page under `docs/`, a driver README, or a root document the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`), apply the same change to every existing counterpart under `docs/es/`, `docs/ko/` and `docs/zh_Hans/` in the same PR. A page with no counterpart yet needs none. See [Translations](docs/TRANSLATIONS.md).
+8. Keep functions under about 100 lines. A new function over that limit is split into helpers before review, and so is an existing function you substantially rewrite. Changing a few lines of an existing long function does not require refactoring it.
+9. Keep source files under about 1000 lines of production code (test modules excluded). When a change pushes a file past that, split it by responsibility into a module directory: `foo.rs` becomes `foo/mod.rs` plus submodules under `foo/`, in the same PR or in an issue opened alongside it. Tests live in the module's own `tests` submodule (`foo/tests.rs`, or `foo/tests/mod.rs` with one file per topic once it grows), declared with `#[cfg(test)] mod tests;`, never as loose sibling files such as `foo_tests.rs`.
+
+Existing functions and files that already exceed these limits are exempt until they are refactored; they do not need to change before an unrelated PR can merge. Maintainers may skip the issue-first step and the PR size limit, but not the function and file size limits.
 
 
 ### Commit messages and the changelog
@@ -142,6 +146,10 @@ cargo nextest run -p dbflux_components accessibility
 ```
 
 ## Issues
+
+Open the issue first and wait for a maintainer to approve it before starting work on a feature or a behavior change. Approval is the `status:approved` label on the issue. A proposal often needs adjusting before it is built, and an approved issue keeps you from spending time on code that has to be redone.
+
+A bug fix does not need to wait: open the issue and the fix together, and link the issue from the PR.
 
 Before opening an issue:
 

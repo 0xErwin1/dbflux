@@ -31,6 +31,8 @@ license: MIT
 - In `Validation`, include only commands or scenarios that were actually run
 - In `Where was this tested?`, mark only real environments; do not claim coverage that did not happen
 - Reference linked issues only when they actually exist; do not invent issue requirements
+- For a feature or behavior change, check that the linked issue carries the `status:approved` label before opening the PR; a bug fix does not need it
+- Keep each PR around 400 changed lines; split larger work into independent PRs that branch from `main` rather than stacks, since PRs are squash-merged. New or substantially rewritten code keeps functions under ~100 lines and files under ~1000 lines of production code, with tests in the module's `tests` submodule
 - Do not invent labels such as `area:*`; take them from the taxonomy in `CONTRIBUTING.md`
 - State the labels the change needs in `Labels to apply`, and do not silently drop the section when the author has no write access to apply them
 - Push with `git push -u origin <branch>` if the branch is not yet tracked
