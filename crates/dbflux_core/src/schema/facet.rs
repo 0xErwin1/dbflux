@@ -95,9 +95,7 @@ mod tests {
             None,
             Some(DatabaseCategory::Relational),
             Some(DatabaseCategory::KeyValue),
-            Some(DatabaseCategory::Graph),
             Some(DatabaseCategory::TimeSeries),
-            Some(DatabaseCategory::WideColumn),
         ] {
             assert_eq!(
                 default_collection_facets(category),

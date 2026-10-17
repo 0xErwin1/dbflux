@@ -472,9 +472,7 @@ mod tests {
             (DatabaseCategory::Document, AppIcon::Braces),
             (DatabaseCategory::KeyValue, AppIcon::KeyRound),
             (DatabaseCategory::ObjectStorage, AppIcon::Boxes),
-            (DatabaseCategory::Graph, AppIcon::Database),
             (DatabaseCategory::TimeSeries, AppIcon::Database),
-            (DatabaseCategory::WideColumn, AppIcon::Database),
             (DatabaseCategory::LogStream, AppIcon::Database),
         ];
 

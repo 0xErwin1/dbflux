@@ -14,8 +14,8 @@ Every driver exposes a `DriverMetadata` value (defined in
 adapts purely from this metadata. The relevant fields are:
 
 - **`DatabaseCategory`** — selects the view model and terminology. Values:
-  `Relational`, `Document`, `KeyValue`, `Graph`, `TimeSeries`, `WideColumn`,
-  `LogStream`. (Not every value has a shipping driver.)
+  `Relational`, `Document`, `KeyValue`, `TimeSeries`, `LogStream`,
+  `ObjectStorage`. A category lands together with a driver that declares it.
 - **`QueryLanguage`** — drives editor mode, placeholder text, and query parsing.
   Values include `Sql`, `MongoQuery`, `RedisCommands`, `Cypher`, `InfluxQuery`,
   `Flux`, `Cql`, `CloudWatchLogsInsightsQl`, `OpenSearchPpl`, `OpenSearchSql`,

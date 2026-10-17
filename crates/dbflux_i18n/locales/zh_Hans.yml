@@ -458,10 +458,9 @@ connection_manager:
       relational: "关系型"
       document: "文档"
       key_value: "键值"
-      wide_column: "宽列"
       time_series_and_logs: "时间序列和日志"
-      graph: "图"
       object_storage: "对象存储"
+      other: "其他"
   export:
     target:
       connection: 连接
@@ -5078,9 +5077,7 @@ sidebar:
       relational: "表（%{count}）"
       document: "集合（%{count}）"
       key_value: "键（%{count}）"
-      graph: "节点（%{count}）"
       time_series: "测量（%{count}）"
-      wide_column: "表（%{count}）"
       log_stream: "日志组（%{count}）"
       object_storage: "存储桶（%{count}）"
     folder:

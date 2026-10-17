@@ -19,10 +19,10 @@ pub(super) enum PickerSection {
     Relational,
     Document,
     KeyValue,
-    WideColumn,
     TimeSeriesAndLogs,
-    Graph,
     ObjectStorage,
+    /// Categories with no section of their own (the reserved wire slots).
+    Other,
 }
 
 /// Display order of the picker sections.
@@ -30,10 +30,9 @@ const SECTION_ORDER: &[PickerSection] = &[
     PickerSection::Relational,
     PickerSection::Document,
     PickerSection::KeyValue,
-    PickerSection::WideColumn,
     PickerSection::TimeSeriesAndLogs,
-    PickerSection::Graph,
     PickerSection::ObjectStorage,
+    PickerSection::Other,
 ];
 
 impl PickerSection {
@@ -42,10 +41,9 @@ impl PickerSection {
             DatabaseCategory::Relational => Self::Relational,
             DatabaseCategory::Document => Self::Document,
             DatabaseCategory::KeyValue => Self::KeyValue,
-            DatabaseCategory::WideColumn => Self::WideColumn,
             DatabaseCategory::TimeSeries | DatabaseCategory::LogStream => Self::TimeSeriesAndLogs,
-            DatabaseCategory::Graph => Self::Graph,
             DatabaseCategory::ObjectStorage => Self::ObjectStorage,
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => Self::Other,
         }
     }
 
@@ -54,10 +52,9 @@ impl PickerSection {
             Self::Relational => "relational",
             Self::Document => "document",
             Self::KeyValue => "key_value",
-            Self::WideColumn => "wide_column",
             Self::TimeSeriesAndLogs => "time_series_and_logs",
-            Self::Graph => "graph",
             Self::ObjectStorage => "object_storage",
+            Self::Other => "other",
         };
 
         dbflux_i18n::t!(&format!("connection_manager.driver_select.section.{key}"))
@@ -666,9 +663,9 @@ mod category_order_tests {
             DatabaseCategory::Relational,
             DatabaseCategory::Document,
             DatabaseCategory::KeyValue,
-            DatabaseCategory::Graph,
+            DatabaseCategory::ReservedGraph,
             DatabaseCategory::TimeSeries,
-            DatabaseCategory::WideColumn,
+            DatabaseCategory::ReservedWideColumn,
             DatabaseCategory::LogStream,
             DatabaseCategory::ObjectStorage,
         ];

@@ -51,8 +51,10 @@ pub enum DataStructure {
     /// Key-value stores (Redis, Valkey, etc.)
     KeyValue(KeyValueSchema),
 
-    /// Graph databases (Neo4j, Neptune, etc.)
-    Graph(GraphSchema),
+    /// Holds postcard wire index 3 (formerly the never-built graph schema) so
+    /// that the variants after it keep their indices for driver RPC peers.
+    #[doc(hidden)]
+    ReservedGraph,
 
     /// Holds postcard wire index 4 (formerly the never-built wide-column schema)
     /// so that `TimeSeries` keeps index 5 for peers on the driver RPC protocol.
@@ -66,6 +68,139 @@ pub enum DataStructure {
 impl Default for DataStructure {
     fn default() -> Self {
         Self::Relational(RelationalSchema::default())
+    }
+}
+
+/// What every schema with a database list exposes, so snapshot-wide
+/// operations walk any paradigm the same way instead of matching each one.
+trait DatabaseScoped {
+    fn databases(&self) -> &[DatabaseInfo];
+
+    fn current_database(&self) -> Option<&str>;
+
+    fn databases_mut(&mut self) -> &mut Vec<DatabaseInfo>;
+
+    /// Forgets the current database and the objects loaded for it.
+    fn clear_current_database(&mut self);
+
+    /// Removes the object `target` names from the current database. Schemas
+    /// with no droppable objects keep everything.
+    fn remove_current_object(&mut self, _target: &SchemaDropTarget) {}
+}
+
+impl DataStructure {
+    /// The schema as a database-scoped one, the single place that knows which
+    /// paradigms hold a database list. `None` for key-value stores, whose
+    /// keyspaces are not databases, and the reserved wire slots.
+    fn database_scoped(&self) -> Option<&dyn DatabaseScoped> {
+        match self {
+            DataStructure::Relational(schema) => Some(schema),
+            DataStructure::Document(schema) => Some(schema),
+            DataStructure::TimeSeries(schema) => Some(schema),
+            DataStructure::KeyValue(_)
+            | DataStructure::ReservedGraph
+            | DataStructure::ReservedWideColumn => None,
+        }
+    }
+
+    fn database_scoped_mut(&mut self) -> Option<&mut dyn DatabaseScoped> {
+        match self {
+            DataStructure::Relational(schema) => Some(schema),
+            DataStructure::Document(schema) => Some(schema),
+            DataStructure::TimeSeries(schema) => Some(schema),
+            DataStructure::KeyValue(_)
+            | DataStructure::ReservedGraph
+            | DataStructure::ReservedWideColumn => None,
+        }
+    }
+}
+
+impl DatabaseScoped for RelationalSchema {
+    fn databases(&self) -> &[DatabaseInfo] {
+        &self.databases
+    }
+
+    fn current_database(&self) -> Option<&str> {
+        self.current_database.as_deref()
+    }
+
+    fn databases_mut(&mut self) -> &mut Vec<DatabaseInfo> {
+        &mut self.databases
+    }
+
+    fn clear_current_database(&mut self) {
+        self.current_database = None;
+        self.schemas.clear();
+        self.tables.clear();
+        self.views.clear();
+    }
+
+    fn remove_current_object(&mut self, target: &SchemaDropTarget) {
+        if let Some(schema_name) = target.schema.as_deref() {
+            if let Some(db_schema) = self
+                .schemas
+                .iter_mut()
+                .find(|entry| entry.name == schema_name)
+            {
+                db_schema.remove_object(target);
+            }
+            return;
+        }
+
+        match target.kind {
+            SchemaObjectKind::Table => {
+                self.tables.retain(|entry| entry.name != target.name);
+            }
+            SchemaObjectKind::View => {
+                self.views.retain(|entry| entry.name != target.name);
+            }
+            SchemaObjectKind::Collection | SchemaObjectKind::Database => {}
+        }
+    }
+}
+
+impl DatabaseScoped for DocumentSchema {
+    fn databases(&self) -> &[DatabaseInfo] {
+        &self.databases
+    }
+
+    fn current_database(&self) -> Option<&str> {
+        self.current_database.as_deref()
+    }
+
+    fn databases_mut(&mut self) -> &mut Vec<DatabaseInfo> {
+        &mut self.databases
+    }
+
+    fn clear_current_database(&mut self) {
+        self.current_database = None;
+        self.collections.clear();
+    }
+
+    fn remove_current_object(&mut self, target: &SchemaDropTarget) {
+        if target.kind == SchemaObjectKind::Collection {
+            self.collections.retain(|entry| entry.name != target.name);
+        }
+    }
+}
+
+impl DatabaseScoped for TimeSeriesSchema {
+    fn databases(&self) -> &[DatabaseInfo] {
+        &self.databases
+    }
+
+    fn current_database(&self) -> Option<&str> {
+        self.current_database.as_deref()
+    }
+
+    fn databases_mut(&mut self) -> &mut Vec<DatabaseInfo> {
+        &mut self.databases
+    }
+
+    fn clear_current_database(&mut self) {
+        self.current_database = None;
+        self.measurements.clear();
+        self.retention_policies.clear();
     }
 }
 
@@ -113,22 +248,6 @@ pub struct KeyValueSchema {
     pub current_keyspace: Option<u32>,
 }
 
-/// Schema for graph databases (Neo4j, Neptune, etc.)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GraphSchema {
-    pub databases: Vec<DatabaseInfo>,
-    pub current_database: Option<String>,
-
-    /// Node labels in the graph.
-    pub node_labels: Vec<NodeLabelInfo>,
-
-    /// Relationship types in the graph.
-    pub relationship_types: Vec<RelationshipTypeInfo>,
-
-    /// Property keys used across nodes/relationships.
-    pub property_keys: Vec<String>,
-}
-
 /// Schema for time-series databases (InfluxDB, TimescaleDB, QuestDB)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TimeSeriesSchema {
@@ -140,30 +259,6 @@ pub struct TimeSeriesSchema {
 
     /// Retention policies.
     pub retention_policies: Vec<RetentionPolicyInfo>,
-}
-
-// =============================================================================
-// Graph Schema Types
-// =============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeLabelInfo {
-    pub name: String,
-    pub count: Option<u64>,
-    pub properties: Vec<PropertyInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelationshipTypeInfo {
-    pub name: String,
-    pub count: Option<u64>,
-    pub properties: Vec<PropertyInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PropertyInfo {
-    pub name: String,
-    pub data_type: Option<String>,
 }
 
 // =============================================================================
@@ -221,12 +316,6 @@ impl SchemaSnapshot {
         }
     }
 
-    pub fn graph(schema: GraphSchema) -> Self {
-        Self {
-            structure: DataStructure::Graph(schema),
-        }
-    }
-
     pub fn time_series(schema: TimeSeriesSchema) -> Self {
         Self {
             structure: DataStructure::TimeSeries(schema),
@@ -245,10 +334,6 @@ impl SchemaSnapshot {
 
     pub fn is_key_value(&self) -> bool {
         matches!(self.structure, DataStructure::KeyValue(_))
-    }
-
-    pub fn is_graph(&self) -> bool {
-        matches!(self.structure, DataStructure::Graph(_))
     }
 
     pub fn is_time_series(&self) -> bool {
@@ -278,13 +363,6 @@ impl SchemaSnapshot {
         }
     }
 
-    pub fn as_graph(&self) -> Option<&GraphSchema> {
-        match &self.structure {
-            DataStructure::Graph(s) => Some(s),
-            _ => None,
-        }
-    }
-
     pub fn as_time_series(&self) -> Option<&TimeSeriesSchema> {
         match &self.structure {
             DataStructure::TimeSeries(s) => Some(s),
@@ -296,24 +374,16 @@ impl SchemaSnapshot {
 
     /// Get databases (for types that have them).
     pub fn databases(&self) -> &[DatabaseInfo] {
-        match &self.structure {
-            DataStructure::Relational(s) => &s.databases,
-            DataStructure::Document(s) => &s.databases,
-            DataStructure::Graph(s) => &s.databases,
-            DataStructure::TimeSeries(s) => &s.databases,
-            DataStructure::KeyValue(_) | DataStructure::ReservedWideColumn => &[],
-        }
+        self.structure
+            .database_scoped()
+            .map_or(&[], |schema| schema.databases())
     }
 
     /// Get current database name.
     pub fn current_database(&self) -> Option<&str> {
-        match &self.structure {
-            DataStructure::Relational(s) => s.current_database.as_deref(),
-            DataStructure::Document(s) => s.current_database.as_deref(),
-            DataStructure::Graph(s) => s.current_database.as_deref(),
-            DataStructure::TimeSeries(s) => s.current_database.as_deref(),
-            DataStructure::KeyValue(_) | DataStructure::ReservedWideColumn => None,
-        }
+        self.structure
+            .database_scoped()
+            .and_then(|schema| schema.current_database())
     }
 
     /// Get schemas (relational only).
@@ -367,89 +437,28 @@ impl SchemaSnapshot {
     /// Drops `database` from the database list. When it is the current
     /// database, the objects loaded for it are cleared as well.
     pub fn remove_database(&mut self, database: &str) {
-        match &mut self.structure {
-            DataStructure::Relational(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
+        let Some(schema) = self.structure.database_scoped_mut() else {
+            return;
+        };
 
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.schemas.clear();
-                    schema.tables.clear();
-                    schema.views.clear();
-                }
-            }
-            DataStructure::Document(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
+        schema
+            .databases_mut()
+            .retain(|entry| entry.name != database);
 
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.collections.clear();
-                }
-            }
-            DataStructure::Graph(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.node_labels.clear();
-                    schema.relationship_types.clear();
-                    schema.property_keys.clear();
-                }
-            }
-            DataStructure::TimeSeries(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.measurements.clear();
-                    schema.retention_policies.clear();
-                }
-            }
-            DataStructure::KeyValue(_) | DataStructure::ReservedWideColumn => {}
+        if schema.current_database() == Some(database) {
+            schema.clear_current_database();
         }
     }
 
     /// Removes the object named by `target` when it belongs to the current
     /// database. Only relational and document snapshots hold droppable objects.
     pub fn remove_object(&mut self, target: &SchemaDropTarget) {
-        match &mut self.structure {
-            DataStructure::Relational(schema) => {
-                if !Self::targets_current_database(target, schema.current_database.as_deref()) {
-                    return;
-                }
+        let Some(schema) = self.structure.database_scoped_mut() else {
+            return;
+        };
 
-                if let Some(schema_name) = target.schema.as_deref() {
-                    if let Some(db_schema) = schema
-                        .schemas
-                        .iter_mut()
-                        .find(|entry| entry.name == schema_name)
-                    {
-                        db_schema.remove_object(target);
-                    }
-                    return;
-                }
-
-                match target.kind {
-                    SchemaObjectKind::Table => {
-                        schema.tables.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::View => {
-                        schema.views.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::Collection | SchemaObjectKind::Database => {}
-                }
-            }
-            DataStructure::Document(schema) => {
-                if Self::targets_current_database(target, schema.current_database.as_deref())
-                    && target.kind == SchemaObjectKind::Collection
-                {
-                    schema.collections.retain(|entry| entry.name != target.name);
-                }
-            }
-            DataStructure::KeyValue(_)
-            | DataStructure::Graph(_)
-            | DataStructure::ReservedWideColumn
-            | DataStructure::TimeSeries(_) => {}
+        if Self::targets_current_database(target, schema.current_database()) {
+            schema.remove_current_object(target);
         }
     }
 
@@ -1397,24 +1406,6 @@ mod tests {
         })
     }
 
-    fn graph_snapshot() -> SchemaSnapshot {
-        SchemaSnapshot::graph(GraphSchema {
-            databases: vec![database("app"), database("other")],
-            current_database: Some("app".to_string()),
-            node_labels: vec![NodeLabelInfo {
-                name: "Person".to_string(),
-                count: None,
-                properties: Vec::new(),
-            }],
-            relationship_types: vec![RelationshipTypeInfo {
-                name: "KNOWS".to_string(),
-                count: None,
-                properties: Vec::new(),
-            }],
-            property_keys: vec!["name".to_string()],
-        })
-    }
-
     fn time_series_snapshot() -> SchemaSnapshot {
         SchemaSnapshot::time_series(TimeSeriesSchema {
             databases: vec![database("app"), database("other")],
@@ -1486,32 +1477,6 @@ mod tests {
         assert_eq!(database_names(&snapshot), vec!["app"]);
         assert_eq!(snapshot.current_database(), Some("app"));
         assert_eq!(snapshot.collections().len(), 2);
-    }
-
-    #[test]
-    fn remove_current_database_clears_graph_lists() {
-        let mut snapshot = graph_snapshot();
-        snapshot.remove_database("app");
-
-        assert_eq!(database_names(&snapshot), vec!["other"]);
-        assert_eq!(snapshot.current_database(), None);
-        let graph = snapshot.as_graph().expect("graph snapshot");
-        assert!(graph.node_labels.is_empty());
-        assert!(graph.relationship_types.is_empty());
-        assert!(graph.property_keys.is_empty());
-    }
-
-    #[test]
-    fn remove_other_database_keeps_graph_lists() {
-        let mut snapshot = graph_snapshot();
-        snapshot.remove_database("other");
-
-        assert_eq!(database_names(&snapshot), vec!["app"]);
-        assert_eq!(snapshot.current_database(), Some("app"));
-        let graph = snapshot.as_graph().expect("graph snapshot");
-        assert_eq!(graph.node_labels.len(), 1);
-        assert_eq!(graph.relationship_types.len(), 1);
-        assert_eq!(graph.property_keys.len(), 1);
     }
 
     #[test]
@@ -1642,11 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_object_leaves_graph_and_time_series_snapshots_unchanged() {
-        let mut graph = graph_snapshot();
-        graph.remove_object(&SchemaDropTarget::new(SchemaObjectKind::Table, "Person"));
-        assert_eq!(graph.as_graph().expect("graph").node_labels.len(), 1);
-
+    fn remove_object_leaves_time_series_snapshots_unchanged() {
         let mut time_series = time_series_snapshot();
         time_series.remove_object(&SchemaDropTarget::new(SchemaObjectKind::Table, "cpu"));
         assert_eq!(time_series.measurements().len(), 1);

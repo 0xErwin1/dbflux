@@ -1062,8 +1062,8 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs`
   define:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries,
-    WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream,
+    ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl,
     OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql,
     Lua, Python, Bash (cada uno lleva su modo de editor, placeholder y prefijo
@@ -1120,11 +1120,12 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     única tabla de íconos, tonos y etiquetas de contenedor del árbol de schema
     por categoría; una `DatabaseCategory` nueva agrega un brazo ahí en lugar de
     un match en cada crate de UI.
-  - `DataStructure::ReservedWideColumn` solo reserva el índice 4 del wire
-    postcard, para que `TimeSeries` conserve el índice 5 ante peers del
-    protocolo RPC de drivers;
-    `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` fija los índices de las
-    variantes. No elimine ni reordene variantes de `DataStructure`.
+  - `DataStructure::ReservedGraph` y `ReservedWideColumn` solo reservan los
+    índices 3 y 4 del wire postcard, y `DatabaseCategory::ReservedGraph` y
+    `ReservedWideColumn` los índices 3 y 5, para que las variantes siguientes
+    conserven su índice ante peers del protocolo RPC de drivers;
+    `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` fija los índices de
+    ambos enums. No elimine ni reordene sus variantes.
   - `CollectionChildInfo` permite a los drivers publicar fuentes hijas bajo una
     collection/container sin heurísticas de UI.
   - `EventStreamTarget` le da al workspace/audit un identificador genérico para

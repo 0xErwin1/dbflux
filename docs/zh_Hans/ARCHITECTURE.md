@@ -699,7 +699,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 ### 驱动程序体系
 
 - **驱动程序能力**：`crates/dbflux_core/src/driver/capabilities.rs` 定义了：
-  - `DatabaseCategory`：Relational、Document、KeyValue、Graph、TimeSeries、WideColumn、LogStream、ObjectStorage
+  - `DatabaseCategory`：Relational、Document、KeyValue、TimeSeries、LogStream、ObjectStorage
   - `QueryLanguage`：Sql、CloudWatchLogsInsightsQl、OpenSearchPpl、OpenSearchSql、MongoQuery、RedisCommands、Cypher、InfluxQuery、Flux、Cql、Lua、Python、Bash（各自携带编辑器模式、占位提示、注释前缀）
   - `DriverCapabilities`：`u64` 位标志，用于 PAGINATION、TRANSACTIONS、NESTED_DOCUMENTS、MULTI_STATEMENT、ROUTINES、STORED_PROCEDURES、DASHBOARD_IMPORT、DASHBOARD_SYNC 等特性
   - `DriverMetadata`：静态的驱动程序信息（id、name、category、query_language、capabilities、icon）
@@ -713,7 +713,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - `CollectionPresentation` 告诉界面一个集合/容器如何打开（例如数据网格还是事件流）。
   - `ObjectFacet`（`crates/dbflux_core/src/schema/facet.rs`）表示一个对象所暴露的范式：`Tabular`、`Document`、`Vector`。`CollectionPresentation` 决定打开哪种文档；facet 决定数据文档内部的视图模式。`Connection::object_facets` 默认返回 `[Tabular]`，由驱动程序覆盖（PostgreSQL 为每个 `vector(n)` 列添加一个 `Vector`）；集合则通过 `default_collection_facets(category)` 推导。该枚举是穷尽的，因此新的 facet 在 `DataViewMode::for_facet`（`crates/dbflux_ui_document/src/data_view.rs`）处理它之前无法编译。最近邻 SQL 仍由驱动程序通过 `QueryGenerator::generate_nearest_neighbors` 生成，默认不支持。
   - `category_presentation`（`crates/dbflux_components/src/category.rs`）是按类别提供后备图标、色调与 Schema 树容器标签的唯一表；新增 `DatabaseCategory` 只需在此添加一个分支，而不必在每个界面 crate 中写 match。
-  - `DataStructure::ReservedWideColumn` 仅占用 postcard 线上索引 4，使 `TimeSeries` 对驱动程序 RPC 对端保持索引 5；`crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` 固定各变体的索引。不要删除或重排 `DataStructure` 的变体。
+  - `DataStructure::ReservedGraph` 与 `ReservedWideColumn` 仅占用 postcard 线上索引 3 与 4，`DatabaseCategory::ReservedGraph` 与 `ReservedWideColumn` 占用索引 3 与 5，使其后的变体对驱动程序 RPC 对端保持原有索引；`crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` 固定两个枚举的索引。不要删除或重排它们的变体。
   - `CollectionChildInfo` 让驱动程序可以发布集合/容器之下的子来源，无需界面做启发式推断。
   - `EventStreamTarget` 为工作区/审计提供一个通用标识符，指向由驱动程序支撑的事件流。
   - `SourceContextSpec` 让驱动程序可以声明额外的查询上下文控件，而无需在 `dbflux_ui` 中硬编码驱动程序名。

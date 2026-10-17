@@ -6,7 +6,7 @@
 
 每个驱动程序都会暴露一个 `DriverMetadata` 值（定义在 `crates/dbflux_core/src/driver/capabilities.rs`）。界面不依赖特定驱动程序，完全依据这份元数据来适配。相关字段如下：
 
-- **`DatabaseCategory`** —— 决定视图模型与术语。取值：`Relational`、`Document`、`KeyValue`、`Graph`、`TimeSeries`、`WideColumn`、`LogStream`。（并非每个取值都有已发布的驱动程序。）
+- **`DatabaseCategory`** —— 决定视图模型与术语。取值：`Relational`、`Document`、`KeyValue`、`TimeSeries`、`LogStream`、`ObjectStorage`。新类别必须与声明它的驱动程序一同加入。
 - **`QueryLanguage`** —— 决定编辑器模式、占位提示文本与查询解析。取值包括 `Sql`、`MongoQuery`、`RedisCommands`、`Cypher`、`InfluxQuery`、`Flux`、`Cql`、`CloudWatchLogsInsightsQl`、`OpenSearchPpl`、`OpenSearchSql`，脚本语言 `Lua` / `Python` / `Bash`，以及 `Custom(String)`。
 - **`DriverCapabilities`** —— 一个 `u64` 位标志集合，声明所支持的功能（事务、分页、Schema、键值操作等）。便捷基值 `RELATIONAL_BASE`、`DOCUMENT_BASE` 和 `KEYVALUE_BASE` 把各类别的通用标志归为一组。
 

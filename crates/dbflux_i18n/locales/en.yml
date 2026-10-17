@@ -458,10 +458,9 @@ connection_manager:
       relational: "Relational"
       document: "Document"
       key_value: "Key-value"
-      wide_column: "Wide column"
       time_series_and_logs: "Time series and logs"
-      graph: "Graph"
       object_storage: "Object storage"
+      other: "Other"
   export:
     target:
       connection: connection
@@ -5080,9 +5079,7 @@ sidebar:
       relational: Tables (%{count})
       document: Collections (%{count})
       key_value: Keys (%{count})
-      graph: Nodes (%{count})
       time_series: Measurements (%{count})
-      wide_column: Tables (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
     folder:
