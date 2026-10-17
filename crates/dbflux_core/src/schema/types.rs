@@ -1,4 +1,5 @@
 use crate::data::key_value::KeyType;
+use crate::{SchemaDropTarget, SchemaObjectKind};
 use serde::{Deserialize, Serialize};
 
 /// Information about a database on the server.
@@ -20,6 +21,22 @@ pub struct DbSchemaInfo {
     /// Custom types (enums, domains, composites). Lazy-loaded.
     #[serde(default)]
     pub custom_types: Option<Vec<CustomTypeInfo>>,
+}
+
+impl DbSchemaInfo {
+    /// Removes the table, collection, or view named by `target`; database
+    /// targets leave the schema unchanged.
+    pub fn remove_object(&mut self, target: &SchemaDropTarget) {
+        match target.kind {
+            SchemaObjectKind::Table | SchemaObjectKind::Collection => {
+                self.tables.retain(|entry| entry.name != target.name);
+            }
+            SchemaObjectKind::View => {
+                self.views.retain(|entry| entry.name != target.name);
+            }
+            SchemaObjectKind::Database => {}
+        }
+    }
 }
 
 /// Unified schema structure for different database paradigms.
@@ -345,6 +362,102 @@ impl SchemaSnapshot {
             DataStructure::TimeSeries(s) => &s.measurements,
             _ => &[],
         }
+    }
+
+    /// Drops `database` from the database list. When it is the current
+    /// database, the objects loaded for it are cleared as well.
+    pub fn remove_database(&mut self, database: &str) {
+        match &mut self.structure {
+            DataStructure::Relational(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.schemas.clear();
+                    schema.tables.clear();
+                    schema.views.clear();
+                }
+            }
+            DataStructure::Document(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.collections.clear();
+                }
+            }
+            DataStructure::Graph(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.node_labels.clear();
+                    schema.relationship_types.clear();
+                    schema.property_keys.clear();
+                }
+            }
+            DataStructure::TimeSeries(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.measurements.clear();
+                    schema.retention_policies.clear();
+                }
+            }
+            DataStructure::KeyValue(_) | DataStructure::ReservedWideColumn => {}
+        }
+    }
+
+    /// Removes the object named by `target` when it belongs to the current
+    /// database. Only relational and document snapshots hold droppable objects.
+    pub fn remove_object(&mut self, target: &SchemaDropTarget) {
+        match &mut self.structure {
+            DataStructure::Relational(schema) => {
+                if !Self::targets_current_database(target, schema.current_database.as_deref()) {
+                    return;
+                }
+
+                if let Some(schema_name) = target.schema.as_deref() {
+                    if let Some(db_schema) = schema
+                        .schemas
+                        .iter_mut()
+                        .find(|entry| entry.name == schema_name)
+                    {
+                        db_schema.remove_object(target);
+                    }
+                    return;
+                }
+
+                match target.kind {
+                    SchemaObjectKind::Table => {
+                        schema.tables.retain(|entry| entry.name != target.name);
+                    }
+                    SchemaObjectKind::View => {
+                        schema.views.retain(|entry| entry.name != target.name);
+                    }
+                    SchemaObjectKind::Collection | SchemaObjectKind::Database => {}
+                }
+            }
+            DataStructure::Document(schema) => {
+                if Self::targets_current_database(target, schema.current_database.as_deref())
+                    && target.kind == SchemaObjectKind::Collection
+                {
+                    schema.collections.retain(|entry| entry.name != target.name);
+                }
+            }
+            DataStructure::KeyValue(_)
+            | DataStructure::Graph(_)
+            | DataStructure::ReservedWideColumn
+            | DataStructure::TimeSeries(_) => {}
+        }
+    }
+
+    fn targets_current_database(target: &SchemaDropTarget, current_database: Option<&str>) -> bool {
+        target
+            .database
+            .as_deref()
+            .is_none_or(|database| current_database == Some(database))
     }
 }
 
@@ -1221,5 +1334,321 @@ mod tests {
         assert_eq!(decoded.identity, None);
         assert_eq!(decoded.primary_key, None);
         assert!(decoded.blockers.is_empty());
+    }
+
+    fn database(name: &str) -> DatabaseInfo {
+        DatabaseInfo {
+            name: name.to_string(),
+            is_current: false,
+        }
+    }
+
+    fn named_table(name: &str) -> TableInfo {
+        let mut json = minimal_table_info_json();
+        json["name"] = serde_json::Value::String(name.to_string());
+        serde_json::from_value(json).expect("table info decodes")
+    }
+
+    fn named_view(name: &str) -> ViewInfo {
+        ViewInfo {
+            name: name.to_string(),
+            schema: None,
+        }
+    }
+
+    fn named_collection(name: &str) -> CollectionInfo {
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "database": null,
+            "document_count": null,
+            "avg_document_size": null,
+        }))
+        .expect("collection info decodes")
+    }
+
+    fn database_names(snapshot: &SchemaSnapshot) -> Vec<&str> {
+        snapshot
+            .databases()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect()
+    }
+
+    fn relational_snapshot() -> SchemaSnapshot {
+        SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![database("app"), database("other")],
+            current_database: Some("app".to_string()),
+            schemas: vec![DbSchemaInfo {
+                name: "public".to_string(),
+                tables: vec![named_table("orders"), named_table("users")],
+                views: vec![named_view("order_view"), named_view("user_view")],
+                custom_types: None,
+            }],
+            tables: vec![named_table("orders"), named_table("users")],
+            views: vec![named_view("order_view"), named_view("user_view")],
+        })
+    }
+
+    fn document_snapshot() -> SchemaSnapshot {
+        SchemaSnapshot::document(DocumentSchema {
+            databases: vec![database("app"), database("other")],
+            current_database: Some("app".to_string()),
+            collections: vec![named_collection("orders"), named_collection("users")],
+        })
+    }
+
+    fn graph_snapshot() -> SchemaSnapshot {
+        SchemaSnapshot::graph(GraphSchema {
+            databases: vec![database("app"), database("other")],
+            current_database: Some("app".to_string()),
+            node_labels: vec![NodeLabelInfo {
+                name: "Person".to_string(),
+                count: None,
+                properties: Vec::new(),
+            }],
+            relationship_types: vec![RelationshipTypeInfo {
+                name: "KNOWS".to_string(),
+                count: None,
+                properties: Vec::new(),
+            }],
+            property_keys: vec!["name".to_string()],
+        })
+    }
+
+    fn time_series_snapshot() -> SchemaSnapshot {
+        SchemaSnapshot::time_series(TimeSeriesSchema {
+            databases: vec![database("app"), database("other")],
+            current_database: Some("app".to_string()),
+            measurements: vec![MeasurementInfo {
+                name: "cpu".to_string(),
+                tags: Vec::new(),
+                fields: Vec::new(),
+            }],
+            retention_policies: vec![RetentionPolicyInfo {
+                name: "autogen".to_string(),
+                duration: None,
+                is_default: true,
+            }],
+        })
+    }
+
+    fn key_value_snapshot() -> SchemaSnapshot {
+        SchemaSnapshot::key_value(KeyValueSchema {
+            keyspaces: vec![KeySpaceInfo {
+                db_index: 0,
+                key_count: Some(3),
+                memory_bytes: None,
+                avg_ttl_seconds: None,
+            }],
+            current_keyspace: Some(0),
+        })
+    }
+
+    #[test]
+    fn remove_current_database_clears_relational_lists() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_database("app");
+
+        assert_eq!(database_names(&snapshot), vec!["other"]);
+        assert_eq!(snapshot.current_database(), None);
+        assert!(snapshot.schemas().is_empty());
+        assert!(snapshot.tables().is_empty());
+        assert!(snapshot.views().is_empty());
+    }
+
+    #[test]
+    fn remove_other_database_keeps_relational_lists() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_database("other");
+
+        assert_eq!(database_names(&snapshot), vec!["app"]);
+        assert_eq!(snapshot.current_database(), Some("app"));
+        assert_eq!(snapshot.schemas().len(), 1);
+        assert_eq!(snapshot.tables().len(), 2);
+        assert_eq!(snapshot.views().len(), 2);
+    }
+
+    #[test]
+    fn remove_current_database_clears_document_collections() {
+        let mut snapshot = document_snapshot();
+        snapshot.remove_database("app");
+
+        assert_eq!(database_names(&snapshot), vec!["other"]);
+        assert_eq!(snapshot.current_database(), None);
+        assert!(snapshot.collections().is_empty());
+    }
+
+    #[test]
+    fn remove_other_database_keeps_document_collections() {
+        let mut snapshot = document_snapshot();
+        snapshot.remove_database("other");
+
+        assert_eq!(database_names(&snapshot), vec!["app"]);
+        assert_eq!(snapshot.current_database(), Some("app"));
+        assert_eq!(snapshot.collections().len(), 2);
+    }
+
+    #[test]
+    fn remove_current_database_clears_graph_lists() {
+        let mut snapshot = graph_snapshot();
+        snapshot.remove_database("app");
+
+        assert_eq!(database_names(&snapshot), vec!["other"]);
+        assert_eq!(snapshot.current_database(), None);
+        let graph = snapshot.as_graph().expect("graph snapshot");
+        assert!(graph.node_labels.is_empty());
+        assert!(graph.relationship_types.is_empty());
+        assert!(graph.property_keys.is_empty());
+    }
+
+    #[test]
+    fn remove_other_database_keeps_graph_lists() {
+        let mut snapshot = graph_snapshot();
+        snapshot.remove_database("other");
+
+        assert_eq!(database_names(&snapshot), vec!["app"]);
+        assert_eq!(snapshot.current_database(), Some("app"));
+        let graph = snapshot.as_graph().expect("graph snapshot");
+        assert_eq!(graph.node_labels.len(), 1);
+        assert_eq!(graph.relationship_types.len(), 1);
+        assert_eq!(graph.property_keys.len(), 1);
+    }
+
+    #[test]
+    fn remove_current_database_clears_time_series_lists() {
+        let mut snapshot = time_series_snapshot();
+        snapshot.remove_database("app");
+
+        assert_eq!(database_names(&snapshot), vec!["other"]);
+        assert_eq!(snapshot.current_database(), None);
+        let time_series = snapshot.as_time_series().expect("time-series snapshot");
+        assert!(time_series.measurements.is_empty());
+        assert!(time_series.retention_policies.is_empty());
+    }
+
+    #[test]
+    fn remove_other_database_keeps_time_series_lists() {
+        let mut snapshot = time_series_snapshot();
+        snapshot.remove_database("other");
+
+        assert_eq!(database_names(&snapshot), vec!["app"]);
+        assert_eq!(snapshot.current_database(), Some("app"));
+        let time_series = snapshot.as_time_series().expect("time-series snapshot");
+        assert_eq!(time_series.measurements.len(), 1);
+        assert_eq!(time_series.retention_policies.len(), 1);
+    }
+
+    #[test]
+    fn remove_database_leaves_key_value_snapshot_unchanged() {
+        let mut snapshot = key_value_snapshot();
+        snapshot.remove_database("0");
+
+        let key_value = snapshot.as_key_value().expect("key-value snapshot");
+        assert_eq!(key_value.keyspaces.len(), 1);
+        assert_eq!(key_value.current_keyspace, Some(0));
+    }
+
+    fn table_names(tables: &[TableInfo]) -> Vec<&str> {
+        tables.iter().map(|entry| entry.name.as_str()).collect()
+    }
+
+    fn view_names(views: &[ViewInfo]) -> Vec<&str> {
+        views.iter().map(|entry| entry.name.as_str()).collect()
+    }
+
+    #[test]
+    fn remove_table_with_schema_removes_only_that_schema_table() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_object(
+            &SchemaDropTarget::new(SchemaObjectKind::Table, "orders").with_schema("public"),
+        );
+
+        assert_eq!(table_names(&snapshot.schemas()[0].tables), vec!["users"]);
+        assert_eq!(snapshot.schemas()[0].views.len(), 2);
+        assert_eq!(table_names(snapshot.tables()), vec!["orders", "users"]);
+    }
+
+    #[test]
+    fn remove_view_with_schema_removes_only_that_schema_view() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_object(
+            &SchemaDropTarget::new(SchemaObjectKind::View, "order_view").with_schema("public"),
+        );
+
+        assert_eq!(view_names(&snapshot.schemas()[0].views), vec!["user_view"]);
+        assert_eq!(snapshot.schemas()[0].tables.len(), 2);
+        assert_eq!(snapshot.views().len(), 2);
+    }
+
+    #[test]
+    fn remove_collection_with_schema_removes_relational_schema_table() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_object(
+            &SchemaDropTarget::new(SchemaObjectKind::Collection, "orders").with_schema("public"),
+        );
+
+        assert_eq!(table_names(&snapshot.schemas()[0].tables), vec!["users"]);
+    }
+
+    #[test]
+    fn remove_table_and_view_without_schema_use_flat_lists() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_object(&SchemaDropTarget::new(SchemaObjectKind::Table, "orders"));
+        snapshot.remove_object(&SchemaDropTarget::new(SchemaObjectKind::View, "user_view"));
+        snapshot.remove_object(&SchemaDropTarget::new(
+            SchemaObjectKind::Collection,
+            "users",
+        ));
+
+        assert_eq!(table_names(snapshot.tables()), vec!["users"]);
+        assert_eq!(view_names(snapshot.views()), vec!["order_view"]);
+        assert_eq!(snapshot.schemas()[0].tables.len(), 2);
+    }
+
+    #[test]
+    fn remove_relational_object_of_other_database_is_ignored() {
+        let mut snapshot = relational_snapshot();
+        snapshot.remove_object(
+            &SchemaDropTarget::new(SchemaObjectKind::Table, "orders").with_database("other"),
+        );
+
+        assert_eq!(snapshot.tables().len(), 2);
+    }
+
+    #[test]
+    fn remove_collection_removes_only_named_document_collection() {
+        let mut snapshot = document_snapshot();
+        snapshot.remove_object(
+            &SchemaDropTarget::new(SchemaObjectKind::Collection, "orders").with_database("app"),
+        );
+
+        let names: Vec<&str> = snapshot
+            .collections()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["users"]);
+    }
+
+    #[test]
+    fn remove_document_object_ignores_other_database_and_non_collection_kinds() {
+        let mut snapshot = document_snapshot();
+        snapshot.remove_object(
+            &SchemaDropTarget::new(SchemaObjectKind::Collection, "orders").with_database("other"),
+        );
+        snapshot.remove_object(&SchemaDropTarget::new(SchemaObjectKind::Table, "orders"));
+
+        assert_eq!(snapshot.collections().len(), 2);
+    }
+
+    #[test]
+    fn remove_object_leaves_graph_and_time_series_snapshots_unchanged() {
+        let mut graph = graph_snapshot();
+        graph.remove_object(&SchemaDropTarget::new(SchemaObjectKind::Table, "Person"));
+        assert_eq!(graph.as_graph().expect("graph").node_labels.len(), 1);
+
+        let mut time_series = time_series_snapshot();
+        time_series.remove_object(&SchemaDropTarget::new(SchemaObjectKind::Table, "cpu"));
+        assert_eq!(time_series.measurements().len(), 1);
     }
 }
