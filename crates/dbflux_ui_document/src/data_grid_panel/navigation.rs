@@ -931,6 +931,14 @@ impl DataGridPanel {
 
     // === Referenced-row navigation ===
 
+    /// Whether an applied builder spec owns this panel's next refresh: the
+    /// equality a referenced row writes would land in the hidden filter
+    /// input while the builder query reruns unchanged. The workspace keeps
+    /// such a tab's query and opens the referenced row in a tab of its own.
+    pub(crate) fn builder_query_applied(&self) -> bool {
+        self.builder.visual_select.is_some()
+    }
+
     /// Maps an outgoing FK reference to the row the workspace should open.
     /// `None` unless the panel browses a table, since the connection and
     /// database the target lives in come from that source — and for an

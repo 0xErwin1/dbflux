@@ -200,6 +200,14 @@ impl DataDocument {
             })
         });
 
+        // Optional helper: whether an applied builder spec owns this tab's
+        // query. The workspace reads it to keep such a tab's query and open
+        // a referenced row beside it instead.
+        handle.has_applied_builder_query = Some({
+            let grid = entity.read(cx).data_grid.clone();
+            Box::new(move |cx| grid.read(cx).builder_query_applied())
+        });
+
         handle
     }
 }
