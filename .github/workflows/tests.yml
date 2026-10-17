@@ -24,16 +24,13 @@ on:
       - '.github/workflows/web.yml'
   pull_request:
     branches: [main, dev]
-  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# The group name must be a literal, not ${{ github.workflow }}: under
-# workflow_call that expression resolves to the *calling* workflow, so Release
-# invoking tests.yml and style.yml would put both — and the Release run itself,
-# whose group differs only by case — in one group and cancel them all.
+# The group name is a literal so tests.yml and style.yml, which run on the
+# same events, never share a concurrency group and cancel each other.
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
@@ -72,9 +69,8 @@ jobs:
           # rather than silently disabling the checks that gate this branch.
           rust=true
 
-          # Everything that is not a pull request must run the Rust checks: this
-          # workflow is also invoked through workflow_call from release.yml, where
-          # there is no pull request to scope against.
+          # Everything that is not a pull request must run the Rust checks: a push
+          # or a manual run has no pull request to scope against.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             if changed=$(git diff --name-only "$BASE_SHA" HEAD) && [ -n "$changed" ]; then
               # The rule the path filter used to apply, in one place: the Rust
@@ -92,7 +88,7 @@ jobs:
 
   # NOTE: this job is duplicated in style.yml. GitHub offers no way to share an
   # output between two workflows without a reusable workflow, and neither file
-  # can be one (both are already workflow_call targets for release.yml). The two
+  # can be one without changing how its required checks are reported. The two
   # copies must stay byte-identical except for surrounding indentation.
 
   # Fail-open gate: `always()` stops a failed `changes` job from skipping this

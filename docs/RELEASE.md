@@ -453,7 +453,7 @@ cargo test --workspace
 
 `scripts/lint.py` covers only the first-party crates under `crates/` and never lints or reformats the vendored crates under `vendor/`.
 
-These fast suites do not cover the driver live integration tests: driver-specific suites backed by containers, local files, or a credential-gated Redshift cluster, documented in [tests/driver-live/README.md](../tests/driver-live/README.md). Run them before tagging an rc or stable. CI gates publication on the same suites — `release.yml` invokes `tests.yml`, and the `Create Release` job waits for it — but the suites exercise source code, not the built artifacts, and nightly builds are not test-gated (`nightly.yml` calls `build.yml` directly).
+These fast suites do not cover the driver live integration tests: driver-specific suites backed by containers, local files, or a credential-gated Redshift cluster, documented in [tests/driver-live/README.md](../tests/driver-live/README.md). Run them before tagging an rc or stable. CI does not run any suite at release time: `release.yml` builds and publishes without calling `tests.yml` or `style.yml`, and relies on the checks that already ran on the pull requests and on `main`. No release channel is test-gated, nightly included (`nightly.yml` calls `build.yml` directly).
 
 ## Related
 

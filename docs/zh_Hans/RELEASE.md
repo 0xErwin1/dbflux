@@ -434,7 +434,7 @@ cargo test --workspace
 
 `scripts/lint.py` 只覆盖 `crates/` 下的第一方 crate，从不对 `vendor/` 下的第三方 crate 执行 lint 或重新格式化。
 
-这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 以相同的套件作为发布门槛 —— `release.yml` 调用 `tests.yml`，且 `Create Release` 作业会等待它完成 —— 但这些套件验证的是源代码，而非构建出的制品，nightly 构建不以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
+这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 在发布时不运行任何套件：`release.yml` 在不调用 `tests.yml` 或 `style.yml` 的情况下构建并发布，依赖已在拉取请求和 `main` 上运行过的检查。包括 nightly 在内，没有任何发布渠道以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
 
 ## 相关文件
 
