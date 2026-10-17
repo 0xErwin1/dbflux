@@ -38,6 +38,8 @@ pub(super) enum GeneralFormRow {
     GridFontSize,
     VimMode,
     VimLeader,
+    TableAlias,
+    TableAliasUseAs,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -1960,6 +1962,14 @@ mod tests {
 
         let expected = [
             ("vim-mode", "settings.general.vim_mode.label"),
+            (
+                "table-alias",
+                "settings.general.table_alias_completion.label",
+            ),
+            (
+                "table-alias-as",
+                "settings.general.table_alias_use_as.label",
+            ),
             ("restore-session", "settings.general.restore_session.label"),
             ("reopen-conns", "settings.general.reopen_connections.label"),
             (

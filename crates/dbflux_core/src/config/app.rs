@@ -396,6 +396,15 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub vim_mode: bool,
 
+    /// Append a generated alias (`access_control ac`) when a table completion
+    /// is accepted after `FROM` / `JOIN`. On by default.
+    #[serde(default = "default_true")]
+    pub table_alias_completion: bool,
+
+    /// Write that alias with `AS` (`access_control AS ac`). Off by default.
+    #[serde(default)]
+    pub table_alias_use_as: bool,
+
     /// The key that starts Vim leader sequences, in the keymap's stored key
     /// form (`space`, `,`, `\`). Space by default.
     #[serde(default = "default_vim_leader")]
@@ -526,6 +535,8 @@ impl Default for GeneralSettings {
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
             toast_auto_dismiss_secs: Self::DEFAULT_TOAST_AUTO_DISMISS_SECS,
             vim_mode: false,
+            table_alias_completion: true,
+            table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,

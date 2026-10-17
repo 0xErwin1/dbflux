@@ -101,6 +101,8 @@ pub fn save_general_settings(
         language: settings.language.clone(),
         key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
         vim_mode: if settings.vim_mode { 1 } else { 0 },
+        table_alias_completion: i32::from(settings.table_alias_completion),
+        table_alias_use_as: i32::from(settings.table_alias_use_as),
         editor_row_limit,
         vim_leader: settings.vim_leader.clone(),
         ui_font_family: settings.ui_font_family.clone(),
@@ -1099,6 +1101,8 @@ fn load_general_settings(
         language: language_setting_from_storage(&dto.language),
         key_value_size_limit_mib: dto.key_value_size_limit_mib as u64,
         vim_mode: dto.vim_mode != 0,
+        table_alias_completion: dto.table_alias_completion != 0,
+        table_alias_use_as: dto.table_alias_use_as != 0,
         editor_row_limit: usize::try_from(dto.editor_row_limit)
             .ok()
             .filter(|value| *value > 0)
@@ -2554,6 +2558,8 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
             updated_at: String::new(),
         };
 
@@ -2649,6 +2655,8 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
             updated_at: String::new(),
         };
         runtime
@@ -2906,6 +2914,26 @@ mod tests {
     }
 
     #[test]
+    fn table_alias_settings_default_on_without_as_and_round_trip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(loaded.general_settings.table_alias_completion);
+        assert!(!loaded.general_settings.table_alias_use_as);
+
+        let settings = GeneralSettings {
+            table_alias_completion: false,
+            table_alias_use_as: true,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save table alias settings");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(!loaded.general_settings.table_alias_completion);
+        assert!(loaded.general_settings.table_alias_use_as);
+    }
+
+    #[test]
     fn out_of_range_font_sizes_and_blank_families_are_normalized_on_load() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
@@ -2975,6 +3003,8 @@ mod tests {
             grid_font_family: None,
             grid_font_size: 12.5,
             toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
             updated_at: String::new(),
         };
         runtime

@@ -257,6 +257,10 @@ impl SqlDialect for PostgresDialect {
         true
     }
 
+    fn mutation_target_alias(&self) -> dbflux_core::MutationTargetAlias {
+        dbflux_core::MutationTargetAlias::Accepted
+    }
+
     fn supports_drop_cascade(&self) -> bool {
         true
     }
