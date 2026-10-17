@@ -52,7 +52,7 @@ pub struct CellValue {
     placeholder: bool,
 
     /// The `(label, id_suffix)` pair a resolved foreign key draws on one
-    /// line; see [`Self::fk_reference`]. `None` on every other cell.
+    /// line; see [`Self::with_fk_label`]. `None` on every other cell.
     fk_spans: Option<(Arc<str>, Arc<str>)>,
 }
 
@@ -448,41 +448,15 @@ impl CellValue {
         self.placeholder
     }
 
-    /// A foreign-key reference drawn as its resolved label with the raw id
-    /// after it (`María López · #8`).
-    ///
-    /// The label is display-only: the cell is the text of `raw_id` in every
-    /// other respect — the editor opens on the id, mutations and the
-    /// clipboard carry it, and it compares equal to a text cell holding the
-    /// same id. A label that is empty or the id itself falls back to a plain
-    /// text cell, so the id is never drawn twice. A long id (a uuid) is cut
-    /// to [`FK_ID_DISPLAY_LEN`] characters for display only, so it cannot
-    /// crowd the label out of the cell.
-    pub fn fk_reference(display_value: &str, raw_id: &str) -> Self {
-        if display_value.is_empty() || display_value == raw_id {
-            return Self::text(raw_id);
-        }
-
-        let id_for_display = truncate_chars(raw_id, FK_ID_DISPLAY_LEN);
-
-        Self {
-            kind: CellKind::Text(raw_id.into()),
-            display_text: format!("{display_value} · #{id_for_display}").into(),
-            placeholder: false,
-            fk_spans: Some((display_value.into(), format!(" · #{id_for_display}").into())),
-        }
-    }
-
     /// Attaches a resolved foreign-key label to this cell, drawn as the
     /// label with the raw id after it (`María López · #8`).
     ///
-    /// Unlike [`Self::fk_reference`], the cell keeps the value it was built
-    /// with: an int stays an `Int`, so mutations carry the typed value and
-    /// row identity survives a reload. The label is display-only,
-    /// normalized the way [`Self::text`] draws text (whitespace flattened
-    /// to one line) and cut to [`FK_LABEL_DISPLAY_LEN`]. A label that is
-    /// empty or the id itself leaves the cell unchanged, so the id is
-    /// never drawn twice.
+    /// The cell keeps the value it was built with: an int stays an `Int`,
+    /// so mutations carry the typed value and row identity survives a
+    /// reload. The label is display-only, normalized the way
+    /// [`Self::text`] draws text (whitespace flattened to one line) and
+    /// cut to [`FK_LABEL_DISPLAY_LEN`]. A label that is empty or the id
+    /// itself leaves the cell unchanged, so the id is never drawn twice.
     pub fn with_fk_label(mut self, display_value: &str) -> Self {
         let raw_id = self.edit_text();
 
@@ -507,7 +481,7 @@ impl CellValue {
 
     /// The `(label, id_suffix)` pair drawn for a resolved foreign-key
     /// reference, the label in the cell's text color and the suffix muted;
-    /// see [`Self::fk_reference`].
+    /// see [`Self::with_fk_label`].
     pub fn fk_spans(&self) -> Option<(Arc<str>, Arc<str>)> {
         self.fk_spans.clone()
     }
@@ -2442,21 +2416,9 @@ mod tests {
     }
 
     #[test]
-    fn an_fk_reference_draws_its_label_with_the_raw_id_after_it() {
-        let cell = CellValue::fk_reference("María López", "8");
-
-        assert_eq!(cell.display_text().as_ref(), "María López · #8");
-        assert_eq!(
-            cell.fk_spans()
-                .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
-            Some(("María López".to_string(), " · #8".to_string()))
-        );
-    }
-
-    #[test]
-    fn an_fk_reference_cuts_a_long_id_to_its_leading_characters() {
+    fn a_labeled_cell_cuts_a_long_id_to_its_leading_characters() {
         let uuid = "44444444-0000-4000-8000-000000000001";
-        let cell = CellValue::fk_reference("María López", uuid);
+        let cell = CellValue::text(uuid).with_fk_label("María López");
 
         assert_eq!(cell.display_text().as_ref(), "María López · #44444444…");
         assert_eq!(
@@ -2468,8 +2430,8 @@ mod tests {
     }
 
     #[test]
-    fn an_fk_reference_edits_and_copies_as_its_raw_id() {
-        let cell = CellValue::fk_reference("María López", "8");
+    fn a_labeled_cell_edits_and_copies_as_its_raw_id() {
+        let cell = CellValue::text("8").with_fk_label("María López");
 
         assert_eq!(cell.edit_text(), "8");
         assert_eq!(cell.to_value(), dbflux_core::Value::Text("8".to_string()));
@@ -2477,23 +2439,12 @@ mod tests {
     }
 
     #[test]
-    fn an_fk_reference_holds_the_same_value_as_text_of_its_raw_id() {
-        let cell = CellValue::fk_reference("María López", "8");
+    fn a_labeled_cell_holds_the_same_value_as_the_cell_it_labels() {
+        let cell = CellValue::text("8").with_fk_label("María López");
 
         assert!(cell.holds_same_value(&CellValue::text("8")));
         assert!(CellValue::text("8").holds_same_value(&cell));
         assert!(!cell.holds_same_value(&CellValue::text("María López")));
-    }
-
-    #[test]
-    fn an_fk_reference_without_a_distinct_label_is_plain_text() {
-        let empty_label = CellValue::fk_reference("", "8");
-        assert!(empty_label.fk_spans().is_none());
-        assert_eq!(empty_label.display_text().as_ref(), "8");
-
-        let label_is_id = CellValue::fk_reference("8", "8");
-        assert!(label_is_id.fk_spans().is_none());
-        assert_eq!(label_is_id.display_text().as_ref(), "8");
     }
 
     #[test]
