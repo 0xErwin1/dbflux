@@ -298,7 +298,7 @@ crates/
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -309,7 +309,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # Connection tree; walks the snapshot's DatabaseLayout
   dbflux_ui_windows/        # Settings window + connection manager window
     src/
       ssh_shared.rs         # Shared SSH auth UI components
@@ -1049,6 +1049,13 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` sigue siendo
   contraíble y redimensionable mediante ToggleSidebar (Ctrl+B), y gestiona la
   vista temporal por separado de la elección explícita de contraer.
+- El árbol de conexiones recorre una sola proyección: `SchemaSnapshot::database_layout`
+  (`crates/dbflux_core/src/schema/listing.rs`) indica si cada base de datos agrupa
+  tablas y vistas bajo schemas, lista sus objetos en una sola `ObjectFolder`
+  (colecciones o mediciones) o es un keyspace. El sidebar
+  (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
+  partir de esa descripción, y su menú contextual lee las facetas del objeto y el
+  mismo layout; ninguno hace match sobre el paradigma.
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del

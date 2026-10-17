@@ -19,8 +19,9 @@ use uuid::Uuid;
 const PROFILE_ID: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0001);
 
 /// A connection whose category, capabilities and loading strategy the
-/// fixture chooses; nothing else is ever called by the tree builder.
-struct ShapeConnection {
+/// fixture chooses. Its collections carry the facets an RPC driver of that
+/// category gets.
+pub(crate) struct ShapeConnection {
     metadata: dbflux_core::DriverMetadata,
     strategy: SchemaLoadingStrategy,
 }
@@ -67,6 +68,13 @@ impl dbflux_core::Connection for ShapeConnection {
         &self.metadata
     }
 
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        dbflux_core::category_collection_facets(self.metadata.category)
+    }
+
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
         Ok(())
     }
@@ -105,7 +113,7 @@ impl dbflux_core::Connection for ShapeConnection {
     }
 }
 
-fn connected_profile(
+pub(crate) fn connected_profile(
     category: DatabaseCategory,
     capabilities: DriverCapabilities,
     strategy: SchemaLoadingStrategy,

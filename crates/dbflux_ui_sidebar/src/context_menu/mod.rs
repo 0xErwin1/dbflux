@@ -868,7 +868,7 @@ impl Sidebar {
                     // "New Query" opens an empty code document with this bucket/database
                     // pre-selected in the source-context dropdown. Available for any
                     // time-series database node — no driver-id branching.
-                    if self.database_is_time_series(item_id, cx) {
+                    if self.database_lists_measurements(item_id, cx) {
                         Self::append_menu_section(
                             &mut items,
                             [ContextMenuItem::item(
@@ -1617,20 +1617,25 @@ impl Sidebar {
             })
     }
 
-    /// Returns true when the collection node belongs to a time-series connection.
+    /// Returns true when the collection node declares the time-series facet.
     ///
     /// Used to suppress document-database-specific menu items (e.g. MongoDB generate
     /// query submenu) for measurements that are rendered as Collection nodes.
     fn collection_is_time_series(&self, item_id: &str, cx: &App) -> bool {
-        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+        let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = parse_node_id(item_id)
+        else {
             return false;
         };
-        let state = self.app_state.read(cx);
-        state
+
+        self.app_state
+            .read(cx)
             .connections()
             .get(&profile_id)
-            .and_then(|conn| conn.schema.as_ref())
-            .is_some_and(|schema| schema.is_time_series())
+            .is_some_and(|connected| collection_has_time_series_facet(connected, &database, &name))
     }
 
     /// Returns true when the driver's `QueryGenerator` can produce a query template
@@ -1662,10 +1667,6 @@ impl Sidebar {
         query_gen.template_for_collection(&request).is_some()
     }
 
-    /// Returns true when the database node belongs to a time-series connection.
-    ///
-    /// Used to show the "New Query" action on bucket/database nodes for
-    /// time-series drivers without branching on a specific driver ID.
     /// Whether the node's connection offers a native console. Generic: read
     /// from the driver's capabilities, never from its id.
     fn database_has_native_console(&self, item_id: &str, cx: &App) -> bool {
@@ -1680,16 +1681,21 @@ impl Sidebar {
             .is_some_and(|conn| conn.connection.metadata().native_console().is_some())
     }
 
-    fn database_is_time_series(&self, item_id: &str, cx: &App) -> bool {
+    /// Returns true when the database node lists measurements.
+    ///
+    /// Used to show the "New Query" action on bucket/database nodes whose
+    /// objects are measurements, read from the snapshot's database layout
+    /// rather than from a driver ID.
+    fn database_lists_measurements(&self, item_id: &str, cx: &App) -> bool {
         let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
             return false;
         };
-        let state = self.app_state.read(cx);
-        state
+
+        self.app_state
+            .read(cx)
             .connections()
             .get(&profile_id)
-            .and_then(|conn| conn.schema.as_ref())
-            .is_some_and(|schema| schema.is_time_series())
+            .is_some_and(lists_measurements)
     }
 
     fn open_child_picker(&mut self, item_id: &str, cx: &mut Context<Self>) {
@@ -2199,6 +2205,32 @@ impl Sidebar {
                 .contains(DriverCapabilities::FOREIGN_KEYS)
     }
 }
+
+/// Whether the collection declares the time-series facet, the facet the
+/// measurement menu actions apply to.
+fn collection_has_time_series_facet(
+    connected: &ConnectedProfile,
+    database: &str,
+    name: &str,
+) -> bool {
+    connected
+        .connection
+        .collection_facets(&CollectionRef::new(database, name))
+        .iter()
+        .any(|facet| matches!(facet, dbflux_core::ObjectFacet::TimeSeries(_)))
+}
+
+/// Whether the connection's databases list their objects in a measurement
+/// folder.
+fn lists_measurements(connected: &ConnectedProfile) -> bool {
+    connected.schema.as_ref().is_some_and(|schema| {
+        schema.database_layout()
+            == dbflux_core::DatabaseLayout::Folder(dbflux_core::ObjectFolder::Measurements)
+    })
+}
+
+#[cfg(test)]
+mod time_series_tests;
 
 #[cfg(test)]
 mod parent_hover_tests {

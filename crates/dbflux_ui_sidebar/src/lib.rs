@@ -521,12 +521,12 @@ pub enum ContextMenuAction {
     GenerateCollectionCode(CollectionCodeKind),
     /// Open a new code document pre-seeded with a query template for this collection.
     ///
-    /// Available for any `DatabaseCategory::TimeSeries` measurement. The template
+    /// Available for any collection with the time-series facet. The template
     /// text is produced by the driver's `QueryGenerator::template_for_collection`.
     QueryCollection,
     /// Open a new empty code document for writing queries against this database/bucket.
     ///
-    /// Available for database nodes belonging to a time-series connection.
+    /// Available for database nodes whose objects sit in a measurement folder.
     NewQueryForDatabase,
     /// Open the connection's native console against this database, in its
     /// own tab. Offered where the driver advertises `NATIVE_CONSOLE`.

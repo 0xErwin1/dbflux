@@ -271,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 实体（由 dbflux_ui 重新导出）
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -282,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 连接树；遍历快照的 DatabaseLayout
   dbflux_ui_windows/        # 设置窗口 + 连接管理器窗口
     src/
       ssh_shared.rs         # 共享的 SSH 认证界面组件
@@ -693,6 +693,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 由驱动程序拥有的、位于集合/容器之下的子资源，通过通用的 `CollectionChildInfo` 元数据发布。侧边栏不得根据名称、字段类型或驱动程序 ID 去推断驱动程序特有的子项。
 - 例程（函数、存储过程、聚合函数、窗口函数）会在驱动程序设置了 `ROUTINES` 能力并填充 `schema_routines` 接缝时，显示为一个按 Schema 划分的「例程」文件夹。界面通用地渲染该文件夹，不会为任何驱动程序做特殊处理。
 - 侧边栏 dock：`crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` 仍可通过 ToggleSidebar（Ctrl+B）折叠和调整大小，同时将临时展开与明确的折叠选择分开管理。
+- 连接树只遍历一个投影：`SchemaSnapshot::database_layout`（`crates/dbflux_core/src/schema/listing.rs`）说明每个数据库是把表和视图归入 schema、把对象列在一个 `ObjectFolder`（集合或度量）中，还是一个 keyspace。侧边栏（`tree_builder/object_folder.rs`）根据该描述构建每个数据库的内容，其上下文菜单读取对象的 facet 和同一布局；两者都不对范式做匹配。
 - `dbflux_ui_base::object_tree` 提供通用的延迟加载层级结构，每个 `AppStateEntity` 配备一个协调器。core/app 边界按会话及目标槽位限定结果的应用；侧边栏和向导适配器保留兼容的 ID，同时各自管理交互状态。并非所有侧边栏特有类别都已迁移。
 - 连接树：`crates/dbflux_core/src/connection/tree.rs` 把文件夹与连接建模为树结构；`tree_manager.rs` 负责内存中的管理。
 

@@ -1325,7 +1325,6 @@ impl Sidebar {
         None
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Build the namespace children for a `MetricsFolder` node.
     ///
     /// Peeks the `MetricCatalogCache`; if populated, emits one
@@ -3281,7 +3280,7 @@ fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
 }
 
 #[cfg(test)]
-mod tree_shape_tests;
+pub(crate) mod tree_shape_tests;
 
 #[cfg(test)]
 mod tests {

@@ -271,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 엔티티 (dbflux_ui가 재노출)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -282,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 연결 트리; 스냅샷의 DatabaseLayout을 순회
   dbflux_ui_windows/        # 설정 창 + 연결 관리자 창
     src/
       ssh_shared.rs         # 공유 SSH 인증 UI 컴포넌트
@@ -685,6 +685,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - 컬렉션/컨테이너 아래의 드라이버 소유 하위 리소스는 일반 `CollectionChildInfo` 메타데이터를 통해 게시됩니다. 사이드바는 이름, 필드 타입, 드라이버 ID로부터 드라이버별 하위 항목을 추론해서는 안 됩니다.
 - 루틴(함수, 프로시저, 집계, 창 함수)은 드라이버가 `ROUTINES` 기능을 설정하고 `schema_routines` 접점을 채울 때 스키마별 "Routines" 폴더로 나타납니다. UI는 이 폴더를 일반적으로 렌더링하며 어떤 드라이버도 특별 취급하지 않습니다.
 - 사이드바 독: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs`는 ToggleSidebar 명령(Ctrl+B)이 있는 접을 수 있고 크기 조절 가능한 사이드바를 제공합니다.
+- 연결 트리는 하나의 투영만 순회합니다. `SchemaSnapshot::database_layout`(`crates/dbflux_core/src/schema/listing.rs`)은 각 데이터베이스가 테이블과 뷰를 스키마 아래에 묶는지, 객체를 하나의 `ObjectFolder`(컬렉션 또는 측정값)에 나열하는지, 키스페이스인지를 알려 줍니다. 사이드바(`tree_builder/object_folder.rs`)는 이 설명으로 각 데이터베이스의 내용을 만들고, 컨텍스트 메뉴는 객체의 패싯과 같은 레이아웃을 읽습니다. 어느 쪽도 패러다임으로 분기하지 않습니다.
 - 연결 트리: `crates/dbflux_core/src/connection/tree.rs`는 폴더와 연결을 트리 구조로 모델링하고, `tree_manager.rs`가 인메모리 관리를 담당합니다.
 
 ### 드라이버 체계

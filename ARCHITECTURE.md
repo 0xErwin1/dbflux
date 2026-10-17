@@ -271,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -282,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # Connection tree; walks the snapshot's DatabaseLayout
   dbflux_ui_windows/        # Settings window + connection manager window
     src/
       ssh_shared.rs         # Shared SSH auth UI components
@@ -702,6 +702,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` remains collapsible and resizable with ToggleSidebar (Ctrl+B), and manages transient reveal separately from the explicit collapse choice.
+- The connection tree walks one projection: `SchemaSnapshot::database_layout` (`crates/dbflux_core/src/schema/listing.rs`) says whether each database groups tables and views under schemas, lists its objects in one `ObjectFolder` (collections or measurements), or is a keyspace. The sidebar (`tree_builder/object_folder.rs`) builds each database's content from that description, and its context menu reads object facets and the same layout; neither matches on the paradigm.
 - `dbflux_ui_base::object_tree` provides a generic lazy hierarchy with one coordinator per `AppStateEntity`. Core/app boundaries fence session and target-slot application; sidebar and wizard adapters retain compatible IDs while keeping interaction state local to each consumer. This does not cover every sidebar-specific family.
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure; `tree_manager.rs` handles in-memory management.
 
