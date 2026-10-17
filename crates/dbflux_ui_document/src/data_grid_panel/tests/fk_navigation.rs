@@ -1002,3 +1002,256 @@ fn grid_fk_labels_off_keeps_cells_raw_and_the_inspector_resolving(cx: &mut TestA
         "the inspector resolved the label on its own"
     );
 }
+
+// =========================================================================
+// Moving to another row drops the previous label lookup
+// =========================================================================
+
+/// The orders table with two single-column foreign keys, so one row's
+/// inspector lookup needs the display column of two referenced tables.
+fn orders_with_two_fks() -> dbflux_core::TableInfo {
+    let fk = |name: &str, column: &str, table: &str| dbflux_core::ForeignKeyInfo {
+        name: name.to_string(),
+        columns: vec![column.to_string()],
+        referenced_table: table.to_string(),
+        referenced_schema: Some("public".to_string()),
+        referenced_columns: vec!["id".to_string()],
+        on_delete: None,
+        on_update: None,
+    };
+
+    let mut info = orders_with_customer_fk();
+    info.foreign_keys = Some(vec![
+        fk("fk_customer", "customer_id", "customers"),
+        fk("fk_region", "region_id", "regions"),
+    ]);
+    info
+}
+
+/// A page whose first row carries both foreign keys and whose second row
+/// keeps only the customer one.
+fn orders_result_with_two_fk_rows() -> QueryResult {
+    QueryResult::table(
+        vec![
+            key_column("id", true),
+            key_column("customer_id", false),
+            key_column("region_id", false),
+        ],
+        vec![
+            vec![
+                dbflux_core::Value::Int(1),
+                dbflux_core::Value::Int(8),
+                dbflux_core::Value::Int(2),
+            ],
+            vec![
+                dbflux_core::Value::Int(2),
+                dbflux_core::Value::Int(9),
+                dbflux_core::Value::Null,
+            ],
+        ],
+        None,
+        Duration::ZERO,
+    )
+}
+
+/// Connection stub that records every `table_details` call by table and
+/// counts `fetch_row_by_pk`, answering customer 9 with a name, so what a
+/// row's label lookup read is visible after the executor ran.
+#[derive(Default)]
+struct CountingLabelConnection {
+    tables: std::sync::Mutex<Vec<String>>,
+    fetches: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingLabelConnection {
+    fn tables(&self) -> Vec<String> {
+        self.tables
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn fetches(&self) -> usize {
+        self.fetches.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl dbflux_core::Connection for CountingLabelConnection {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        static META: std::sync::OnceLock<dbflux_core::DriverMetadata> = std::sync::OnceLock::new();
+        META.get_or_init(|| {
+            dbflux_core::DriverMetadataBuilder::new(
+                "stub-counting-label",
+                "Stub",
+                dbflux_core::DatabaseCategory::Relational,
+                dbflux_core::QueryLanguage::Sql,
+            )
+            .build()
+        })
+    }
+
+    fn kind(&self) -> dbflux_core::DbKind {
+        dbflux_core::DbKind::Postgres
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        dbflux_core::SchemaLoadingStrategy::SingleDatabase
+    }
+
+    #[expect(
+        clippy::unimplemented,
+        reason = "test-only stub connection: the label lookup path never asks for a dialect"
+    )]
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        unimplemented!("CountingLabelConnection::dialect not needed")
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn execute(&self, _: &dbflux_core::QueryRequest) -> Result<QueryResult, dbflux_core::DbError> {
+        Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+    }
+
+    fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        Ok(dbflux_core::SchemaSnapshot::default())
+    }
+
+    fn table_details(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        table: &str,
+    ) -> Result<dbflux_core::TableInfo, dbflux_core::DbError> {
+        self.tables
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(table.to_string());
+
+        Ok(super::builder_draft_and_fk::referenced_table_info(table))
+    }
+
+    fn fetch_row_by_pk(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        pk_value: &dbflux_core::Value,
+    ) -> Result<Option<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        self.fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        if pk_value == &dbflux_core::Value::Int(9) {
+            return Ok(Some(std::collections::HashMap::from([
+                ("id".to_string(), dbflux_core::Value::Int(9)),
+                (
+                    "name".to_string(),
+                    dbflux_core::Value::Text("María López".to_string()),
+                ),
+            ])));
+        }
+
+        Ok(None)
+    }
+}
+
+/// Moving to another row before the executor runs the first row's label
+/// lookup drops that lookup instead of leaving a detached task behind: the
+/// referenced tables of the row that is no longer open are never read,
+/// while the current row's lookup still resolves.
+#[gpui::test]
+fn moving_to_another_row_drops_the_previous_label_lookup(cx: &mut TestAppContext) {
+    let connection = Arc::new(CountingLabelConnection::default());
+    let (app_state, profile_id) = register_stub_connection(cx, connection.clone());
+
+    cx.update(|cx| {
+        app_state.update(cx, |app, _| {
+            let connected = app
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the stub connection is registered");
+            connected.table_details.insert(
+                (
+                    "app".to_string(),
+                    Some("public".to_string()),
+                    "orders".to_string(),
+                ),
+                orders_with_two_fks(),
+            );
+        });
+    });
+
+    let panel_holder = Rc::new(RefCell::new(None));
+    let panel_handle = panel_holder.clone();
+
+    let (_, window) = cx.add_window_view(move |window, cx| {
+        let panel = cx.new(|cx| {
+            let source = DataSource::Table {
+                profile_id,
+                database: Some("app".to_string()),
+                table: TableRef::with_schema("public", "orders"),
+                pagination: Pagination::default(),
+                order_by: Vec::new(),
+                total_rows: Some(2),
+            };
+
+            DataGridPanel::new_internal(
+                source,
+                app_state.clone(),
+                vec!["id".to_string()],
+                window,
+                cx,
+            )
+        });
+        panel_handle.replace(Some(panel.clone()));
+        Root::new(panel, window, cx)
+    });
+    window.run_until_parked();
+
+    let panel = panel_holder
+        .borrow()
+        .clone()
+        .expect("the window builder stores the grid");
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_result(orders_result_with_two_fk_rows(), cx);
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| panel.open_row_inspector(0, 2, cx));
+        // The cursor moves on before the executor runs the first row's
+        // lookup.
+        panel.update(cx, |panel, cx| panel.open_row_inspector(1, 2, cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        connection.tables(),
+        ["customers"],
+        "the second referenced table of the row that is no longer open is never read"
+    );
+    assert_eq!(
+        connection.fetches(),
+        1,
+        "only the current row's referenced row is fetched"
+    );
+    assert_eq!(
+        inspector_reference(&panel, window).display_label.as_deref(),
+        Some("María López"),
+        "the current row's lookup still resolves"
+    );
+}

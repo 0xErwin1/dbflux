@@ -1275,6 +1275,36 @@ impl dbflux_core::Connection for FkResolveConnection {
     }
 }
 
+/// A referenced table whose `id` / `name` columns make `name` the display
+/// column the resolution picks.
+pub(super) fn referenced_table_info(table: &str) -> dbflux_core::TableInfo {
+    let column = |name: &str, type_name: &str, is_primary_key: bool| dbflux_core::ColumnInfo {
+        name: name.to_string(),
+        type_name: type_name.to_string(),
+        nullable: true,
+        is_primary_key,
+        default_value: None,
+        enum_values: None,
+    };
+
+    dbflux_core::TableInfo {
+        name: table.to_string(),
+        schema: Some("public".to_string()),
+        columns: Some(vec![
+            column("id", "int4", true),
+            column("name", "text", false),
+        ]),
+        indexes: None,
+        foreign_keys: None,
+        constraints: None,
+        sample_fields: None,
+        presentation: Default::default(),
+        child_items: None,
+        storage_hints: None,
+        pseudo_columns: Box::default(),
+    }
+}
+
 /// Caches a referenced table whose `id` / `name` columns make `name` the
 /// display column the resolution picks.
 pub(super) fn cache_referenced_table_details(
@@ -1285,37 +1315,12 @@ pub(super) fn cache_referenced_table_details(
 ) {
     cx.update(|cx| {
         app_state.update(cx, |app, _| {
-            let column =
-                |name: &str, type_name: &str, is_primary_key: bool| dbflux_core::ColumnInfo {
-                    name: name.to_string(),
-                    type_name: type_name.to_string(),
-                    nullable: true,
-                    is_primary_key,
-                    default_value: None,
-                    enum_values: None,
-                };
-
             app.set_table_details(
                 profile_id,
                 "app".to_string(),
                 Some("public".to_string()),
                 table.to_string(),
-                dbflux_core::TableInfo {
-                    name: table.to_string(),
-                    schema: Some("public".to_string()),
-                    columns: Some(vec![
-                        column("id", "int4", true),
-                        column("name", "text", false),
-                    ]),
-                    indexes: None,
-                    foreign_keys: None,
-                    constraints: None,
-                    sample_fields: None,
-                    presentation: Default::default(),
-                    child_items: None,
-                    storage_hints: None,
-                    pseudo_columns: Box::default(),
-                },
+                referenced_table_info(table),
             );
         });
     });

@@ -1960,6 +1960,7 @@ impl DataGridPanel {
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
             self.inspector.incoming_references.cancel();
+            self.inspector.outgoing_labels = None;
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -2337,8 +2338,13 @@ impl DataGridPanel {
     /// its table's display column (cached table details, fetched when
     /// missing). A row that no longer answers, or a failed fetch, keeps
     /// the raw id.
+    ///
+    /// The lookup is held in `inspector.outgoing_labels`: opening another
+    /// row (or closing the inspector) drops it, cancelling its display
+    /// column and label fetches before they start; the generation check in
+    /// `resolve_outgoing_labels` only stops fetches that already began.
     fn load_outgoing_reference_labels(
-        &self,
+        &mut self,
         references: &[super::row_inspector::FkReference],
         content: Entity<super::row_inspector::RowInspectorContent>,
         cx: &mut Context<Self>,
@@ -2350,6 +2356,7 @@ impl DataGridPanel {
             ) && reference.display_label.is_none()
         };
         if !references.iter().any(is_unresolved) {
+            self.inspector.outgoing_labels = None;
             return;
         }
 
@@ -2360,6 +2367,7 @@ impl DataGridPanel {
             ..
         }) = self.reference_lookup_target(cx)
         else {
+            self.inspector.outgoing_labels = None;
             return;
         };
 
@@ -2381,7 +2389,7 @@ impl DataGridPanel {
             }
         }
 
-        cx.spawn(async move |_, cx| {
+        let task = cx.spawn(async move |_, cx| {
             let display_columns = reference_display_columns(
                 &app_state,
                 profile_id,
@@ -2420,8 +2428,9 @@ impl DataGridPanel {
                 cx,
             )
             .await;
-        })
-        .detach();
+        });
+
+        self.inspector.outgoing_labels = Some(task);
     }
 
     /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.

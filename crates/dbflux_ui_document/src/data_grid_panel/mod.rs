@@ -775,6 +775,11 @@ struct InspectorState {
     /// references.
     incoming_references: row_inspector::IncomingReferencesLoader,
 
+    /// The inspected row's outgoing-reference label lookup. Every open
+    /// replaces or drops it, cancelling a lookup still in flight for a
+    /// previous row.
+    outgoing_labels: Option<Task<()>>,
+
     /// The Document panel a document collection shows instead of the row
     /// inspector, kept alive so its expanded fields survive row changes.
     document_inspector_content: Option<Entity<documents::inspector::DocumentInspectorContent>>,
@@ -1433,6 +1438,7 @@ impl DataGridPanel {
                 pinned: false,
                 _row_inspector_subscription: None,
                 incoming_references: row_inspector::IncomingReferencesLoader::default(),
+                outgoing_labels: None,
                 document_inspector_content: None,
                 _document_inspector_subscription: None,
                 row_action_provider: None,
