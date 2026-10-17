@@ -17,6 +17,7 @@ Both are created from the repository's own templates — never from a remembered
 - An issue uses one of the forms in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` for a defect, `feature_request.yml` for a capability. Fill the form's fields in the order it declares them, and keep the `[bug] ` / `[feature] ` title prefix and the `Labels I plan to apply` checklist it renders.
 - A pull request uses `.github/pull_request_template.md` verbatim: `Summary`, `What does this resolve?`, `How was this solved?`, `Validation`, `Where was this tested?`, `Checklist`, `Labels to apply`. Do not add sections of your own; follow-up work and known limitations belong where the template asks for them.
 - The mechanics (duplicate search, choosing the form, `gh` commands, reading the full branch delta) live in `skills/issue-creation/SKILL.md` and `skills/branch-pr/SKILL.md`.
+- Open the issue first and wait for maintainer approval (the `status:approved` label) before implementing a feature or behavior change; a bug fix may open its issue and PR together, and the maintainer may skip the wait. PRs are squash-merged, so split large work into independent PRs from `main` rather than long stacks (see `CONTRIBUTING.md` § Pull Requests).
 - Use only labels from the taxonomy in `CONTRIBUTING.md` § Label Guide, and never invent labels such as `area:*`.
 - A contributor without write access to `0xErwin1/dbflux` cannot apply labels from a fork. State the labels the change needs where the template asks for them and ask a maintainer to apply them during triage — do not drop that part of the template.
 
@@ -136,8 +137,9 @@ cargo run -p dbflux --features ui-automation
 
 - Prioritize correctness and clarity over speed
 - Do not write comments that summarize code; only explain non-obvious "why"
-- Prefer implementing in existing files unless it's a new logical component
-- Avoid creating many small files
+- Keep code organized by module: extend the module that owns the behavior, and once a file passes ~1000 lines of production code, split it into a module directory (`foo/mod.rs` plus submodules) by responsibility. New files belong inside the module directory they serve, not loose next to unrelated files.
+- Keep tests in the module's `tests` submodule (`foo/tests.rs` or `foo/tests/`), not inline in large files and not as sibling `*_tests.rs` files.
+- Keep functions under ~100 lines; split new or substantially rewritten functions that exceed it into private helpers. Existing functions and files over these limits are exempt until they are refactored.
 - Avoid creative additions unless explicitly requested
 - Use full words for variable names (no abbreviations like "q" for "queue")
 

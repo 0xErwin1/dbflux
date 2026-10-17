@@ -2,6 +2,7 @@
   "name": "dbflux-web",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@11.28.6",
   "scripts": {
     "dev": "pnpm run sync-docs && astro dev",
     "build": "pnpm run sync-docs && astro build",
