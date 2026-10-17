@@ -1227,3 +1227,35 @@ fn the_footer_counts_the_neighbors(cx: &mut TestAppContext) {
         assert!(footer.starts_with("1 nearest"), "{footer}");
     });
 }
+
+/// A longer vector column name must not push the distance switch and K.
+#[gpui::test]
+fn the_column_picker_keeps_its_width_for_any_column_name(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    redraw(window);
+    let before = window
+        .debug_bounds("nearest-neighbors-column-slot")
+        .expect("the column picker is drawn");
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.nearest.column_dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_items(
+                    vec![dbflux_components::controls::DropdownItem::new(
+                        "a_much_longer_vector_column_name",
+                    )],
+                    cx,
+                );
+                dropdown.set_selected_index(Some(0), cx);
+            });
+        })
+    });
+    redraw(window);
+
+    let after = window
+        .debug_bounds("nearest-neighbors-column-slot")
+        .expect("the column picker is drawn");
+    assert_eq!(after.size.width, before.size.width);
+}

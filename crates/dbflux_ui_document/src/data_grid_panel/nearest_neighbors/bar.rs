@@ -14,6 +14,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::Sizable;
 
+/// Width of the vector-column picker in the bar.
+const COLUMN_PICKER_WIDTH: Rems = dbflux_components::tokens::ui(180.0);
+
 /// Segment id of a distance in the bar's distance switch.
 fn distance_segment(distance: VectorDistance) -> &'static str {
     match distance {
@@ -110,8 +113,13 @@ impl DataGridPanel {
                     ),
             )
             .child(
+                // A fixed slot: a longer column name truncates instead of
+                // pushing the distance switch and K along the bar.
                 div()
+                    .debug_selector(|| "nearest-neighbors-column-slot".to_string())
                     .flex_none()
+                    .w(COLUMN_PICKER_WIDTH)
+                    .overflow_hidden()
                     .child(self.nearest.column_dropdown.clone()),
             )
             .child(distance_switch)
