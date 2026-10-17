@@ -702,6 +702,9 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - **드라이버/UI 분리**: UI와 앱 오케스트레이션 계층은 구체적인 드라이버 ID로 분기하거나 드라이버별 라우팅을 내장해서는 안 됩니다. 코어가 접점을 노출하고 드라이버가 이를 채웁니다.
   - `DriverMetadata`는 폭넓은 적응(`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`)을 담당합니다.
   - `CollectionPresentation`은 컬렉션/컨테이너가 어떻게 열리는지(예: 데이터 그리드 vs 이벤트 스트림) UI에 알려줍니다.
+  - `ObjectFacet`(`crates/dbflux_core/src/schema/facet.rs`)은 하나의 개체가 노출하는 패러다임(`Tabular`, `Document`, `Vector`)을 나타냅니다. `CollectionPresentation`은 어떤 문서가 열릴지 고르고, facet은 데이터 문서 안의 뷰 모드를 고릅니다. `Connection::object_facets`의 기본값은 `[Tabular]`이며 드라이버가 재정의합니다(PostgreSQL은 `vector(n)` 열마다 `Vector`를 하나 추가합니다). 컬렉션은 `default_collection_facets(category)`에서 facet을 도출합니다. 이 열거형은 exhaustive이므로 새 facet은 `DataViewMode::for_facet`(`crates/dbflux_ui_document/src/data_view.rs`)가 처리할 때까지 컴파일되지 않습니다. 최근접 이웃 SQL은 `QueryGenerator::generate_nearest_neighbors`를 통해 드라이버가 소유하며, 기본값은 미지원입니다.
+  - `category_presentation`(`crates/dbflux_components/src/category.rs`)은 카테고리별 대체 아이콘, 톤, 스키마 트리 컨테이너 레이블을 담는 단일 테이블입니다. 새 `DatabaseCategory`는 UI 크레이트마다 match를 두는 대신 여기에 arm 하나를 추가합니다.
+  - `DataStructure::ReservedWideColumn`은 postcard 와이어 인덱스 4만 차지하여 드라이버 RPC 피어에 대해 `TimeSeries`가 인덱스 5를 유지하게 합니다. `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs`가 변형 인덱스를 고정합니다. `DataStructure` 변형을 제거하거나 순서를 바꾸지 마십시오.
   - `CollectionChildInfo`는 드라이버가 UI 휴리스틱 없이 컬렉션/컨테이너 아래에 하위 소스를 게시할 수 있게 합니다.
   - `EventStreamTarget`는 워크스페이스/감사에 드라이버 지원 이벤트 스트림의 일반 식별자를 제공합니다.
   - `SourceContextSpec`는 드라이버가 `dbflux_ui`에 드라이버 이름을 하드코딩하지 않고 추가 쿼리 컨텍스트 컨트롤을 선언할 수 있게 합니다.

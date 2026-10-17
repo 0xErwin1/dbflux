@@ -711,6 +711,9 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - **驱动程序/界面解耦**：界面与应用编排层绝不能依据具体的驱动程序 ID 做分支，也不能内嵌针对特定驱动程序的路由。核心 crate 暴露接缝，驱动程序去填充它们。
   - `DriverMetadata` 覆盖宽泛的适配需求（`DatabaseCategory`、`QueryLanguage`、`DriverCapabilities`）。
   - `CollectionPresentation` 告诉界面一个集合/容器如何打开（例如数据网格还是事件流）。
+  - `ObjectFacet`（`crates/dbflux_core/src/schema/facet.rs`）表示一个对象所暴露的范式：`Tabular`、`Document`、`Vector`。`CollectionPresentation` 决定打开哪种文档；facet 决定数据文档内部的视图模式。`Connection::object_facets` 默认返回 `[Tabular]`，由驱动程序覆盖（PostgreSQL 为每个 `vector(n)` 列添加一个 `Vector`）；集合则通过 `default_collection_facets(category)` 推导。该枚举是穷尽的，因此新的 facet 在 `DataViewMode::for_facet`（`crates/dbflux_ui_document/src/data_view.rs`）处理它之前无法编译。最近邻 SQL 仍由驱动程序通过 `QueryGenerator::generate_nearest_neighbors` 生成，默认不支持。
+  - `category_presentation`（`crates/dbflux_components/src/category.rs`）是按类别提供后备图标、色调与 Schema 树容器标签的唯一表；新增 `DatabaseCategory` 只需在此添加一个分支，而不必在每个界面 crate 中写 match。
+  - `DataStructure::ReservedWideColumn` 仅占用 postcard 线上索引 4，使 `TimeSeries` 对驱动程序 RPC 对端保持索引 5；`crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` 固定各变体的索引。不要删除或重排 `DataStructure` 的变体。
   - `CollectionChildInfo` 让驱动程序可以发布集合/容器之下的子来源，无需界面做启发式推断。
   - `EventStreamTarget` 为工作区/审计提供一个通用标识符，指向由驱动程序支撑的事件流。
   - `SourceContextSpec` 让驱动程序可以声明额外的查询上下文控件，而无需在 `dbflux_ui` 中硬编码驱动程序名。

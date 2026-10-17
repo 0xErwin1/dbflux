@@ -419,6 +419,7 @@ Key abstractions for UI adaptation:
 - `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
 - `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
 - `CollectionPresentation`: Determines how a collection/container opens (for example data grid vs event stream)
+- `ObjectFacet` (via `Connection::object_facets`, default `[Tabular]`; collections use `default_collection_facets`): Determines the view modes and grid actions inside the data document, per object. A table can carry several (PostgreSQL adds `Vector` for each `vector(n)` column)
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
@@ -469,6 +470,7 @@ Key abstractions for UI adaptation:
 4. Define the connection form in the driver crate (e.g. `const DRIVER_FORM: DriverFormDef`) and return it from `DbDriver::form_definition()`. Form definitions live with the driver, not in `dbflux_core`.
 5. Implement `ErrorFormatter` for driver-specific error messages
 6. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
+   - Override `Connection::object_facets` when an object exposes more than one paradigm, and implement the matching `QueryGenerator` method (for example `generate_nearest_neighbors` for `ObjectFacet::Vector`).
 7. Implement `LanguageService` when the driver speaks a non-SQL dialect (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). SQL drivers can reuse `SqlLanguageService` from `dbflux_core`.
 8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag. The feature MUST also be added to `default` in `crates/dbflux/Cargo.toml` — release builds ship default features, so a driver left out of `default` silently ships disabled.
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
@@ -486,6 +488,8 @@ Drivers declare their capabilities via `DriverMetadata`:
 - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
+- `ObjectFacet` (`dbflux_core/src/schema/facet.rs`): per-object paradigms. A new paradigm lands as one facet variant, a driver that emits it and the view that renders it, in the same plan. Never add a core facet, `DataStructure` variant or view kind as a skeleton to be filled in later.
+- A new `DatabaseCategory` also needs its arm in `category_presentation` (`dbflux_components/src/category.rs`), the single source of category icons, tones and container labels.
 
 ### Documentation translations
 

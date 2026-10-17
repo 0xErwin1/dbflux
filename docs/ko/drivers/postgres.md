@@ -22,6 +22,7 @@
 - 쿼리가 발생시킨 서버 알림과 경고(예: 단독 `COMMIT`의 `WARNING: there is no transaction in progress` 또는 `RAISE NOTICE`)는 그 결과와 함께 반환됩니다. 배치는 모든 알림을 기본 결과에 붙이며, 실패한 쿼리는 알림을 버립니다. 쿼리는 처음 100개의 알림을 유지하고, 나머지 개수를 알려 주는 알림 하나를 덧붙입니다.
 - 데이터 전송 엔진: 네이티브 다중 행 `INSERT` 대량 적재(`BULK_INSERT`), 원본 테이블의 열을 기반으로 한 드라이버 네이티브 `CREATE TABLE` DDL, `TRUNCATE TABLE` 지원, FK 안전 마이그레이션을 위한 참조 무결성 토글(`SET session_replication_role`).
 - 검증된 1차원 배열을 포함해 `pgvector`의 `vector`, `halfvec`, `sparsevec` 값을 텍스트 결과로 표시합니다.
+- `pgvector` `vector` 열이 있는 테이블에서 선택한 행과 가장 가까운 행을 L2 거리, 코사인 거리 또는 음의 내적으로 찾고, 각 이웃을 `distance`와 함께 표시합니다. `halfvec`와 `sparsevec` 열은 이 검색을 제공하지 않습니다.
 - 1차원 배열을 포함해 전문 검색의 `tsvector`와 `tsquery` 값을 PostgreSQL의 정규 텍스트 형태로 표시합니다.
 - 1차원 `numeric[]` 배열을 포함해 `numeric` 값을 PostgreSQL이 저장한 정확한 십진수로 표시합니다.
 - `infinity`와 `-infinity` 날짜와 타임스탬프, 그리고 그 1차원 배열을 PostgreSQL 자체의 텍스트로 표시합니다.

@@ -1104,6 +1104,27 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `QueryLanguage`, `DriverCapabilities`).
   - `CollectionPresentation` le indica a la UI cómo se abre una
     collection/container (por ejemplo data grid vs event stream).
+  - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) nombra los
+    paradigmas que expone un objeto: `Tabular`, `Document`, `Vector`.
+    `CollectionPresentation` elige qué document se abre; los facets eligen los
+    modos de vista dentro del data document. `Connection::object_facets`
+    devuelve `[Tabular]` por defecto y los drivers lo sobrescriben (PostgreSQL
+    agrega un `Vector` por cada columna `vector(n)`); las collections derivan
+    los suyos de `default_collection_facets(category)`. El enum es exhaustivo,
+    así que un facet nuevo no compila hasta que `DataViewMode::for_facet`
+    (`crates/dbflux_ui_document/src/data_view.rs`) lo maneje. El SQL de
+    vecinos más cercanos sigue siendo propiedad del driver vía
+    `QueryGenerator::generate_nearest_neighbors`, que por defecto no está
+    soportado.
+  - `category_presentation` (`crates/dbflux_components/src/category.rs`) es la
+    única tabla de íconos, tonos y etiquetas de contenedor del árbol de schema
+    por categoría; una `DatabaseCategory` nueva agrega un brazo ahí en lugar de
+    un match en cada crate de UI.
+  - `DataStructure::ReservedWideColumn` solo reserva el índice 4 del wire
+    postcard, para que `TimeSeries` conserve el índice 5 ante peers del
+    protocolo RPC de drivers;
+    `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` fija los índices de las
+    variantes. No elimine ni reordene variantes de `DataStructure`.
   - `CollectionChildInfo` permite a los drivers publicar fuentes hijas bajo una
     collection/container sin heurísticas de UI.
   - `EventStreamTarget` le da al workspace/audit un identificador genérico para
