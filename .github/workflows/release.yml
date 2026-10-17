@@ -111,6 +111,9 @@ jobs:
     # nothing the checks produce. A red check still blocks the release.
     needs: [classify]
     uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      actions: read  # required by the reusable build workflow's Windows signing job
     with:
       version: ${{ needs.classify.outputs.version }}
       channel: ${{ needs.classify.outputs.channel }}
@@ -153,7 +156,8 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: artifacts
-          pattern: "*"
+          # Exclude raw, unsigned SignPath inputs; publish only final platform bundles.
+          pattern: "{linux,macos,windows}-*"
           merge-multiple: false
 
       - name: (act) Load artifacts locally

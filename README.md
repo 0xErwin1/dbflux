@@ -296,6 +296,21 @@ nix develop
 nix-shell
 ```
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+Stable and release-candidate Windows releases are Authenticode-signed: `dbflux.exe` in the portable ZIP and the installer, and the setup executable itself. Nightly builds are not Authenticode-signed. Every release artifact, on every platform, also carries a GPG signature and a SHA256 checksum.
+
+| Role | Members |
+|------|---------|
+| Committers and reviewers | [@0xErwin1](https://github.com/0xErwin1) |
+| Approvers | [@0xErwin1](https://github.com/0xErwin1) |
+
+Changes from contributors without commit access are reviewed before they are merged. Signed binaries are built only by GitHub Actions from this repository, and every signing request is approved manually.
+
+Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user. See the [Privacy Policy](PRIVACY.md) for details.
+
 ## License
 
 MIT & Apache-2.0. The DBFlux name and logo are covered by the [Trademark Policy](TRADEMARK.md), not by the code license.
