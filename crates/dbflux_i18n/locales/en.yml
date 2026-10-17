@@ -1793,6 +1793,9 @@ document:
         anchor_row: "row %{row}"
         read_only: "Similar rows are read-only"
         menu_detail: "by %{column} · nearest %{limit}"
+        menu_blocked:
+          no_vector: "No value in %{column}"
+          pending_edits: "Save or revert %{count} changes first"
         column:
           l2: "L2 distance"
           cosine: "Cosine distance"

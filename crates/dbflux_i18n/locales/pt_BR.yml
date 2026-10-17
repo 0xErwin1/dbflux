@@ -1793,6 +1793,9 @@ document:
         anchor_row: "linha %{row}"
         read_only: "Linhas semelhantes são somente leitura"
         menu_detail: "por %{column} · %{limit} mais próximas"
+        menu_blocked:
+          no_vector: "Sem valor em %{column}"
+          pending_edits: "Salve ou reverta %{count} alterações antes"
         column:
           l2: "Distância L2"
           cosine: "Distância cosseno"

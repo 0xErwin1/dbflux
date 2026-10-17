@@ -2555,7 +2555,7 @@ impl DataGridPanel {
 
         let block = self.similar_rows_block(menu.row, menu.col, cx);
         let detail = match &block {
-            Some(block) => Some(block.reason()),
+            Some(block) => Some(block.menu_reason()),
             None => self.similar_rows_menu_detail(menu.col, cx),
         };
 

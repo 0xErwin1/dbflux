@@ -290,7 +290,8 @@ pub fn menu_row(
         .text_color(text_color)
         .when(interaction_state.interactive, |row| row.cursor_pointer())
         .when(item.disabled, |row| {
-            row.opacity(MenuMetrics::DISABLED_OPACITY)
+            row.aria_disabled(true)
+                .opacity(MenuMetrics::DISABLED_OPACITY)
         })
         .child(shape)
         .child(match item.icon.clone() {

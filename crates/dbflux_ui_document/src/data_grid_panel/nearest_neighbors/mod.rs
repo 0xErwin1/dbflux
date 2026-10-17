@@ -128,6 +128,21 @@ pub(crate) enum SimilarRowsBlock {
 }
 
 impl SimilarRowsBlock {
+    /// The reason as the row menu's second line shows it, short enough not
+    /// to be cut off.
+    pub(crate) fn menu_reason(&self) -> String {
+        match self {
+            SimilarRowsBlock::NoVector { column } => dbflux_i18n::t!(
+                "document.data.grid.nearest.menu_blocked.no_vector",
+                column = column.as_str()
+            ),
+            SimilarRowsBlock::PendingEdits { count } => dbflux_i18n::t!(
+                "document.data.grid.nearest.menu_blocked.pending_edits",
+                count = count
+            ),
+        }
+    }
+
     pub(crate) fn reason(&self) -> String {
         match self {
             SimilarRowsBlock::NoVector { column } => dbflux_i18n::t!(

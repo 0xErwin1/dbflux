@@ -1016,10 +1016,7 @@ fn find_similar_rows_is_disabled_with_the_reason_while_edits_are_pending(cx: &mu
     let (_, detail, disabled) = find_similar_entry(&row_menu(&panel, window));
 
     assert!(disabled);
-    assert_eq!(
-        detail.as_deref(),
-        Some("Save or revert your 1 changes first")
-    );
+    assert_eq!(detail.as_deref(), Some("Save or revert 1 changes first"));
     assert!(calls.lock().unwrap().neighbor_requests.is_empty());
 }
 
@@ -1038,10 +1035,7 @@ fn find_similar_rows_is_disabled_on_a_row_without_a_vector(cx: &mut TestAppConte
     let (_, detail, disabled) = find_similar_entry(&row_menu(&panel, window));
 
     assert!(disabled);
-    assert_eq!(
-        detail.as_deref(),
-        Some("The selected row has no value in embedding")
-    );
+    assert_eq!(detail.as_deref(), Some("No value in embedding"));
     assert!(!find_similar_rows(&panel, window) || calls.lock().unwrap().executed.is_empty());
 }
 

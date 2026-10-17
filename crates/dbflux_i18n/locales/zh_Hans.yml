@@ -1793,6 +1793,9 @@ document:
         anchor_row: "第 %{row} 行"
         read_only: "相似行为只读"
         menu_detail: "按 %{column} · 最近 %{limit} 行"
+        menu_blocked:
+          no_vector: "%{column} 无值"
+          pending_edits: "请先保存或还原 %{count} 处更改"
         column:
           l2: "L2 距离"
           cosine: "余弦距离"

@@ -1793,6 +1793,9 @@ document:
         anchor_row: "%{row}행"
         read_only: "유사한 행은 읽기 전용입니다"
         menu_detail: "%{column} 기준 · 가장 가까운 %{limit}개"
+        menu_blocked:
+          no_vector: "%{column} 값 없음"
+          pending_edits: "먼저 변경 %{count}개를 저장하거나 되돌리기"
         column:
           l2: "L2 거리"
           cosine: "코사인 거리"
