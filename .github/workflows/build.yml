@@ -791,7 +791,7 @@ jobs:
     timeout-minutes: 210
     permissions:
       contents: read
-      actions: read
+      actions: read  # SignPath reads the uploaded unsigned artifact through the Actions API
     env:
       # test-signing uses SignPath's self-signed test certificate. Switch to
       # release-signing once SignPath Foundation imports the production
@@ -801,6 +801,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check Windows signing prerequisites
         if: inputs.channel == 'stable' || inputs.channel == 'rc'

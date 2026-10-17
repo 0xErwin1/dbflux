@@ -113,7 +113,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     permissions:
       contents: read
-      actions: read
+      actions: read  # required by the reusable build workflow's Windows signing job
     with:
       version: ${{ needs.classify.outputs.version }}
       channel: ${{ needs.classify.outputs.channel }}
