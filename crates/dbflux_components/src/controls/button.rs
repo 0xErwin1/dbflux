@@ -562,7 +562,9 @@ impl RenderOnce for Button {
         }
 
         if disabled {
-            return button.opacity(ButtonMetrics::DISABLED_OPACITY);
+            return button
+                .aria_disabled(true)
+                .opacity(ButtonMetrics::DISABLED_OPACITY);
         }
 
         let state_on_down = state.clone();

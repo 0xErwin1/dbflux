@@ -1064,6 +1064,7 @@ impl DataGridPanel {
                         cx.notify();
                     } else if menu.selected_index < base_count
                         && let Some(item) = base_items.get(menu.selected_index)
+                        && !item.disabled
                         && let Some(action) = item.action
                     {
                         self.handle_context_menu_action(action, window, cx);
@@ -1760,9 +1761,13 @@ impl DataGridPanel {
         };
 
         // Separators are shorter than rows, so this over-estimates a little;
-        // a menu placed a few pixels higher than necessary is harmless.
+        // a menu placed a few pixels higher than necessary is harmless. The
+        // one taller row (Find similar rows, with its detail line) is counted
+        // whether or not it is shown, for the same reason.
         let menu_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
             * menu_items.len() as f32
+            + dbflux_components::fonts::ui_px(cx, MenuMetrics::DETAIL_ROW_HEIGHT)
+            - dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
             + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
@@ -2519,8 +2524,10 @@ impl DataGridPanel {
         });
     }
 
-    /// Adds "Find similar rows" after "View value" when the table has a
-    /// vector column and the menu is on a row of the grid.
+    /// Adds "Find similar rows" to the row actions when the table has a
+    /// vector column and the menu is on a row of the grid. The entry names
+    /// the column and K it reads, or, disabled, why it cannot run from this
+    /// row.
     pub(in crate::data_grid_panel) fn with_find_similar_rows(
         &self,
         mut items: Vec<ContextMenuItem>,
@@ -2532,18 +2539,31 @@ impl DataGridPanel {
             return items;
         }
 
-        let position = items
-            .iter()
-            .position(|item| item.action == Some(ContextMenuAction::ViewValue))
-            .map_or(items.len(), |index| index + 1);
+        let position_of =
+            |action: ContextMenuAction| items.iter().position(|item| item.action == Some(action));
+        let position = position_of(ContextMenuAction::InspectRow)
+            .map(|index| index + 1)
+            .or_else(|| position_of(ContextMenuAction::DuplicateRow))
+            .or_else(|| position_of(ContextMenuAction::AddRow).map(|index| index + 1))
+            .or_else(|| position_of(ContextMenuAction::ViewValue).map(|index| index + 1))
+            .unwrap_or(items.len());
+
+        let block = self.similar_rows_block(menu.row, menu.col, cx);
+        let detail = match &block {
+            Some(block) => Some(block.reason()),
+            None => self.similar_rows_menu_detail(menu.col, cx),
+        };
+
         items.insert(
             position,
             ContextMenuItem {
                 label: dbflux_i18n::t!("document.data.context_menu.item.find_similar_rows").into(),
                 action: Some(ContextMenuAction::FindSimilarRows),
-                icon: Some(AppIcon::Search),
+                icon: Some(AppIcon::ChartScatter),
                 is_separator: false,
                 is_danger: false,
+                detail: detail.map(Into::into),
+                disabled: block.is_some(),
             },
         );
         items
@@ -2571,6 +2591,8 @@ impl DataGridPanel {
                     icon: Some(AppIcon::CircleX),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 }),
                 Some(ContextMenuAction::SetNull) => {
                     adapted.push(item);
@@ -2580,6 +2602,8 @@ impl DataGridPanel {
                         icon: Some(AppIcon::RotateCcw),
                         is_separator: false,
                         is_danger: false,
+                        detail: None,
+                        disabled: false,
                     });
                 }
                 _ => adapted.push(item),

@@ -856,6 +856,10 @@ impl MenuMetrics {
     pub const ICON: Rems = ui(15.0);
     /// Trailing submenu chevron. (13 px)
     pub const SUBMENU_ICON: Rems = ui(13.0);
+    /// Second line under the label of a row that explains it. (11.5 px)
+    pub const DETAIL_FONT: Rems = ui(11.5);
+    /// Height of a row that carries a detail line. (44 px)
+    pub const DETAIL_ROW_HEIGHT: Rems = ui(44.0);
 
     /// Header row: icon (13 px), gap (8 px), mono label (11 px), padding
     /// 2 px top, 16 px sides, 8 px bottom.
@@ -927,6 +931,10 @@ impl GridMetrics {
     pub const HEADER_GAP: Pixels = px(6.0);
     /// Alpha of the tint wash behind the focused and selected cells.
     pub const CELL_SELECTED_ALPHA: f32 = 0.12;
+    /// Wash of the reference row a similar-rows search pins on top.
+    pub const REFERENCE_ROW_ALPHA: f32 = 0.10;
+    /// Bottom line under the reference row.
+    pub const REFERENCE_ROW_BORDER_ALPHA: f32 = 0.45;
 }
 
 /// Geometry of the result chrome: the footer under a result grid and the

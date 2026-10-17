@@ -1259,6 +1259,7 @@ impl DataTable {
                     enum_dropdown.as_ref(),
                     edit_buffer,
                     state.document_presentation(),
+                    state.has_reference_row(),
                     total_width,
                     font_size,
                     row_height,
@@ -1305,6 +1306,7 @@ fn render_rows(
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
     document: Option<&DocumentPresentation>,
+    reference_row: bool,
     total_width: f32,
     font_size: Pixels,
     row_height: Pixels,
@@ -1363,6 +1365,10 @@ fn render_rows(
             let is_active_row = selection.active.is_some_and(|active| active.row == row_ix);
             let tint = ChromeColors::tint(theme);
             let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
+            let is_reference_row = reference_row && row_ix == 0;
+            // Under a reference row the others are numbered from 1, so the
+            // number reads as their rank.
+            let row_number = if reference_row { row_ix } else { row_ix + 1 };
 
             let cells: Vec<AnyElement> = (0..model.col_count())
                 .map(|col_ix| {
@@ -1579,12 +1585,18 @@ fn render_rows(
                 .when_some(row_bg, |d, bg| d.bg(bg))
                 // The row holding the focused cell gets the selected-row
                 // wash; clean rows otherwise alternate.
-                .when(row_bg.is_none() && is_active_row, |d| {
-                    d.bg(theme.table_active)
+                .when(row_bg.is_none() && is_reference_row, |d| {
+                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
+                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
                 })
-                .when(row_bg.is_none() && !is_active_row && row_ix % 2 == 1, |d| {
-                    d.bg(theme.table_even)
-                })
+                .when(
+                    row_bg.is_none() && !is_reference_row && is_active_row,
+                    |d| d.bg(theme.table_active),
+                )
+                .when(
+                    row_bg.is_none() && !is_reference_row && !is_active_row && row_ix % 2 == 1,
+                    |d| d.bg(theme.table_even),
+                )
                 .child(
                     div()
                         .flex()
@@ -1595,8 +1607,20 @@ fn render_rows(
                         .h_full()
                         .pr(CELL_PADDING_X)
                         .text_size(font_size)
-                        .text_color(if is_active_row { tint } else { theme.input })
-                        .child((row_ix + 1).to_string()),
+                        .text_color(if is_active_row || is_reference_row {
+                            tint
+                        } else {
+                            theme.input
+                        })
+                        .map(|gutter| {
+                            if is_reference_row {
+                                gutter.child(
+                                    Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint),
+                                )
+                            } else {
+                                gutter.child(row_number.to_string())
+                            }
+                        }),
                 )
                 .children(cells)
                 .into_any_element()

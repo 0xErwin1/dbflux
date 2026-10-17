@@ -297,28 +297,33 @@ impl DataGridPanel {
             actions.push(ToolbarAction::Export);
         }
 
-        if self.filter_is_clearable(cx) {
+        // The neighbor bar replaces the filter row: its own actions stand in
+        // for the filter's.
+        let neighbors_shown = self.neighbor_bar_search().is_some();
+        let filter_controls_shown = filter_row_shown && !neighbors_shown;
+
+        if !neighbors_shown && self.filter_is_clearable(cx) {
             actions.push(ToolbarAction::ClearFilter);
         }
 
-        if filter_row_shown && self.builder_notice_visible() {
+        if filter_controls_shown && self.builder_notice_visible() {
             actions.push(ToolbarAction::ResetBuilder);
         }
 
-        if filter_row_shown && self.nearest_neighbor_search().is_some() {
+        if filter_row_shown && neighbors_shown {
             actions.push(ToolbarAction::NearestDistance);
             actions.push(ToolbarAction::ClearNearest);
         }
 
-        if filter_row_shown && self.can_toggle_view() {
+        if filter_controls_shown && self.can_toggle_view() {
             actions.push(ToolbarAction::ToggleView);
         }
 
-        if filter_row_shown && !self.builder.builder_open && self.can_open_builder(cx) {
+        if filter_controls_shown && !self.builder.builder_open && self.can_open_builder(cx) {
             actions.push(ToolbarAction::OpenBuilder);
         }
 
-        if filter_row_shown && self.shows_table_column_picker() {
+        if filter_controls_shown && self.shows_table_column_picker() {
             actions.push(ToolbarAction::ColumnPicker);
         }
 
@@ -518,7 +523,7 @@ impl DataGridPanel {
             ToolbarAction::NearestDistance => dbflux_i18n::t!(
                 "document.data.context_menu.toolbar.nearest_distance",
                 distance = self
-                    .nearest_neighbor_search()
+                    .neighbor_bar_search()
                     .map(|search| super::super::nearest_neighbors::distance_label(search.distance))
                     .unwrap_or_default()
             ),

@@ -266,14 +266,16 @@ impl Connection for StubVectorConnection {
     }
 }
 
-fn open_table(
+/// An app state holding one connection to the stub, with its call log and
+/// the toast host.
+fn connect(
     with_vector: bool,
     cx: &mut TestAppContext,
 ) -> (
-    Entity<DataGridPanel>,
+    Entity<AppStateEntity>,
+    Uuid,
     Arc<Mutex<Calls>>,
     Entity<ToastHost>,
-    &mut VisualTestContext,
 ) {
     cx.update(gpui_component::init);
     cx.update(theme::init);
@@ -330,6 +332,19 @@ fn open_table(
         });
     });
 
+    (app_state, profile_id, calls, toasts)
+}
+
+fn open_table(
+    with_vector: bool,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<DataGridPanel>,
+    Arc<Mutex<Calls>>,
+    Entity<ToastHost>,
+    &mut VisualTestContext,
+) {
+    let (app_state, profile_id, calls, toasts) = connect(with_vector, cx);
     let window = cx.add_empty_window();
     let panel = window.update(|window, app| {
         app.new(|cx| {
@@ -346,6 +361,36 @@ fn open_table(
     window.run_until_parked();
 
     (panel, calls, toasts, window)
+}
+
+/// Like [`open_table`], but the panel is drawn in a window, so a test can
+/// read what the frame shows.
+fn open_rendered_table(cx: &mut TestAppContext) -> (Entity<DataGridPanel>, &mut VisualTestContext) {
+    let (app_state, profile_id, _, _) = connect(true, cx);
+    let panel_handle = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+    let (_, window) = cx.add_window_view({
+        let panel_handle = panel_handle.clone();
+        move |window, cx| {
+            let panel = cx.new(|cx| {
+                DataGridPanel::new_for_table(
+                    profile_id,
+                    TableRef::with_schema("public", "items"),
+                    None,
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            panel_handle.replace(Some(panel.clone()));
+            gpui_component::Root::new(panel, window, cx)
+        }
+    });
+    window.run_until_parked();
+    window.update(|_, _| {});
+
+    let panel = panel_handle.borrow().clone().expect("the panel is created");
+    (panel, window)
 }
 
 /// Puts the cursor on the label of the second row.
@@ -455,12 +500,27 @@ fn similar_rows_replace_the_page_with_the_neighbors_and_their_distance(cx: &mut 
 
     assert_eq!(
         column_names(&panel, window),
-        vec!["id", "label", "embedding", "nearest_distance"]
+        vec!["L2 distance", "id", "label", "embedding"],
+        "the distance comes first, under a header that names it"
     );
 
     window.update(|_, app| {
         let panel = panel.read(app);
-        assert_eq!(panel.result.rows.len(), 1);
+        assert_eq!(
+            panel.result.rows.len(),
+            2,
+            "the anchor row, then the neighbor"
+        );
+        assert_eq!(
+            panel.result.rows[0],
+            vec![
+                Value::Text("anchor".into()),
+                Value::Int(2),
+                Value::Text("second".into()),
+                Value::Text("[0,1,0]".into()),
+            ]
+        );
+        assert_eq!(panel.result.rows[1][0], Value::Text("1.5000".into()));
         assert!(!panel.mutations_enabled(), "neighbor rows are read-only");
         let search = panel
             .nearest_neighbor_search()
@@ -556,14 +616,18 @@ fn a_failed_search_reports_the_error_and_keeps_the_page(cx: &mut TestAppContext)
     });
 }
 
-fn first_label(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) -> Option<Value> {
+/// The label of the first neighbor, under the pinned anchor row.
+fn first_neighbor_label(
+    panel: &Entity<DataGridPanel>,
+    window: &mut VisualTestContext,
+) -> Option<Value> {
     window.update(|_, app| {
         panel
             .read(app)
             .result
             .rows
-            .first()
-            .and_then(|row| row.get(1).cloned())
+            .get(1)
+            .and_then(|row| row.get(2).cloned())
     })
 }
 
@@ -615,7 +679,7 @@ fn a_new_distance_drops_the_search_it_replaces(cx: &mut TestAppContext) {
     window.run_until_parked();
 
     assert_eq!(
-        first_label(&panel, window),
+        first_neighbor_label(&panel, window),
         Some(Value::Text(
             "NEAREST embedding InnerProduct LIMIT 10".into()
         ))
@@ -668,5 +732,487 @@ fn pending_edits_block_finding_similar_rows(cx: &mut TestAppContext) {
         assert!(panel.has_pending_edits(app), "the edit is still staged");
         assert!(panel.nearest_neighbor_search().is_none());
         assert_eq!(panel.result.rows.len(), 2);
+    });
+}
+
+fn set_filter(panel: &Entity<DataGridPanel>, text: &str, window: &mut VisualTestContext) {
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.filter_bar.filter_input.update(cx, |input, cx| {
+                input.set_value(text, window, cx);
+            });
+        });
+    });
+}
+
+fn filter_text(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) -> String {
+    window.update(|_, app| {
+        panel
+            .read(app)
+            .filter_bar
+            .filter_input
+            .read(app)
+            .value()
+            .to_string()
+    })
+}
+
+fn redraw(window: &mut VisualTestContext) {
+    window.run_until_parked();
+    window.update(|_, _| {});
+}
+
+/// The disabled state of each edit button in the header, `None` for a
+/// button the frame does not draw.
+fn edit_buttons_disabled(window: &mut VisualTestContext) -> Vec<Option<bool>> {
+    use dbflux_components::accessibility::{FrameCapture, accessibility_node};
+
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+    ["undo-btn", "redo-btn", "save-btn", "revert-btn"]
+        .iter()
+        .map(|id| accessibility_node(&frame, id).map(|node| node.is_disabled()))
+        .collect()
+}
+
+/// The neighbor bar takes the filter row's place at the same height; the
+/// WHERE / LIMIT field and the builder and column-picker actions give way.
+#[gpui::test]
+fn similar_rows_replace_the_filter_row_with_the_neighbor_bar(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    let filter_row = window
+        .debug_bounds("data-grid-filter-controls")
+        .expect("the table shows the filter field");
+    assert!(window.debug_bounds("nearest-neighbors-bar").is_none());
+
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    redraw(window);
+
+    assert!(
+        window.debug_bounds("data-grid-filter-controls").is_none(),
+        "WHERE and LIMIT do not apply to the neighbors"
+    );
+    let bar = window
+        .debug_bounds("nearest-neighbors-bar")
+        .expect("the neighbor bar is drawn");
+    assert_eq!(bar.size.height, filter_row.size.height);
+    assert_eq!(bar.origin.y, filter_row.origin.y);
+
+    window.update(|_, app| {
+        let actions = panel.read(app).toolbar_actions(app);
+        assert!(!actions.contains(&ToolbarAction::OpenBuilder));
+        assert!(!actions.contains(&ToolbarAction::ColumnPicker));
+        assert!(!actions.contains(&ToolbarAction::ClearFilter));
+    });
+}
+
+#[gpui::test]
+fn the_neighbor_bar_names_the_anchor_row_and_the_column(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        assert_eq!(
+            panel.read(app).nearest_neighbors_summary().as_deref(),
+            Some("Similar to id = 2 by embedding")
+        );
+    });
+}
+
+/// The rows are read-only because they are neighbors, not because the table
+/// has no key: no missing-key banner, and the key column keeps its icon.
+#[gpui::test]
+fn similar_rows_show_no_missing_primary_key_banner(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    redraw(window);
+
+    assert!(window.debug_bounds("missing-primary-key-banner").is_none());
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        let state = table_state.read(app);
+        assert_eq!(
+            state.pk_columns(),
+            &[1],
+            "the id column, after the distance, keeps its key icon"
+        );
+        assert!(state.has_reference_row(), "the anchor row is marked");
+        assert!(!state.is_editable(), "neighbor rows stay read-only");
+    });
+}
+
+#[gpui::test]
+fn similar_rows_keep_the_edit_controls_disabled(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    assert_eq!(edit_buttons_disabled(window), vec![Some(true); 4]);
+
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    redraw(window);
+
+    assert_eq!(
+        edit_buttons_disabled(window),
+        vec![Some(true); 4],
+        "the header keeps its shape with every edit action disabled"
+    );
+}
+
+#[gpui::test]
+fn the_header_counts_the_neighbors_shown(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    let table_meta = window.update(|_, app| panel.read(app).source_breadcrumb_meta());
+
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        assert_eq!(
+            panel.read(app).source_breadcrumb_meta(),
+            crate::labels::breadcrumb_meta_label(4, Some(1))
+        );
+    });
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.clear_nearest_neighbors(window, cx))
+    });
+    window.run_until_parked();
+
+    window.update(|_, app| {
+        assert_eq!(panel.read(app).source_breadcrumb_meta(), table_meta);
+    });
+}
+
+#[gpui::test]
+fn back_to_table_restores_the_filter_row(cx: &mut TestAppContext) {
+    let (panel, window) = open_rendered_table(cx);
+    set_filter(&panel, "label <> ''", window);
+    redraw(window);
+    let actions_before = window.update(|_, app| panel.read(app).toolbar_actions(app));
+
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    redraw(window);
+    assert!(window.debug_bounds("data-grid-filter-controls").is_none());
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.clear_nearest_neighbors(window, cx))
+    });
+    redraw(window);
+
+    assert!(window.debug_bounds("data-grid-filter-controls").is_some());
+    assert!(window.debug_bounds("nearest-neighbors-bar").is_none());
+    assert_eq!(filter_text(&panel, window), "label <> ''");
+    window.update(|_, app| {
+        assert_eq!(panel.read(app).toolbar_actions(app), actions_before);
+    });
+}
+
+fn menu_item(action: ContextMenuAction) -> crate::data_grid_panel::ContextMenuItem {
+    crate::data_grid_panel::ContextMenuItem {
+        label: format!("{action:?}").into(),
+        action: Some(action),
+        icon: None,
+        is_separator: false,
+        is_danger: false,
+        detail: None,
+        disabled: false,
+    }
+}
+
+/// The row menu as the grid builds it, with "Find similar rows" added.
+fn row_menu(
+    panel: &Entity<DataGridPanel>,
+    window: &mut VisualTestContext,
+) -> Vec<crate::data_grid_panel::ContextMenuItem> {
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.open_context_menu_at_selection(window, cx);
+            let menu = panel.context_menu.take().expect("the row menu opens");
+            let base = vec![
+                menu_item(ContextMenuAction::Copy),
+                menu_item(ContextMenuAction::ViewValue),
+                menu_item(ContextMenuAction::Paste),
+                menu_item(ContextMenuAction::AddRow),
+                menu_item(ContextMenuAction::InspectRow),
+                menu_item(ContextMenuAction::DuplicateRow),
+                menu_item(ContextMenuAction::DeleteRow),
+            ];
+            panel.with_find_similar_rows(base, &menu, true, cx)
+        })
+    })
+}
+
+fn find_similar_entry(
+    items: &[crate::data_grid_panel::ContextMenuItem],
+) -> (usize, Option<String>, bool) {
+    let (index, item) = items
+        .iter()
+        .enumerate()
+        .find(|(_, item)| item.action == Some(ContextMenuAction::FindSimilarRows))
+        .expect("the menu offers Find similar rows");
+    (
+        index,
+        item.detail.as_ref().map(|detail| detail.to_string()),
+        item.disabled,
+    )
+}
+
+#[gpui::test]
+fn find_similar_rows_sits_with_the_row_actions_and_names_what_it_reads(cx: &mut TestAppContext) {
+    let (panel, _, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+
+    let items = row_menu(&panel, window);
+    let (index, detail, disabled) = find_similar_entry(&items);
+
+    assert_eq!(
+        items.get(index - 1).and_then(|item| item.action),
+        Some(ContextMenuAction::InspectRow),
+        "right after Inspect row"
+    );
+    assert_eq!(detail.as_deref(), Some("by embedding · nearest 10"));
+    assert!(!disabled);
+}
+
+#[gpui::test]
+fn find_similar_rows_is_disabled_with_the_reason_while_edits_are_pending(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        table_state.update(app, |state, _cx| {
+            state.stage_base_cell_value(
+                0,
+                1,
+                dbflux_components::components::data_table::model::CellValue::text("edited"),
+            );
+        });
+    });
+
+    let (_, detail, disabled) = find_similar_entry(&row_menu(&panel, window));
+
+    assert!(disabled);
+    assert_eq!(
+        detail.as_deref(),
+        Some("Save or revert your 1 changes first")
+    );
+    assert!(calls.lock().unwrap().neighbor_requests.is_empty());
+}
+
+#[gpui::test]
+fn find_similar_rows_is_disabled_on_a_row_without_a_vector(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            let mut page = table_page();
+            page.rows[1][2] = Value::Null;
+            panel.set_result(page, cx);
+        })
+    });
+    select_second_row(&panel, window);
+
+    let (_, detail, disabled) = find_similar_entry(&row_menu(&panel, window));
+
+    assert!(disabled);
+    assert_eq!(
+        detail.as_deref(),
+        Some("The selected row has no value in embedding")
+    );
+    assert!(!find_similar_rows(&panel, window) || calls.lock().unwrap().executed.is_empty());
+}
+
+#[gpui::test]
+fn a_new_k_reads_that_many_neighbors(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel
+                .nearest
+                .k_input
+                .update(cx, |input, cx| input.set_value("3", window, cx));
+            panel.apply_neighbor_limit(window, cx);
+        })
+    });
+    window.run_until_parked();
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls.executed.last().map(String::as_str),
+        Some("NEAREST embedding L2 LIMIT 3")
+    );
+    drop(calls);
+    window.update(|_, app| {
+        assert_eq!(
+            panel.read(app).nearest_neighbor_search().map(|s| s.limit),
+            Some(3)
+        );
+    });
+}
+
+#[gpui::test]
+fn a_k_out_of_range_is_refused(cx: &mut TestAppContext) {
+    let (panel, calls, toasts, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    let toasts_before = window.update(|_, app| toasts.read(app).latest_toast_id());
+
+    for text in ["0", "1001", "ten"] {
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel
+                    .nearest
+                    .k_input
+                    .update(cx, |input, cx| input.set_value(text, window, cx));
+                panel.apply_neighbor_limit(window, cx);
+            })
+        });
+        window.run_until_parked();
+
+        let value = window.update(|_, app| {
+            panel
+                .read(app)
+                .nearest
+                .k_input
+                .read(app)
+                .value()
+                .to_string()
+        });
+        assert_eq!(value, "10", "{text} goes back to the K shown");
+    }
+
+    assert_eq!(calls.lock().unwrap().executed.len(), 1, "no search ran");
+    let toasts_after = window.update(|_, app| toasts.read(app).latest_toast_id());
+    assert!(toasts_after.is_some() && toasts_after != toasts_before);
+}
+
+#[gpui::test]
+fn refresh_reads_the_same_neighbors_again(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    let browses = calls.lock().unwrap().browses;
+
+    window.update(|window, app| panel.update(app, |panel, cx| panel.request_refresh(window, cx)));
+    window.run_until_parked();
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.browses, browses, "the table page is not read");
+    assert_eq!(
+        calls.executed,
+        vec![
+            "NEAREST embedding L2 LIMIT 10".to_string(),
+            "NEAREST embedding L2 LIMIT 10".to_string()
+        ]
+    );
+}
+
+#[gpui::test]
+fn escape_returns_to_the_table(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    let browses = calls.lock().unwrap().browses;
+
+    let handled = window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.dispatch_command(Command::Cancel, window, cx)
+        })
+    });
+    window.run_until_parked();
+
+    assert!(handled);
+    assert_eq!(calls.lock().unwrap().browses, browses + 1);
+    assert_eq!(
+        column_names(&panel, window),
+        vec!["id", "label", "embedding"]
+    );
+    window.update(|_, app| {
+        assert!(panel.read(app).nearest_neighbor_search().is_none());
+    });
+}
+
+#[gpui::test]
+fn picking_a_distance_runs_the_search_with_it(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.set_nearest_neighbor_distance(VectorDistance::Cosine, cx);
+            panel.set_nearest_neighbor_distance(VectorDistance::Cosine, cx);
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        calls.lock().unwrap().executed,
+        vec![
+            "NEAREST embedding L2 LIMIT 10".to_string(),
+            "NEAREST embedding Cosine LIMIT 10".to_string()
+        ],
+        "picking the distance shown again runs nothing"
+    );
+    assert_eq!(column_names(&panel, window)[0], "Cosine distance");
+}
+
+#[gpui::test]
+fn a_failed_search_leaves_the_neighbors_and_says_why_in_the_bar(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    calls.lock().unwrap().fail_execute = true;
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.set_nearest_neighbor_distance(VectorDistance::InnerProduct, cx)
+        })
+    });
+    window.run_until_parked();
+
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert_eq!(
+            panel.nearest_neighbor_search().map(|s| s.distance),
+            Some(VectorDistance::L2),
+            "the shown neighbors stay"
+        );
+        assert_eq!(panel.result.rows.len(), 2);
+        assert!(
+            panel
+                .nearest
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("operator does not exist"))
+        );
+    });
+}
+
+#[gpui::test]
+fn the_footer_counts_the_neighbors(cx: &mut TestAppContext) {
+    let (panel, _, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        let footer = panel.rows_footer(panel.result.rows.len());
+        assert!(footer.starts_with("1 nearest"), "{footer}");
     });
 }

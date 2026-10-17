@@ -61,6 +61,12 @@ impl DataGridPanel {
             return;
         }
 
+        // Refresh keeps its place in the neighbor bar and reads the same
+        // neighbors again.
+        if self.rerun_nearest_neighbors(cx) {
+            return;
+        }
+
         self.refresh(window, cx);
     }
 
