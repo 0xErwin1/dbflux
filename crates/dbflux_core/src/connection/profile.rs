@@ -1786,6 +1786,14 @@ impl ConnectionProfile {
         crate::storage::secrets::ssh_secret_ref(&self.id)
     }
 
+    /// Whether DBFlux must ask for the connection password before connecting:
+    /// the driver authenticates with one, the keyring does not hold it, and no
+    /// value source (environment, secret manager, parameter store, auth
+    /// session field, stored literal) supplies it.
+    pub fn requires_password_prompt(&self, driver_requires_password: bool) -> bool {
+        driver_requires_password && !self.save_password && !self.value_refs.contains_key("password")
+    }
+
     /// Returns true if this profile uses the new connect pipeline
     /// (has auth profile, value refs, or unified access method).
     pub fn uses_pipeline(&self) -> bool {
@@ -2497,6 +2505,63 @@ mod tests {
 
         profile.auth_profile_id = Some(Uuid::new_v4());
         assert!(profile.uses_pipeline());
+    }
+
+    fn unsaved_password_profile() -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = false;
+        profile
+    }
+
+    #[test]
+    fn password_prompt_required_when_password_is_neither_saved_nor_sourced() {
+        assert!(unsaved_password_profile().requires_password_prompt(true));
+    }
+
+    #[test]
+    fn password_prompt_not_required_when_driver_needs_no_password() {
+        assert!(!unsaved_password_profile().requires_password_prompt(false));
+    }
+
+    #[test]
+    fn password_prompt_not_required_when_password_is_saved() {
+        let mut profile = unsaved_password_profile();
+        profile.save_password = true;
+
+        assert!(!profile.requires_password_prompt(true));
+    }
+
+    #[test]
+    fn password_prompt_not_required_when_password_has_a_value_source() {
+        let sources = [
+            ValueRef::env("DB_PASS"),
+            ValueRef::secret("aws-secrets-manager", "db/creds", None),
+            ValueRef::parameter_with_key("aws-ssm", "/db/pass", None),
+            ValueRef::auth("password"),
+            ValueRef::literal("stored"),
+        ];
+
+        for source in sources {
+            let mut profile = unsaved_password_profile();
+            profile
+                .value_refs
+                .insert("password".to_string(), source.clone());
+
+            assert!(
+                !profile.requires_password_prompt(true),
+                "a password sourced from {source:?} must not be prompted"
+            );
+        }
+    }
+
+    #[test]
+    fn password_prompt_ignores_value_sources_of_other_fields() {
+        let mut profile = unsaved_password_profile();
+        profile
+            .value_refs
+            .insert("host".to_string(), ValueRef::env("DB_HOST"));
+
+        assert!(profile.requires_password_prompt(true));
     }
 
     #[test]

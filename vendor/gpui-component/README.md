@@ -13,7 +13,9 @@ Build fantastic, high-performance desktop apps with Rust and GPUI.
 GPUI Kit is a comprehensive Rust desktop application framework. It combines a
 production-ready UI system with application-grade data, layout, and editing
 capabilities, all built on a reusable foundation of behavior, state, and
-infrastructure, and opens the finished application to JavaScript extensions.
+infrastructure. GPUI Kit ships 75+ documented components and primitives,
+WebAssembly support, AccessKit accessibility, UI integration testing, and an
+optional JavaScript extension runtime.
 
 Documentation: <https://gpui-kit.com>
 
@@ -31,14 +33,17 @@ See the [executable application recipe and AI-assisted development acceptance ch
 
 ## Features
 
-- **60+ UI Components**: Forms, navigation, overlays, feedback, layout, and more, with polished interactions and productive defaults.
+- **75+ Components and Primitives**: Forms, navigation, overlays, data display, editing, feedback, and layout, with polished interactions and productive defaults.
 - **Production Ready**: Used to build Longbridge Pro from day one and continuously refined in a publicly shipped commercial desktop application.
+- **WebAssembly**: Run applications and the same component showcases on the web with `wasm32-unknown-unknown`.
+- **Accessibility**: AccessKit roles, names, states, relationships, and actions are built into the interaction layer and covered by tests.
+- **UI Integration Testing**: Render real components in headless windows, drive pointer and keyboard input, and assert state, focus, layout, and accessibility.
 - **Native Feel**: Modern controls inspired by macOS and Windows, backed by semantic themes and multiple sizes.
 - **120 FPS**: GPU-accelerated interfaces that remain smooth under load.
 - **Data Tables**: Virtual scrolling, fixed and resizable columns, sorting, and cell selection across hundreds of thousands of rows.
 - **Virtual Lists**: Render only the visible range, including lists whose items have different sizes.
 - **Code Editor**: Stable performance at 200K lines with Tree-sitter highlighting and LSP diagnostics, completion, and hover.
-- **Dock Layout**: Resizable panels, draggable tabs, nested splits, edge docks, and serializable freeform Tiles.
+- **Dock Layout**: Resizable panels, draggable tabs, nested splits, and edge docks — all serializable.
 - **Rich Content**: Native Markdown and HTML rendering, syntax highlighting, and built-in charts.
 - **Design Freedom**: Use the complete visual system or build your own on the behavior and infrastructure in `gpui-base`.
 - **JavaScript Extensions**: `gpui-shell` lets a shipped Rust host load panels and business logic as scripts, with every capability granted explicitly.
@@ -114,7 +119,7 @@ commercial desktop application rather than designed in isolation.
 
 ```toml
 [dependencies]
-gpui-kit = "0.6"
+gpui-kit = "0.7"
 ```
 
 `gpui-kit` always brings in GPUI and `gpui-base`; `gpui-component` and the
@@ -122,6 +127,22 @@ default icon set are on by default. Turn default
 features off to keep only the layers you use. The `gpui-component` features (`inspector`, `decimal`,
 `tree-sitter`, and each `tree-sitter-<language>`) are available under the same
 names.
+
+### GPUI Fast
+
+Enable the optional `gpui-fast` feature to select [GPUI Fast](https://github.com/longbridge/gpui-fast)
+for the core, native platforms, WebAssembly, and every enabled Kit layer:
+
+```toml
+[dependencies]
+gpui-kit = { version = "0.7", features = ["gpui-fast"] }
+```
+
+Keep the same imports, initialization, and test macros; no application `[patch]`
+or crate alias is needed. The default backend remains the pinned upstream GPUI
+snapshot. Cargo features are additive, so upstream packages still compile when
+Fast is selected. See [Getting Started](https://gpui-kit.com/docs/getting-started)
+for feature combinations and comparison commands.
 
 ### Basic Example
 
@@ -154,18 +175,15 @@ fn main() {
         // This must be called before using any GPUI Component features.
         gpui_kit::init(cx);
 
-        cx.spawn(async move |cx| {
-            cx.open_window(WindowOptions::default(), |window, cx| {
-                let view = cx.new(|_| HelloWorld);
-                // This first level on the window, should be a Root.
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("Failed to open window");
+        gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+            cx.new(|_| HelloWorld)
         })
-        .detach();
+        .expect("Failed to open window");
     });
 }
 ```
+
+`gpui_kit::open_window` is the application window entry point and always mounts a Base `Root`. Component initialization registers styled window facilities; Cargo features do not select a different root type.
 
 ### Icons
 
@@ -237,7 +255,9 @@ See the [comparison with Iced, egui and Qt 6](https://gpui-kit.com/docs/comparis
 
 ## License
 
-Apache-2.0
+Software source and documentation code examples: [Apache-2.0](LICENSE-APACHE).
+
+Documentation prose and original illustrations in the Docs, Base, Component, and Shell sections (including Chinese translations) for which GPUI Kit holds licensing rights are also offered under [CC BY 4.0](LICENSE-DOCS.md). When copying or adapting that material, credit **GPUI Kit**, link to the source page and [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/), and indicate changes. Existing Apache-2.0 permissions remain; earlier revisions retain their prior terms, and third-party contributions keep their own licenses unless separately authorized. Using facts or ideas without copying protected expression does not require attribution under CC BY 4.0.
 
 - Built on [GPUI](https://github.com/zed-industries/zed), the UI framework from Zed Industries, also Apache-2.0. The `gpui-pre-*` crates are snapshots of it, published with Zed's license and notices intact.
 - UI design based on [shadcn/ui](https://ui.shadcn.com), some from [Reui](https://reui.io).

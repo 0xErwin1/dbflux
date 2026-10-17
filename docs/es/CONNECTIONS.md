@@ -324,6 +324,13 @@ interruptor **Use URI** en la pestaña Main alterna entre ambos.
 - **Los secretos viven en el keyring del sistema operativo**, nunca en la base
   de datos de DBFlux. Si el keyring no está disponible, las casillas "Save"
   desaparecen y los secretos no se conservan.
+- **Una contraseña sin guardar se pide al conectar.** Si la contraseña de una
+  conexión no está guardada en el keyring ni proviene de una fuente de valor,
+  DBFlux la pide antes de conectar, y cada base de datos que abre esa conexión
+  la usa hasta que te desconectes. Déjala vacía para servidores que no piden
+  contraseña. **Recordar hasta cerrar DBFlux** la guarda en memoria, nunca en
+  el keyring, para que las siguientes conexiones no la vuelvan a pedir;
+  Cancelar deja la conexión cerrada.
 - **Un proxy deshabilitado o una coincidencia en No-Proxy conecta directamente
   de forma silenciosa.**
 - **`No Proxy` no soporta CIDR** — lista hosts/sufijos, no rangos de IP.

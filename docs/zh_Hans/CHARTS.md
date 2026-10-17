@@ -115,11 +115,11 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 
 ### 查询编辑器中的图表按钮
 
-任何产生表格化结果的查询都可以绘制成图表。在查询编辑器工具栏中点击图表按钮（提示文本为“在图表文档中打开当前查询”），即可在图表文档中打开当前查询。
+任何产生表格化结果的查询都可以绘制成图表。在查询编辑器左边缘的操作栏中点击图表按钮（提示文本为“在图表文档中打开当前查询”），即可在图表文档中打开当前查询。
 
 ### 将此查询制作成图表
 
-数据网格的上下文菜单提供“将此查询制作成图表”项。该项由 `crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs` 中的 `can_chart_from_context_menu` 控制，需要同时满足：
+数据网格的上下文菜单提供“将此查询制作成图表”项。该项由 `crates/dbflux_ui_document/src/data_grid_panel/context_menu/mod.rs` 中的 `can_chart_from_context_menu` 控制，需要同时满足：
 
 1. 面板的来源是一个带有非空原始查询的 `QueryResult`；且
 2. 对当前结果调用 `detect_chart_columns` 返回 `Ok`。

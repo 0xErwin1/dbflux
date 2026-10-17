@@ -11,31 +11,30 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 
 use crate::language_service::RedisLanguageService;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
-    ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog, KeyBulkDeleteRequest,
-    KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest,
-    KeyGetRequest, KeyGetResult, KeyLoadState, KeyMetadata, KeyMetadataRequest, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
-    KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
+    CancelToken, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    EditorDiagnostic, ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab,
+    FormValues, FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog,
+    KeyBulkDeleteRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyMetadata, KeyMetadataRequest,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
+    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
     KeyValuePrefixRequest, KeyValueSchema, LanguageService, ListEnd, ListPushRequest,
-    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, OrderByColumn,
-    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement,
-    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption,
-    SemanticPlan, SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
-    SshTunnelConfig, StreamAddRequest, StreamClaimRequest, StreamConsumerGroup,
-    StreamDeleteRequest, StreamEntry, StreamEntryId, StreamGroupsRequest, StreamPendingEntry,
-    StreamPendingRequest, StreamRangePage, StreamRangeRequest, TextPosition, TextPositionRange,
-    TransactionCapabilities, TransferFamily, Value, ValueRepr, WritePrivilege, ZSetAddRequest,
-    ZSetMember, ZSetRangePage, ZSetRangeRequest, ZSetRemoveRequest, field, field_password,
-    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_field_equals,
-    when_unchecked, with_default,
+    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, PaginationStyle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RangeOrder, ReadOnlyEnforcement, RelationalConnection,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan,
+    SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
+    StreamAddRequest, StreamClaimRequest, StreamConsumerGroup, StreamDeleteRequest, StreamEntry,
+    StreamEntryId, StreamGroupsRequest, StreamPendingEntry, StreamPendingRequest, StreamRangePage,
+    StreamRangeRequest, TextPosition, TextPositionRange, TransactionCapabilities, TransferFamily,
+    Value, ValueRepr, WritePrivilege, ZSetAddRequest, ZSetMember, ZSetRangePage, ZSetRangeRequest,
+    ZSetRemoveRequest, field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
+    when_checked, when_field_equals, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 
 use crate::transport::{
     AclCommandAvailability, AclDryRunReply, ClusterScanCursor, ConfiguredTopology,
@@ -204,7 +203,8 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
             | DriverCapabilities::CHART_AUTHORING.bits()
-            | DriverCapabilities::NATIVE_CONSOLE.bits(),
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: Some(6379),
     uri_scheme: "redis".into(),
@@ -594,8 +594,8 @@ impl RedisDriver {
         ssh_secret: Option<&str>,
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, config.host.clone(), config.port)?;
+        let OpenedSshTunnel { tunnel, .. } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
 
         self.connect_direct(DirectConnectParams {
@@ -1268,6 +1268,95 @@ impl RedisConnection {
         })
     }
 
+    /// Scans one key page on a standalone, Sentinel or cluster transport,
+    /// checking `cancel` between `SCAN` round trips.
+    fn scan_key_page(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        let is_cluster = {
+            let transport = self
+                .connection
+                .lock()
+                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+            matches!(&*transport, RedisTransport::Cluster(_))
+        };
+
+        if is_cluster {
+            return self.scan_keys_cluster(request, cancel);
+        }
+
+        let cursor = request
+            .cursor
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .map_err(|_| DbError::InvalidProfile("Invalid key scan cursor".to_string()))?;
+
+        let limit = key_page_limit(request.limit);
+        let filter = request
+            .filter
+            .as_deref()
+            .filter(|filter| !filter.is_empty());
+        let type_name = request.type_filter.and_then(redis_type_name);
+
+        // Budget and page are created inside the closure so a Sentinel retry
+        // restarts the page from `cursor` with a fresh budget.
+        self.with_connection(request.keyspace, |conn| {
+            let mut budget = ScanBudget::for_key_page();
+            let mut page = ScanPageKeys::default();
+
+            let next_cursor = fill_scan_page(
+                cursor,
+                limit,
+                &mut budget,
+                &mut page,
+                cancel,
+                |batch_cursor| {
+                    scan_command(batch_cursor, filter, limit, type_name)
+                        .query::<(u64, Vec<String>)>(conn)
+                        .map_err(|e| format_redis_query_error(&e))
+                },
+            )?;
+
+            let scanned_keys = scanned_key_estimate(budget.round_trips(), limit);
+            let keys = page.into_keys();
+
+            let entries = match request.type_filter.filter(|_| type_name.is_some()) {
+                Some(key_type) => key_entries_of_type(keys, key_type),
+                None => {
+                    let type_names = if keys.is_empty() {
+                        Vec::new()
+                    } else {
+                        let mut pipeline = redis::pipe();
+                        for key in &keys {
+                            pipeline.cmd("TYPE").arg(key);
+                        }
+
+                        pipeline
+                            .query::<Vec<String>>(conn)
+                            .map_err(|e| format_redis_query_error(&e))?
+                    };
+
+                    key_entries_with_types(keys, type_names)?
+                }
+            };
+
+            let next_cursor = if next_cursor == 0 {
+                None
+            } else {
+                Some(next_cursor.to_string())
+            };
+
+            Ok(KeyScanPage {
+                entries,
+                next_cursor,
+                scanned_keys: Some(scanned_keys),
+            })
+        })
+    }
+
     /// Fans a key scan out across every Redis Cluster master, since a plain
     /// `SCAN` is unroutable against a `ClusterConnection` (redis-rs has no
     /// single-node "current" concept for it, unlike single-key commands).
@@ -1278,7 +1367,11 @@ impl RedisConnection {
     /// returned cursor is tracked independently and round-tripped via
     /// `ClusterScanCursor`; the overall scan is exhausted once every node
     /// has reported cursor 0.
-    fn scan_keys_cluster(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+    fn scan_keys_cluster(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
         validate_cluster_database(request.keyspace)?;
 
         let mut transport = self
@@ -1333,8 +1426,13 @@ impl RedisConnection {
             let (host, port) = split_host_port(&address)?;
             let node_cursor = cursor_state.cursor_for(&address);
 
-            let next_cursor =
-                fill_scan_page(node_cursor, limit, &mut budget, &mut page, |batch_cursor| {
+            let next_cursor = fill_scan_page(
+                node_cursor,
+                limit,
+                &mut budget,
+                &mut page,
+                cancel,
+                |batch_cursor| {
                     let routing = RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress {
                         host: host.clone(),
                         port,
@@ -1349,7 +1447,8 @@ impl RedisConnection {
 
                     redis::FromRedisValue::from_redis_value(&value)
                         .map_err(|e| format_redis_query_error(&e))
-                })?;
+                },
+            )?;
 
             cursor_state.record_result(&address, next_cursor);
         }
@@ -1500,12 +1599,7 @@ impl Connection for RedisConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
-            return Err(DbError::NotSupported(
-                "Redis command execution does not support a requested row limit or statement timeout"
-                    .to_string(),
-            ));
-        }
+        refuse_unsupported_request_options(req)?;
         if req.read_only.is_required() && self.is_cluster()? {
             return Err(DbError::NotSupported(
                 "Redis: read-only enforcement is unsupported on Redis Cluster connections, \
@@ -1574,7 +1668,7 @@ impl Connection for RedisConnection {
             send_parsed_command(conn, &parts, req.read_only)
         })?;
 
-        Ok(redis_value_to_result(value, start.elapsed()))
+        Ok(redis_value_to_result(value, start.elapsed(), req.limit))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1743,34 +1837,9 @@ impl Connection for RedisConnection {
         plan_redis_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM key WHERE filter LIMIT offset".to_string()
-    }
-
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // Redis doesn't use SQL - this is for SQL-based drivers
-        ("SET key value".to_string(), Vec::new())
-    }
-
-    fn build_truncate_sql(&self, _table: &str) -> String {
+    fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {
         // Redis doesn't support TRUNCATE - use FLUSHDB with caution
-        "FLUSHDB".to_string()
+        Ok(TRUNCATE_STATEMENT.to_string())
     }
 
     fn build_drop_index_sql(
@@ -1778,14 +1847,14 @@ impl Connection for RedisConnection {
         _index_name: &str,
         _table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         // Redis doesn't have named indexes like SQL databases
-        "DROP INDEX not_applicable".to_string()
+        Ok(DROP_INDEX_STATEMENT.to_string())
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         // Redis uses INFO command, not SQL
-        "INFO server | grep redis_version"
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -1794,6 +1863,30 @@ impl Connection for RedisConnection {
 }
 
 impl KeyValueConnection for RedisConnection {}
+
+/// SQL/command text of `build_truncate_sql`, kept as a constant so the exact
+/// text is testable without a live server.
+const TRUNCATE_STATEMENT: &str = "FLUSHDB";
+
+/// SQL/command text of `build_drop_index_sql`, kept as a constant so the
+/// exact text is testable without a live server.
+const DROP_INDEX_STATEMENT: &str = "DROP INDEX not_applicable";
+
+/// Command text of `version_query`, kept as a constant so the exact text is
+/// testable without a live server.
+const VERSION_QUERY: &str = "INFO server | grep redis_version";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn sql_builder_constants_match_the_driver_contract() {
+        assert_eq!(TRUNCATE_STATEMENT, "FLUSHDB");
+        assert_eq!(DROP_INDEX_STATEMENT, "DROP INDEX not_applicable");
+        assert_eq!(VERSION_QUERY, "INFO server | grep redis_version");
+    }
+}
 
 impl ConnectionExt for RedisConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {
@@ -1831,80 +1924,15 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
-        let is_cluster = {
-            let transport = self
-                .connection
-                .lock()
-                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
-            matches!(&*transport, RedisTransport::Cluster(_))
-        };
+        self.scan_key_page(request, &CancelToken::new())
+    }
 
-        if is_cluster {
-            return self.scan_keys_cluster(request);
-        }
-
-        let cursor = request
-            .cursor
-            .as_deref()
-            .unwrap_or("0")
-            .parse::<u64>()
-            .map_err(|_| DbError::InvalidProfile("Invalid key scan cursor".to_string()))?;
-
-        let limit = key_page_limit(request.limit);
-        let filter = request
-            .filter
-            .as_deref()
-            .filter(|filter| !filter.is_empty());
-        let type_name = request.type_filter.and_then(redis_type_name);
-
-        // Budget and page are created inside the closure so a Sentinel retry
-        // restarts the page from `cursor` with a fresh budget.
-        self.with_connection(request.keyspace, |conn| {
-            let mut budget = ScanBudget::for_key_page();
-            let mut page = ScanPageKeys::default();
-
-            let next_cursor =
-                fill_scan_page(cursor, limit, &mut budget, &mut page, |batch_cursor| {
-                    scan_command(batch_cursor, filter, limit, type_name)
-                        .query::<(u64, Vec<String>)>(conn)
-                        .map_err(|e| format_redis_query_error(&e))
-                })?;
-
-            let scanned_keys = scanned_key_estimate(budget.round_trips(), limit);
-            let keys = page.into_keys();
-
-            let entries = match request.type_filter.filter(|_| type_name.is_some()) {
-                Some(key_type) => key_entries_of_type(keys, key_type),
-                None => {
-                    let type_names = if keys.is_empty() {
-                        Vec::new()
-                    } else {
-                        let mut pipeline = redis::pipe();
-                        for key in &keys {
-                            pipeline.cmd("TYPE").arg(key);
-                        }
-
-                        pipeline
-                            .query::<Vec<String>>(conn)
-                            .map_err(|e| format_redis_query_error(&e))?
-                    };
-
-                    key_entries_with_types(keys, type_names)?
-                }
-            };
-
-            let next_cursor = if next_cursor == 0 {
-                None
-            } else {
-                Some(next_cursor.to_string())
-            };
-
-            Ok(KeyScanPage {
-                entries,
-                next_cursor,
-                scanned_keys: Some(scanned_keys),
-            })
-        })
+    fn scan_keys_with_cancel(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        self.scan_key_page(request, cancel)
     }
 
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
@@ -2962,9 +2990,42 @@ impl ConnectionErrorFormatter for RedisErrorFormatter {
     }
 }
 
+/// Rejects request options `execute` cannot honor before any command runs.
+/// Instance metric and inspector sources build their own results, so they
+/// cannot apply a row budget.
+fn refuse_unsupported_request_options(request: &QueryRequest) -> Result<(), DbError> {
+    if request.statement_timeout.is_some() {
+        return Err(DbError::NotSupported(
+            "Redis: requested statement timeout is unsupported; rejected before execution"
+                .to_string(),
+        ));
+    }
+    if request.limit.is_some()
+        && let Some(
+            ExecutionSourceContext::InstanceMetricQuery { .. }
+            | ExecutionSourceContext::InstanceInspectorQuery { .. },
+        ) = request
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.source.as_ref())
+    {
+        return Err(DbError::NotSupported(
+            "Redis: row limits on instance catalog queries are unsupported; rejected before execution"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // -- Redis Value → QueryResult --
 
-fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duration) -> QueryResult {
+/// Converts one command reply into a result. `row_limit` bounds only the rows
+/// of a tabular reply; text and scalar replies carry no rows and ignore it.
+fn redis_value_to_result(
+    value: redis::Value,
+    execution_time: std::time::Duration,
+    row_limit: Option<u32>,
+) -> QueryResult {
     match value {
         redis::Value::Nil => QueryResult::text("(nil)".to_string(), execution_time),
 
@@ -2977,7 +3038,7 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
 
         redis::Value::SimpleString(s) => QueryResult::text(s, execution_time),
 
-        redis::Value::Array(items) => redis_array_to_result(items, execution_time),
+        redis::Value::Array(items) => redis_array_to_result(items, execution_time, row_limit),
 
         redis::Value::Map(entries) => {
             let mut lines = Vec::with_capacity(entries.len());
@@ -3002,7 +3063,7 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
 
         redis::Value::VerbatimString { format: _, text } => QueryResult::text(text, execution_time),
 
-        redis::Value::Set(items) => redis_array_to_result(items, execution_time),
+        redis::Value::Set(items) => redis_array_to_result(items, execution_time, row_limit),
 
         redis::Value::Okay => QueryResult::text("OK".to_string(), execution_time),
 
@@ -3011,12 +3072,14 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
             execution_time,
         ),
 
-        redis::Value::Push { kind: _, data } => redis_array_to_result(data, execution_time),
+        redis::Value::Push { kind: _, data } => {
+            redis_array_to_result(data, execution_time, row_limit)
+        }
 
         redis::Value::Attribute {
             data,
             attributes: _,
-        } => redis_value_to_result(*data, execution_time),
+        } => redis_value_to_result(*data, execution_time, row_limit),
     }
 }
 
@@ -3025,6 +3088,7 @@ fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duratio
 fn redis_array_to_result(
     items: Vec<redis::Value>,
     execution_time: std::time::Duration,
+    row_limit: Option<u32>,
 ) -> QueryResult {
     if items.is_empty() {
         return QueryResult::text("(empty array)".to_string(), execution_time);
@@ -3062,13 +3126,23 @@ fn redis_array_to_result(
             },
         ];
 
+        let retained = row_limit.map_or(items.len(), |limit| {
+            items
+                .len()
+                .min(usize::try_from(limit).unwrap_or(usize::MAX))
+        });
+        let truncated = retained < items.len();
+
         let rows: Vec<Vec<Value>> = items
             .into_iter()
+            .take(retained)
             .enumerate()
             .map(|(i, v)| vec![Value::Int(i as i64), redis_scalar_to_value(v)])
             .collect();
 
-        return QueryResult::table(columns, rows, None, execution_time);
+        let mut result = QueryResult::table(columns, rows, None, execution_time);
+        result.set_rows_truncated(truncated);
+        return result;
     }
 
     // Fallback: numbered text dump
@@ -4046,21 +4120,28 @@ impl ScanPageKeys {
 /// Fills `page` from consecutive `SCAN` batches starting at `start_cursor`
 /// and returns the cursor to resume from (0 once the scan is complete).
 ///
-/// Always issues at least one batch, then stops as soon as the page holds
-/// `limit` keys, the cursor returns to 0, or `budget` is exhausted. A batch
-/// that is empty but carries a non-zero cursor does not end the page. Every
-/// key of the last batch is kept even when that overshoots `limit`, because
-/// the returned cursor has already moved past them.
+/// Issues at least one batch unless `cancel` is already set, then stops as
+/// soon as the page holds `limit` keys, the cursor returns to 0, or `budget`
+/// is exhausted. A batch that is empty but carries a non-zero cursor does not
+/// end the page. Every key of the last batch is kept even when that
+/// overshoots `limit`, because the returned cursor has already moved past
+/// them. `cancel` is checked before every batch and ends the page with
+/// `DbError::Cancelled`.
 fn fill_scan_page(
     start_cursor: u64,
     limit: usize,
     budget: &mut ScanBudget,
     page: &mut ScanPageKeys,
+    cancel: &CancelToken,
     mut scan_batch: impl FnMut(u64) -> Result<(u64, Vec<String>), DbError>,
 ) -> Result<u64, DbError> {
     let mut cursor = start_cursor;
 
     loop {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
         let (next_cursor, batch) = scan_batch(cursor)?;
         budget.record_round_trip();
 
@@ -4391,6 +4472,140 @@ mod tests {
         SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
     };
 
+    fn bulk(text: &str) -> redis::Value {
+        redis::Value::BulkString(text.as_bytes().to_vec())
+    }
+
+    fn scalar_array(count: usize) -> redis::Value {
+        redis::Value::Array((0..count).map(|index| bulk(&index.to_string())).collect())
+    }
+
+    #[test]
+    fn row_limit_truncates_array_replies_and_marks_the_result() {
+        let result = redis_value_to_result(scalar_array(5), std::time::Duration::ZERO, Some(3));
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(result.rows_truncated());
+        assert_eq!(result.rows[2][1], Value::Text("2".to_string()));
+    }
+
+    #[test]
+    fn row_limit_equal_to_the_reply_size_does_not_mark_truncation() {
+        let result = redis_value_to_result(scalar_array(3), std::time::Duration::ZERO, Some(3));
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn zero_row_limit_keeps_the_columns_and_drops_every_row() {
+        let result = redis_value_to_result(scalar_array(2), std::time::Duration::ZERO, Some(0));
+
+        assert!(result.rows.is_empty());
+        assert_eq!(result.columns.len(), 2);
+        assert!(result.rows_truncated());
+    }
+
+    #[test]
+    fn zero_row_limit_on_an_empty_array_does_not_mark_truncation() {
+        let result = redis_value_to_result(
+            redis::Value::Array(Vec::new()),
+            std::time::Duration::ZERO,
+            Some(0),
+        );
+
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn row_limit_counts_rows_of_set_and_push_replies() {
+        let set = redis_value_to_result(
+            redis::Value::Set(vec![bulk("a"), bulk("b")]),
+            std::time::Duration::ZERO,
+            Some(1),
+        );
+        let attribute = redis_value_to_result(
+            redis::Value::Attribute {
+                data: Box::new(scalar_array(4)),
+                attributes: Vec::new(),
+            },
+            std::time::Duration::ZERO,
+            Some(2),
+        );
+
+        assert_eq!(set.rows.len(), 1);
+        assert!(set.rows_truncated());
+        assert_eq!(attribute.rows.len(), 2);
+        assert!(attribute.rows_truncated());
+    }
+
+    #[test]
+    fn row_limit_is_ignored_by_scalar_and_ok_replies() {
+        for value in [redis::Value::Okay, redis::Value::Int(7), bulk("text")] {
+            let result = redis_value_to_result(value, std::time::Duration::ZERO, Some(0));
+
+            assert!(result.text_body.is_some());
+            assert!(!result.rows_truncated());
+        }
+    }
+
+    #[test]
+    fn unlimited_requests_keep_every_row() {
+        let result = redis_value_to_result(scalar_array(5), std::time::Duration::ZERO, None);
+
+        assert_eq!(result.rows.len(), 5);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn redis_declares_request_row_limit() {
+        assert!(
+            REDIS_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
+    fn row_limit_on_instance_catalog_sources_is_refused_before_execution() {
+        for source in [
+            ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "redis.connected_clients".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            },
+            ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: "redis.client_list".to_string(),
+            },
+        ] {
+            let request = QueryRequest::new("INFO")
+                .with_limit(10)
+                .with_execution_context(Some(dbflux_core::ExecutionContext {
+                    source: Some(source),
+                    ..Default::default()
+                }));
+
+            assert!(matches!(
+                refuse_unsupported_request_options(&request),
+                Err(DbError::NotSupported(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn row_limit_on_editor_commands_and_timeouts_are_classified() {
+        assert!(
+            refuse_unsupported_request_options(&QueryRequest::new("GET a").with_limit(0)).is_ok()
+        );
+
+        let mut timed = QueryRequest::new("GET a");
+        timed.statement_timeout = Some(std::time::Duration::from_secs(1));
+        assert!(matches!(
+            refuse_unsupported_request_options(&timed),
+            Err(DbError::NotSupported(_))
+        ));
+    }
+
     fn packed_arguments(command: &redis::Cmd) -> String {
         String::from_utf8_lossy(&command.get_packed_command()).to_string()
     }
@@ -4601,6 +4816,49 @@ mod tests {
     }
 
     #[test]
+    fn fill_scan_page_stops_before_the_next_batch_once_cancelled() {
+        let token = CancelToken::new();
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let result = fill_scan_page(0, 10, &mut budget, &mut page, &token, |cursor| {
+            requested_cursors.push(cursor);
+            token.cancel();
+            Ok((7, vec!["session:1".to_string()]))
+        });
+
+        assert!(
+            matches!(result, Err(DbError::Cancelled)),
+            "a cancel between batches must end the page, got: {:?}",
+            result
+        );
+        assert_eq!(requested_cursors, vec![0]);
+    }
+
+    #[test]
+    fn fill_scan_page_issues_no_batch_when_already_cancelled() {
+        let token = CancelToken::new();
+        token.cancel();
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let result = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            &token,
+            scripted_scan(vec![(0, vec!["session:1"])], &mut requested_cursors),
+        );
+
+        assert!(matches!(result, Err(DbError::Cancelled)));
+        assert!(requested_cursors.is_empty());
+        assert_eq!(page.len(), 0);
+    }
+
+    #[test]
     fn fill_scan_page_continues_past_empty_batches_until_a_match() -> Result<(), DbError> {
         let mut requested_cursors = Vec::new();
         let mut budget = generous_scan_budget();
@@ -4611,6 +4869,7 @@ mod tests {
             1,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(7, vec![]), (12, vec![]), (19, vec!["leaderboard:weekly"])],
                 &mut requested_cursors,
@@ -4634,6 +4893,7 @@ mod tests {
             10,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(4, vec!["a", "b"]), (0, vec!["b", "c", "a"])],
                 &mut requested_cursors,
@@ -4659,6 +4919,7 @@ mod tests {
             100,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(vec![(0, vec!["only"])], &mut requested_cursors),
         )?;
 
@@ -4679,6 +4940,7 @@ mod tests {
             10,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(1, vec![]), (2, vec![]), (3, vec![]), (4, vec!["late"])],
                 &mut requested_cursors,
@@ -4703,6 +4965,7 @@ mod tests {
             10,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(vec![(8, vec![]), (9, vec![])], &mut requested_cursors),
         )?;
 
@@ -4722,6 +4985,7 @@ mod tests {
             2,
             &mut budget,
             &mut page,
+            &CancelToken::new(),
             scripted_scan(
                 vec![(6, vec!["a"]), (11, vec!["b", "c", "d"]), (0, vec!["e"])],
                 &mut requested_cursors,
@@ -4746,9 +5010,14 @@ mod tests {
         let mut budget = generous_scan_budget();
         let mut page = ScanPageKeys::default();
 
-        let outcome = fill_scan_page(0, 10, &mut budget, &mut page, |_cursor| {
-            Err(DbError::query_failed("scan failed"))
-        });
+        let outcome = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            &CancelToken::new(),
+            |_cursor| Err(DbError::query_failed("scan failed")),
+        );
 
         assert!(outcome.is_err());
     }

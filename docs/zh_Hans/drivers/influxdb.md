@@ -13,13 +13,16 @@
 
 ## 功能
 
-- **时序类别** —— 归类为 `DatabaseCategory::TimeSeries`，默认编辑器语言为 `QueryLanguage::InfluxQuery`。声明的能力包括 `AUTHENTICATION`、`MULTIPLE_DATABASES`、`PAGINATION`、`EXPORT_CSV`、`EXPORT_JSON`、`CHART_AUTHORING`、`INSTANCE_METRICS` 与 `INSTANCE_INSPECTOR`。连接使用 `http` URI 方案、默认端口 8086，TLS 由基于 rustls 的 HTTP 客户端提供。
+- **时序类别** —— 归类为 `DatabaseCategory::TimeSeries`，默认编辑器语言为 `QueryLanguage::InfluxQuery`。声明的能力包括 `AUTHENTICATION`、`MULTIPLE_DATABASES`、`PAGINATION`、`EXPORT_CSV`、`EXPORT_JSON`、`CHART_AUTHORING`、`INSTANCE_METRICS`、`INSTANCE_INSPECTOR` 与 `REQUEST_ROW_LIMIT`。连接使用 `http` URI 方案、默认端口 8086，TLS 由基于 rustls 的 HTTP 客户端提供。
 - **InfluxDB v1 与 v2** —— 两个 API 版本在同一个驱动 crate 中均受支持。
 - **两个版本都支持 InfluxQL** —— v1 的查询语言在 v1 上可用，在 v2 上则经由 v2 的兼容端点使用。
 - **v2 上的 Flux** —— 当连接配置为 v2 时，可以使用 Flux 查询。
 - **可选的默认存储桶** —— 连接配置中的存储桶（v2）或数据库（v1）字段是可选的。v2 的 API 令牌可访问组织中的所有存储桶；v1 的用户可访问服务器上的所有数据库。该字段留空时，用户可在编辑器中通过源上下文下拉框按查询选择存储桶；填写它则只是预先选中该存储桶，并不限制访问其他存储桶。
 - **按查询路由存储桶** —— 每条 InfluxQL 查询所使用的存储桶来自源上下文下拉框的选择，而不是连接配置。对于 Flux 查询，存储桶内嵌在查询文本本身中（`from(bucket: "...")`）。
+- **请求行数上限** —— `execute()` 会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此编辑器查询会带上编辑器的行数上限。
 - **无需存储桶的存活检查** —— 连接存活检查不要求指定存储桶：v1 针对内部数据库执行 `SHOW DATABASES`；v2 则请求 `/api/v2/buckets?limit=1`。
+- **按存储桶列出测量** —— 存储桶（v2）与数据库（v1）采用延迟加载（`SchemaLoadingStrategy::LazyPerDatabase`）：在侧边栏中展开其中一个，会通过 `schema_for_database` 列出它的测量，v2 使用 Flux 的 `schema.measurements()`，v1 使用 `SHOW MEASUREMENTS`。配置中的默认存储桶显示连接时获取的测量；其他存储桶无需修改配置即可展开。
+- **带类型的时间戳** —— InfluxQL 的 `time` 列以日期时间值（`Value::DateTime`）返回，因此数据网格显示格式化的时间戳而非纪元毫秒数，图表仍将其作为时间轴。
 - **时间范围宏** —— InfluxQL 与 Flux 查询都支持兼容 Grafana 的宏标记，这些标记会在查询被送往驱动程序之前，替换成所绑定的时间范围窗口：
 
   | 标记 | 语言 | 展开结果 |
@@ -80,7 +83,7 @@
 
 ## 限制
 
-- `execute()` 对任何请求的行数限制（包括零）或语句超时，在发送 HTTP 请求或分派实例上下文前返回 `NotSupported`。未请求这些保护的查询仍可执行；默认编辑器无法保证这些保护。
+- `execute()` 将 `QueryRequest::limit` 作为扁平化结果上的单一预算执行，但只在读取完整 HTTP 响应之后。对语句超时以及实例指标或检查器查询上的行数上限，它会在分派前返回 `NotSupported`。
 
 - **不支持查询取消** —— `cancel()` 返回 `NotSupported`；进行中的查询无法从界面中止（未声明 `QUERY_CANCELLATION`）。
 - **不生成变更语句** —— `QueryGenerator::generate_mutation` 始终返回 `None`；只生成读取模板，这与只读的查询 API 一致。

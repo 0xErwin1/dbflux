@@ -8,7 +8,10 @@ pub enum ExecutionSourceContext {
         targets: Vec<String>,
         start_ms: i64,
         end_ms: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Always encoded. `postcard` has no representation for an absent
+        /// struct field, so `skip_serializing_if` desynchronises the IPC
+        /// frame even with `serde(default)` present.
+        #[serde(default)]
         query_mode: Option<String>,
     },
     /// A CloudWatch GetMetricData request. Carries one or more metric series
@@ -62,7 +65,8 @@ pub struct MetricQuerySeries {
     /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
     pub statistic: String,
     /// Optional display label; falls back to `metric_name` in the result columns.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `ExecutionSourceContext::CollectionWindow::query_mode`.
+    #[serde(default)]
     pub label: Option<String>,
 }
 
@@ -73,7 +77,8 @@ pub struct ExecutionContext {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub container: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `ExecutionSourceContext::CollectionWindow::query_mode`.
+    #[serde(default)]
     pub source: Option<ExecutionSourceContext>,
 }
 

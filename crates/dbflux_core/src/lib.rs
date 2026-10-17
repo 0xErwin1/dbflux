@@ -123,21 +123,22 @@ pub use data::{
     remove_value_at_path, set_value_at_path, value_at_path, value_to_document_json,
 };
 pub use data::{
-    ColumnAssignment, CrudResult, DataViewKind, DecodeOutcome, DecodedPayload, DecodedValue,
-    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, Encoding, HashDeleteRequest,
-    HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
-    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
-    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest,
-    RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest,
-    SetCondition, SetRemoveRequest, SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest,
-    StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest,
-    ZSetRemoveRequest, decode, decode_as, detect, probe_message_pack,
+    ColumnAssignment, CrudResult, DecodeOutcome, DecodedPayload, DecodedValue, DocumentDelete,
+    DocumentFilter, DocumentInsert, DocumentUpdate, Encoding, HashDeleteRequest, HashSetRequest,
+    KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest,
+    KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage,
+    KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest, ListEnd,
+    ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest, RecordIdentity, RowDelete,
+    RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest, SetCondition, SetRemoveRequest,
+    SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest, StreamAddRequest, StreamDeleteRequest,
+    StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, decode, decode_as,
+    detect, probe_message_pack,
 };
 pub use data::{
     ColumnBadge, ColumnProfile, ColumnProjection, DEFAULT_PAGE_ROWS,
     DEFAULT_PROJECTION_BUDGET_BYTES, DEFAULT_PROJECTION_MAX_COLUMNS, EstimateScope, PartUnit,
-    ProfileSource, ReadEstimate, TableProfile, ValueRange, default_projection,
+    ProfileSource, ReadEstimate, TableFact, TableFactKind, TablePartition, TablePartitions,
+    TableProfile, TableViewFeatures, ValueCount, ValueRange, default_projection,
 };
 
 pub use data::{
@@ -175,16 +176,16 @@ pub use query::{
     MutationTemplateOperation, MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery,
     Predicate, PredicateValue, ProjectedColumn, Projection, QueryGenError, QueryGenerator,
     QueryHandle, QueryRequest, QueryResult, QueryResultShape, ReadTemplateOperation,
-    ReadTemplateRequest, ResolvedWindow, Row, ScalarLiteral, SchemaColumns, ScopeRelation,
-    ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
-    ScriptOperationOutcome, ScriptTarget, SelectQuery, SemanticFieldRef, SemanticFilter,
-    SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate, SemanticRequest,
-    SemanticRequestKind, SortDirection, SortEntry, SourceTable, SpecError, SqlClause,
-    SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis, SqlLanguageService,
-    SqlMutationGenerator, StatementScope, TableBrowseRequest, TableCountRequest, TableRef,
-    TextPosition, TextPositionRange, TextRange, TransactionVocab, TransferColumn, ValidationResult,
-    VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec, VisualSortDirection,
-    aggregate_writes_output, ceiling_permits, classify_query_for_governance,
+    ReadTemplateRequest, ResolvedWindow, Row, SERVER_NOTICES_METADATA_KEY, ScalarLiteral,
+    SchemaColumns, ScopeRelation, ScriptMethod, ScriptOperation, ScriptOperationCounts,
+    ScriptOperationHost, ScriptOperationOutcome, ScriptTarget, SelectQuery, SemanticFieldRef,
+    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
+    SemanticRequest, SemanticRequestKind, ServerNotice, SortDirection, SortEntry, SourceTable,
+    SpecError, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
+    SqlLanguageService, SqlMutationGenerator, StatementScope, TableBrowseRequest,
+    TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange, TransactionVocab,
+    TransferColumn, ValidationResult, VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec,
+    VisualSortDirection, aggregate_writes_output, ceiling_permits, classify_query_for_governance,
     classify_query_for_language, classify_query_for_language_with_service, classify_sql_execution,
     classify_visual_mutation, contains_compound_block, contains_time_macros,
     detect_dangerous_query, detect_dangerous_sql, infer_column_kind, inline_params,
@@ -212,7 +213,7 @@ pub use query::relational_filter::{
     RelationalFilterError, ResolveError as RelationalResolveError, parse_and_resolve,
 };
 
-pub use query::relational_filter::count::count_query_from_spec;
+pub use query::relational_filter::count::{count_query_from_spec, count_query_from_sql};
 
 /// Build a parameterized SELECT from a `VisualQuerySpec` using the given dialect.
 ///
@@ -242,23 +243,22 @@ pub use schema::node_id as schema_node_id;
 pub use schema::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
-    ColumnDiff, ColumnFamilyInfo, ColumnInfo, ColumnSnapshot, ConstraintInfo, ConstraintKind,
-    ContainerInfo, CreationBlocker, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
+    ColumnDiff, ColumnInfo, ColumnSnapshot, ConstraintInfo, ConstraintKind, ContainerInfo,
+    CreationBlocker, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo, DatabaseLayout,
     DbSchemaInfo, DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo,
-    GraphInfo, GraphSchema, IdentitySpec, IndexBuilder, IndexData, IndexDirection, IndexInfo,
-    IndexSnapshot, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness,
-    MissingCreationMetadata, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, OrderResult,
-    ParseSchemaNodeIdError, PrimaryKeySpec, PropertyInfo, QueryTableRef, RelationKind, RelationRef,
-    RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, RiskedChange, RoutineInfo,
-    RoutineKind, SchemaChange, SchemaColumnInfo, SchemaDiff, SchemaDriftDetected,
-    SchemaFingerprint, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
-    SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SchemaSnapshotRecord,
-    SearchIndexInfo, SearchMappingInfo, SearchSchema, SnapshotDepth, TableAlterNormalizationError,
-    TableChange, TableCreationMetadata, TableInfo, TableKey, TableStorageHint, TimeSeriesFieldInfo,
-    TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema,
-    ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema, check_drift_sync,
-    check_schema_drift, classify_table_added, classify_table_removed, diff_schema, diff_table_info,
-    extract_referenced_tables, normalize_selected_table_alter, topological_order,
+    IdentitySpec, IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo,
+    KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
+    NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, ObjectFolder, OrderResult,
+    ParseSchemaNodeIdError, PrimaryKeySpec, QueryTableRef, RelationKind, RelationRef,
+    RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind, SchemaChange,
+    SchemaColumnInfo, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
+    SchemaSnapshot, SchemaSnapshotRecord, SnapshotDepth, TableAlterNormalizationError, TableChange,
+    TableCreationMetadata, TableInfo, TableKey, TableStorageHint, TimeSeriesFacet,
+    TimeSeriesFieldInfo, TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo,
+    category_collection_facets, check_drift_sync, check_schema_drift, classify_table_added,
+    classify_table_removed, diff_schema, diff_table_info, extract_referenced_tables,
+    normalize_selected_table_alter, topological_order,
 };
 
 pub use sql::{
@@ -272,7 +272,7 @@ pub use sql::{
     TransactionControl, TypeAttributeDefinition, TypeDefinition, classify_sql_transaction_control,
     generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
     generate_select_star, generate_sql, generate_truncate, generate_update_template,
-    validate_ddl_fragment,
+    quote_double_quoted_identifier, validate_ddl_fragment,
 };
 
 pub use pipeline::{

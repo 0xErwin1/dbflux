@@ -47,6 +47,25 @@ whole. So does a buffer with a compound block, such as the `BEGIN ... END` body
 of a procedure or trigger, since the `;` inside it does not end a statement;
 `BEGIN` that opens a transaction is not a block.
 
+Without a selection, when the statement under the cursor only opens or ends a
+transaction (`BEGIN`,
+`START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` or `ABORT`) and the buffer
+holds other statements, the editor asks first: run the entire script, which is
+the default, or run only that statement. A connection whose driver cannot run
+a whole script at once offers only that statement. Run alone, a `BEGIN` leaves a
+transaction open that later runs in the same tab silently join, and a `COMMIT`
+or `ROLLBACK` skips the rest of the script, ending at most a transaction an
+earlier run left open.
+
+Each result is captioned with the lines of the statement that produced it. A
+statement that returns no result set, such as `UPDATE` or `COMMIT`, shows
+**Statement executed** and, when the driver reports it, how many rows it
+affected, which the footer repeats in place of the row count. Notices and
+warnings the server sends while the statement runs, such as PostgreSQL's
+`WARNING: there is no transaction in progress` after a `COMMIT` outside a
+transaction, are listed under that line, or in the footer of a result with rows.
+Only drivers that report them show them; PostgreSQL does.
+
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ## Multi-statement scripts
@@ -93,8 +112,9 @@ runtime.
 
 DBFlux keeps a history of completed queries and lets you save named queries.
 
-- `Alt+h` (in the editor), or the toolbar's History button, opens and closes the
-  query history panel beside the editor.
+- `Alt+h` (in the editor), or the History button in the action strip on the
+  editor's left edge, opens and closes the query history panel beside the
+  editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** the current query.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, in the editor) — open the saved-queries browser.

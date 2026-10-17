@@ -28,9 +28,11 @@ las secciones siguientes.
 
 ### Mapa de crates en capas
 
-Las dependencias apuntan hacia abajo. `dbflux_core` es la capa de contratos sin
-dependencias sobre la que se construye el resto de crates; la UI nunca depende
-de un crate de driver concreto (ver [Desacoplamiento
+Las dependencias apuntan hacia abajo. `dbflux_core` es la capa de contratos
+compartida sobre la que se construye el resto del workspace; tiene una única
+dependencia propia, `dbflux_policy`, para los tipos de clasificación de
+ejecución y de alteración de esquema que reexporta. La UI nunca depende de un
+crate de driver concreto (ver [Desacoplamiento
 Driver/UI](#driver-system)).
 
 ```mermaid
@@ -62,12 +64,17 @@ flowchart TB
     end
 
     subgraph Support["Bibliotecas de soporte"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["Políticas — dbflux_policy"]
+        policy["ExecutionClassification,<br/>clasificación de alteraciones de esquema"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "solo seams genéricos" .-> core
@@ -249,7 +256,7 @@ crates/
         file_ops.rs         # Auto-save, scratch/shadow file management
         focus.rs            # Internal focus management
         live_output.rs      # Document-owned streamed script output buffer
-        render.rs           # Toolbar, editor, and live output rendering
+        render.rs           # Action strip, editor, and live output rendering
       console/              # NativeConsole: reusable command console docked under a document
         mod.rs              # Entity, execution, audit, history recall, render
         format.rs           # Dangerous-command gate, result formatting, recall list
@@ -272,8 +279,8 @@ crates/
         mod.rs              # AuditDocument entity
         pane.rs             # AuditDocument::into_pane constructor
         view.rs             # LogStreamView boundary struct
-        render.rs           # Extracted render code (~1300 LOC)
-        commands.rs         # Extracted command dispatch (~560 LOC)
+        render.rs           # Extracted render code
+        commands.rs         # Extracted command dispatch
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -291,7 +298,7 @@ crates/
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -302,7 +309,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # Connection tree; walks the snapshot's DatabaseLayout
   dbflux_ui_windows/        # Settings window + connection manager window
     src/
       ssh_shared.rs         # Shared SSH auth UI components
@@ -335,7 +342,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # Per-profile hook bindings
-  dbflux_ui/                # Thin integrator (~13.5k LOC): wires the six UI crates together
+  dbflux_ui/                # Thin integrator: wires the six UI crates together
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
@@ -658,31 +665,29 @@ en tabs con cinco capas:
    mantiene un `Vec<Tab>` más el orden MRU.
 
 2. **`PaneHandle`** (`pane.rs`) — shell que borra closures y reemplaza al
-   antiguo enum cerrado `DocumentHandle`. Cada operación
-   (render, focus, dispatch_command, meta_snapshot, tab_title, can_close,
-   connection_id, active_context, change_summary, refresh_policy,
-   set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key,
-   subscribe, más helpers opcionales como `resolve_close`, `save_for_close`,
-   `flush_for_shutdown` e `is_file_backed_empty`) es un closure `Box<dyn Fn>`
-   que captura el `Entity<T>` tipado. `PaneHandle` es `!Clone`. Cada tipo de document provee
-   `XxxDocument::into_pane(entity, cx) -> PaneHandle` en su propio archivo
-   `pane.rs` (todos bajo `crates/dbflux_ui_document/src/`). Agregar un nuevo
-   tipo de document no requiere cambios en `workspace/mod.rs`, `tab_manager.rs`,
-   `tab_bar.rs` ni `handle.rs`.
+   antiguo enum cerrado `DocumentHandle`. Cada operación es un closure
+   `Box<dyn Fn>` que captura el `Entity<T>` tipado: renderizado y foco, envío
+   de comandos, lecturas puras de metadatos (título, posibilidad de cierre,
+   conexión y contexto activo, resumen de cambios, política de refresco),
+   mutaciones como la pestaña activa y la política de refresco, coincidencia de
+   deduplicación, suscripción a eventos, y helpers opcionales propios del
+   document (cierre, política de guardado y salida, paneles laterales, acciones
+   del panel, segmentos de la barra de estado). `PaneHandle` es `!Clone`. Cada
+   tipo de document provee `XxxDocument::into_pane(entity, cx) -> PaneHandle` en
+   su propio archivo `pane.rs` (todos bajo
+   `crates/dbflux_ui_document/src/`). Agregar un nuevo tipo de document no
+   requiere cambios en `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs` ni
+   `handle.rs`.
 
 3. **`DocumentKey`** (`dedup.rs`) — enum de identidad usado para la
-   deduplicación de tabs. Variantes: `Table`, `Collection`, `File`,
-   `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`,
-   `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`,
-   `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Reemplaza los
-   métodos `is_*` del antiguo `DocumentHandle`. Los call sites usan
+   deduplicación de tabs; la lista de variantes vive en `dedup.rs` y es la
+   fuente de verdad. Reemplaza los métodos `is_*` del antiguo `DocumentHandle`.
+   Los call sites usan
    `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
-4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — enum de eventos unificado que
-   reemplaza cuatro enums de eventos por-document que fueron eliminados.
-   Variantes: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`,
-   `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`,
-   `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — enum de eventos unificado que
+   reemplaza cuatro enums de eventos por-document que fueron eliminados; la
+   lista de variantes vive en `handle.rs`.
 
 5. **`ResultPanel` + `ViewHandle`**
    (`crates/dbflux_components/src/result_panel/mod.rs`) — host de chrome
@@ -710,7 +715,7 @@ entradas en un menú dibujado sobre el área de documents. Mientras está abiert
 el workspace reporta `ContextId::ContextMenu`, así que las teclas del menú
 contextual lo manejan. El workspace nunca conoce el tipo de document, y un
 document se suma desde su propio `pane.rs` sin cambios en `workspace/mod.rs`,
-`tab_manager.rs` ni `tab_bar.rs`. `CodeDocument` lista toda su toolbar; la tabla
+`tab_manager.rs` ni `tab_bar.rs`. `CodeDocument` lista toda su barra de acciones y el botón Refresh de sus resultados; la tabla
 de datos conserva `m` para su propio menú contextual, que funciona como su menú
 de acciones.
 
@@ -906,7 +911,7 @@ para leer los campos de vuelta, devolviendo las cláusulas que no puede
 representar como `UnrepresentableClause`, de modo que la UI muestra un
 conflicto de sincronización en lugar de sobrescribirlas. La UI vive en
 `crates/dbflux_ui_document/src/document_builder/` y
-`data_grid_panel/documents/builder.rs`: Find escribe los campos y se ejecuta con
+`data_grid_panel/documents/builder/mod.rs`: Find escribe los campos y se ejecuta con
 `browse_collection`, así que los resultados siguen siendo editables, mientras
 que el modo Aggregate (gated también en `DocumentFeatures::AGGREGATE`) ejecuta
 el pipeline en la vista Agregación con resultados de solo lectura. Las
@@ -1044,6 +1049,15 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` sigue siendo
   contraíble y redimensionable mediante ToggleSidebar (Ctrl+B), y gestiona la
   vista temporal por separado de la elección explícita de contraer.
+- El árbol de conexiones recorre una sola proyección: `SchemaSnapshot::database_layout`
+  (`crates/dbflux_core/src/schema/listing.rs`) indica si cada base de datos agrupa
+  tablas y vistas bajo schemas, lista sus objetos en una sola `ObjectFolder`
+  (colecciones o mediciones) o es un keyspace. El sidebar
+  (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
+  partir de esa descripción, y su menú contextual lee las facetas del objeto y el
+  mismo layout. El único chequeo de categoría que queda en el árbol es la lista
+  de buckets de una conexión de almacenamiento de objetos, que se obtiene por su
+  propio camino en lugar de leerse de un snapshot.
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
@@ -1057,8 +1071,8 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs`
   define:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries,
-    WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream,
+    ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl,
     OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql,
     Lua, Python, Bash (cada uno lleva su modo de editor, placeholder y prefijo
@@ -1099,6 +1113,36 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `QueryLanguage`, `DriverCapabilities`).
   - `CollectionPresentation` le indica a la UI cómo se abre una
     collection/container (por ejemplo data grid vs event stream).
+  - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) nombra los
+    paradigmas que expone un objeto: `Tabular`, `Document`, `Vector`,
+    `TimeSeries`. `CollectionPresentation` elige qué document se abre; los
+    facets eligen los modos de vista, los gates y el texto del filtro dentro
+    del data document. `Connection::object_facets` (tablas) y
+    `Connection::collection_facets` (collections) devuelven `[Tabular]` por
+    defecto y los drivers los sobrescriben: PostgreSQL agrega `Document` por una
+    columna `json`/`jsonb`, `TimeSeries` por una hypertable de TimescaleDB y un
+    `Vector` por cada columna `vector(n)`; MongoDB y DynamoDB declaran
+    `[Document, Tabular]`; InfluxDB declara `TimeSeries` sobre `time`. Solo el
+    adaptador RPC deriva facets de la categoría declarada
+    (`category_collection_facets`), porque el wire no los transporta.
+    `TimeSeries` abre el gráfico sobre su columna de tiempo junto a las filas;
+    `Document` en una tabla abre un árbol de documentos de solo lectura con los
+    valores JSON expandidos. El enum es exhaustivo,
+    así que un facet nuevo no compila hasta que `DataViewMode::for_facet`
+    (`crates/dbflux_ui_document/src/data_view.rs`) lo maneje. El SQL de
+    vecinos más cercanos sigue siendo propiedad del driver vía
+    `QueryGenerator::generate_nearest_neighbors`, que por defecto no está
+    soportado.
+  - `category_presentation` (`crates/dbflux_components/src/category.rs`) es la
+    única tabla de íconos, tonos y etiquetas de contenedor del árbol de schema
+    por categoría; una `DatabaseCategory` nueva agrega un brazo ahí en lugar de
+    un match en cada crate de UI.
+  - `DataStructure::ReservedGraph` y `ReservedWideColumn` solo reservan los
+    índices 3 y 4 del wire postcard, y `DatabaseCategory::ReservedGraph` y
+    `ReservedWideColumn` los índices 3 y 5, para que las variantes siguientes
+    conserven su índice ante peers del protocolo RPC de drivers;
+    `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` fija los índices de
+    ambos enums. No elimine ni reordene sus variantes.
   - `CollectionChildInfo` permite a los drivers publicar fuentes hijas bajo una
     collection/container sin heurísticas de UI.
   - `EventStreamTarget` le da al workspace/audit un identificador genérico para
@@ -1111,6 +1155,18 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()`
     permiten que la UI abra y decore documents de object-storage sin bifurcar
     según driver ID.
+  - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`),
+    informado por `Connection::table_view_features()`, habilita las vistas
+    Columnas y Particiones de una tabla, la estimación de lectura, el perfil de
+    muestra y el selector de columnas. Los datos vienen de `table_profile`,
+    `table_partitions`, `estimate_table_read` y `sample_table_profile`, y
+    `TableBrowseRequest::columns` lleva la proyección. La UI
+    (`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`) los
+    muestra con los componentes compartidos `ColumnProfileView`,
+    `PartitionListView`, `ColumnProjectionPicker` y `ReadEstimateBar` de
+    `dbflux_components`. El documento Parquet usa la misma vista de perfil, el
+    selector y la barra de estimación, y el documento CSV usa la vista de
+    perfil.
   - Si la UI necesita comportamiento nuevo, agrega primero una abstracción
     genérica del core; no agregues `if driver_id == ...` en `dbflux_ui` ni en
     código de workflow orientado a la app.
@@ -1523,8 +1579,9 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
 ### Componentes de Soporte
 
 - Sistema de toasts: `crates/dbflux_ui_base/src/toast.rs` implementación
-  personalizada con auto-dismiss (4s) para toasts de success/info/warning. (Shim
-  en `crates/dbflux_ui/src/ui/components/toast.rs`.)
+  personalizada con auto-dismiss configurable para toasts de
+  success/info/warning (por defecto 8 s, y el doble para los de warning; se
+  ajusta en Settings > General).
 - Infraestructura de tunnels: `crates/dbflux_tunnel_core/` provee `Tunnel` RAII
   con el trait `TunnelConnector` y el forwarder bidireccional
   `ForwardingConnection<R>`.

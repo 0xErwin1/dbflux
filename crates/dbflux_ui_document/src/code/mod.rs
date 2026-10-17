@@ -29,11 +29,12 @@ use dbflux_core::observability::{
     EventRecord, EventSeverity, EventSourceId,
 };
 use dbflux_core::{
-    DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic,
-    EditorLanguageProfile, ExecutionContext, ExecutionSourceContext, HistoryEntry, OutputReceiver,
-    QueryLanguage, QueryRequest, QueryResult, ReadOnlyEnforcement, RefreshPolicy,
-    SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult, check_schema_drift,
+    Connection, DangerousAction, DangerousQueryKind, DbError,
+    DiagnosticSeverity as CoreDiagnosticSeverity, DriftOutcome, DriverCapabilities,
+    EditorDiagnostic as CoreEditorDiagnostic, EditorLanguageProfile, ExecutionContext,
+    ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
+    ReadOnlyEnforcement, RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget,
+    ValidationResult, check_schema_drift,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -62,6 +63,8 @@ use uuid::Uuid;
 mod code_actions;
 mod comment;
 mod completion;
+#[cfg(test)]
+mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
@@ -70,7 +73,7 @@ mod file_ops;
 mod file_persistence;
 mod focus;
 mod live_output;
-pub mod pane;
+pub(crate) mod pane;
 mod render;
 mod statements;
 mod vim;
@@ -79,7 +82,7 @@ use code_actions::SqlCodeActionProvider;
 pub(crate) use completion::QueryCompletionProvider;
 pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
-pub use vim::VimMode;
+pub(crate) use vim::VimMode;
 
 pub(crate) use execution::evaluate_dangerous_with_effective_settings;
 
@@ -94,12 +97,15 @@ pub(super) struct ResultTab {
     title: String,
     grid: Entity<DataGridPanel>,
     result_panel: Entity<ResultPanel>,
+    /// Where the tab's result came from, so its footer actions run the
+    /// query there even after the document moved on.
+    origin: Option<ResultOrigin>,
     _subscription: Subscription,
 }
 
 /// Internal layout of the document.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum SqlQueryLayout {
+pub(crate) enum SqlQueryLayout {
     #[default]
     Split,
     EditorOnly,
@@ -109,7 +115,7 @@ pub enum SqlQueryLayout {
 /// Where the results sit in the split: below the editor, or beside it on
 /// the right for wide screens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ResultsPosition {
+pub(crate) enum ResultsPosition {
     #[default]
     Bottom,
     Right,
@@ -190,7 +196,7 @@ impl ResultsPosition {
 
 /// Where focus is within the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum SqlQueryFocus {
+pub(crate) enum SqlQueryFocus {
     #[default]
     Editor,
     Results,
@@ -289,12 +295,33 @@ fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(
 /// Caps an editor query at `editor_row_limit` rows unless the request already
 /// carries its own limit, which wins even when it is zero. A limit beyond
 /// `u32::MAX` saturates because `QueryRequest::limit` is a `u32`.
-fn apply_editor_row_limit(mut request: QueryRequest, editor_row_limit: usize) -> QueryRequest {
-    if request.limit.is_none() {
+///
+/// `None` leaves the request as it is: the connection cannot enforce a row
+/// budget, and a driver that cannot enforce one refuses the whole request
+/// instead of running it unbounded (see [`enforces_request_row_limit`]).
+fn apply_editor_row_limit(
+    mut request: QueryRequest,
+    editor_row_limit: Option<usize>,
+) -> QueryRequest {
+    if let (Some(editor_row_limit), None) = (editor_row_limit, request.limit) {
         request.limit = Some(u32::try_from(editor_row_limit).unwrap_or(u32::MAX));
     }
 
     request
+}
+
+/// Whether `connection` enforces [`QueryRequest::limit`] itself: it stops
+/// reading rows at the cap and marks the result truncated, instead of refusing
+/// a request that carries one.
+///
+/// A request goes out with the editor row limit only when this holds. The limit
+/// is a budget the driver has to enforce, so sending it to a driver that cannot
+/// enforce it turns the query away without running anything; the native console
+/// gates its commands on the same flag.
+pub(crate) fn enforces_request_row_limit(connection: &dyn Connection) -> bool {
+    connection
+        .metadata()
+        .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
 }
 
 fn query_request_for_execution(
@@ -302,7 +329,7 @@ fn query_request_for_execution(
     active_database: Option<String>,
     exec_ctx: &ExecutionContext,
     query_language: QueryLanguage,
-    editor_row_limit: usize,
+    editor_row_limit: Option<usize>,
 ) -> QueryRequest {
     let window = match &exec_ctx.source {
         Some(ExecutionSourceContext::CollectionWindow {
@@ -463,6 +490,24 @@ pub(super) struct Execution {
     /// Byte offset in the buffer where the text of the latest run starts,
     /// used to name the statement lines behind each result.
     pub(super) query_origin: Option<usize>,
+    /// A result tab's Load all rows request. The next execution takes it, and
+    /// drops the row limit and replaces that tab only when it runs the same
+    /// query.
+    pub(super) load_all_rows: Option<LoadAllRows>,
+}
+
+pub(super) struct LoadAllRows {
+    pub(super) query: String,
+    pub(super) grid: gpui::EntityId,
+    pub(super) origin: ResultOrigin,
+}
+
+/// The connection, database and execution context a query result came from.
+#[derive(Clone)]
+pub(super) struct ResultOrigin {
+    connection_id: Uuid,
+    context: ExecutionSessionContext,
+    exec_ctx: ExecutionContext,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -485,6 +530,8 @@ pub(super) struct PendingActions {
     result: Option<PendingQueryResult>,
     set_query: Option<HistoryQuerySelected>,
     auto_refresh: bool,
+    /// A result tab asked to load every row of its query.
+    load_all_rows: Option<gpui::EntityId>,
     history_focus_restore: bool,
     drift_query: Option<PendingDriftQuery>,
     source_input_values: Option<(String, String)>,
@@ -498,9 +545,16 @@ pub(super) struct PendingActions {
     error: Option<String>,
 }
 
+#[derive(Clone)]
 struct ExecutionSessionContext {
     root: Arc<dyn dbflux_core::Connection>,
     database: Option<String>,
+}
+
+impl ExecutionSessionContext {
+    fn same_as(&self, other: &Self) -> bool {
+        self.database == other.database && Arc::ptr_eq(&self.root, &other.root)
+    }
 }
 
 pub struct CodeDocument {
@@ -585,6 +639,10 @@ struct PendingQueryResult {
     is_script: bool,
     /// The read-only enforcement the execution requested.
     read_only: ReadOnlyEnforcement,
+    /// The result tab a Load all rows run replaces, whichever tab is active.
+    result_grid: Option<gpui::EntityId>,
+    /// Where the query ran; `None` for a script.
+    origin: Option<ResultOrigin>,
 }
 
 pub(super) struct ActiveQueryTask {
@@ -605,11 +663,25 @@ struct PendingDangerousQuery {
 /// Pending confirmation for running a whole multi-statement script.
 ///
 /// Raised when the user runs without a selection, the buffer holds more than
-/// one statement, and the driver advertises `MULTI_STATEMENT`.
+/// one statement, and the driver advertises `MULTI_STATEMENT`, or when the
+/// statement under the cursor only opens or ends a transaction.
 struct PendingScriptConfirm {
     query: String,
     in_new_tab: bool,
     statement_count: usize,
+    /// The transaction boundary under the cursor that a cursor run would have
+    /// executed alone; the confirmation offers to run just that statement.
+    cursor_statement: Option<CursorStatement>,
+}
+
+/// A statement of the buffer a run without a selection would execute.
+struct CursorStatement {
+    text: String,
+    origin: usize,
+    line: usize,
+    /// Whether the confirmation may offer the whole script: false on a
+    /// driver that cannot run a batch, where only this statement can run.
+    offers_script: bool,
 }
 
 /// Action resolved by the schema-drift modal.
@@ -638,7 +710,7 @@ struct PendingDriftQuery {
 
 /// Record of a query execution.
 #[derive(Clone)]
-pub struct ExecutionRecord {
+pub(crate) struct ExecutionRecord {
     pub id: Uuid,
     pub started_at: Instant,
     pub finished_at: Option<Instant>,
@@ -737,11 +809,15 @@ impl CodeDocument {
         };
 
         let input_state = cx.new(|cx| {
-            GpuiEditorState::new(window, cx)
+            let mut state = GpuiEditorState::new(window, cx)
                 .language(editor_mode)
                 .line_number(true)
                 .soft_wrap(false)
-                .placeholder(placeholder)
+                .placeholder(placeholder);
+            // The menu sizes itself to its longest item; allow database identifiers
+            // more room than the component's 320 px default, while keeping a cap.
+            state.lsp_mut().completion_menu.max_width = px(640.);
+            state
         });
 
         let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));
@@ -929,6 +1005,9 @@ impl CodeDocument {
             Dropdown::new("sql-auto-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
+                .aria_label(dbflux_i18n::t!(
+                    "document.code.toolbar.auto_refresh_interval"
+                ))
                 .chevron_trigger(ButtonVariant::Secondary)
         });
 
@@ -1147,6 +1226,7 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
                 query_origin: None,
+                load_all_rows: None,
             },
             execution_session: ExecutionSessionBinding::new(),
             execution_session_context: None,
@@ -1497,27 +1577,29 @@ impl CodeDocument {
             return;
         };
 
-        let current = self.connection_id.and_then(|connection_id| {
-            let app_state = self.app_state.read(cx);
-            let connected = app_state.connections().get(&connection_id)?;
-            let database = self
-                .source
-                .exec_ctx
-                .database
-                .clone()
-                .or_else(|| connected.active_database.clone());
-            connected
-                .resolve_connection_for_execution(database.as_deref())
-                .ok()
-                .map(|root| (root, database))
-        });
-        let unchanged = current.is_some_and(|(root, database)| {
-            database == bound.database && Arc::ptr_eq(&bound.root, &root)
-        });
+        let unchanged = self
+            .current_execution_context(cx)
+            .is_some_and(|current| current.same_as(bound));
 
         if !unchanged {
             self.invalidate_execution_session(cx);
         }
+    }
+
+    /// The connection and database the next query would run on.
+    fn current_execution_context(&self, cx: &App) -> Option<ExecutionSessionContext> {
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&self.connection_id?)?;
+        let database = self
+            .source
+            .exec_ctx
+            .database
+            .clone()
+            .or_else(|| connected.active_database.clone());
+        connected
+            .resolve_connection_for_execution(database.as_deref())
+            .ok()
+            .map(|root| ExecutionSessionContext { root, database })
     }
 
     /// Invalidates before detached background cleanup; no document entity is retained.
@@ -2049,26 +2131,7 @@ impl CodeDocument {
         // Build details_json from the query text and any driver-provided extra fields.
         // The extra fields let drivers surface structured context (e.g., language, version,
         // injected window) without requiring driver-id branching here.
-        let details = {
-            let mut obj = serde_json::Map::new();
-            if let Some(q) = query {
-                obj.insert(
-                    "query".to_string(),
-                    serde_json::Value::String(q.to_string()),
-                );
-            }
-            if let Some(extra) = metadata_extra {
-                for (key, value) in extra {
-                    obj.insert(key.clone(), value.clone());
-                }
-            }
-            if !obj.is_empty() {
-                Some(serde_json::Value::Object(obj).to_string())
-            } else {
-                None
-            }
-        };
-        event.details_json = details;
+        event.details_json = audit_details_json(query, metadata_extra);
 
         if let Some(duration) = duration_ms {
             event.duration_ms = Some(duration);
@@ -3986,5 +4049,70 @@ mod tests {
         });
 
         assert!(panel_ids(window).is_empty());
+    }
+}
+
+/// `details_json` of an editor audit event: the query text and the
+/// driver-provided extra fields, without the server notices, which are user
+/// output rather than audit context and can carry row values.
+fn audit_details_json(
+    query: Option<&str>,
+    metadata_extra: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Option<String> {
+    let mut details = serde_json::Map::new();
+    if let Some(query) = query {
+        details.insert(
+            "query".to_string(),
+            serde_json::Value::String(query.to_string()),
+        );
+    }
+    if let Some(extra) = metadata_extra {
+        for (key, value) in extra {
+            if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
+                continue;
+            }
+            details.insert(key.clone(), value.clone());
+        }
+    }
+
+    (!details.is_empty()).then(|| serde_json::Value::Object(details).to_string())
+}
+
+#[cfg(test)]
+mod audit_details_tests {
+    use super::audit_details_json;
+    use dbflux_core::{QueryResult, ServerNotice};
+    use std::time::Duration;
+
+    #[test]
+    fn server_notices_stay_out_of_the_audit_details() {
+        let mut result = QueryResult::table(Vec::new(), Vec::new(), Some(0), Duration::ZERO);
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "row 42 belongs to alice".to_string(),
+        }]);
+        result.set_rows_truncated(true);
+
+        let details = audit_details_json(Some("COMMIT"), result.metadata_extra.as_ref())
+            .expect("details with the query");
+        let details: serde_json::Value = serde_json::from_str(&details).expect("details are JSON");
+
+        assert_eq!(details["query"], "COMMIT");
+        assert!(
+            details
+                .get(dbflux_core::SERVER_NOTICES_METADATA_KEY)
+                .is_none()
+        );
+        assert!(!details.to_string().contains("alice"));
+        assert_eq!(
+            details.as_object().map(|object| object.len()),
+            Some(2),
+            "the other driver fields are kept"
+        );
+    }
+
+    #[test]
+    fn no_query_and_no_extra_fields_leave_no_details() {
+        assert_eq!(audit_details_json(None, None), None);
     }
 }

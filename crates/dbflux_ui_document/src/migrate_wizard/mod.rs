@@ -1572,6 +1572,13 @@ impl MigrateWizard {
 impl MigrateWizard {
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let rail_entity = cx.entity().downgrade();
+        // The rail is built from rail_entries(), which maps RAIL_PHASES
+        // one-to-one in order, so the clicked index is a valid RAIL_PHASES
+        // index; the mapping is not re-checked here.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "render_wizard_rail receives to_rail_items(self.phase), built one-to-one from RAIL_PHASES in order, so the clicked index is below RAIL_PHASES.len()"
+        )]
         let on_select = move |index: usize, _window: &mut Window, app: &mut App| {
             let phase = RAIL_PHASES[index];
             rail_entity
@@ -2044,3 +2051,7 @@ mod lifecycle_tests {
         );
     }
 }
+
+/// Render naming test for the wizard's checkboxes (issue #807, S4/S7).
+#[cfg(test)]
+mod accessibility_tests;

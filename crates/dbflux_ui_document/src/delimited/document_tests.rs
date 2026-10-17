@@ -2472,7 +2472,8 @@ fn the_pane_handle_lists_the_dialect_and_edit_actions(cx: &mut TestAppContext) {
             "delimited-add-column",
             "delimited-rename-column",
             "delimited-discard",
-            "delimited-reload"
+            "delimited-reload",
+            "delimited-profile-full-scan"
         ]
     );
 }

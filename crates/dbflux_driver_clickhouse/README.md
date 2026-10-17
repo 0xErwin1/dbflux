@@ -25,7 +25,7 @@ the endpoint is a URL and not a host/port pair.
 ## Features
 
 - Blocking HTTP(S) transport built on rustls, authenticating with HTTP Basic.
-- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver refuses request row limits, so console commands run without one.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Arbitrary single-statement SQL, with responses forced to `JSONCompact` so column
   names and types arrive alongside the rows.
 - Row width is checked against the declared column count on every response, so a
@@ -35,6 +35,10 @@ the endpoint is a URL and not a host/port pair.
   size, and compression.
 - Schema loading is lazy per database, so a server with many databases does not pay
   for all of them at connect time.
+- Row-limited queries stream their result and stop reading one row past the
+  limit, so a large result comes back truncated instead of failing on the
+  response byte cap. The request sets `cancel_http_readonly_queries_on_client_close`,
+  so the server stops a read-only query once the client closes the connection.
 - SQL is sent unchanged over HTTP. The existing `offset` request value is sent
   as an HTTP query parameter; its server-side behavior is not certified here.
 - Read-only visual SELECT generation, using ClickHouse identifier and literal
@@ -44,6 +48,18 @@ the endpoint is a URL and not a host/port pair.
 - Dangerous-query detection uses the shared `SqlLanguageService` (no ClickHouse-specific override): `ALTER TABLE ... DELETE WHERE ...` and `ALTER TABLE ... UPDATE ... WHERE ...` are already caught as `Alter` (any `ALTER`-prefixed statement is flagged regardless of sub-command), and `TRUNCATE`/`DROP` are caught as usual. `KILL QUERY`/`KILL MUTATION` and `OPTIMIZE TABLE ... FINAL` are not flagged — neither deletes rows or changes table structure — matching how other relational drivers treat comparable non-destructive administrative statements.
 - Write-privilege probe: after connecting, checks the `readonly` server setting and `system.grants` for the current user and their active session roles to detect a read-only session or a user without `INSERT`/`ALTER UPDATE`/`ALTER DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; grants reachable only through a role-of-a-role are not resolved and leave the policy unchanged).
 - Instance metrics and inspector (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR`): a curated set of gauges and counters from `system.metrics`, `system.events`, and `system.asynchronous_metrics` (active queries, tracked memory, TCP/HTTP connections, selected/inserted rows, OS memory available), plus a `system.processes` running-queries inspector with a "Kill query" row action. The kill action is gated by a `KILL QUERY` privilege probe run once when the catalog is built; the action stays hidden unless that probe succeeds, so a probe that fails for any reason leaves a destructive control out of the UI rather than offering one the session cannot execute.
+- Table views (`TableViewFeatures`): a table's Columns view reads
+  `system.columns`, `system.tables` and `system.parts` for each column's codec,
+  size on disk and uncompressed, compression ratio, sort key position and
+  partition key, and for the table's engine, keys, TTL, active parts, rows and
+  size. The Partitions view lists each partition's active parts, rows, sizes
+  and key range from `system.parts`, newest first. The Data view gets a column
+  picker that names only the chosen columns in the query, and a read estimate
+  from `EXPLAIN ESTIMATE`. A filter with a subquery, or with `IN` followed by a
+  table name, gets no estimate, because planning it would read that subquery or
+  table. **Profile the first 1 000 000 rows** calculates null counts,
+  approximate distinct counts (`uniq`) and ranges on request, and is recorded
+  in the audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 
 ### Type handling
 
@@ -59,9 +75,10 @@ arrives fully structured rather than as raw text:
 ## Limitations
 
 - No SSH tunnels.
-- No transactions, prepared statements, or query cancellation. Explicit
-  `QueryRequest` row limits (including zero) and statement timeouts are refused
-  before dispatch. The configured default HTTP transport timeout remains in
+- No transactions, prepared statements, or query cancellation. Statement
+  timeouts, and row limits on instance metric or inspector queries, are refused
+  before dispatch. An error the server reports after the row-limit cut is
+  not seen, because reading stops at the cut: the result shows as truncated. The configured default HTTP transport timeout remains in
   effect, but does not guarantee that server work or mutations stop. Unbounded
   queries can allocate a whole result (within the HTTP response-body cap). The
   driver reports no lock-timeout support.
@@ -69,8 +86,16 @@ arrives fully structured rather than as raw text:
   SQL runs only when typed explicitly into the editor, so the grid is read-only and
   the driver is not a transfer target.
 - One SQL statement per request; multi-statement scripts are not batched.
-- HTTP response bodies are capped at 128 MiB.
+- HTTP response bodies are capped at 128 MiB. The cap applies to queries
+  without a row limit, and to row-limited ones only when the kept rows alone
+  exceed it.
 - Named ClickHouse time zones are not interpreted client-side. ISO timestamps
   carrying an offset are handled accurately; timestamps without one are treated
   as UTC.
 - Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) is sent with the per-request setting `readonly = 2`, so ClickHouse rejects writes, DDL and attempts to change `readonly`. The setting does not limit what a read can reach; least-privilege database credentials remain the real boundary.
+- The read estimate is an upper bound: a `LIMIT` can stop the read sooner. Its
+  bytes scale each read column's size on disk by the share of granules the read
+  touches, so they are an approximation.
+- **Profile the first 1 000 000 rows** reads the first rows the server returns,
+  not a random sample. On a MergeTree table they follow the sort key, so the
+  range of a leading sort key column can be narrower than the table's.

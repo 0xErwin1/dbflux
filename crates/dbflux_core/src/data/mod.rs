@@ -5,12 +5,12 @@ pub(crate) mod document_edit;
 pub(crate) mod document_schema;
 pub(crate) mod key_value;
 pub(crate) mod value_decoder;
-pub(crate) mod view;
 
 pub use column_profile::{
     ColumnBadge, ColumnProfile, ColumnProjection, DEFAULT_PAGE_ROWS,
     DEFAULT_PROJECTION_BUDGET_BYTES, DEFAULT_PROJECTION_MAX_COLUMNS, EstimateScope, PartUnit,
-    ProfileSource, ReadEstimate, TableProfile, ValueRange, default_projection,
+    ProfileSource, ReadEstimate, TableFact, TableFactKind, TablePartition, TablePartitions,
+    TableProfile, TableViewFeatures, ValueCount, ValueRange, default_projection,
 };
 pub use crud::{
     ColumnAssignment, CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
@@ -50,4 +50,3 @@ pub use value_decoder::{
     DecodeOutcome, DecodedPayload, DecodedValue, Encoding, decode, decode_as, detect,
     probe_message_pack,
 };
-pub use view::DataViewKind;

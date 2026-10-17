@@ -109,8 +109,8 @@ mod tests {
             .unwrap();
         stmt.query_map([], |row| row.get::<_, String>(1))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     fn setup(conn: &Connection) {
@@ -280,8 +280,8 @@ mod tests {
                 .unwrap();
             stmt.query_map([&dashboard_id], |row| row.get(0))
                 .unwrap()
-                .filter_map(|r| r.ok())
-                .collect()
+                .collect::<Result<_, _>>()
+                .expect("every row reads")
         };
 
         assert_eq!(kinds, vec!["chart", "divider"]);

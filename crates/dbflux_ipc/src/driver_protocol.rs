@@ -1,13 +1,14 @@
 use crate::audit::AuditEventEmitDto;
-use crate::envelope::ProtocolVersion;
+use crate::envelope::{DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, ProtocolVersion};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
-    ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
-    DocumentDelete, DocumentInsert, DocumentUpdate, DriverFormDef, DriverMetadata,
-    ExecutionContext, ExplainRequest, QueryRequest, QueryResult, QueryResultShape, RowDelete,
-    RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    CollectionRef, ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
+    DriverMetadata, ExecutionContext, ExplainRequest, Pagination, QueryRequest, QueryResult,
+    QueryResultShape, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticFilter,
+    SemanticPlan, SemanticRequest, TableBrowseRequest, TableCountRequest, TableInfo, Value,
+    ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -52,6 +53,305 @@ pub struct DriverRpcError {
     pub code: DriverRpcErrorCode,
     pub message: String,
     pub retriable: bool,
+}
+
+/// A JSON document carried over the driver RPC as JSON text.
+///
+/// `postcard` rejects `deserialize_any`, and `serde_json::Value` deserializes
+/// exclusively through it, so a raw `Value` field can be written to a frame but
+/// never read back. The IPC request/response types carry the JSON text and
+/// parse it here, at the protocol boundary, leaving the `dbflux_core` types
+/// (and their JSON representation for MCP and the rest of the application)
+/// untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonText(serde_json::Value);
+
+impl JsonText {
+    pub fn new(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+
+    pub fn value(&self) -> &serde_json::Value {
+        &self.0
+    }
+
+    pub fn into_value(self) -> serde_json::Value {
+        self.0
+    }
+}
+
+impl From<serde_json::Value> for JsonText {
+    fn from(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
+impl From<JsonText> for serde_json::Value {
+    fn from(value: JsonText) -> Self {
+        value.0
+    }
+}
+
+impl serde::Serialize for JsonText {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for JsonText {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        serde_json::from_str(&text)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentFilter` with a [`JsonText`] payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentFilterDto {
+    pub filter: JsonText,
+}
+
+impl From<DocumentFilter> for DocumentFilterDto {
+    fn from(value: DocumentFilter) -> Self {
+        Self {
+            filter: value.filter.into(),
+        }
+    }
+}
+
+impl From<DocumentFilterDto> for DocumentFilter {
+    fn from(value: DocumentFilterDto) -> Self {
+        Self {
+            filter: value.filter.into(),
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentUpdate`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentUpdateDto {
+    pub collection: String,
+    pub database: Option<String>,
+    pub filter: DocumentFilterDto,
+    pub update: JsonText,
+    pub many: bool,
+    pub upsert: bool,
+}
+
+impl From<DocumentUpdate> for DocumentUpdateDto {
+    fn from(value: DocumentUpdate) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            update: value.update.into(),
+            many: value.many,
+            upsert: value.upsert,
+        }
+    }
+}
+
+impl From<DocumentUpdateDto> for DocumentUpdate {
+    fn from(value: DocumentUpdateDto) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            update: value.update.into(),
+            many: value.many,
+            upsert: value.upsert,
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentInsert`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentInsertDto {
+    pub collection: String,
+    pub database: Option<String>,
+    pub documents: Vec<JsonText>,
+}
+
+impl From<DocumentInsert> for DocumentInsertDto {
+    fn from(value: DocumentInsert) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            documents: value.documents.into_iter().map(JsonText::new).collect(),
+        }
+    }
+}
+
+impl From<DocumentInsertDto> for DocumentInsert {
+    fn from(value: DocumentInsertDto) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            documents: value
+                .documents
+                .into_iter()
+                .map(JsonText::into_value)
+                .collect(),
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::DocumentDelete`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentDeleteDto {
+    pub collection: String,
+    pub database: Option<String>,
+    pub filter: DocumentFilterDto,
+    pub many: bool,
+}
+
+impl From<DocumentDelete> for DocumentDeleteDto {
+    fn from(value: DocumentDelete) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            many: value.many,
+        }
+    }
+}
+
+impl From<DocumentDeleteDto> for DocumentDelete {
+    fn from(value: DocumentDeleteDto) -> Self {
+        Self {
+            collection: value.collection,
+            database: value.database,
+            filter: value.filter.into(),
+            many: value.many,
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::CollectionBrowseRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionBrowseRequestDto {
+    pub collection: CollectionRef,
+    pub pagination: Pagination,
+    #[serde(default)]
+    pub filter: Option<JsonText>,
+    #[serde(default)]
+    pub semantic_filter: Option<SemanticFilter>,
+    #[serde(default)]
+    pub projection: Option<JsonText>,
+    #[serde(default)]
+    pub sort: Option<JsonText>,
+}
+
+impl From<CollectionBrowseRequest> for CollectionBrowseRequestDto {
+    fn from(value: CollectionBrowseRequest) -> Self {
+        let CollectionBrowseRequest {
+            collection,
+            pagination,
+            filter,
+            semantic_filter,
+            projection,
+            sort,
+        } = value;
+
+        Self {
+            collection,
+            pagination,
+            filter: filter.map(JsonText::new),
+            semantic_filter,
+            projection: projection.map(JsonText::new),
+            sort: sort.map(JsonText::new),
+        }
+    }
+}
+
+impl From<CollectionBrowseRequestDto> for CollectionBrowseRequest {
+    fn from(value: CollectionBrowseRequestDto) -> Self {
+        Self {
+            collection: value.collection,
+            pagination: value.pagination,
+            filter: value.filter.map(JsonText::into_value),
+            semantic_filter: value.semantic_filter,
+            projection: value.projection.map(JsonText::into_value),
+            sort: value.sort.map(JsonText::into_value),
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::CollectionCountRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionCountRequestDto {
+    pub collection: CollectionRef,
+    #[serde(default)]
+    pub filter: Option<JsonText>,
+    #[serde(default)]
+    pub semantic_filter: Option<SemanticFilter>,
+}
+
+impl From<CollectionCountRequest> for CollectionCountRequestDto {
+    fn from(value: CollectionCountRequest) -> Self {
+        Self {
+            collection: value.collection,
+            filter: value.filter.map(JsonText::new),
+            semantic_filter: value.semantic_filter,
+        }
+    }
+}
+
+impl From<CollectionCountRequestDto> for CollectionCountRequest {
+    fn from(value: CollectionCountRequestDto) -> Self {
+        Self {
+            collection: value.collection,
+            filter: value.filter.map(JsonText::into_value),
+            semantic_filter: value.semantic_filter,
+        }
+    }
+}
+
+/// IPC mirror of `dbflux_core::CrudResult`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrudResultDto {
+    pub affected_rows: u64,
+    pub returning_row: Option<Row>,
+    #[serde(default)]
+    pub metadata_extra: Option<std::collections::HashMap<String, JsonText>>,
+}
+
+impl From<CrudResult> for CrudResultDto {
+    fn from(value: CrudResult) -> Self {
+        Self {
+            affected_rows: value.affected_rows,
+            returning_row: value.returning_row,
+            metadata_extra: value.metadata_extra.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, JsonText::new(value)))
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl From<CrudResultDto> for CrudResult {
+    fn from(value: CrudResultDto) -> Self {
+        Self {
+            affected_rows: value.affected_rows,
+            returning_row: value.returning_row,
+            metadata_extra: value.metadata_extra.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, value.into_value()))
+                    .collect()
+            }),
+        }
+    }
 }
 
 /// Serializable representation of `QueryRequest`.
@@ -176,13 +476,88 @@ impl From<QueryResultDto> for QueryResult {
             // Resolved window and metadata_extra are not part of the IPC DTO; drivers set them locally.
             resolved_window: None,
             metadata_extra: None,
-            // The driver RPC DTO does not currently propagate additional
-            // result sets across the wire. External RPC drivers that need
-            // multi-set support would have to extend QueryResultDto first;
-            // until then, IPC-driven connections behave as single-result-set.
+            // A single DTO is one result set; additional sets travel in
+            // `QueryResultSetsDto` from v1.7.
             additional_results: Vec::new(),
         }
     }
+}
+
+/// One result set together with the truncation flag `QueryResultDto` has no
+/// room for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultSetDto {
+    pub result: QueryResultDto,
+    pub rows_truncated: bool,
+}
+
+impl From<&QueryResult> for ResultSetDto {
+    fn from(value: &QueryResult) -> Self {
+        Self {
+            result: QueryResultDto::from(value),
+            rows_truncated: value.rows_truncated(),
+        }
+    }
+}
+
+impl From<ResultSetDto> for QueryResult {
+    fn from(value: ResultSetDto) -> Self {
+        let mut result = QueryResult::from(value.result);
+        result.set_rows_truncated(value.rows_truncated);
+        result
+    }
+}
+
+/// Every result set of a query, execute or browse answer (v1.7+): the primary
+/// set first, then the additional ones in the order the driver returned them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryResultSetsDto {
+    pub primary: ResultSetDto,
+    pub additional: Vec<ResultSetDto>,
+}
+
+impl From<&QueryResult> for QueryResultSetsDto {
+    fn from(value: &QueryResult) -> Self {
+        Self {
+            primary: ResultSetDto::from(value),
+            additional: value
+                .additional_results
+                .iter()
+                .map(ResultSetDto::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<QueryResultSetsDto> for QueryResult {
+    fn from(value: QueryResultSetsDto) -> Self {
+        let mut result = QueryResult::from(value.primary);
+        for additional in value.additional {
+            result.push_additional_result(additional.into());
+        }
+        result
+    }
+}
+
+/// Whether `Execute`, `ExecuteWithHandle` and the browse requests are answered
+/// with every result set (`ExecuteResultSets`, `ExecuteWithHandleResultSets`,
+/// `BrowseResultSets`) on a session that negotiated `version`. Older peers
+/// cannot decode those variants and receive only the primary result set.
+pub fn protocol_carries_result_sets(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_V1_7.major
+        || (version.major == DRIVER_RPC_V1_7.major && version.minor >= DRIVER_RPC_V1_7.minor)
+}
+
+/// Whether `Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`
+/// on a session that negotiated `version`.
+///
+/// From v1.6 a host whose driver declares `DriverCapabilities::REQUEST_ROW_LIMIT`
+/// accepts the limit and answers with `ExecuteResultWithTruncation` /
+/// `ExecuteWithHandleResultWithTruncation`. Older peers cannot report that a
+/// result set dropped rows, so neither side sends nor accepts a limit with them.
+pub fn protocol_carries_request_row_limit(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_V1_6.major
+        || (version.major == DRIVER_RPC_V1_6.major && version.minor >= DRIVER_RPC_V1_6.minor)
 }
 
 /// Payload for optional chunked query responses.
@@ -266,10 +641,10 @@ pub enum DriverRequestBody {
         request: TableCountRequest,
     },
     BrowseCollection {
-        request: CollectionBrowseRequest,
+        request: CollectionBrowseRequestDto,
     },
     CountCollection {
-        request: CollectionCountRequest,
+        request: CollectionCountRequestDto,
     },
     Explain {
         request: ExplainRequest,
@@ -292,13 +667,13 @@ pub enum DriverRequestBody {
     },
     // === Document mutations ===
     UpdateDocument {
-        update: DocumentUpdate,
+        update: DocumentUpdateDto,
     },
     InsertDocument {
-        insert: DocumentInsert,
+        insert: DocumentInsertDto,
     },
     DeleteDocument {
-        delete: DocumentDelete,
+        delete: DocumentDeleteDto,
     },
     // === Schema extras ===
     SchemaTypes {
@@ -489,7 +864,7 @@ pub enum DriverResponseBody {
     },
     // === CRUD results ===
     CrudResult {
-        result: CrudResult,
+        result: CrudResultDto,
     },
     // === Document results ===
     // Same as CrudResult, no separate variant needed
@@ -549,6 +924,31 @@ pub enum DriverResponseBody {
     // Appended after the last v1.4 variant for the same wire-index reason.
     KvKeyCountResult {
         count: u64,
+    },
+    // v1.6: `QueryResultDto` cannot change shape, so the truncation flag rides
+    // on new variants appended after the last v1.5 variant. A host sends them
+    // only on sessions that negotiated v1.6 or newer.
+    ExecuteResultWithTruncation {
+        result: QueryResultDto,
+        rows_truncated: bool,
+    },
+    ExecuteWithHandleResultWithTruncation {
+        handle_id: Uuid,
+        result: QueryResultDto,
+        rows_truncated: bool,
+    },
+    // v1.7: every result set with its own truncation flag, appended after the
+    // last v1.6 variant. A host sends them only on sessions that negotiated
+    // v1.7 or newer.
+    ExecuteResultSets {
+        results: QueryResultSetsDto,
+    },
+    ExecuteWithHandleResultSets {
+        handle_id: Uuid,
+        results: QueryResultSetsDto,
+    },
+    BrowseResultSets {
+        results: QueryResultSetsDto,
     },
 }
 
@@ -619,14 +1019,151 @@ impl DriverResponseEnvelope {
 mod tests {
     use super::{
         DriverRequestBody, DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
-        DriverRpcError, DriverRpcErrorCode, QueryRequestDto,
+        DriverRpcError, DriverRpcErrorCode, QueryRequestDto, QueryResultDto, QueryResultSetsDto,
+        QueryResultShapeDto, ResultSetDto, protocol_carries_request_row_limit,
+        protocol_carries_result_sets,
     };
     use crate::ProtocolVersion;
     use dbflux_core::{
         ExecutionContext, ExecutionSourceContext, KeyGetRequest, KeyGetResult, QueryRequest,
+        QueryResult,
     };
     use std::time::Duration;
     use uuid::Uuid;
+
+    /// `TableBrowseRequest` and `TableCountRequest` cross the driver RPC wire,
+    /// and `framing.rs` encodes every frame with postcard, which is positional.
+    /// A field that is skipped is absent from the bytes while the decoder still
+    /// consumes the next field's bytes as that field, shifting everything after
+    /// it, so a field that is only read in-process has to be skipped on both
+    /// sides of the encoding. Then a request carrying it encodes exactly like
+    /// one that does not and every other field keeps its place.
+    #[test]
+    fn browse_and_count_database_never_shifts_the_wire_layout() {
+        use dbflux_core::{
+            Pagination, SemanticFilter, TableBrowseRequest, TableCountRequest, TableRef, Value,
+            WhereOperator,
+        };
+
+        let filter = SemanticFilter::compare("id", WhereOperator::Eq, Value::Int(1));
+
+        // The shape an external driver RPC actually sends for a browse: no
+        // projection and no semantic filter. Both fields always encode from
+        // v1.8, so the bare shape decodes like any other.
+        let bare = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"));
+        let bare_scoped = bare.clone().with_database(Some("reporting".to_string()));
+        let bare_bytes = postcard::to_allocvec(&DriverRequestBody::BrowseTable { request: bare })
+            .expect("serialize bare browse");
+        assert_eq!(
+            bare_bytes,
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: bare_scoped,
+            })
+            .expect("serialize scoped bare browse"),
+            "the database must be zero-width even with no projection"
+        );
+
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&bare_bytes).expect("decode bare browse");
+        let DriverRequestBody::BrowseTable { request } = decoded else {
+            panic!("expected BrowseTable");
+        };
+        assert!(request.semantic_filter.is_none());
+        assert!(request.columns.is_empty());
+
+        // A count with a string filter and no semantic filter decodes as well.
+        let plain_count =
+            TableCountRequest::new(TableRef::with_schema("dbo", "events")).with_filter("id = 1");
+        let plain_count_scoped = plain_count
+            .clone()
+            .with_database(Some("reporting".to_string()));
+        let plain_count_bytes = postcard::to_allocvec(&DriverRequestBody::CountTable {
+            request: plain_count,
+        })
+        .expect("serialize plain count");
+        assert_eq!(
+            plain_count_bytes,
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: plain_count_scoped,
+            })
+            .expect("serialize scoped plain count"),
+            "the database must be zero-width with no semantic filter"
+        );
+
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&plain_count_bytes).expect("decode plain count");
+        let DriverRequestBody::CountTable { request } = decoded else {
+            panic!("expected CountTable");
+        };
+        assert!(request.semantic_filter.is_none());
+
+        // A populated projection is part of the fixture: `columns` used to be
+        // skipped when empty (which shifted the fields after it), and v1.8
+        // always encodes it.
+        let browse = TableBrowseRequest::new(TableRef::with_schema("dbo", "events"))
+            .with_pagination(Pagination::Offset {
+                limit: 10,
+                offset: 20,
+            })
+            .with_columns(vec!["id".to_string()])
+            .with_semantic_filter(filter.clone());
+        let browse_scoped = browse.clone().with_database(Some("reporting".to_string()));
+
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: browse.clone(),
+            })
+            .expect("serialize browse"),
+            postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+                request: browse_scoped,
+            })
+            .expect("serialize scoped browse"),
+            "a database on the request must not change the encoded bytes"
+        );
+
+        let bytes = postcard::to_allocvec(&DriverRequestBody::BrowseTable {
+            request: browse.clone(),
+        })
+        .expect("serialize browse");
+        let decoded: DriverRequestBody = postcard::from_bytes(&bytes).expect("decode browse");
+        let DriverRequestBody::BrowseTable { request } = decoded else {
+            panic!("expected BrowseTable");
+        };
+        assert_eq!(request.table, browse.table);
+        assert_eq!(request.pagination, browse.pagination);
+        assert_eq!(request.semantic_filter, browse.semantic_filter);
+
+        let count = TableCountRequest::new(TableRef::with_schema("dbo", "events"))
+            .with_filter("id = 1")
+            .with_semantic_filter(filter.clone());
+        let count_scoped = count.clone().with_database(Some("reporting".to_string()));
+
+        assert_eq!(
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: count.clone(),
+            })
+            .expect("serialize count"),
+            postcard::to_allocvec(&DriverRequestBody::CountTable {
+                request: count_scoped,
+            })
+            .expect("serialize scoped count"),
+            "a database on the count must not change the encoded bytes"
+        );
+
+        let bytes = postcard::to_allocvec(&DriverRequestBody::CountTable {
+            request: count.clone(),
+        })
+        .expect("serialize count");
+        let decoded: DriverRequestBody = postcard::from_bytes(&bytes).expect("decode count");
+        let DriverRequestBody::CountTable { request } = decoded else {
+            panic!("expected CountTable");
+        };
+        assert_eq!(request.filter, count.filter);
+        assert_eq!(
+            request.semantic_filter, count.semantic_filter,
+            "the count's filter must survive the wire"
+        );
+    }
 
     #[test]
     fn request_envelope_uses_explicit_protocol_version() {
@@ -648,6 +1185,70 @@ mod tests {
 
         assert_eq!(response.protocol_version, ProtocolVersion::new(1, 0));
         assert_eq!(response.request_id, 41);
+    }
+
+    #[test]
+    fn table_info_with_indexes_roundtrips_over_postcard() {
+        let mut relational = nontrivial_table_info();
+        relational.indexes = Some(dbflux_core::IndexData::Relational(vec![
+            dbflux_core::IndexInfo {
+                name: "orders_pkey".into(),
+                columns: vec!["id".into()],
+                is_unique: true,
+                is_primary: true,
+            },
+        ]));
+        let bytes = postcard::to_allocvec(&DriverResponseBody::TableDetails { table: relational })
+            .expect("encode table details");
+        let decoded: DriverResponseBody =
+            postcard::from_bytes(&bytes).expect("decode table details");
+        let DriverResponseBody::TableDetails { table } = decoded else {
+            panic!("expected TableDetails, got {decoded:?}");
+        };
+        let Some(dbflux_core::IndexData::Relational(indexes)) = table.indexes else {
+            panic!("expected relational indexes, got {:?}", table.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "orders_pkey");
+        assert_eq!(indexes[0].columns, vec!["id".to_string()]);
+        assert!(indexes[0].is_unique);
+        assert!(indexes[0].is_primary);
+
+        let mut document = nontrivial_table_info();
+        document.indexes = Some(dbflux_core::IndexData::Document(vec![
+            dbflux_core::CollectionIndexInfo {
+                name: "created_at_ttl".into(),
+                keys: vec![("created_at".into(), dbflux_core::IndexDirection::Descending)],
+                is_unique: false,
+                is_sparse: true,
+                expire_after_seconds: Some(3600),
+            },
+        ]));
+        let bytes = postcard::to_allocvec(&DriverRequestBody::GenerateCode {
+            generator_id: "select".into(),
+            table: document,
+        })
+        .expect("encode generate code");
+        let decoded: DriverRequestBody =
+            postcard::from_bytes(&bytes).expect("decode generate code");
+        let DriverRequestBody::GenerateCode { table, .. } = decoded else {
+            panic!("expected GenerateCode, got {decoded:?}");
+        };
+        let Some(dbflux_core::IndexData::Document(indexes)) = table.indexes else {
+            panic!("expected document indexes, got {:?}", table.indexes);
+        };
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "created_at_ttl");
+        assert_eq!(
+            indexes[0].keys,
+            vec![(
+                "created_at".to_string(),
+                dbflux_core::IndexDirection::Descending
+            )]
+        );
+        assert!(!indexes[0].is_unique);
+        assert!(indexes[0].is_sparse);
+        assert_eq!(indexes[0].expire_after_seconds, Some(3600));
     }
 
     #[test]
@@ -864,9 +1465,13 @@ mod tests {
     /// Fixture shape for the golden byte tests below. Populated fields:
     /// `schema`, two `columns` (one with default and enum values, one with an
     /// empty `enum_values` list), `foreign_keys`, `constraints`, and
-    /// `storage_hints`. Deliberately left empty: `indexes` (postcard cannot
-    /// encode the internally tagged `IndexData` enum), `sample_fields`
+    /// `storage_hints`. Deliberately left empty: `indexes` (covered by
+    /// `table_info_with_indexes_roundtrips_over_postcard`), `sample_fields`
     /// (document-database only), and `child_items` (driver child sources).
+    ///
+    /// The populated `enum_values`/`Some` choices predate the v1.8 wire-format
+    /// fix and are kept so the captured bytes stay valid legacy fixtures; see
+    /// `tests/driver_wire_roundtrip.rs` for the live round-trip coverage.
     fn nontrivial_table_info() -> dbflux_core::TableInfo {
         dbflux_core::TableInfo {
             name: "orders".into(),
@@ -878,12 +1483,11 @@ mod tests {
                     nullable: false,
                     is_primary_key: true,
                     default_value: None,
-                    // NOTE: `enum_values` carries `skip_serializing_if`,
-                    // which postcard cannot round-trip (a skipped field
-                    // misaligns every later byte on decode). The fixture
-                    // keeps it `Some` so the bytes are decodable; real
-                    // multi-column payloads with a `None` here have the same
-                    // pre-existing decode hazard.
+                    // Legacy fixture value: `enum_values` used to carry
+                    // `skip_serializing_if`, so only `Some` frames were
+                    // decodable. Kept `Some` to preserve the captured bytes;
+                    // v1.8 always encodes the field and no longer has this
+                    // hazard.
                     enum_values: Some(Vec::new()),
                 },
                 dbflux_core::ColumnInfo {
@@ -895,9 +1499,6 @@ mod tests {
                     enum_values: Some(vec!["new".into(), "paid".into()]),
                 },
             ]),
-            // `IndexData` is internally tagged (`#[serde(tag = "kind")]`),
-            // which postcard cannot encode (`SerdeSerCustom`), so wire-carried
-            // `TableInfo` always leaves `indexes` as `None`.
             indexes: None,
             foreign_keys: Some(vec![dbflux_core::ForeignKeyInfo {
                 name: "fk_orders_customer".into(),
@@ -986,6 +1587,269 @@ mod tests {
             DriverResponseBody::KvKeyCountResult { count } => assert_eq!(count, 1_234_567),
             other => panic!("unexpected response body: {other:?}"),
         }
+    }
+
+    fn limited_result_dto() -> QueryResultDto {
+        QueryResultDto {
+            shape: QueryResultShapeDto::Table,
+            columns: Vec::new(),
+            rows: vec![
+                vec![dbflux_core::Value::Int(1)],
+                vec![dbflux_core::Value::Int(2)],
+            ],
+            affected_rows: None,
+            execution_time_ms: 7,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+        }
+    }
+
+    #[test]
+    fn truncation_results_are_appended_after_the_last_v1_5_response_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteResultWithTruncation {
+                result: limited_result_dto(),
+                rows_truncated: true,
+            }),
+            35
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                handle_id: Uuid::nil(),
+                result: limited_result_dto(),
+                rows_truncated: true,
+            }),
+            36
+        );
+    }
+
+    #[test]
+    fn execute_result_with_truncation_round_trips_through_postcard() {
+        for truncated in [true, false] {
+            let response = DriverResponseBody::ExecuteResultWithTruncation {
+                result: limited_result_dto(),
+                rows_truncated: truncated,
+            };
+            let bytes = postcard::to_allocvec(&response).expect("serialize");
+            let restored: DriverResponseBody = postcard::from_bytes(&bytes).expect("deserialize");
+
+            match restored {
+                DriverResponseBody::ExecuteResultWithTruncation {
+                    result,
+                    rows_truncated,
+                } => {
+                    assert_eq!(rows_truncated, truncated);
+                    assert_eq!(result.rows.len(), 2);
+                    assert_eq!(result.execution_time_ms, 7);
+                }
+                other => panic!("unexpected response body: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn execute_with_handle_result_with_truncation_round_trips_through_postcard() {
+        let handle = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("uuid");
+        let response = DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+            handle_id: handle,
+            result: limited_result_dto(),
+            rows_truncated: true,
+        };
+        let bytes = postcard::to_allocvec(&response).expect("serialize");
+        let restored: DriverResponseBody = postcard::from_bytes(&bytes).expect("deserialize");
+
+        match restored {
+            DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                handle_id,
+                result,
+                rows_truncated,
+            } => {
+                assert_eq!(handle_id, handle);
+                assert!(rows_truncated);
+                assert_eq!(result.rows.len(), 2);
+            }
+            other => panic!("unexpected response body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_execute_results_keep_their_wire_indices() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteResult {
+                result: limited_result_dto(),
+            }),
+            4
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteWithHandleResult {
+                handle_id: Uuid::nil(),
+                result: limited_result_dto(),
+            }),
+            5
+        );
+    }
+
+    fn result_set_dto(label: &str, rows_truncated: bool) -> ResultSetDto {
+        let mut result = limited_result_dto();
+        result.text_body = Some(label.to_string());
+        ResultSetDto {
+            result,
+            rows_truncated,
+        }
+    }
+
+    fn result_sets_dto() -> QueryResultSetsDto {
+        QueryResultSetsDto {
+            primary: result_set_dto("primary", true),
+            additional: vec![
+                result_set_dto("second", false),
+                result_set_dto("third", true),
+            ],
+        }
+    }
+
+    #[test]
+    fn result_set_responses_are_appended_after_the_last_v1_6_response_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteResultSets {
+                results: result_sets_dto(),
+            }),
+            37
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ExecuteWithHandleResultSets {
+                handle_id: Uuid::nil(),
+                results: result_sets_dto(),
+            }),
+            38
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::BrowseResultSets {
+                results: result_sets_dto(),
+            }),
+            39
+        );
+    }
+
+    #[test]
+    fn result_set_responses_round_trip_through_postcard() {
+        let handle = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("uuid");
+        let responses = [
+            DriverResponseBody::ExecuteResultSets {
+                results: result_sets_dto(),
+            },
+            DriverResponseBody::ExecuteWithHandleResultSets {
+                handle_id: handle,
+                results: result_sets_dto(),
+            },
+            DriverResponseBody::BrowseResultSets {
+                results: result_sets_dto(),
+            },
+        ];
+
+        for response in responses {
+            let bytes = postcard::to_allocvec(&response).expect("serialize");
+            let restored: DriverResponseBody = postcard::from_bytes(&bytes).expect("deserialize");
+
+            let results = match restored {
+                DriverResponseBody::ExecuteResultSets { results }
+                | DriverResponseBody::BrowseResultSets { results } => results,
+                DriverResponseBody::ExecuteWithHandleResultSets { handle_id, results } => {
+                    assert_eq!(handle_id, handle);
+                    results
+                }
+                other => panic!("unexpected response body: {other:?}"),
+            };
+
+            let labels: Vec<(Option<String>, bool)> = std::iter::once(&results.primary)
+                .chain(&results.additional)
+                .map(|set| (set.result.text_body.clone(), set.rows_truncated))
+                .collect();
+            assert_eq!(
+                labels,
+                vec![
+                    (Some("primary".to_string()), true),
+                    (Some("second".to_string()), false),
+                    (Some("third".to_string()), true),
+                ]
+            );
+            assert_eq!(results.primary.result.rows.len(), 2);
+        }
+    }
+
+    #[test]
+    fn result_sets_carry_every_set_and_its_truncation_flag() {
+        let mut primary = QueryResult::text("primary".to_string(), Duration::from_millis(3));
+        primary.set_rows_truncated(true);
+        let second = QueryResult::text("second".to_string(), Duration::from_millis(4));
+        let mut third = QueryResult::text("third".to_string(), Duration::from_millis(5));
+        third.set_rows_truncated(true);
+        primary.push_additional_result(second);
+        primary.push_additional_result(third);
+
+        let dto = QueryResultSetsDto::from(&primary);
+        assert!(dto.primary.rows_truncated);
+        assert!(dto.primary.result.text_body.as_deref() == Some("primary"));
+        assert_eq!(dto.additional.len(), 2);
+
+        let bytes = postcard::to_allocvec(&dto).expect("serialize");
+        let restored: QueryResult = postcard::from_bytes::<QueryResultSetsDto>(&bytes)
+            .expect("deserialize")
+            .into();
+
+        let sets: Vec<(Option<&str>, bool, Duration)> = restored
+            .iter_result_sets()
+            .map(|set| {
+                (
+                    set.text_body.as_deref(),
+                    set.rows_truncated(),
+                    set.execution_time,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sets,
+            vec![
+                (Some("primary"), true, Duration::from_millis(3)),
+                (Some("second"), false, Duration::from_millis(4)),
+                (Some("third"), true, Duration::from_millis(5)),
+            ]
+        );
+        assert!(
+            restored
+                .additional_results
+                .iter()
+                .all(|set| set.additional_results.is_empty())
+        );
+    }
+
+    #[test]
+    fn result_sets_travel_only_from_v1_7() {
+        assert!(!protocol_carries_result_sets(ProtocolVersion::new(1, 0)));
+        assert!(!protocol_carries_result_sets(ProtocolVersion::new(1, 6)));
+        assert!(protocol_carries_result_sets(ProtocolVersion::new(1, 7)));
+        assert!(protocol_carries_result_sets(ProtocolVersion::new(1, 8)));
+        assert!(protocol_carries_result_sets(ProtocolVersion::new(2, 0)));
+    }
+
+    #[test]
+    fn request_row_limit_travels_only_from_v1_6() {
+        assert!(!protocol_carries_request_row_limit(ProtocolVersion::new(
+            1, 0
+        )));
+        assert!(!protocol_carries_request_row_limit(ProtocolVersion::new(
+            1, 5
+        )));
+        assert!(protocol_carries_request_row_limit(ProtocolVersion::new(
+            1, 6
+        )));
+        assert!(protocol_carries_request_row_limit(ProtocolVersion::new(
+            1, 7
+        )));
+        assert!(protocol_carries_request_row_limit(ProtocolVersion::new(
+            2, 0
+        )));
     }
 
     #[test]

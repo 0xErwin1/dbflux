@@ -198,6 +198,13 @@ components:
       name: "정렬: 이름"
     source:
       file_footer: "파일 푸터의 크기"
+      catalog: "%{name}의 크기"
+      planner_statistics: "%{name}의 통계"
+      loaded_rows: "불러온 %{rows}개 행 기준"
+      full_scan: "전체 %{rows}개 행 기준"
+      sample: "처음 읽은 %{rows}개 행의 분포"
+      read_at: "%{time}에 읽음"
+      file_modified: "파일 수정 %{time}"
     header:
       column: "열"
       codec: "코덱"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total}개 열 · 데이터에 %{shown}개 표시"
       hint: "열을 전환해 데이터 프로젝션에 추가하거나 제거합니다"
+      counts_only: "열 %{total}개"
     loading: "열 통계를 읽는 중…"
     empty: "이 테이블에는 열이 없습니다"
     no_match: "필터와 일치하는 열이 없습니다"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "정렬 키"
       partition_key: "파티션 키"
+      sort_key_position: "정렬 키 %{position}"
+      distribution_key: "분산 키"
+    action:
+      refresh: "통계 새로 고침"
+      sample: "처음 %{rows}개 행 프로파일링"
+      full_scan: "파일 전체 프로파일링"
+      running: "프로파일링 중…"
+    fact:
+      engine: "엔진"
+      sort_key: "정렬 키"
+      partition_key: "파티션 키"
+      primary_key: "기본 키"
+      sampling_key: "샘플링 키"
+      ttl: "TTL"
+      distribution_style: "분산"
+      active_parts: "활성 파트"
+      statistics_updated: "통계 갱신"
+      rows: "행"
+      on_disk: "디스크"
+      raw: "비압축"
+      ratio: "압축률"
+      row_groups: "행 그룹"
+      unsorted: "미정렬"
+      created_by: "작성 프로그램"
   read_estimate:
     lead: "읽을 양"
     row_groups: "행 그룹 %{total}개 중 %{touched}개"
     more:
       one: "외 %{count}개"
       many: "외 %{count}개"
+    parts: "파트 %{total}개 중 %{touched}개"
+    granules: "그래뉼 %{total}개 중 %{touched}개"
+    rows: "%{rows}개 행"
+    lead_upper: "최대 읽기"
+  partition_list:
+    summary: "파티션 %{count}개"
+    summary_with_key: "파티션 %{count}개 · PARTITION BY %{key}"
+    refresh: "파티션 새로 고침"
+    loading: "파티션을 읽는 중…"
+    empty: "이 테이블에는 파티션이 없습니다"
+    error_title: "파티션을 읽을 수 없습니다"
+    header:
+      partition: "파티션"
+      parts: "파트"
+      rows: "행"
+      on_disk: "디스크"
+      raw: "비압축"
+      ratio: "압축률"
+      range: "키 범위"
+      modified: "마지막 변경"
 composites:
   rail:
     add: "추가"
@@ -406,10 +458,9 @@ connection_manager:
       relational: "관계형"
       document: "문서"
       key_value: "키-값"
-      wide_column: "와이드 컬럼"
       time_series_and_logs: "시계열 및 로그"
-      graph: "그래프"
       object_storage: "오브젝트 스토리지"
+      other: "기타"
   export:
     target:
       connection: 연결
@@ -495,6 +546,8 @@ connection_manager:
       bundle_file: 번들 파일
       bundle_encrypted: 번들이 암호화되어 있음
       passphrase: 패스프레이즈
+      show_passphrase: 암호 문구 표시
+      hide_passphrase: 암호 문구 숨기기
     hint:
       no_native_picker: 이 시스템에는 기본 파일 선택기가 없습니다 — 위에 번들 경로를 입력하거나 붙여넣으세요.
       external_refs: 외부 값 참조는 그대로 전달됩니다
@@ -1206,7 +1259,6 @@ document:
       checking: "확인 중…"
       run: 실행
       last_run: "마지막 실행 %{seconds}초"
-      new_tab: 새 탭
       read_only: 읽기 전용
       saved: 저장됨
       save: 저장
@@ -1260,6 +1312,11 @@ document:
         many: "텍스트가 선택되지 않았습니다. 전체 스크립트가 %{count}개 문으로 순서대로 실행됩니다. 계속하시겠습니까?"
       cancel: 취소
       run: 스크립트 실행
+      run_statement: "이 문만 실행"
+      transaction:
+        title: "커서 위치의 트랜잭션 문"
+        message: "커서 위치의 문(%{line}행)은 \"%{statement}\"이며, 트랜잭션을 시작하거나 끝내기만 합니다. 이 문만 실행하면 스크립트의 나머지 부분은 실행되지 않습니다. 대신 %{count}개 문으로 된 전체 스크립트를 실행하시겠습니까?"
+        message_statement_only: "커서 위치의 문(%{line}행)은 \"%{statement}\"이며, 트랜잭션을 시작하거나 끝내기만 합니다. 이 문만 실행하면 스크립트의 나머지 부분은 실행되지 않으며, 이 연결은 전체 스크립트를 한 번에 실행할 수 없습니다. 함께 실행하려면 문을 선택하세요. 이 문만 실행하시겠습니까?"
     dangerous_query:
       fallback:
         title: 경고
@@ -1358,6 +1415,7 @@ document:
         run_script: "%{name} 스크립트 실행"
       copy_error: 오류 복사
       result_tab_title: "결과 %{index}"
+      count_rows_failed: 쿼리의 행 수를 셀 수 없습니다
       error:
         select_source: 소스를 하나 이상 선택하세요
         start_time_required: 시작 시간은 필수입니다
@@ -1541,6 +1599,7 @@ document:
         set_null: NULL로 설정
         add_row: 행 추가
         inspect_row: 행 검사
+        find_similar_rows: 유사한 행 찾기
         view_value: 값 보기
         duplicate_row: 행 복제
         delete_row: 행 삭제
@@ -1591,6 +1650,16 @@ document:
         value_compact: "값 압축"
         value_revert: "값 되돌리기"
         value_save: "값 저장"
+        view_table_data: "데이터 보기"
+        view_table_columns: "열 보기"
+        view_table_partitions: "파티션 보기"
+        column_picker: "열 선택"
+        refresh_profile: "열 통계 새로 고침"
+        sample_profile: "처음 행 프로파일링"
+        refresh_partitions: "파티션 새로 고침"
+        nearest_distance: "거리 변경 (현재 %{distance})"
+        nearest_clear: "테이블 행으로 돌아가기"
+        nearest_column: "벡터 열 변경"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -1621,7 +1690,6 @@ document:
           insert_failed: "문서를 삽입하지 못했습니다: %{error}"
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
-      rows_omitted: 실행 제한에 도달하여 이 결과 집합의 일부 행이 생략되었습니다.
       edit_bar:
         clean: 저장하지 않은 변경 사항 없음
         dirty:
@@ -1665,6 +1733,15 @@ document:
         rows:
           one: "행 %{count}개"
           many: "행 %{count}개"
+        executed: "문이 실행되었습니다"
+        affected_rows:
+          one: "%{count}개 행이 영향을 받음"
+          many: "%{count}개 행이 영향을 받음"
+        limited_rows:
+          first: "처음 %{count}개 행 로드됨"
+          of_total: "%{loaded}/%{total}개 행 로드됨"
+          count: 행 수 세기
+          load_all: 모든 행 로드
         pending_changes:
           one: "대기 중인 변경 사항 %{count}개"
           many: "대기 중인 변경 사항 %{count}개"
@@ -1707,6 +1784,39 @@ document:
         builder_notice: 행은 빌더 쿼리에서 가져옵니다
         edit_in_builder: 빌더에서 편집
         reset_builder: 초기화
+      nearest:
+        summary: "%{column} 기준 %{anchor}와 유사"
+        similar_to: "유사 대상"
+        by: "기준"
+        k: "K"
+        anchor: "기준 행"
+        anchor_row: "%{row}행"
+        read_only: "유사한 행은 읽기 전용입니다"
+        menu_detail: "%{column} 기준 · 가장 가까운 %{limit}개"
+        menu_blocked:
+          no_vector: "%{column} 값 없음"
+          pending_edits:
+            one: "먼저 변경 1개를 저장하거나 되돌리기"
+            many: "먼저 변경 %{count}개를 저장하거나 되돌리기"
+        column:
+          l2: "L2 거리"
+          cosine: "코사인 거리"
+          inner_product: "내적"
+        rows:
+          of_total: "%{total}행 중 가장 가까운 %{count}행"
+          count: "가장 가까운 %{count}행"
+        back_to_table: 테이블로 돌아가기
+        distance:
+          l2: L2
+          cosine: 코사인
+          inner_product: 내적
+        error:
+          no_vector: "선택한 행의 %{column} 값이 없습니다"
+          failed: "유사한 행 찾기 실패: %{error}"
+          pending_edits:
+            one: "먼저 변경 사항을 저장하거나 되돌리세요"
+            many: "먼저 변경 사항 %{count}개를 저장하거나 되돌리세요"
+          invalid_k: "K는 1부터 %{max}까지의 정수여야 합니다"
       toast:
         query_imported: 쿼리를 성공적으로 가져왔습니다
         mutation_queued: 변경 작업이 승인 대기열에 추가되었습니다.
@@ -1810,6 +1920,20 @@ document:
         references: 참조
         row: 행
       title: "행 %{row}"
+    table_views:
+      tab:
+        data: "데이터"
+        columns: "열"
+        partitions: "파티션"
+      projection_keeps_keys: "행을 편집할 수 있도록 기본 키는 프로젝션에 남습니다: %{columns}"
+      sample_failed: "샘플 프로파일링 실패: %{error}"
+      badge:
+        sort_position: "정렬 %{position}"
+        sort: "정렬"
+        partition: "파티션"
+        distribution: "분산"
+      header_nulls: "NULL %{percent}"
+      refresh_failed: "열 통계를 새로 고치지 못했습니다: %{error}"
   delimited:
     unsaved_summary: "%{name}의 저장되지 않은 편집"
     loading: "%{name} 불러오는 중…"
@@ -1927,6 +2051,7 @@ document:
       text: "텍스트"
       raw: "원본"
       aligned: "정렬"
+      columns: "열"
     text:
       more_in_file: "파일에 레코드가 더 있습니다. 여기에 표시하려면 더 불러오세요."
       capped: "텍스트에는 불러온 레코드 %{loaded}개 중 처음 %{shown}개만 표시됩니다. 표에는 모두 표시됩니다."
@@ -1935,6 +2060,17 @@ document:
       apply_failed: "텍스트를 적용할 수 없습니다: %{cause}"
       read_only_capped: "이 텍스트는 불러온 레코드를 모두 표시하지 않으므로 편집할 수 없습니다. 레코드 일부의 편집은 해당 레코드에 맞출 수 없습니다. 표에서 편집하세요."
       raw_edit_hint: "편집 내용은 보기를 전환하거나 저장하거나 더 불러올 때 표에 적용됩니다. 텍스트에서는 필드 값만 가져옵니다. 값이 바뀌지 않은 행은 파일의 줄바꿈과 따옴표를 유지하고, 바뀌거나 추가된 행은 파일의 열에 맞춰 기록됩니다."
+    columns:
+      type:
+        integer: "정수"
+        decimal: "소수"
+        boolean: "불리언"
+        date: "날짜"
+        timestamp: "타임스탬프"
+        text: "텍스트"
+      progress: "%{total} 중 %{scanned}"
+      error:
+        scan_failed: "%{file}을(를) 프로파일링할 수 없습니다"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "%{file} 분석 중 (%{analyzer})"
@@ -3226,9 +3362,6 @@ document:
       custom: "사용자 지정"
       on_open: 열 때
     result_warnings:
-      rows_omitted:
-        summary: 쿼리 결과에서 행이 생략되었습니다
-        cause: 실행 제한에 도달하여 하나 이상의 결과 집합에서 행이 생략되었습니다.
       context:
         query: 쿼리 결과
         table_browse: 테이블 탐색 결과
@@ -3246,6 +3379,7 @@ document:
       close_others: 다른 탭 닫기
       close_right: 오른쪽 탭 닫기
     new: 새 탭
+    close_named: "%{title} 닫기"
     unsaved_changes: 저장되지 않은 변경 사항
 document_tree:
   search_placeholder: 검색…
@@ -3383,6 +3517,7 @@ login:
     no_url: 이 공급자에 사용할 수 있는 로그인 URL이 없습니다.
     no_url_provided: 공급자가 로그인 URL을 제공하지 않았습니다.
 modals:
+  close: 닫기
   active_query:
     title: 실행 중인 쿼리
     prompt: 이 연결에서 쿼리가 아직 실행 중입니다. 어떻게 하시겠습니까?
@@ -3545,6 +3680,13 @@ modals:
     remember: 이 세션 동안 기억
     cancel: 취소
     connect: 연결
+  connection_password:
+    title: "비밀번호 필요"
+    connection_label: "연결"
+    placeholder: "비밀번호"
+    show_password: "비밀번호 표시"
+    hide_password: "비밀번호 숨기기"
+    remember: "DBFlux를 닫을 때까지 기억"
   unsaved_changes:
     title: 저장되지 않은 변경 사항
     prompt: 다음 문서에 저장되지 않은 변경 사항이 있습니다. 어떻게 하시겠습니까?
@@ -3885,6 +4027,7 @@ settings:
       error: 공유 데이터베이스 설정을 업데이트하지 못했습니다
       hint: "다음 실행 시 적용됩니다. 이 나이틀리 빌드의 dbflux-nightly.db 대신 안정 데이터베이스(dbflux.db)를 공유합니다."
     override_value_header: 값 재정의
+    override_field: "%{field} 재정의"
     placeholder:
       refresh_policy: 새로고침 정책
     save:
@@ -4026,6 +4169,7 @@ settings:
       cycle_result_view: "결과 보기 전환"
       toggle_value_panel: 값 패널 전환
       toggle_row_inspector: 행 검사기 전환
+      find_similar_rows: 유사한 행 찾기
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
       open_pane_actions: 패널 작업 열기
@@ -4765,6 +4909,8 @@ shutdown:
   failed: 종료 실패
 
 sidebar:
+  row:
+    actions: "%{name} 작업"
   header:
     new_dashboard: "새 대시보드"
     add: "추가"
@@ -4962,9 +5108,7 @@ sidebar:
       relational: 테이블 (%{count})
       document: 컬렉션 (%{count})
       key_value: 키 (%{count})
-      graph: 노드 (%{count})
       time_series: 측정값 (%{count})
-      wide_column: 테이블 (%{count})
       log_stream: 로그 그룹 (%{count})
       object_storage: 버킷 (%{count})
     folder:

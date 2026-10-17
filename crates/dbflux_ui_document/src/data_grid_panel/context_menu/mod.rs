@@ -152,6 +152,13 @@ impl ExportMenuEntry {
 
 /// The export menu row one step from `from`, wrapping at both ends and
 /// passing over disabled rows. Returns `from` when no other row is enabled.
+// index starts at from.min(count - 1) and only moves by modular steps over
+// count, so entries[index] stays below entries.len(); count > 0 after the
+// early return.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "index starts at from.min(count - 1) and moves only by modular steps over count, with count > 0 after the early return"
+)]
 pub(super) fn step_export_selection(
     entries: &[ExportMenuEntry],
     from: usize,
@@ -317,6 +324,14 @@ impl DataGridPanel {
                 .as_ref()
                 .and_then(|cid| {
                     let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
+                    // NodeId::root(), child() and parent() all keep the
+                    // leading document index segment, and no crate builds a
+                    // NodeId from its public path field, so the
+                    // slice after it is in range.
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "cursor ids come from NodeId::root()/child()/parent(), which all keep the leading document index segment, so path has at least one element and [1..] is in range"
+                    )]
                     let path: Vec<String> = cid.path[1..].to_vec();
                     let path_opt = if path.is_empty() { None } else { Some(path) };
                     Some((path_opt, Some(node.value.clone())))
@@ -767,10 +782,12 @@ impl DataGridPanel {
             .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
             .unwrap_or(false);
 
-        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
-        let has_generate_sql = !is_document_view && !is_column_header;
-        let has_copy_query = !is_column_header && self.has_copy_query_support();
+        let table_queries = self.offers_table_query_actions();
+        let has_filter = table_queries && self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order =
+            table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+        let has_generate_sql = table_queries && !is_document_view && !is_column_header;
+        let has_copy_query = table_queries && !is_column_header && self.has_copy_query_support();
         let can_chart = !is_column_header && self.can_chart_from_context_menu(cx);
 
         // Layout:
@@ -781,20 +798,24 @@ impl DataGridPanel {
         //   [sep + Toolbar]?          (if the grid shows any toolbar button)
         let inspect_row_enabled = !self.is_grouped_result();
 
-        let base_items = if is_column_header {
-            Vec::new()
-        } else {
-            self.adapt_menu_items_for_documents(
-                Self::build_context_menu_items(
-                    is_editable,
+        let base_items = match self.context_menu.as_ref() {
+            Some(menu) if !is_column_header => self.with_find_similar_rows(
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
+                        is_document_view,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
+                    ),
                     is_document_view,
-                    has_row_target,
-                    can_chart,
-                    inspect_row_enabled,
+                    cx,
                 ),
-                is_document_view,
+                menu,
+                has_row_target,
                 cx,
-            )
+            ),
+            _ => Vec::new(),
         };
         let base_count = base_items.len();
 
@@ -1045,6 +1066,7 @@ impl DataGridPanel {
                         cx.notify();
                     } else if menu.selected_index < base_count
                         && let Some(item) = base_items.get(menu.selected_index)
+                        && !item.disabled
                         && let Some(action) = item.action
                     {
                         self.handle_context_menu_action(action, window, cx);
@@ -1155,6 +1177,7 @@ impl DataGridPanel {
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::UnsetField
                 | ContextMenuAction::RevertCell
+                | ContextMenuAction::FindSimilarRows
                 | ContextMenuAction::DuplicateRow
                 | ContextMenuAction::DeleteRow
                 | ContextMenuAction::GenerateSelectWhere
@@ -1622,6 +1645,7 @@ impl DataGridPanel {
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
+        let mut detail_rows = 0usize;
         let menu_items = if menu.is_column_header {
             self.render_column_header_menu_items(menu, backend, cx)
         } else {
@@ -1629,17 +1653,26 @@ impl DataGridPanel {
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = self.adapt_menu_items_for_documents(
-                Self::build_context_menu_items(
-                    is_editable,
+            let visible_items = self.with_find_similar_rows(
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
+                        menu.is_document_view,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
+                    ),
                     menu.is_document_view,
-                    has_row_target,
-                    can_chart,
-                    inspect_row_enabled,
+                    cx,
                 ),
-                menu.is_document_view,
+                menu,
+                has_row_target,
                 cx,
             );
+            detail_rows = visible_items
+                .iter()
+                .filter(|item| item.detail.is_some())
+                .count();
             let mut menu_items: Vec<AnyElement> = Vec::new();
             let mut visual_index = 0usize;
 
@@ -1655,12 +1688,15 @@ impl DataGridPanel {
                 cx,
             );
 
-            let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-            let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+            let table_queries = self.offers_table_query_actions();
+            let has_filter =
+                table_queries && self.has_filter_submenu(backend, is_document_view, cx);
+            let has_order =
+                table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
             let separators = QueryGroupSeparators::new(
                 has_filter,
                 has_order,
-                !is_document_view,
+                table_queries && !is_document_view,
                 self.has_copy_query_support(),
             );
 
@@ -1687,7 +1723,7 @@ impl DataGridPanel {
                 cx,
             );
             Self::render_generate_sql_submenu_section(
-                is_document_view,
+                is_document_view || !table_queries,
                 separators.generate_sql,
                 menu,
                 submenus_open_left,
@@ -1735,9 +1771,13 @@ impl DataGridPanel {
         };
 
         // Separators are shorter than rows, so this over-estimates a little;
-        // a menu placed a few pixels higher than necessary is harmless.
-        let menu_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
-            * menu_items.len() as f32
+        // a menu placed a few pixels higher than necessary is harmless. Rows
+        // with a detail line are taller.
+        let row_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT);
+        let detail_extra =
+            dbflux_components::fonts::ui_px(cx, MenuMetrics::DETAIL_ROW_HEIGHT) - row_height;
+        let menu_height = row_height * menu_items.len() as f32
+            + detail_extra * detail_rows as f32
             + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
@@ -1868,6 +1908,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::InspectRow => {
                 self.open_row_inspector(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::FindSimilarRows => {
+                self.find_similar_rows_at(menu.row, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);
@@ -2239,6 +2282,7 @@ impl DataGridPanel {
                         schema: schema.clone(),
                         name: reference.target_table.clone(),
                     })
+                    .with_database(Some(database.clone()))
                     .with_semantic_filter(
                         dbflux_core::SemanticFilter::compare(
                             reference.column.as_str(),
@@ -2444,6 +2488,10 @@ impl DataGridPanel {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 if let Some(insert_data) = state.edit_buffer().get_pending_insert_by_idx(insert_idx)
                 {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "col < insert_data.len() is checked directly above"
+                    )]
                     if col < insert_data.len() {
                         insert_data[col].edit_text()
                     } else {
@@ -2486,6 +2534,51 @@ impl DataGridPanel {
         });
     }
 
+    /// Adds "Find similar rows" to the row actions when the table has a
+    /// vector column and the menu is on a row of the grid. The entry names
+    /// the column and K it reads, or, disabled, why it cannot run from this
+    /// row.
+    pub(in crate::data_grid_panel) fn with_find_similar_rows(
+        &self,
+        mut items: Vec<ContextMenuItem>,
+        menu: &TableContextMenu,
+        has_row_target: bool,
+        cx: &Context<Self>,
+    ) -> Vec<ContextMenuItem> {
+        if menu.is_document_view || !has_row_target || !self.can_find_similar_rows(menu.col, cx) {
+            return items;
+        }
+
+        let position_of =
+            |action: ContextMenuAction| items.iter().position(|item| item.action == Some(action));
+        let position = position_of(ContextMenuAction::InspectRow)
+            .map(|index| index + 1)
+            .or_else(|| position_of(ContextMenuAction::DuplicateRow))
+            .or_else(|| position_of(ContextMenuAction::AddRow).map(|index| index + 1))
+            .or_else(|| position_of(ContextMenuAction::ViewValue).map(|index| index + 1))
+            .unwrap_or(items.len());
+
+        let block = self.similar_rows_block(menu.row, menu.col, cx);
+        let detail = match &block {
+            Some(block) => Some(block.menu_reason()),
+            None => self.similar_rows_menu_detail(menu.col, cx),
+        };
+
+        items.insert(
+            position,
+            ContextMenuItem {
+                label: dbflux_i18n::t!("document.data.context_menu.item.find_similar_rows").into(),
+                action: Some(ContextMenuAction::FindSimilarRows),
+                icon: Some(AppIcon::ChartScatter),
+                is_separator: false,
+                is_danger: false,
+                detail: detail.map(Into::into),
+                disabled: block.is_some(),
+            },
+        );
+        items
+    }
+
     /// In a document grid the column-default entry has no meaning: it becomes
     /// "Unset field", and "Revert change" follows "Set NULL".
     fn adapt_menu_items_for_documents(
@@ -2508,6 +2601,8 @@ impl DataGridPanel {
                     icon: Some(AppIcon::CircleX),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 }),
                 Some(ContextMenuAction::SetNull) => {
                     adapted.push(item);
@@ -2517,6 +2612,8 @@ impl DataGridPanel {
                         icon: Some(AppIcon::RotateCcw),
                         is_separator: false,
                         is_danger: false,
+                        detail: None,
+                        disabled: false,
                     });
                 }
                 _ => adapted.push(item),
@@ -3168,6 +3265,8 @@ impl DataGridPanel {
 
         let base_row_count = self.result.rows.len();
 
+        let mut removed_insert = None;
+
         table_state.update(cx, |state, cx| {
             let buffer = state.edit_buffer_mut();
             buffer.set_base_row_count(base_row_count);
@@ -3180,12 +3279,17 @@ impl DataGridPanel {
                 }
                 Some(VisualRowSource::Insert(insert_idx)) => {
                     buffer.remove_pending_insert_by_idx(insert_idx);
+                    removed_insert = Some(insert_idx);
                 }
                 None => {}
             }
 
             cx.notify();
         });
+
+        if let Some(insert_idx) = removed_insert {
+            self.renumber_queued_inserts_after_removal(insert_idx);
+        }
     }
 
     // === Filter / Order from context menu ===
@@ -3631,10 +3735,11 @@ impl DataGridPanel {
     }
 
     fn has_copy_query_support(&self) -> bool {
-        matches!(
-            self.source,
-            DataSource::Table { .. } | DataSource::Collection { .. }
-        )
+        self.offers_table_query_actions()
+            && matches!(
+                self.source,
+                DataSource::Table { .. } | DataSource::Collection { .. }
+            )
     }
 
     /// Returns true when a "Chart this query" context menu item should be shown.

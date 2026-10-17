@@ -15,7 +15,7 @@
 
 ### 分层的 crate 图谱
 
-依赖自上而下。`dbflux_core` 是每个 crate 都构建其上的无依赖契约层；界面从不依赖具体的驱动程序 crate（参见[驱动程序/界面解耦](#驱动程序体系)）。
+依赖自上而下。`dbflux_core` 是整个工作区共同构建其上的契约层；它自身仅有一项很窄的依赖 `dbflux_policy`，用于它再导出的执行分类与模式变更类型。界面从不依赖具体的驱动程序 crate（参见[驱动程序/界面解耦](#驱动程序体系)）。
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["支撑库"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["策略 — dbflux_policy"]
+        policy["ExecutionClassification、<br/>模式变更分类"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "仅通过通用接缝" .-> core
@@ -224,7 +229,7 @@ crates/
         file_ops.rs         # 自动保存、临时/影子文件管理
         focus.rs            # 内部焦点管理
         live_output.rs      # 文档自有的流式脚本输出缓冲区
-        render.rs           # 工具栏、编辑器与实时输出渲染
+        render.rs           # 操作栏、编辑器与实时输出渲染
       console/              # NativeConsole：停靠在文档下方的可复用命令控制台
         mod.rs              # 实体、执行、审计、历史回溯、渲染
         format.rs           # 危险命令关卡、结果格式化、回溯列表
@@ -247,8 +252,8 @@ crates/
         mod.rs              # AuditDocument 实体
         pane.rs             # AuditDocument::into_pane 构造函数
         view.rs             # LogStreamView 边界结构体
-        render.rs           # 抽出的渲染代码（约 1300 行）
-        commands.rs         # 抽出的命令分发（约 560 行）
+        render.rs           # 抽出的渲染代码
+        commands.rs         # 抽出的命令分发
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -266,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 实体（由 dbflux_ui 重新导出）
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -277,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 连接树；遍历快照的 DatabaseLayout
   dbflux_ui_windows/        # 设置窗口 + 连接管理器窗口
     src/
       ssh_shared.rs         # 共享的 SSH 认证界面组件
@@ -310,7 +315,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # 按配置文件的 Hook 绑定
-  dbflux_ui/                # 轻量集成层（约 13.5k 行）：把六个 UI crate 串联起来
+  dbflux_ui/                # 轻量集成层：把六个 UI crate 串联起来
     src/                    # 通过旧模块路径上的 pub use 垫片重新导出已迁移的子系统
       lib.rs                # crate 根；通过垫片模块重新导出
       app.rs                # GPUI 应用引导
@@ -590,17 +595,17 @@ crates/
 
 1. **`Tab`**（`tab_manager.rs`）—— `#[non_exhaustive]` 枚举，只有一个 `Pane(Box<PaneHandle>)` 变体。保留枚举形式是为了向前兼容（例如将来可能出现可分离的面板变体）。`TabManager` 持有一个 `Vec<Tab>` 以及 MRU 顺序。
 
-2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。它的各项操作（render、focus、dispatch_command、meta_snapshot、tab_title、can_close、connection_id、active_context、change_summary、refresh_policy、set_active_tab、set_refresh_policy、flush_auto_save、matches_dedup_key、subscribe，以及若干可选辅助方法，如 `resolve_close`、`save_for_close`、`flush_for_shutdown` 和 `is_file_backed_empty`）各自是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
+2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。每一项操作都是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包：渲染与焦点、命令分发、纯元数据读取（标题、是否可关闭、连接与活动上下文、变更摘要、刷新策略）、诸如活动标签页与刷新策略这类变更、去重匹配、事件订阅，以及可选的文档专属辅助方法（关闭、保存与退出策略、侧边面板、面板操作、状态栏片段）。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
 
-3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举。变体：`Table`、`Collection`、`File`、`KeyValueDb`、`Chart`、`Audit`、`EventStream`、`Routine`、`MetricChart`、`Dashboard`、`InstanceMetric`、`InstanceInspector`、`InstanceOverview`、`ObjectStoreBucketsRoot`、`ObjectBrowser`、`ObjectEditor`。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
+3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举；变体列表以 `dedup.rs` 为准。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
 
-4. **`DocumentEvent`**（`handle.rs`，约 30 行）—— 统一的事件枚举，取代了已被删除的四个按文档划分的事件枚举。变体：`MetaChanged`、`ExecutionStarted`、`ExecutionFinished`、`RequestClose`、`RequestFocus`、`RequestSqlPreview`、`OpenInspector`、`ChartThisQuery`。
+4. **`DocumentEvent`**（`handle.rs`）—— 统一的事件枚举，取代了已被删除的四个按文档划分的事件枚举；变体列表以 `handle.rs` 为准。
 
 5. **`ResultPanel` + `ViewHandle`**（`crates/dbflux_components/src/result_panel/mod.rs`）—— 通用框架宿主。`ResultPanel` 持有一行框架，并把主体渲染委托给 `ViewHandle`（7 个闭包：render、focus、focus_handle、toolbar_segments、available_modes、current_mode、set_mode）。槽位系统（`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`）让各视图可以贡献任意框架内容：`ResultPanel` 合并内置段（当 `available_modes.len() >= 2` 时，把模式栏放在 Left/0）与视图提供的段，按 `(position, index)` 排序，并在一个 `flex_wrap` 行中渲染。
 
 **面板操作**
 
-文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个工具栏；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
+文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个操作栏以及结果的刷新按钮；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
 
 **文档类型**
 
@@ -652,7 +657,7 @@ crates/
 
 **持久化**：迁移 `017_qry_saved_queries` 新增了 `qry_*` 表族（根表 + 列/排序/连接子表、级联外键、`UNIQUE (profile_id, name)`），由 `SavedQueryRepo`（`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`）与内存中的 `SavedQueryManager`（`crates/dbflux_ui_base/src/saved_query_manager.rs`）负责前端访问。`TableProbe` 接缝用于在把已保存查询导入另一个连接时验证表是否存在，而无需侵入驱动程序代码。
 
-**文档查询构建器**：文档集合有自己的侧栏，以 `DocumentFeatures::VISUAL_BUILDER` 加上 `Connection::document_query_codec()` 返回的编解码器为门控，从不依据驱动程序 id。`DocumentQuerySpec`（`crates/dbflux_core/src/query/document_query.rs`）描述筛选树、带类型的值、包含/排除投影、排序、限制、跳过以及可选的分组阶段（`$count` / `$sum` / `$avg`）。驱动程序实现 `DocumentQueryCodec`，把 spec 渲染为 find 栏位（`DocumentFindSlots`）、管道和预览文本，并把栏位解析回 spec；无法表示的子句以 `UnrepresentableClause` 返回，使界面显示同步冲突而不是覆盖它们。界面位于 `crates/dbflux_ui_document/src/document_builder/` 与 `data_grid_panel/documents/builder.rs`：Find 写入栏位并通过 `browse_collection` 运行，因此结果保持可编辑；Aggregate 模式（同时以 `DocumentFeatures::AGGREGATE` 为门控）通过聚合视图运行管道，结果为只读。已保存的文档查询使用迁移 `037_qry_saved_document_queries`（spec 以 JSON 存储，`UNIQUE (profile_id, database_name, collection_name, name)`）、`DocumentQueryRepo` 与 `SavedDocumentQueryManager`（`crates/dbflux_ui_base/src/saved_document_query_manager.rs`）。
+**文档查询构建器**：文档集合有自己的侧栏，以 `DocumentFeatures::VISUAL_BUILDER` 加上 `Connection::document_query_codec()` 返回的编解码器为门控，从不依据驱动程序 id。`DocumentQuerySpec`（`crates/dbflux_core/src/query/document_query.rs`）描述筛选树、带类型的值、包含/排除投影、排序、限制、跳过以及可选的分组阶段（`$count` / `$sum` / `$avg`）。驱动程序实现 `DocumentQueryCodec`，把 spec 渲染为 find 栏位（`DocumentFindSlots`）、管道和预览文本，并把栏位解析回 spec；无法表示的子句以 `UnrepresentableClause` 返回，使界面显示同步冲突而不是覆盖它们。界面位于 `crates/dbflux_ui_document/src/document_builder/` 与 `data_grid_panel/documents/builder/mod.rs`：Find 写入栏位并通过 `browse_collection` 运行，因此结果保持可编辑；Aggregate 模式（同时以 `DocumentFeatures::AGGREGATE` 为门控）通过聚合视图运行管道，结果为只读。已保存的文档查询使用迁移 `037_qry_saved_document_queries`（spec 以 JSON 存储，`UNIQUE (profile_id, database_name, collection_name, name)`）、`DocumentQueryRepo` 与 `SavedDocumentQueryManager`（`crates/dbflux_ui_base/src/saved_document_query_manager.rs`）。
 
 ### 数据可视化
 
@@ -688,13 +693,14 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 由驱动程序拥有的、位于集合/容器之下的子资源，通过通用的 `CollectionChildInfo` 元数据发布。侧边栏不得根据名称、字段类型或驱动程序 ID 去推断驱动程序特有的子项。
 - 例程（函数、存储过程、聚合函数、窗口函数）会在驱动程序设置了 `ROUTINES` 能力并填充 `schema_routines` 接缝时，显示为一个按 Schema 划分的「例程」文件夹。界面通用地渲染该文件夹，不会为任何驱动程序做特殊处理。
 - 侧边栏 dock：`crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` 仍可通过 ToggleSidebar（Ctrl+B）折叠和调整大小，同时将临时展开与明确的折叠选择分开管理。
+- 连接树只遍历一个投影：`SchemaSnapshot::database_layout`（`crates/dbflux_core/src/schema/listing.rs`）说明每个数据库是把表和视图归入 schema、把对象列在一个 `ObjectFolder`（集合或度量）中，还是一个 keyspace。侧边栏（`tree_builder/object_folder.rs`）根据该描述构建每个数据库的内容，其上下文菜单读取对象的 facet 和同一布局。树中仅剩的类别检查是对象存储连接的存储桶列表，它通过自己的路径获取，而不是从快照读取。
 - `dbflux_ui_base::object_tree` 提供通用的延迟加载层级结构，每个 `AppStateEntity` 配备一个协调器。core/app 边界按会话及目标槽位限定结果的应用；侧边栏和向导适配器保留兼容的 ID，同时各自管理交互状态。并非所有侧边栏特有类别都已迁移。
 - 连接树：`crates/dbflux_core/src/connection/tree.rs` 把文件夹与连接建模为树结构；`tree_manager.rs` 负责内存中的管理。
 
 ### 驱动程序体系
 
 - **驱动程序能力**：`crates/dbflux_core/src/driver/capabilities.rs` 定义了：
-  - `DatabaseCategory`：Relational、Document、KeyValue、Graph、TimeSeries、WideColumn、LogStream、ObjectStorage
+  - `DatabaseCategory`：Relational、Document、KeyValue、TimeSeries、LogStream、ObjectStorage
   - `QueryLanguage`：Sql、CloudWatchLogsInsightsQl、OpenSearchPpl、OpenSearchSql、MongoQuery、RedisCommands、Cypher、InfluxQuery、Flux、Cql、Lua、Python、Bash（各自携带编辑器模式、占位提示、注释前缀）
   - `DriverCapabilities`：`u64` 位标志，用于 PAGINATION、TRANSACTIONS、NESTED_DOCUMENTS、MULTI_STATEMENT、ROUTINES、STORED_PROCEDURES、DASHBOARD_IMPORT、DASHBOARD_SYNC 等特性
   - `DriverMetadata`：静态的驱动程序信息（id、name、category、query_language、capabilities、icon）
@@ -706,10 +712,14 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - **驱动程序/界面解耦**：界面与应用编排层绝不能依据具体的驱动程序 ID 做分支，也不能内嵌针对特定驱动程序的路由。核心 crate 暴露接缝，驱动程序去填充它们。
   - `DriverMetadata` 覆盖宽泛的适配需求（`DatabaseCategory`、`QueryLanguage`、`DriverCapabilities`）。
   - `CollectionPresentation` 告诉界面一个集合/容器如何打开（例如数据网格还是事件流）。
+  - `ObjectFacet`（`crates/dbflux_core/src/schema/facet.rs`）表示一个对象所暴露的范式：`Tabular`、`Document`、`Vector`、`TimeSeries`。`CollectionPresentation` 决定打开哪种文档；facet 决定数据文档内部的视图模式、功能开关与筛选措辞。`Connection::object_facets`（表）与 `Connection::collection_facets`（集合）默认返回 `[Tabular]`，由驱动程序覆盖：PostgreSQL 为 `json`/`jsonb` 列添加 `Document`，为 TimescaleDB 超表添加 `TimeSeries`，并为每个 `vector(n)` 列添加一个 `Vector`；MongoDB 与 DynamoDB 声明 `[Document, Tabular]`；InfluxDB 声明基于 `time` 的 `TimeSeries`。由于线上协议不携带 facet，只有 RPC 适配器从声明的类别推导 facet（`category_collection_facets`）。`TimeSeries` 在行旁打开基于其时间列的图表；表上的 `Document` 打开一个只读文档树，并展开 JSON 值。该枚举是穷尽的，因此新的 facet 在 `DataViewMode::for_facet`（`crates/dbflux_ui_document/src/data_view.rs`）处理它之前无法编译。最近邻 SQL 仍由驱动程序通过 `QueryGenerator::generate_nearest_neighbors` 生成，默认不支持。
+  - `category_presentation`（`crates/dbflux_components/src/category.rs`）是按类别提供后备图标、色调与 Schema 树容器标签的唯一表；新增 `DatabaseCategory` 只需在此添加一个分支，而不必在每个界面 crate 中写 match。
+  - `DataStructure::ReservedGraph` 与 `ReservedWideColumn` 仅占用 postcard 线上索引 3 与 4，`DatabaseCategory::ReservedGraph` 与 `ReservedWideColumn` 占用索引 3 与 5，使其后的变体对驱动程序 RPC 对端保持原有索引；`crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` 固定两个枚举的索引。不要删除或重排它们的变体。
   - `CollectionChildInfo` 让驱动程序可以发布集合/容器之下的子来源，无需界面做启发式推断。
   - `EventStreamTarget` 为工作区/审计提供一个通用标识符，指向由驱动程序支撑的事件流。
   - `SourceContextSpec` 让驱动程序可以声明额外的查询上下文控件，而无需在 `dbflux_ui` 中硬编码驱动程序名。
   - `ObjectStoreConnection`（`crates/dbflux_core/src/core/traits.rs`，经由 `Connection::object_store_api()` 抵达）是对象存储接缝（存储桶/对象列举、CRUD、预签名、复制、版本）；`CollectionPresentation::ObjectBrowser` 与 `PaneHandle::status_segments()` 让界面能够打开对象存储文档并为其添加框架，而无需依据驱动程序 ID 做分支。
+  - `TableViewFeatures`（`crates/dbflux_core/src/data/column_profile.rs`，由 `Connection::table_view_features()` 报告）控制表的“列”与“分区”视图、读取量估算、样本分析和列选择器。数据来自 `table_profile`、`table_partitions`、`estimate_table_read` 与 `sample_table_profile`，`TableBrowseRequest::columns` 携带投影。界面（`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`）使用 `dbflux_components` 中共享的 `ColumnProfileView`、`PartitionListView`、`ColumnProjectionPicker` 与 `ReadEstimateBar` 渲染它们。Parquet 文档使用同样的分析视图、列选择器与估算栏，CSV 文档使用分析视图。
   - 如果界面需要新行为，请先添加一个通用的核心抽象；不要在 `dbflux_ui` 或面向应用的工作流代码里写 `if driver_id == ...`。
 
 ### 认证与访问流水线
@@ -885,7 +895,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 ### 支撑组件
 
-- Toast 提示系统：`crates/dbflux_ui_base/src/toast.rs` 自研实现，对成功/信息/警告类 Toast 提示自动消失（4 秒）。（`crates/dbflux_ui/src/ui/components/toast.rs` 处留有垫片。）
+- Toast 提示系统：`crates/dbflux_ui_base/src/toast.rs` 自研实现，对成功/信息/警告类 Toast 提示提供可配置的自动消失（默认 8 秒，警告类为其两倍；在 Settings > General 中调整）。
 - 隧道基础设施：`crates/dbflux_tunnel_core/` 提供 RAII `Tunnel`，带 `TunnelConnector` trait 与 `ForwardingConnection<R>` 双向转发器。
 - 代理隧道：`crates/dbflux_proxy/` 经由 `TunnelConnector` 实现 SOCKS5 与 HTTP CONNECT 代理隧道。
 - SSH 隧道：`crates/dbflux_ssh/src/lib.rs` 经由 `TunnelConnector` 实现 SSH 隧道，为保障 libssh2 安全，所有操作串行到单个线程上。

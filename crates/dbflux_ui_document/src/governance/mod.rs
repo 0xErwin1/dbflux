@@ -250,6 +250,12 @@ impl McpApprovalsView {
 
     /// Moves the selection `step` entries along the pending list, clamped
     /// to its ends.
+    // next is either 0 or a saturating value clamped to pending.len() - 1,
+    // with pending non-empty after the early return.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is 0 or saturating_add_signed(step).min(self.pending.len() - 1), with pending non-empty after the early return"
+    )]
     fn move_selection(&mut self, step: isize, cx: &mut Context<Self>) {
         if self.pending.is_empty() {
             return;

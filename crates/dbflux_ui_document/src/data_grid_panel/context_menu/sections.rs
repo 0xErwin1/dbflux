@@ -75,6 +75,7 @@ fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> 
     let command = match action {
         ContextMenuAction::InspectRow => Command::ToggleRowInspector,
         ContextMenuAction::ViewValue => Command::ToggleValuePanel,
+        ContextMenuAction::FindSimilarRows => Command::FindSimilarRows,
         _ => return None,
     };
 
@@ -252,28 +253,38 @@ impl DataGridPanel {
             if let Some(shortcut) = action_shortcut(action, cx) {
                 row_item = row_item.shortcut(shortcut);
             }
+            if let Some(detail) = &item.detail {
+                row_item = row_item.detail(detail.clone());
+            }
+            if item.disabled {
+                row_item = row_item.disabled();
+            }
 
-            menu_items.push(
-                menu_row(
-                    item.label.clone(),
-                    &row_item,
-                    current_index == selected_index,
-                    cx,
-                )
-                .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                    if let Some(ref mut menu) = this.context_menu
-                        && (menu.selected_index != current_index || menu.any_submenu_open())
-                    {
-                        menu.selected_index = current_index;
-                        menu.close_submenus();
-                        cx.notify();
-                    }
-                }))
-                .on_click(cx.listener(move |this, _, window, cx| {
+            let row = menu_row(
+                item.label.clone(),
+                &row_item,
+                current_index == selected_index,
+                cx,
+            )
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if let Some(ref mut menu) = this.context_menu
+                    && (menu.selected_index != current_index || menu.any_submenu_open())
+                {
+                    menu.selected_index = current_index;
+                    menu.close_submenus();
+                    cx.notify();
+                }
+            }));
+
+            let row = if item.disabled {
+                row
+            } else {
+                row.on_click(cx.listener(move |this, _, window, cx| {
                     this.handle_context_menu_action(action, window, cx);
                 }))
-                .into_any_element(),
-            );
+            };
+
+            menu_items.push(row.into_any_element());
 
             *visual_index += 1;
         }

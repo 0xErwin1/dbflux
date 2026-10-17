@@ -52,6 +52,26 @@ También un buffer con un bloque compuesto, como el cuerpo `BEGIN ... END` de un
 procedimiento o trigger, ya que el `;` dentro de él no termina una sentencia; un
 `BEGIN` que abre una transacción no es un bloque.
 
+Sin selección, cuando la sentencia bajo el cursor solo abre o cierra una
+transacción (`BEGIN`,
+`START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` o `ABORT`) y el buffer contiene
+otras sentencias, el editor pregunta primero: ejecutar todo el script, que es la
+opción predeterminada, o solo esa sentencia. Una conexión cuyo driver no puede
+ejecutar un script completo de una vez ofrece solo esa sentencia. Ejecutado solo, un `BEGIN` deja
+abierta una transacción a la que se suman en silencio las ejecuciones
+posteriores de la misma pestaña, y un `COMMIT` o `ROLLBACK` omite el resto del script
+y como mucho cierra una transacción que dejó abierta una ejecución anterior.
+
+Cada resultado lleva como título las líneas de la sentencia que lo produjo. Una
+sentencia que no devuelve un conjunto de resultados, como `UPDATE` o `COMMIT`,
+muestra **Sentencia ejecutada** y, cuando el driver lo informa, cuántas filas
+afectó, que el pie repite en lugar del recuento de filas. Los avisos y
+advertencias que envía el servidor mientras se ejecuta la sentencia, como el
+`WARNING: there is no transaction in progress` de PostgreSQL tras un `COMMIT`
+fuera de una transacción, se listan debajo de esa línea, o en el pie de un
+resultado con filas. Solo los muestran los drivers que los informan; PostgreSQL
+lo hace.
+
 Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
 
 ## Scripts multi-statement
@@ -102,8 +122,9 @@ Ver `docs/LUA.md` para el runtime de Lua embebido.
 DBFlux mantiene un historial de las queries completadas y te permite guardar
 queries con nombre.
 
-- `Alt+h` (en el editor), o el botón History de la barra de herramientas, abre y
-  cierra el panel de historial de queries junto al editor.
+- `Alt+h` (en el editor), o el botón History de la barra de acciones en el borde
+  izquierdo del editor, abre y cierra el panel de historial de queries junto al
+  editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** la query actual.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, en el editor) — abre el explorador de queries guardadas.

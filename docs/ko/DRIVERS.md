@@ -10,7 +10,7 @@
 
 모든 드라이버는 `DriverMetadata` 값(`crates/dbflux_core/src/driver/capabilities.rs`에 정의)을 노출합니다. UI는 드라이버에 독립적이며 순수하게 이 메타데이터만으로 동작을 조정합니다. 관련 필드는 다음과 같습니다:
 
-- **`DatabaseCategory`** — 뷰 모델과 용어를 선택합니다. 값: `Relational`, `Document`, `KeyValue`, `Graph`, `TimeSeries`, `WideColumn`, `LogStream`. (모든 값에 출시된 드라이버가 있는 것은 아닙니다.)
+- **`DatabaseCategory`** — 뷰 모델과 용어를 선택합니다. 값: `Relational`, `Document`, `KeyValue`, `TimeSeries`, `LogStream`, `ObjectStorage`. 카테고리는 그것을 선언하는 드라이버와 함께 추가됩니다.
 - **`QueryLanguage`** — 에디터 모드, 자리 표시자 텍스트, 쿼리 파싱을 결정합니다. 값에는 `Sql`, `MongoQuery`, `RedisCommands`, `Cypher`, `InfluxQuery`, `Flux`, `Cql`, `CloudWatchLogsInsightsQl`, `OpenSearchPpl`, `OpenSearchSql`, 스크립트 언어인 `Lua` / `Python` / `Bash`, 그리고 `Custom(String)`이 포함됩니다.
 - **`DriverCapabilities`** — 지원되는 기능(트랜잭션, 페이지 나누기, 스키마, 키-값 작업 등)을 선언하는 `u64` 비트플래그 집합입니다. 편의용 베이스인 `RELATIONAL_BASE`, `DOCUMENT_BASE`, `KEYVALUE_BASE`는 각 카테고리의 공통 플래그를 묶어 줍니다.
 

@@ -94,7 +94,7 @@ impl SqlDialect for TursoDialect {
 
 pub(crate) fn quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
-    format!("\"{}\"", ident.replace('"', "\"\""))
+    dbflux_core::quote_double_quoted_identifier(ident)
 }
 
 pub(crate) fn escape_string(s: &str) -> String {
@@ -272,28 +272,6 @@ pub(crate) fn generate_create_table(table: &TableInfo) -> String {
     sql
 }
 
-/// Translates a document-shaped filter into a WHERE clause.
-pub(crate) fn translate_filter_to_sql(filter: &Value) -> String {
-    match filter {
-        Value::Document(doc) => {
-            let parts: Vec<String> = doc
-                .iter()
-                .map(|(key, value)| {
-                    let quoted_col = quote_ident(key);
-                    match value {
-                        Value::Null => format!("{quoted_col} IS NULL"),
-                        other => format!("{quoted_col} = {}", value_to_literal(other)),
-                    }
-                })
-                .collect();
-            parts.join(" AND ")
-        }
-        // A plain text filter is a raw SQL expression.
-        Value::Text(s) => s.clone(),
-        _ => String::new(),
-    }
-}
-
 // =============================================================================
 // DDL code generation
 // =============================================================================
@@ -462,21 +440,6 @@ mod tests {
         assert_eq!(value_to_literal(&Value::Bytes(vec![0xAB])), "X'ab'");
         assert_eq!(value_to_literal(&Value::Float(f64::INFINITY)), "NULL");
         assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
-    }
-
-    #[test]
-    fn filter_translation_handles_null_and_raw_text() {
-        let mut doc = BTreeMap::new();
-        doc.insert("a".to_string(), Value::Null);
-        doc.insert("b".to_string(), Value::Text("x".into()));
-        assert_eq!(
-            translate_filter_to_sql(&Value::Document(doc)),
-            "\"a\" IS NULL AND \"b\" = 'x'"
-        );
-        assert_eq!(
-            translate_filter_to_sql(&Value::Text("a > 1".into())),
-            "a > 1"
-        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod dialect;
 pub mod driver;
 pub mod error_formatter;
 pub(crate) mod introspection;
+mod table_views;
 pub mod types;
 
 pub use dialect::RedshiftDialect;

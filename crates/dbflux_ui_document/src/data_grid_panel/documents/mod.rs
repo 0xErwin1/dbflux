@@ -1,6 +1,6 @@
 //! Document collections in the data grid.
 //!
-//! A collection on a `DatabaseCategory::Document` connection opens as a table
+//! A collection whose driver declares the `Document` facet opens as a table
 //! of its documents, flattened by [`columns`]: `_id` first, the page's field
 //! order after it, objects expandable in place into column groups and arrays
 //! that can be stepped into. The same page is also shown as a tree or as JSON.
@@ -104,7 +104,7 @@ pub(super) struct QueryHistoryEntry {
 
 impl QueryHistoryEntry {
     /// One-line description for the history menu.
-    pub fn summary(&self) -> String {
+    pub(crate) fn summary(&self) -> String {
         let mut parts = Vec::new();
 
         for (keyword, text) in [
@@ -264,7 +264,7 @@ impl VimHost for DataGridPanel {
 }
 
 impl CollectionViewState {
-    pub fn new(window: &mut Window, cx: &mut Context<DataGridPanel>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<DataGridPanel>) -> Self {
         let field_paths = Rc::new(RefCell::new(Vec::new()));
 
         let make_slot =
@@ -386,7 +386,7 @@ impl CollectionViewState {
         }
     }
 
-    pub fn current_step(&self) -> Option<&StepTarget> {
+    pub(crate) fn current_step(&self) -> Option<&StepTarget> {
         self.steps.last()
     }
 }
@@ -480,8 +480,15 @@ pub(super) fn flat_table_model(flat: &FlatView) -> TableModel {
 impl DataGridPanel {
     // === Capabilities ===
 
-    fn collection_capabilities(&self, cx: &App) -> Option<(DatabaseCategory, DocumentFeatures)> {
-        let DataSource::Collection { profile_id, .. } = &self.source else {
+    /// Whether the collection holds documents, as its driver declares, and the
+    /// document features the driver offers.
+    fn collection_capabilities(&self, cx: &App) -> Option<(bool, DocumentFeatures)> {
+        let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
+        else {
             return None;
         };
 
@@ -492,7 +499,9 @@ impl DataGridPanel {
             .map(|connected| {
                 let connection = &connected.connection;
                 (
-                    connection.metadata().category,
+                    connection
+                        .collection_facets(collection)
+                        .contains(&dbflux_core::ObjectFacet::Document),
                     connection.document_features(),
                 )
             })
@@ -501,24 +510,22 @@ impl DataGridPanel {
     /// Whether this grid shows a document collection.
     pub(super) fn is_document_collection(&self, cx: &App) -> bool {
         self.collection_capabilities(cx)
-            .is_some_and(|(category, _)| category == DatabaseCategory::Document)
+            .is_some_and(|(documents, _)| documents)
     }
 
     /// Whether the driver offers the four-slot query bar and the schema sample.
     pub(super) fn has_document_query_slots(&self, cx: &App) -> bool {
         self.collection_capabilities(cx)
-            .is_some_and(|(category, capabilities)| {
-                category == DatabaseCategory::Document
-                    && capabilities.contains(DocumentFeatures::QUERY_SLOTS)
+            .is_some_and(|(documents, capabilities)| {
+                documents && capabilities.contains(DocumentFeatures::QUERY_SLOTS)
             })
     }
 
     /// Whether edits are committed as field patches with the server check.
     pub(super) fn has_document_field_patch(&self, cx: &App) -> bool {
         self.collection_capabilities(cx)
-            .is_some_and(|(category, capabilities)| {
-                category == DatabaseCategory::Document
-                    && capabilities.contains(DocumentFeatures::FIELD_PATCH)
+            .is_some_and(|(documents, capabilities)| {
+                documents && capabilities.contains(DocumentFeatures::FIELD_PATCH)
             })
     }
 
@@ -579,7 +586,7 @@ impl DataGridPanel {
     /// The collection views this connection offers.
     pub(super) fn collection_tabs(&self, cx: &App) -> Vec<CollectionTab> {
         match self.collection_capabilities(cx) {
-            Some((DatabaseCategory::Document, features)) => available_collection_tabs(features),
+            Some((true, features)) => available_collection_tabs(features),
             _ => vec![CollectionTab::Documents],
         }
     }
@@ -692,6 +699,11 @@ impl DataGridPanel {
     /// Rebuilds the grid after the expansion or the step changed.
     fn reflatten_documents(&mut self, cx: &mut Context<Self>) {
         self.result = self.flattened_document_result();
+        // Both orders describe the rows just replaced, not the new ones;
+        // keeping them would leave the grid indexing row positions that are
+        // gone.
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.grid_table.reload = super::TableReload::NewColumns;
         self.rebuild_table(None, cx);
         cx.notify();
@@ -957,6 +969,10 @@ impl DataGridPanel {
     /// Alt+L / Alt+H: the next or previous view of the collection
     /// (Documents, Schema, Aggregate), wrapping. Returns false when the
     /// connection offers a single view.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "tabs.len() >= 2 after the early return and next is a modular step over tabs.len()"
+    )]
     pub(super) fn step_collection_tab(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
         let tabs = self.collection_tabs(cx);
         if tabs.len() < 2 {
@@ -1951,6 +1967,11 @@ impl DataGridPanel {
         }
 
         self.result = self.flattened_document_result();
+        // Both orders describe the rows just replaced, not the new ones;
+        // keeping them would leave the grid indexing row positions that are
+        // gone.
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
 
         // The grid takes the new model in place: a full rebuild would also
         // rebuild the tree and drop its expansion.

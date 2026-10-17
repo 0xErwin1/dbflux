@@ -432,6 +432,7 @@ impl Sidebar {
                 task_description,
                 Some(profile_id),
             );
+            state.tasks_mut().mark_uncancellable(task_id);
             task_id
         });
 
@@ -2801,6 +2802,71 @@ pub(crate) mod object_tree_adapter_tests {
     }
 
     #[gpui::test]
+    async fn failed_database_list_is_cleared_by_reconnect(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::lazy();
+        fake.list_failures.store(1, Ordering::SeqCst);
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![])),
+        );
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.set_expanded(&profile_item, true, cx)
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        let retry_id = format!("object-retry|{profile_item}");
+        assert!(
+            build_items(&window, cx)
+                .iter()
+                .any(|(id, _, _)| id == &retry_id)
+        );
+
+        state.update(cx, |state, _| {
+            let _teardown = state.disconnect(profile_id);
+        });
+        state.update(cx, |state, _| {
+            state
+                .profiles_mut()
+                .retain(|profile| profile.id != profile_id);
+        });
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![])),
+        );
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_tree(cx);
+                sidebar.set_expanded(&profile_item, false, cx);
+                sidebar.set_expanded(&profile_item, true, cx);
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+
+        assert_eq!(
+            fake.list_calls(),
+            2,
+            "the first expansion after reconnect must fetch the list again"
+        );
+        assert!(
+            !build_items(&window, cx)
+                .iter()
+                .any(|(id, _, _)| id == &retry_id),
+            "a failure from the previous session must not survive reconnect"
+        );
+    }
+
+    #[gpui::test]
     async fn authoritative_empty_database_list_does_not_resurrect_snapshot_database(
         cx: &mut TestAppContext,
     ) {
@@ -4320,6 +4386,88 @@ pub(crate) mod object_tree_adapter_tests {
         );
     }
 
+    /// A reloaded bucket of a time-series connection lists its measurements
+    /// as leaves of the measurement folder, the way the bucket renders before
+    /// it was invalidated, never as relational tables.
+    #[gpui::test]
+    async fn time_series_schema_retry_restores_measurement_leaves_after_invalidation(
+        cx: &mut TestAppContext,
+    ) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let mut fake = AdapterFakeConnection::lazy();
+        Arc::get_mut(&mut fake)
+            .expect("unique fake")
+            .metadata
+            .category = DatabaseCategory::TimeSeries;
+        fake.set_schema("app", fake_db_schema("app", vec![fake_table("app", "cpu")]));
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(dbflux_core::SchemaSnapshot::time_series(
+                dbflux_core::TimeSeriesSchema {
+                    databases: vec![dbflux_core::DatabaseInfo {
+                        name: "app".to_string(),
+                        is_current: true,
+                    }],
+                    current_database: Some("app".to_string()),
+                    measurements: Vec::new(),
+                    retention_policies: Vec::new(),
+                },
+            )),
+        );
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        let database_id = SchemaNodeId::Database {
+            profile_id,
+            name: "app".to_string(),
+        }
+        .to_string();
+        let retry_id = format!("object-retry|{database_id}");
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.set_expanded(&database_id, true, cx);
+                sidebar.invalidate_database_cache(profile_id, "app", cx);
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        window
+            .update(cx, |sidebar, _, cx| sidebar.execute_item(&retry_id, cx))
+            .expect("sidebar alive");
+        cx.run_until_parked();
+
+        let rows = build_items(&window, cx);
+        let measurement_id = SchemaNodeId::Collection {
+            profile_id,
+            database: "app".to_string(),
+            name: "cpu".to_string(),
+        }
+        .to_string();
+        let measurements_folder_id = SchemaNodeId::CollectionsFolder {
+            profile_id,
+            database: "app".to_string(),
+        }
+        .to_string();
+        assert_eq!(
+            rows.iter().filter(|(id, _, _)| id == &database_id).count(),
+            1,
+            "recovered database must not duplicate: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(id, _, _)| id == &measurements_folder_id),
+            "the bucket lists its measurement folder: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(id, _, _)| id == &measurement_id),
+            "the measurement is a leaf of that folder: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|(id, _, _)| id.starts_with("T|")),
+            "no relational table rows: {rows:?}"
+        );
+    }
+
     #[gpui::test]
     async fn document_schema_retry_restores_collection_nodes_after_invalidation(
         cx: &mut TestAppContext,
@@ -4345,10 +4493,16 @@ pub(crate) mod object_tree_adapter_tests {
             cx,
             profile_id,
             fake.clone(),
-            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
-                name: "app".to_string(),
-                is_current: true,
-            }])),
+            Some(dbflux_core::SchemaSnapshot::document(
+                dbflux_core::DocumentSchema {
+                    databases: vec![dbflux_core::DatabaseInfo {
+                        name: "app".to_string(),
+                        is_current: true,
+                    }],
+                    current_database: Some("app".to_string()),
+                    collections: Vec::new(),
+                },
+            )),
         );
         let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
         let database_id = SchemaNodeId::Database {

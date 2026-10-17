@@ -663,6 +663,10 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("space", Modifiers::ctrl()),
         Command::ToggleRowInspector,
     );
+    layer.bind(
+        KeyChord::new("s", Modifiers::shift()),
+        Command::FindSimilarRows,
+    );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only

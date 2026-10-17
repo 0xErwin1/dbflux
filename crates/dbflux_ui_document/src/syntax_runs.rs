@@ -17,6 +17,10 @@ fn style(color: Hsla) -> HighlightStyle {
 
 /// Highlight runs for JSON text: object keys in the type color, string
 /// values in the string color, numbers and literals in the number color.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the six bytes[index] reads are guarded by index < bytes.len() in their loop or condition, and the [index..] / [start..index] slices hold because index is clamped to bytes.len() with start <= index"
+)]
 pub(crate) fn json_highlights(
     text: &str,
     colors: &SyntaxColors,

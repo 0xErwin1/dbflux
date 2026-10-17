@@ -198,6 +198,13 @@ components:
       name: "Sort: name"
     source:
       file_footer: "Sizes from the file footer"
+      catalog: "Sizes from %{name}"
+      planner_statistics: "Statistics from %{name}"
+      loaded_rows: "From the %{rows} loaded rows"
+      full_scan: "From all %{rows} rows"
+      sample: "Distributions from the first %{rows} rows read"
+      read_at: "read at %{time}"
+      file_modified: "file modified %{time}"
     header:
       column: "Column"
       codec: "Codec"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} columns · %{shown} shown in Data"
       hint: "Toggle a column to add or drop it from the Data projection"
+      counts_only: "%{total} columns"
     loading: "Reading column statistics…"
     empty: "This table has no columns"
     no_match: "No columns match the filter"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "Sort key"
       partition_key: "Partition key"
+      sort_key_position: "Sort key %{position}"
+      distribution_key: "Distribution key"
+    action:
+      refresh: "Refresh statistics"
+      sample: "Profile the first %{rows} rows"
+      full_scan: "Profile whole file"
+      running: "Profiling…"
+    fact:
+      engine: "Engine"
+      sort_key: "Sort key"
+      partition_key: "Partition key"
+      primary_key: "Primary key"
+      sampling_key: "Sampling key"
+      ttl: "TTL"
+      distribution_style: "Distribution"
+      active_parts: "Active parts"
+      statistics_updated: "Statistics updated"
+      rows: "Rows"
+      on_disk: "On disk"
+      raw: "Raw"
+      ratio: "Ratio"
+      row_groups: "Row groups"
+      unsorted: "Unsorted"
+      created_by: "Written by"
   read_estimate:
     lead: "Will read"
     row_groups: "%{touched} of %{total} row groups"
     more:
       one: "+%{count} more"
       many: "+%{count} more"
+    parts: "%{touched} of %{total} parts"
+    granules: "%{touched} of %{total} granules"
+    rows: "%{rows} rows"
+    lead_upper: "Reads up to"
+  partition_list:
+    summary: "%{count} partitions"
+    summary_with_key: "%{count} partitions · PARTITION BY %{key}"
+    refresh: "Refresh partitions"
+    loading: "Reading partitions…"
+    empty: "This table has no partitions"
+    error_title: "Could not read the partitions"
+    header:
+      partition: "Partition"
+      parts: "Parts"
+      rows: "Rows"
+      on_disk: "On disk"
+      raw: "Raw"
+      ratio: "Ratio"
+      range: "Key range"
+      modified: "Last change"
 composites:
   rail:
     add: "Add"
@@ -406,10 +458,9 @@ connection_manager:
       relational: "Relational"
       document: "Document"
       key_value: "Key-value"
-      wide_column: "Wide column"
       time_series_and_logs: "Time series and logs"
-      graph: "Graph"
       object_storage: "Object storage"
+      other: "Other"
   export:
     target:
       connection: connection
@@ -495,6 +546,8 @@ connection_manager:
       bundle_file: Bundle file
       bundle_encrypted: Bundle is encrypted
       passphrase: Passphrase
+      show_passphrase: Show passphrase
+      hide_passphrase: Hide passphrase
     hint:
       no_native_picker: No native file picker on this system — type or paste the bundle path above.
       external_refs: External value references travel as-is
@@ -1206,7 +1259,6 @@ document:
       checking: "Checking…"
       run: Run
       last_run: "last run %{seconds} s"
-      new_tab: New tab
       read_only: Read-only
       saved: Saved
       save: Save
@@ -1260,6 +1312,11 @@ document:
         many: "No text is selected, so the entire script will run as %{count} statements in order. Continue?"
       cancel: Cancel
       run: Run Script
+      run_statement: "Run Only This Statement"
+      transaction:
+        title: "Transaction statement under the cursor"
+        message: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script. Run the entire script of %{count} statements instead?"
+        message_statement_only: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script, and this connection cannot run a whole script at once: select the statements to run them together. Run only this statement?"
     dangerous_query:
       fallback:
         title: Warning
@@ -1358,6 +1415,7 @@ document:
         run_script: "Run %{name} script"
       copy_error: Copy error
       result_tab_title: "Result %{index}"
+      count_rows_failed: Could not count the rows of the query
       error:
         select_source: Select at least one source
         start_time_required: Start time is required
@@ -1541,6 +1599,7 @@ document:
         set_null: Set to NULL
         add_row: Add row
         inspect_row: Inspect row
+        find_similar_rows: Find similar rows
         view_value: View value
         duplicate_row: Duplicate row
         delete_row: Delete row
@@ -1591,6 +1650,16 @@ document:
         value_compact: "Compact the value"
         value_revert: "Revert the value"
         value_save: "Save the value"
+        view_table_data: "Show Data"
+        view_table_columns: "Show Columns"
+        view_table_partitions: "Show Partitions"
+        column_picker: "Choose columns"
+        refresh_profile: "Refresh column statistics"
+        sample_profile: "Profile the first rows"
+        refresh_partitions: "Refresh partitions"
+        nearest_distance: "Change the distance (now %{distance})"
+        nearest_clear: "Back to the table rows"
+        nearest_column: "Change the vector column"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1621,7 +1690,6 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
-      rows_omitted: Rows omitted from this result set because an execution limit was reached.
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -1665,6 +1733,15 @@ document:
         rows:
           one: "%{count} row"
           many: "%{count} rows"
+        executed: "Statement executed"
+        affected_rows:
+          one: "%{count} row affected"
+          many: "%{count} rows affected"
+        limited_rows:
+          first: "First %{count} rows loaded"
+          of_total: "%{loaded}/%{total} rows loaded"
+          count: Count rows
+          load_all: Load all rows
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"
@@ -1707,6 +1784,39 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+      nearest:
+        summary: "Similar to %{anchor} by %{column}"
+        similar_to: "Similar to"
+        by: "by"
+        k: "K"
+        anchor: "anchor"
+        anchor_row: "row %{row}"
+        read_only: "Similar rows are read-only"
+        menu_detail: "by %{column} · nearest %{limit}"
+        menu_blocked:
+          no_vector: "No value in %{column}"
+          pending_edits:
+            one: "Save or revert 1 change first"
+            many: "Save or revert %{count} changes first"
+        column:
+          l2: "L2 distance"
+          cosine: "Cosine distance"
+          inner_product: "Inner product"
+        rows:
+          of_total: "%{count} nearest of %{total} rows"
+          count: "%{count} nearest rows"
+        back_to_table: Back to table
+        distance:
+          l2: L2
+          cosine: Cosine
+          inner_product: Inner product
+        error:
+          no_vector: "The selected row has no value in %{column}"
+          failed: "Finding similar rows failed: %{error}"
+          pending_edits:
+            one: "Save or revert your change first"
+            many: "Save or revert your %{count} changes first"
+          invalid_k: "K must be a whole number from 1 to %{max}"
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
@@ -1810,6 +1920,20 @@ document:
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
+    table_views:
+      tab:
+        data: "Data"
+        columns: "Columns"
+        partitions: "Partitions"
+      projection_keeps_keys: "The primary key stays in the projection so rows can still be edited: %{columns}"
+      sample_failed: "Profiling a sample failed: %{error}"
+      badge:
+        sort_position: "Sort %{position}"
+        sort: "Sort"
+        partition: "Part"
+        distribution: "Dist"
+      header_nulls: "%{percent} null"
+      refresh_failed: "Refreshing the column statistics failed: %{error}"
   delimited:
     unsaved_summary: "Unsaved edits to %{name}"
     loading: "Loading %{name}…"
@@ -1927,6 +2051,7 @@ document:
       text: "Text"
       raw: "Raw"
       aligned: "Aligned"
+      columns: "Columns"
     text:
       more_in_file: "More records follow in the file. Load more to show them here."
       capped: "The text shows the first %{shown} of the %{loaded} loaded records. The table shows all of them."
@@ -1935,6 +2060,17 @@ document:
       apply_failed: "The text cannot be applied: %{cause}"
       read_only_capped: "This text cannot be edited because it does not show every loaded record, and an edit of part of the records cannot be matched back to them. Edit in the table."
       raw_edit_hint: "Edits are applied to the table when you switch views, save or load more. Only field values are taken from the text: a line whose values did not change keeps its line break and quoting from the file, and changed or added lines are written with the file's columns."
+    columns:
+      type:
+        integer: "Integer"
+        decimal: "Decimal"
+        boolean: "Boolean"
+        date: "Date"
+        timestamp: "Timestamp"
+        text: "Text"
+      progress: "%{scanned} of %{total}"
+      error:
+        scan_failed: "Could not profile %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"
@@ -3226,9 +3362,6 @@ document:
       custom: Custom
       on_open: On open
     result_warnings:
-      rows_omitted:
-        summary: Rows omitted from query result
-        cause: At least one result set omitted rows because an execution limit was reached.
       context:
         query: query result
         table_browse: table browse result
@@ -3246,6 +3379,7 @@ document:
       close_others: Close others
       close_right: Close to the right
     new: New tab
+    close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
 document_tree:
   search_placeholder: Search…
@@ -3383,6 +3517,7 @@ login:
     no_url: No login URL is available for this provider.
     no_url_provided: Login URL not provided by provider
 modals:
+  close: Close
   active_query:
     title: Active query running
     prompt: A query is still running on this connection. What would you like to do?
@@ -3545,6 +3680,13 @@ modals:
     remember: Remember for this session
     cancel: Cancel
     connect: Connect
+  connection_password:
+    title: "Password required"
+    connection_label: "Connection"
+    placeholder: "Password"
+    show_password: "Show password"
+    hide_password: "Hide password"
+    remember: "Remember until DBFlux closes"
   unsaved_changes:
     title: Unsaved changes
     prompt: You have unsaved changes in the following documents. What would you like to do?
@@ -3885,6 +4027,7 @@ settings:
       error: Failed to update the shared-database setting
       hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
     override_value_header: Override Value
+    override_field: "Override %{field}"
     placeholder:
       refresh_policy: Refresh policy
     save:
@@ -4026,6 +4169,7 @@ settings:
       cycle_result_view: "Cycle result view"
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
+      find_similar_rows: Find similar rows
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions
@@ -4766,6 +4910,8 @@ shutdown:
   failed: Shutdown failed
 
 sidebar:
+  row:
+    actions: "Actions for %{name}"
   header:
     new_dashboard: "New Dashboard"
     add: "Add"
@@ -4963,9 +5109,7 @@ sidebar:
       relational: Tables (%{count})
       document: Collections (%{count})
       key_value: Keys (%{count})
-      graph: Nodes (%{count})
       time_series: Measurements (%{count})
-      wide_column: Tables (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
     folder:

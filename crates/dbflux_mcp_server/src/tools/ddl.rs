@@ -1748,7 +1748,14 @@ impl DbFluxServer {
     ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        let sql = connection.build_drop_index_sql(index_name, table, if_exists);
+        let sql = connection
+            .build_drop_index_sql(index_name, table, if_exists)
+            .map_err(|error| {
+                format!(
+                    "Drop index is not supported by the {:?} driver: {error}",
+                    connection.kind()
+                )
+            })?;
         let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
@@ -2593,8 +2600,8 @@ mod alter_table_integration_tests {
         let cols: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .expect("query_map")
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .expect("every row reads");
         cols
     }
 

@@ -134,20 +134,32 @@ apply to SQL `DELETE`/`DROP`/`TRUNCATE`, MongoDB `deleteMany`/`drop`, Redis
 query editor returns. It is a separate execution-safety setting, not one of the
 three dangerous-query controls above. It accepts any whole number from 1 upward
 and cannot be set to zero or turned off: saving any other value shows an error
-and keeps the previous limit. DBFlux sends the limit to the driver with every
-editor query instead of adding a `LIMIT` to the query text, and shows a warning
-when a result left rows out. In a script with several statements the limit is
-one budget shared by all of its result sets, and every statement still runs.
+and keeps the previous limit. DBFlux sends the limit to the driver instead of
+adding a `LIMIT` to the query text. When a result left
+rows out, its footer reads "First 10,000 rows loaded" instead of the row count.
+For a single statement that only reads, the footer then offers **Count rows**,
+which runs the statement inside `SELECT COUNT(*)` without fetching its rows and
+shows "10,000/52,310 rows loaded" (SQL connections only), and **Load all
+rows**, which runs the statement again without the limit in the same result
+tab. Both are also in the table menu (`m`). In a script with several statements
+the limit is one budget shared by all of its result sets, and every statement
+still runs.
 
-Drivers that cannot enforce a row limit refuse the query before running it
-rather than ignore the cap. Editor queries therefore fail with an "Operation
-not supported" error on MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift,
-CloudWatch, external RPC drivers, and DynamoDB writes (PartiQL
-`INSERT`/`UPDATE`/`DELETE` and put, update, and delete commands). Changing the
-limit does not change this. The limit adds no timeout and does not apply to
-Lua, Python, or Bash scripts, connection hooks, or metrics. The
-[console](CONSOLE.md) sends the same limit to drivers that can enforce it and
-runs its commands without one on the others.
+The limit reaches only a driver whose `execute` enforces it: PostgreSQL,
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch and DynamoDB. Some of them still read the
+whole response before cutting it, and Redis bounds only replies shown as a
+table; each driver's page lists its limits. External RPC drivers receive the
+limit when DBFlux and the driver both speak driver RPC 1.6 or newer and the
+driver declares `REQUEST_ROW_LIMIT`; any other external driver gets no limit at
+all and the query runs uncapped. A result that carried
+no limit shows its full row count, because
+nothing was left out, and its footer offers neither Count rows nor Load all
+rows; put a `LIMIT` or a `.limit()` in the statement when the result may be
+large. The limit adds no timeout and does not apply to Lua, Python, or Bash
+scripts, connection hooks, or metrics. The [console](CONSOLE.md) sends the same
+limit to drivers that can enforce it and runs its commands without one on the
+others.
 
 ### Storage (Nightly builds only)
 

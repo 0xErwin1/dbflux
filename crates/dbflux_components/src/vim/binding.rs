@@ -35,7 +35,7 @@ use gpui::{
     InteractiveElement as _, KeyDownEvent, ParentElement as _, SharedString, Stateful, Styled as _,
     Subscription, Window, div,
 };
-use gpui_base::input::{EditAnchor, EditAnchorAffinity, InputCursorShape};
+use gpui_base::input::{EditAnchor, EditAnchorAffinity, InputCursorShape, InputPointerEvent};
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -252,6 +252,7 @@ pub struct VimBinding {
     keystroke_interceptor: Option<Subscription>,
     _focus_out: Subscription,
     _input_changes: Subscription,
+    _input_clicks: Subscription,
     _setting: Option<Subscription>,
 }
 
@@ -332,6 +333,14 @@ impl VimBinding {
             },
         );
 
+        let input_clicks = cx.subscribe_in(
+            &input,
+            window,
+            move |host, _, event: &InputPointerEvent, _window, cx| match event {
+                InputPointerEvent::CaretPlaced => Self::caret_placed(host, input_id, cx),
+            },
+        );
+
         Self {
             input,
             enabled: false,
@@ -367,6 +376,7 @@ impl VimBinding {
             keystroke_interceptor: None,
             _focus_out: focus_out,
             _input_changes: input_changes,
+            _input_clicks: input_clicks,
             _setting: None,
         }
     }
@@ -811,6 +821,28 @@ impl VimBinding {
             binding.finish_replace_once(window, cx);
         }
         Self::report_text_change(host, input, cx);
+    }
+
+    /// A click leaves Visual mode for Normal mode at the clicked offset, as in
+    /// Vim. Without this the stale visual anchor would reselect on the next
+    /// motion.
+    fn caret_placed<H: VimHost>(host: &mut H, input: EntityId, cx: &mut Context<H>) {
+        let Some(binding) = host.vim_mut(input) else {
+            return;
+        };
+        if !binding.enabled
+            || !matches!(
+                binding.mode,
+                VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+            )
+        {
+            return;
+        }
+        let cursor = binding.editor_cursor(cx);
+        binding.visual_anchor = None;
+        binding.visual_cursor = None;
+        binding.set_vim_mode(VimMode::Normal, cx);
+        binding.set_editor_cursor(cursor, cx);
     }
 
     /// Ends the open change group when the editor loses focus, and cancels a

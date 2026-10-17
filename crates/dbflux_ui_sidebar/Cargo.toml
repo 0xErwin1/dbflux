@@ -29,6 +29,7 @@ dirs.workspace = true
 secrecy.workspace = true
 rusqlite.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_components = { workspace = true, features = ["test-support"] }
 
 [features]
 default = []

@@ -30,8 +30,9 @@ así que el endpoint es una URL y no un par host/port.
   de una base de datos en la barra lateral abre una en su propia pestaña, que
   ejecuta una línea SQL a la vez mediante `Connection::execute` con la
   validación del editor, la confirmación de queries peligrosas, las filas de
-  auditoría y el historial de consultas. El driver rechaza los límites de filas
-  por request, así que los comandos de la consola se ejecutan sin límite.
+  auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - SQL arbitrario de un solo statement, con respuestas forzadas a `JSONCompact`
   para que los nombres y tipos de columna lleguen junto con las filas.
 - El ancho de fila se verifica contra el número de columnas declaradas en cada
@@ -42,6 +43,12 @@ así que el endpoint es una URL y no un par host/port.
   partition keys, tamaño en disco y compresión.
 - La carga de schema es perezosa por database, así que un servidor con muchas
   databases no paga el costo de todas ellas al conectar.
+- Las queries con límite de filas leen su resultado en streaming y dejan de
+  leer una fila después del límite, así que un resultado grande vuelve
+  truncado en lugar de fallar por el límite de bytes de la respuesta. El
+  request activa `cancel_http_readonly_queries_on_client_close`, así que el
+  servidor detiene una query de solo lectura cuando el cliente cierra la
+  conexión.
 - El SQL se envía sin modificaciones por HTTP. El valor `offset` existente se
   envía como parámetro de la URL HTTP; aquí no se certifica su comportamiento
   en el servidor.
@@ -67,6 +74,21 @@ así que el endpoint es una URL y no un par host/port.
   escrituras de todos modos (sin efectos secundarios; los grants alcanzables
   solo a través de un rol dentro de otro rol no se resuelven y dejan la
   política sin cambios).
+- Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla lee
+  `system.columns`, `system.tables` y `system.parts` para obtener el codec de
+  cada columna, su tamaño en disco y sin comprimir, la razón de compresión, la
+  posición en la clave de ordenación y la clave de partición, y el motor, las
+  claves, el TTL, las partes activas, las filas y el tamaño de la tabla. La
+  vista Particiones lista las partes activas, filas, tamaños y rango de clave
+  de cada partición desde `system.parts`, de la más reciente a la más antigua.
+  La vista Datos incorpora un selector de columnas que nombra en la query solo
+  las columnas elegidas, y una estimación de lectura a partir de
+  `EXPLAIN ESTIMATE`. Un filtro con una subconsulta, o con `IN` seguido del
+  nombre de una tabla, no recibe estimación, porque planificarlo leería esa
+  subconsulta o tabla. **Perfilar las primeras 1 000 000 filas** calcula, a
+  pedido, la cantidad de nulos, los conteos aproximados de valores distintos
+  (`uniq`) y los rangos, y queda registrado en el log de auditoría. Ver [Columnas y
+  particiones](../TABLE_VIEWS.md).
 
 ### Manejo de tipos
 
@@ -83,9 +105,11 @@ texto crudo:
 ## Limitaciones
 
 - Sin túneles SSH.
-- Sin transacciones, prepared statements ni cancelación de query. Los límites
-  de filas explícitos de `QueryRequest` (incluido cero) y los timeouts de
-  statement explícitos se rechazan antes del despacho. El timeout HTTP de
+- Sin transacciones, prepared statements ni cancelación de query. Los timeouts
+  de statement explícitos, y los límites de filas en queries de métricas o
+  inspectores de instancia, se rechazan antes del despacho. Un error que el
+  servidor reporta después del corte del límite de filas no se ve, porque la
+  lectura se detiene en el corte: el resultado se muestra como truncado. El timeout HTTP de
   transporte configurado sigue vigente, pero no garantiza detener el trabajo
   ni las mutaciones en el servidor. Una query sin límite puede alojar todo el
   resultado en memoria (dentro del límite del cuerpo HTTP). El driver no
@@ -96,7 +120,9 @@ texto crudo:
   destino de transferencia.
 - Un statement SQL por request; los scripts multi-statement no se procesan por
   lotes.
-- Los cuerpos de respuesta HTTP están limitados a 128 MiB.
+- Los cuerpos de respuesta HTTP están limitados a 128 MiB. El límite se aplica
+  a las queries sin límite de filas, y a las que lo tienen solo cuando las filas
+  conservadas por sí solas lo superan.
 - Las zonas horarias con nombre de ClickHouse no se interpretan del lado del
   cliente. Los timestamps ISO con un offset se manejan correctamente; los
   timestamps sin uno se tratan como UTC.
@@ -107,3 +133,10 @@ texto crudo:
   `system.processes` son candidatos naturales para un futuro `InstanceCatalog`,
   así que esto está planeado y no excluido permanentemente.
 - Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se envía con el ajuste por petición `readonly = 2`, de modo que ClickHouse rechaza escrituras, DDL e intentos de cambiar `readonly`. El ajuste no limita lo que una lectura puede alcanzar; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
+- La estimación de lectura es una cota superior: un `LIMIT` puede detener la
+  lectura antes. Sus bytes escalan el tamaño en disco de cada columna leída por
+  la proporción de gránulos que toca la lectura, así que son una aproximación.
+- **Perfilar las primeras 1 000 000 filas** lee las primeras filas que devuelve
+  el servidor, no una muestra aleatoria. En una tabla MergeTree siguen la clave
+  de ordenación, así que el rango de una columna inicial de esa clave puede ser
+  más estrecho que el de la tabla.

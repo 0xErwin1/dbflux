@@ -1,24 +1,47 @@
-use std::rc::Rc;
+use std::{cmp::Reverse, collections::BinaryHeap, rc::Rc};
 
 use fuzzy_matcher::FuzzyMatcher as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
-    Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
-    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
+    Action, AnyElement, App, AppContext, AvailableSpace, Context, DismissEvent, Empty, Entity,
+    EventEmitter, Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement,
+    Pixels, Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
     deferred, div, prelude::FluentBuilder, px, relative,
 };
+use gpui_base::TestSupportExt as _;
 use lsp_types::CompletionItem;
 use std::ops::Range;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
+const MAX_WIDTH_CANDIDATES: usize = 32;
+
+fn width_measurement_candidates(items: &[Rc<CompletionItem>]) -> Vec<usize> {
+    let mut candidates = BinaryHeap::with_capacity(MAX_WIDTH_CANDIDATES + 1);
+    for (index, item) in items.iter().enumerate() {
+        let character_count = item.label.chars().count()
+            + item
+                .detail
+                .as_deref()
+                .map_or(0, |detail| detail.chars().count());
+        candidates.push(Reverse((character_count, index)));
+        if candidates.len() > MAX_WIDTH_CANDIDATES {
+            candidates.pop();
+        }
+    }
+    let mut indices: Vec<_> = candidates
+        .into_iter()
+        .map(|Reverse((_, index))| index)
+        .collect();
+    indices.sort_unstable();
+    indices
+}
 
 use crate::{
     ActiveTheme, IndexPath, Selectable, actions, h_flex,
     input::{
         self, EditorState,
-        popovers::{editor_popover, render_markdown},
+        popovers::{CaretAnchoredPopup, editor_popover, render_markdown},
     },
     label::Label,
     list::{List, ListDelegate, ListEvent, ListState},
@@ -200,6 +223,7 @@ pub struct CompletionMenu {
     offset: usize,
     editor: WeakEntity<EditorState>,
     list: Entity<ListState<ContextMenuDelegate>>,
+    content_width: Pixels,
     open: bool,
 
     /// The offset of the first character that triggered the completion.
@@ -233,7 +257,7 @@ impl CompletionMenu {
                     cx.subscribe(&list, |this: &mut Self, _, ev: &ListEvent, cx| {
                         match ev {
                             ListEvent::Confirm(_) => {
-                                this.hide(cx);
+                                this.dismiss(cx);
                             }
                             _ => {}
                         }
@@ -245,6 +269,7 @@ impl CompletionMenu {
                 offset: 0,
                 editor: editor.downgrade(),
                 list,
+                content_width: px(120.),
                 open: false,
                 trigger_start_offset: None,
                 query: SharedString::default(),
@@ -266,7 +291,7 @@ impl CompletionMenu {
         })
         .detach();
 
-        self.hide(cx);
+        self.dismiss(cx);
     }
 
     pub(crate) fn handle_action(
@@ -303,7 +328,7 @@ impl CompletionMenu {
     }
 
     fn on_action_escape(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.hide(cx);
+        self.dismiss(cx);
     }
 
     fn on_action_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -318,16 +343,21 @@ impl CompletionMenu {
         });
     }
 
-    /// Hide the completion menu and reset the trigger start offset.
+    /// Synchronize a hidden editor menu without dismissing a newer response.
     pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
         self.open = false;
         self.trigger_start_offset = None;
+        cx.notify();
+    }
+
+    /// Dismiss the menu in response to a user action.
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.hide(cx);
         let editor = self.editor.clone();
         cx.spawn(async move |_, cx| {
             let _ = editor.update(cx, |editor, cx| editor.dismiss_completion_overlay(cx));
         })
         .detach();
-        cx.notify();
     }
 
     /// Sets the trigger start offset if it is not already set.
@@ -348,44 +378,44 @@ impl CompletionMenu {
         let items = items.into();
         self.offset = offset;
         self.open = true;
-        self.list.update(cx, |this, cx| {
-            let longest_ix = items
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, item)| {
-                    item.label.len() + item.detail.as_ref().map(|d| d.len()).unwrap_or(0)
-                })
-                .map(|(ix, _)| ix)
-                .unwrap_or(0);
-
+        self.content_width = self.list.update(cx, |this, cx| {
             this.delegate_mut().query = self.query.clone();
             this.delegate_mut().set_items(items);
+            // The virtual list measures at its previous viewport width, which can
+            // keep a new response as narrow as an earlier, shorter one.
+            let mut widest_index = 0;
+            let mut content_width = px(120.);
+            // Prefix matches can contain an entire schema. Character counts
+            // shortlist likely widest rows without laying out thousands of items.
+            // Measuring several candidates also handles proportional fonts better
+            // than measuring only the single longest label.
+            for index in width_measurement_candidates(&this.delegate().items) {
+                let item = &this.delegate().items[index];
+                let width = editor_popover("completion-menu-measure", cx)
+                    .child(CompletionMenuItem::new(index, item.clone()))
+                    .into_any_element()
+                    .layout_as_root(
+                        gpui::size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                        window,
+                        cx,
+                    )
+                    .width;
+                if width > content_width {
+                    content_width = width;
+                    widest_index = index;
+                }
+            }
             this.set_selected_index(Some(IndexPath::new(0)), window, cx);
-            this.set_item_to_measure_index(IndexPath::new(longest_ix), window, cx);
+            this.set_item_to_measure_index(IndexPath::new(widest_index), window, cx);
+            content_width
         });
 
         cx.notify();
     }
-
-    fn origin(&self, cx: &App) -> Option<Point<Pixels>> {
-        let editor = self.editor.upgrade()?;
-        let editor = editor.read(cx);
-        let Some((cursor_bounds, line_height)) = editor.cursor_layout() else {
-            return None;
-        };
-        let cursor_origin = cursor_bounds.origin;
-
-        let scroll_origin = editor.scroll_offset();
-
-        Some(
-            scroll_origin + cursor_origin - editor.input_bounds().origin
-                + Point::new(-px(4.), line_height + px(4.)),
-        )
-    }
 }
 
 impl Render for CompletionMenu {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.open {
             return Empty.into_any_element();
         }
@@ -395,65 +425,184 @@ impl Render for CompletionMenu {
             return Empty.into_any_element();
         }
 
-        let Some(pos) = self.origin(cx) else {
-            return Empty.into_any_element();
-        };
-
-        let selected_documentation = self
-            .list
-            .read(cx)
-            .delegate()
-            .selected_item()
-            .and_then(|item| item.documentation.clone());
-
         let Some(editor) = self.editor.upgrade() else {
             return Empty.into_any_element();
         };
+        // The anchor is resolved in the popup's deferred prepaint from the
+        // input's current-frame geometry; the content below is built there.
         let configured_max = editor.read(cx).lsp().completion_menu.max_width;
-        let max_width = configured_max.min(window.bounds().size.width - pos.x);
-        let abs_pos = editor.read(cx).input_bounds().origin + pos;
-        let vertical_layout =
-            abs_pos.x + configured_max + POPOVER_GAP + configured_max + POPOVER_GAP
-                > window.bounds().size.width;
+        let content_width = self.content_width;
+        let list = self.list.clone();
+        let menu = cx.weak_entity();
 
-        deferred(
-            div()
-                .absolute()
-                .left(pos.x)
-                .top(pos.y)
-                .flex()
-                .flex_row()
-                .gap(POPOVER_GAP)
-                .items_start()
-                .when(vertical_layout, |this| this.flex_col())
-                .child(
-                    editor_popover("completion-menu", cx)
-                        .max_w(max_width)
-                        .min_w(px(120.))
-                        .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT)),
-                )
-                .when_some(selected_documentation, |this, documentation| {
-                    let mut doc = match documentation {
-                        lsp_types::Documentation::String(s) => s.clone(),
-                        lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
-                    };
-                    if vertical_layout {
-                        doc = doc.split("\n").next().unwrap_or_default().to_string();
-                    }
+        deferred(CaretAnchoredPopup::new(
+            self.editor.clone(),
+            move |anchor, window, cx| {
+                // `anchor` is in window coordinates, from the current frame.
+                let max_width = configured_max.min(window.bounds().size.width - anchor.x);
+                let vertical_layout =
+                    anchor.x + configured_max + POPOVER_GAP + configured_max + POPOVER_GAP
+                        > window.bounds().size.width;
 
-                    this.child(
-                        div().child(
-                            editor_popover("completion-menu", cx)
-                                .w(configured_max)
-                                .px_2()
-                                .child(render_markdown("doc", doc, window, cx)),
-                        ),
+                let selected_documentation = list
+                    .read(cx)
+                    .delegate()
+                    .selected_item()
+                    .and_then(|item| item.documentation.clone());
+
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(POPOVER_GAP)
+                    .items_start()
+                    .when(vertical_layout, |this| this.flex_col())
+                    .child(
+                        editor_popover("completion-menu", cx)
+                            .test_support()
+                            .w(content_width.min(max_width))
+                            .max_w(max_width)
+                            .min_w(px(120.))
+                            .child(List::new(&list).max_h(MAX_MENU_HEIGHT)),
                     )
-                })
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.hide(cx);
-                })),
-        )
+                    .when_some(selected_documentation, |this, documentation| {
+                        let mut doc = match documentation {
+                            lsp_types::Documentation::String(s) => s.clone(),
+                            lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
+                        };
+                        if vertical_layout {
+                            doc = doc.split("\n").next().unwrap_or_default().to_string();
+                        }
+
+                        this.child(
+                            div().child(
+                                editor_popover("completion-menu", cx)
+                                    .w(configured_max)
+                                    .px_2()
+                                    .child(render_markdown("doc", doc, window, cx)),
+                            ),
+                        )
+                    })
+                    .on_mouse_down_out({
+                        let menu = menu.clone();
+                        move |_, _, cx: &mut App| {
+                            if let Some(menu) = menu.upgrade() {
+                                menu.update(cx, |menu, cx| menu.dismiss(cx));
+                            }
+                        }
+                    })
+                    .into_any_element()
+            },
+        ))
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn width_measurement_is_bounded_and_keeps_long_candidates_anywhere_in_the_list() {
+        let mut items: Vec<_> = (0..10_000)
+            .map(|index| {
+                Rc::new(CompletionItem {
+                    label: format!("table_{index}"),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        for index in [0, 5_000, 9_999] {
+            items[index] = Rc::new(CompletionItem {
+                label: "table_with_a_long_name".repeat(10),
+                ..Default::default()
+            });
+        }
+        let candidates = width_measurement_candidates(&items);
+        assert_eq!(candidates.len(), MAX_WIDTH_CANDIDATES);
+        for index in [0, 5_000, 9_999] {
+            assert!(candidates.contains(&index));
+        }
+        assert_eq!(items.len(), 10_000, "all suggestions remain available");
+        assert!(width_measurement_candidates(&[]).is_empty());
+        assert_eq!(width_measurement_candidates(&items[..3]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn width_candidates_count_characters_and_include_details() {
+        let mut items = vec![
+            Rc::new(CompletionItem {
+                label: "abcdefghij".into(),
+                ..Default::default()
+            });
+            MAX_WIDTH_CANDIDATES
+        ];
+        items.push(Rc::new(CompletionItem {
+            label: "短".repeat(9),
+            ..Default::default()
+        }));
+        items.push(Rc::new(CompletionItem {
+            label: "id".into(),
+            detail: Some("a long column detail".into()),
+            ..Default::default()
+        }));
+        let candidates = width_measurement_candidates(&items);
+        assert!(
+            !candidates.contains(&MAX_WIDTH_CANDIDATES),
+            "UTF-8 bytes must not inflate character counts"
+        );
+        assert!(
+            candidates.contains(&(MAX_WIDTH_CANDIDATES + 1)),
+            "details contribute to the shortlist"
+        );
+    }
+
+    #[gpui::test]
+    fn hiding_an_old_menu_does_not_dismiss_a_new_completion_response(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::init);
+        let window = cx.add_empty_window();
+        let (editor, menu) = window.update(|window, cx| {
+            let editor = cx.new(|cx| EditorState::new(window, cx).default_value("co"));
+            let menu = CompletionMenu::new(editor.clone(), window, cx);
+            let old_items = vec![CompletionItem {
+                label: "const".into(),
+                ..Default::default()
+            }];
+            editor.update(cx, |editor, cx| {
+                editor.present_completion_items(0, "c", old_items.clone(), cx);
+            });
+            menu.update(cx, |menu, cx| {
+                menu.update_query(0, "c");
+                menu.show(1, old_items, window, cx);
+                // The overlay observes the old request being hidden while a
+                // replacement request is pending. Its deferred dismissal must
+                // not act on the replacement response that arrives next.
+                menu.hide(cx);
+            });
+            editor.update(cx, |editor, cx| {
+                editor.present_completion_items(
+                    0,
+                    "co",
+                    vec![CompletionItem {
+                        label: "const".into(),
+                        ..Default::default()
+                    }],
+                    cx,
+                );
+            });
+            (editor, menu)
+        });
+
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let completion = editor.read(cx).completion_menu_state();
+            assert!(completion.open, "an old menu dismissed the new response");
+            assert_eq!(completion.query, "co");
+            assert_eq!(completion.items.len(), 1);
+            assert_eq!(completion.items[0].label, "const");
+        });
+        drop(menu);
     }
 }

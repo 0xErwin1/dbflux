@@ -1,0 +1,6 @@
++ P|00000000-0000-4000-8000-000000000001 "shape"
+  - CF2|00000000-0000-4000-8000-000000000001|default "Log Groups (2)"
+    - C|00000000-0000-4000-8000-000000000001|default|/aws/lambda/api "/aws/lambda/api"
+    - C|00000000-0000-4000-8000-000000000001|default|/aws/lambda/worker "/aws/lambda/worker"
+  - MF|00000000-0000-4000-8000-000000000001|default "Metrics"
+    - metrics-loading|00000000-0000-4000-8000-000000000001|default "Loading…"

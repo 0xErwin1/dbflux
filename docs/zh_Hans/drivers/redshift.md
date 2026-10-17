@@ -14,7 +14,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 ## 功能
 
 - 关系型驱动程序（`DatabaseCategory::Relational`、`QueryLanguage::Sql`），针对 Redshift 集群或 Redshift Serverless 端点使用 PostgreSQL 线协议通信。
-- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会拒绝请求级的行数上限，因此控制台命令不带上限运行。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 连接表单包含主机、端口（默认 `5439`）、数据库、用户、密码、SSL/`sslmode`（`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`）、连接 URI 模式（`redshift://...`，内部被规范化为 `postgresql://...`），以及 SSH 隧道。
 - 自定义 TLS 信任与双向 TLS：在启用 TLS 的模式下，会把固定的私有根 CA（PEM）叠加到系统根证书之上加入信任库；客户端证书 + 私钥（PEM/PKCS#8）可启用双向 TLS。证书材料按连接从表单中配置的路径加载；校验强度绝不会被削弱（`verify-ca`/`verify-full` 仍会拒绝不受信的证书）。证书/私钥文件缺失、不可读或格式错误会呈现为清晰的连接错误，而不是静默回退到系统信任库；私钥内容从不被记录到日志。
 - 基于 `information_schema` 的 Schema 探查，覆盖数据库、schema、表、视图与列，并用 `ColumnKind` 分类（时间戳/整数/浮点/文本），与标准 PostgreSQL 的 OID 对应。
@@ -23,10 +23,11 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - 查询执行（`SELECT`/浏览）通过标准的 `Connection::execute` 路径返回带类型的列；查询取消通过线协议客户端的取消令牌支持。
 - `RedshiftErrorFormatter` 把常见的连接与查询失败（超时、连接被拒、认证失败、集群不可达、带 `SQLSTATE` 的查询错误）映射为清晰的、由驱动程序格式化的消息，而不是原始的调试输出。
 - 每次连接都上报 `application_name` 为 `dbflux/<version>`，除非连接 URI 自己设置了 `application_name` 查询参数。
+- 表视图（`TableViewFeatures`）：表的“列”视图从 `pg_attribute` 读取每列的编码（`format_encoding`）、在排序键中的位置（复合或交错）以及分布键，并从 `svv_table_info` 读取表的分布方式、行数、大小（按 1 MB 块计）和未排序比例。“数据”视图增加列选择器，查询中只列出所选的列。参见[列与分区](../TABLE_VIEWS.md)。
 
 ## 限制
 
-- 请求的行数上限（包括零）和语句超时会在只读校验或查询准备之前被拒绝：此驱动无法在执行前保证这些限制。未设置这两项时，查询保持原有行为，仍可能缓冲完整结果；这并不限制服务器工作量或内存。提前拒绝的回归测试使用一次性 PostgreSQL 16 验证线协议兼容路径，并不验证 Redshift 集群行为。
+- 语句超时会在只读校验或查询准备之前被拒绝。请求行数上限会像 PostgreSQL 驱动一样流式读取行，并只保留预算内的行，但结果仍会读到末尾；这并不限制服务器工作量。提前拒绝的回归测试使用一次性 PostgreSQL 16 验证线协议兼容路径，并不验证 Redshift 集群行为。
 
 - 只读：`DriverMetadata.capabilities` 不含 `INSERT`、`UPDATE`、`DELETE`、`RETURNING`、`BULK_INSERT`、`TRUNCATE_TABLE`，以及所有 DDL/事务性 DDL 标志。该驱动程序没有内联的网格编辑，也没有变更/可视化查询构建器。`Connection::execute` 还会在���协议层拒绝任何非读取语句并给出明确错误，因此写入尝试永远不会变成静默的空操作。
 - 仅支持单语句：`Connection::execute` 一次只运行一条只读语句。多语句输入（例如 `SELECT 1; SELECT 2`）在到达线协议之前就会被明确拒绝；允许单个可选的结尾 `;`，而字符串字面量、带引号标识符或注释中的 `;` 不被当作分隔符。
@@ -41,3 +42,4 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - `SUPER`/`VARBYTE`/`GEOMETRY`/`GEOGRAPHY`/`HLLSKETCH` 所用的扩展类型 OID 取值，以及用于获取存储提示的 `SVV_TABLE_INFO`/`PG_TABLE_DEF` 查询形状，只由 `#[ignore]` 的真实集成测试（`crates/dbflux_driver_redshift/tests/live_integration.rs`）验证，因为不存在本地或基于 Docker 的 Redshift 引擎。可针对真实集群显式运行：`cargo nextest run -p dbflux_driver_redshift --run-ignored all`。
 - `NUMERIC`/`DECIMAL` 值**会被**解码：驱动程序直接把 PostgreSQL 二进制 `NUMERIC` 线格式解析为精确的 `Value::Decimal` 字符串（按列声明的小数位重建整数/小数部分，并处理 `NaN`/±`Infinity`）。格式错误的载荷会安全回退，而不会损坏数据。该二进制解码器由基于合成线载荷的单元测试覆盖；端到端的保真度仍只通过那些 `#[ignore]` 的集成测试针对真实集群验证。
 - 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）除了驱动自身拒绝非读取语句外，还会在 `BEGIN READ ONLY` 中运行并回滚。具有外部效果的函数不会被阻止；真正的边界仍是最小权限的数据库凭据。
+- “列”视图没有按列的大小（这需要访问 `stv_blocklist`），也没有分区视图、读取量估算或行分析。它只由单元测试覆盖，尚未针对真实的 Redshift 集群验证。

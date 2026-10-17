@@ -15,7 +15,7 @@
 
 ### 계층별 크레이트 맵
 
-종속성은 아래를 향합니다. `dbflux_core`는 다른 모든 크레이트가 기반으로 삼는 종속성 없는 계약 계층이며, UI는 구체적인 드라이버 크레이트에 의존하지 않습니다 ([드라이버/UI 분리](#드라이버-체계) 참조).
+종속성은 아래를 향합니다. `dbflux_core`는 나머지 워크스페이스가 기반으로 삼는 계약 계층이며, 다시 내보내는 실행 분류와 스키마 변경 타입을 위해 `dbflux_policy`라는 좁은 종속성 하나만 가집니다. UI는 구체적인 드라이버 크레이트에 의존하지 않습니다 ([드라이버/UI 분리](#드라이버-체계) 참조).
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["보조 라이브러리"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["정책 — dbflux_policy"]
+        policy["ExecutionClassification,<br/>스키마 변경 분류"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "일반적인 경계면만" .-> core
@@ -247,8 +252,8 @@ crates/
         mod.rs              # AuditDocument 엔티티
         pane.rs             # AuditDocument::into_pane 생성자
         view.rs             # LogStreamView 경계 구조체
-        render.rs           # 추출된 렌더 코드 (~1300 LOC)
-        commands.rs         # 추출된 명령 디스패치 (~560 LOC)
+        render.rs           # 추출된 렌더 코드
+        commands.rs         # 추출된 명령 디스패치
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -266,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 엔티티 (dbflux_ui가 재노출)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -277,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 연결 트리; 스냅샷의 DatabaseLayout을 순회
   dbflux_ui_windows/        # 설정 창 + 연결 관리자 창
     src/
       ssh_shared.rs         # 공유 SSH 인증 UI 컴포넌트
@@ -310,7 +315,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # 프로필별 훅 바인딩
-  dbflux_ui/                # 얇은 통합자 (~13.5k LOC): 여섯 UI 크레이트를 서로 연결
+  dbflux_ui/                # 얇은 통합자: 여섯 UI 크레이트를 서로 연결
     src/                    # 이동된 하위 시스템을 이전 모듈 경로의 shim을 통해 재노출
       lib.rs                # 크레이트 루트; shim 모듈을 통한 재노출
       app.rs                # GPUI 앱 부트스트랩
@@ -582,11 +587,11 @@ crates/
 
 1. **`Tab`** (`tab_manager.rs`) — 단일 `Pane(Box<PaneHandle>)` 변형을 가진 `#[non_exhaustive]` 열거형입니다. 미래 버전과의 호환성(예: 이후 분리 가능한 창 변형)을 위해 열거형으로 유지됩니다. `TabManager`는 `Vec<Tab>`과 MRU 순서를 보유합니다.
 
-2. **`PaneHandle`** (`pane.rs`) — 기존의 닫힌(closed) `DocumentHandle` 열거형을 대체하는, 클로저를 지우는(closure-erasing) 셸입니다. 각 연산(render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe와 `resolve_close`, `save_for_close`, `flush_for_shutdown`, `is_file_backed_empty` 같은 선택적 헬퍼)은 타입화된 `Entity<T>`를 캡처하는 `Box<dyn Fn>` 클로저입니다. `PaneHandle`은 `!Clone`입니다. 각 문서 타입은 자체 `pane.rs` 파일(모두 `crates/dbflux_ui_document/src/` 아래)에서 `XxxDocument::into_pane(entity, cx) -> PaneHandle`을 제공합니다. 새 문서 타입을 추가해도 `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`는 변경할 필요가 없습니다.
+2. **`PaneHandle`** (`pane.rs`) — 기존의 닫힌(closed) `DocumentHandle` 열거형을 대체하는, 클로저를 지우는(closure-erasing) 셸입니다. 모든 연산은 타입화된 `Entity<T>`를 캡처하는 `Box<dyn Fn>` 클로저입니다: 렌더링과 포커스, 명령 디스패치, 순수 메타데이터 읽기(제목, 닫기 가능 여부, 연결과 활성 컨텍스트, 변경 요약, 새로 고침 정책), 활성 탭과 새로 고침 정책 같은 변경, 중복 제거 일치, 이벤트 구독, 그리고 문서별 선택적 헬퍼(닫기, 저장과 종료 정책, 사이드 패널, 패널 액션, 상태 표시줄 세그먼트)입니다. `PaneHandle`은 `!Clone`입니다. 각 문서 타입은 자체 `pane.rs` 파일(모두 `crates/dbflux_ui_document/src/` 아래)에서 `XxxDocument::into_pane(entity, cx) -> PaneHandle`을 제공합니다. 새 문서 타입을 추가해도 `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`는 변경할 필요가 없습니다.
 
-3. **`DocumentKey`** (`dedup.rs`) — 탭 중복 제거에 사용되는 식별 열거형입니다. 변형: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. 기존 `DocumentHandle`의 `is_*` 메서드를 대체합니다. 호출 지점은 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`를 사용합니다.
+3. **`DocumentKey`** (`dedup.rs`) — 탭 중복 제거에 사용되는 식별 열거형입니다. 변형 목록은 `dedup.rs`를 기준으로 합니다. 기존 `DocumentHandle`의 `is_*` 메서드를 대체합니다. 호출 지점은 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`를 사용합니다.
 
-4. **`DocumentEvent`** (`handle.rs`, 약 30 LOC) — 삭제된 네 개의 문서별 이벤트 열거형을 대체하는 통합 이벤트 열거형입니다. 변형: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — 삭제된 네 개의 문서별 이벤트 열거형을 대체하는 통합 이벤트 열거형입니다. 변형 목록은 `handle.rs`를 기준으로 합니다.
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — 범용 UI 프레임(chrome) 호스트입니다. `ResultPanel`은 프레임 행을 소유하고 본문 렌더링을 `ViewHandle`(render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode의 7개 클로저)에 위임합니다. 슬롯 시스템(`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`)은 뷰가 임의의 프레임 요소를 기여할 수 있게 합니다. `ResultPanel`은 내장 세그먼트(`available_modes.len() >= 2`일 때 Left/0의 모드 바)와 뷰가 제공한 세그먼트를 병합하고, `(position, index)`로 정렬하여 `flex_wrap` 행으로 렌더링합니다.
 
@@ -644,7 +649,7 @@ crates/
 
 **영속성**: 마이그레이션 `017_qry_saved_queries`는 `qry_*` 테이블 계열(루트 + columns/sorts/joins 하위 테이블, 계단식 FK, `UNIQUE (profile_id, name)`)을 추가하며, `SavedQueryRepo`(`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`)와 인메모리 `SavedQueryManager`(`crates/dbflux_ui_base/src/saved_query_manager.rs`)가 이를 앞단에서 지원합니다. `TableProbe` 접점은 저장된 쿼리를 다른 연결로 가져올 때 드라이버 코드에 들어가지 않고 테이블 존재 여부를 검증합니다.
 
-**문서 쿼리 빌더**: 문서 컬렉션에는 별도의 레일이 있으며, 드라이버 id가 아니라 `DocumentFeatures::VISUAL_BUILDER`와 `Connection::document_query_codec()`이 반환하는 코덱으로 게이트됩니다. `DocumentQuerySpec`(`crates/dbflux_core/src/query/document_query.rs`)은 필터 트리, 유형이 있는 값, 포함/제외 프로젝션, 정렬, 제한, 건너뛰기, 선택적 그룹 단계(`$count` / `$sum` / `$avg`)를 표현합니다. 드라이버는 `DocumentQueryCodec`을 구현해 스펙을 find 칸(`DocumentFindSlots`), 파이프라인, 미리보기 텍스트로 렌더링하고 칸을 다시 스펙으로 파싱합니다. 표현할 수 없는 절은 `UnrepresentableClause`로 반환되므로 UI는 이를 덮어쓰지 않고 동기화 충돌을 표시합니다. UI는 `crates/dbflux_ui_document/src/document_builder/`와 `data_grid_panel/documents/builder.rs`에 있습니다. Find는 칸을 쓰고 `browse_collection`으로 실행하므로 결과는 편집 가능하게 유지되고, Aggregate 모드(`DocumentFeatures::AGGREGATE`로도 게이트됨)는 집계 뷰에서 파이프라인을 실행하며 결과는 읽기 전용입니다. 저장된 문서 쿼리는 마이그레이션 `037_qry_saved_document_queries`(스펙은 JSON으로 저장, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo`, `SavedDocumentQueryManager`(`crates/dbflux_ui_base/src/saved_document_query_manager.rs`)를 사용합니다.
+**문서 쿼리 빌더**: 문서 컬렉션에는 별도의 레일이 있으며, 드라이버 id가 아니라 `DocumentFeatures::VISUAL_BUILDER`와 `Connection::document_query_codec()`이 반환하는 코덱으로 게이트됩니다. `DocumentQuerySpec`(`crates/dbflux_core/src/query/document_query.rs`)은 필터 트리, 유형이 있는 값, 포함/제외 프로젝션, 정렬, 제한, 건너뛰기, 선택적 그룹 단계(`$count` / `$sum` / `$avg`)를 표현합니다. 드라이버는 `DocumentQueryCodec`을 구현해 스펙을 find 칸(`DocumentFindSlots`), 파이프라인, 미리보기 텍스트로 렌더링하고 칸을 다시 스펙으로 파싱합니다. 표현할 수 없는 절은 `UnrepresentableClause`로 반환되므로 UI는 이를 덮어쓰지 않고 동기화 충돌을 표시합니다. UI는 `crates/dbflux_ui_document/src/document_builder/`와 `data_grid_panel/documents/builder/mod.rs`에 있습니다. Find는 칸을 쓰고 `browse_collection`으로 실행하므로 결과는 편집 가능하게 유지되고, Aggregate 모드(`DocumentFeatures::AGGREGATE`로도 게이트됨)는 집계 뷰에서 파이프라인을 실행하며 결과는 읽기 전용입니다. 저장된 문서 쿼리는 마이그레이션 `037_qry_saved_document_queries`(스펙은 JSON으로 저장, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo`, `SavedDocumentQueryManager`(`crates/dbflux_ui_base/src/saved_document_query_manager.rs`)를 사용합니다.
 
 ### 데이터 시각화
 
@@ -680,12 +685,13 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - 컬렉션/컨테이너 아래의 드라이버 소유 하위 리소스는 일반 `CollectionChildInfo` 메타데이터를 통해 게시됩니다. 사이드바는 이름, 필드 타입, 드라이버 ID로부터 드라이버별 하위 항목을 추론해서는 안 됩니다.
 - 루틴(함수, 프로시저, 집계, 창 함수)은 드라이버가 `ROUTINES` 기능을 설정하고 `schema_routines` 접점을 채울 때 스키마별 "Routines" 폴더로 나타납니다. UI는 이 폴더를 일반적으로 렌더링하며 어떤 드라이버도 특별 취급하지 않습니다.
 - 사이드바 독: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs`는 ToggleSidebar 명령(Ctrl+B)이 있는 접을 수 있고 크기 조절 가능한 사이드바를 제공합니다.
+- 연결 트리는 하나의 투영만 순회합니다. `SchemaSnapshot::database_layout`(`crates/dbflux_core/src/schema/listing.rs`)은 각 데이터베이스가 테이블과 뷰를 스키마 아래에 묶는지, 객체를 하나의 `ObjectFolder`(컬렉션 또는 측정값)에 나열하는지, 키스페이스인지를 알려 줍니다. 사이드바(`tree_builder/object_folder.rs`)는 이 설명으로 각 데이터베이스의 내용을 만들고, 컨텍스트 메뉴는 객체의 패싯과 같은 레이아웃을 읽습니다. 트리에 남은 유일한 카테고리 검사는 오브젝트 스토리지 연결의 버킷 목록으로, 스냅샷에서 읽지 않고 별도 경로로 가져옵니다.
 - 연결 트리: `crates/dbflux_core/src/connection/tree.rs`는 폴더와 연결을 트리 구조로 모델링하고, `tree_manager.rs`가 인메모리 관리를 담당합니다.
 
 ### 드라이버 체계
 
 - **드라이버 기능**: `crates/dbflux_core/src/driver/capabilities.rs`는 다음을 정의합니다:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (각각 편집기 모드, 자리 표시자, 주석 접두어를 전달합니다)
   - `DriverCapabilities`: PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC 등의 기능을 위한 `u64` 비트플래그
   - `DriverMetadata`: 정적 드라이버 정보(id, name, category, query_language, capabilities, icon)
@@ -697,6 +703,9 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - **드라이버/UI 분리**: UI와 앱 오케스트레이션 계층은 구체적인 드라이버 ID로 분기하거나 드라이버별 라우팅을 내장해서는 안 됩니다. 코어가 접점을 노출하고 드라이버가 이를 채웁니다.
   - `DriverMetadata`는 폭넓은 적응(`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`)을 담당합니다.
   - `CollectionPresentation`은 컬렉션/컨테이너가 어떻게 열리는지(예: 데이터 그리드 vs 이벤트 스트림) UI에 알려줍니다.
+  - `ObjectFacet`(`crates/dbflux_core/src/schema/facet.rs`)은 하나의 개체가 노출하는 패러다임(`Tabular`, `Document`, `Vector`, `TimeSeries`)을 나타냅니다. `CollectionPresentation`은 어떤 문서가 열릴지 고르고, facet은 데이터 문서 안의 뷰 모드, 게이트, 필터 문구를 고릅니다. `Connection::object_facets`(테이블)와 `Connection::collection_facets`(컬렉션)의 기본값은 `[Tabular]`이며 드라이버가 재정의합니다. PostgreSQL은 `json`/`jsonb` 열에 `Document`, TimescaleDB 하이퍼테이블에 `TimeSeries`, `vector(n)` 열마다 `Vector`를 추가합니다. MongoDB와 DynamoDB는 `[Document, Tabular]`를, InfluxDB는 `time` 위의 `TimeSeries`를 선언합니다. 와이어가 facet을 전달하지 않으므로 RPC 어댑터만 선언된 카테고리에서 facet을 도출합니다(`category_collection_facets`). `TimeSeries`는 행 옆에 시간 열 기준 차트를 열고, 테이블의 `Document`는 JSON 값이 펼쳐진 읽기 전용 문서 트리를 엽니다. 이 열거형은 exhaustive이므로 새 facet은 `DataViewMode::for_facet`(`crates/dbflux_ui_document/src/data_view.rs`)가 처리할 때까지 컴파일되지 않습니다. 최근접 이웃 SQL은 `QueryGenerator::generate_nearest_neighbors`를 통해 드라이버가 소유하며, 기본값은 미지원입니다.
+  - `category_presentation`(`crates/dbflux_components/src/category.rs`)은 카테고리별 대체 아이콘, 톤, 스키마 트리 컨테이너 레이블을 담는 단일 테이블입니다. 새 `DatabaseCategory`는 UI 크레이트마다 match를 두는 대신 여기에 arm 하나를 추가합니다.
+  - `DataStructure::ReservedGraph`와 `ReservedWideColumn`은 postcard 와이어 인덱스 3과 4를, `DatabaseCategory::ReservedGraph`와 `ReservedWideColumn`은 인덱스 3과 5를 차지하여 뒤따르는 변형이 드라이버 RPC 피어에 대해 인덱스를 유지하게 합니다. `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs`가 두 열거형의 인덱스를 고정합니다. 변형을 제거하거나 순서를 바꾸지 마십시오.
   - `CollectionChildInfo`는 드라이버가 UI 휴리스틱 없이 컬렉션/컨테이너 아래에 하위 소스를 게시할 수 있게 합니다.
   - `EventStreamTarget`는 워크스페이스/감사에 드라이버 지원 이벤트 스트림의 일반 식별자를 제공합니다.
   - `SourceContextSpec`는 드라이버가 `dbflux_ui`에 드라이버 이름을 하드코딩하지 않고 추가 쿼리 컨텍스트 컨트롤을 선언할 수 있게 합니다.
@@ -870,7 +879,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 
 ### 지원 구성 요소
 
-- 토스트 시스템: 성공/정보/경고 토스트에 대해 자동 닫힘(4초)이 있는 `crates/dbflux_ui_base/src/toast.rs` 자체 구현입니다. (`crates/dbflux_ui/src/ui/components/toast.rs`에 심(shim)이 있습니다.)
+- 토스트 시스템: 성공/정보/경고 토스트를 위한 설정 가능한 자동 닫힘을 갖춘 `crates/dbflux_ui_base/src/toast.rs` 자체 구현입니다(기본 8초, 경고 토스트는 그 두 배; Settings > General에서 설정).
 - 터널 인프라: `crates/dbflux_tunnel_core/`는 `TunnelConnector` 트레이트와 `ForwardingConnection<R>` 양방향 포워더를 갖춘 RAII `Tunnel`을 제공합니다.
 - 프록시 터널링: `crates/dbflux_proxy/`는 `TunnelConnector`를 통해 SOCKS5 및 HTTP CONNECT 프록시 터널을 구현합니다.
 - SSH 터널링: `crates/dbflux_ssh/src/lib.rs`는 `TunnelConnector`를 통해 SSH 터널을 구현하며, libssh2 안전성을 위해 모든 작업을 하나의 스레드로 직렬화합니다.

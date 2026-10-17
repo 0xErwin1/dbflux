@@ -30,9 +30,8 @@ use dbflux_core::observability::{
     EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
 };
 use dbflux_core::{
-    Connection, DangerousQueryKind, DbError, DriverCapabilities, ExecutionClassification,
-    HistoryEntry, NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult,
-    classify_query_for_language,
+    Connection, DangerousQueryKind, DbError, ExecutionClassification, HistoryEntry,
+    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult, classify_query_for_language,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -58,7 +57,7 @@ const UNRECORDED_LIMIT: usize = format::HISTORY_LIMIT;
 
 /// Where the console's commands run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NativeConsoleTarget {
+pub(crate) struct NativeConsoleTarget {
     pub profile_id: Uuid,
     /// Passed as `QueryRequest::database`, and named by the prompt.
     pub database: Option<String>,
@@ -68,7 +67,7 @@ pub struct NativeConsoleTarget {
 
 /// What the console tells its host.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NativeConsoleEvent {
+pub(crate) enum NativeConsoleEvent {
     /// The input was clicked; the host should take document focus and treat
     /// the keyboard as being in a text field.
     InputFocused,
@@ -107,7 +106,7 @@ enum ConsoleLayout {
     Tab,
 }
 
-pub struct NativeConsole {
+pub(crate) struct NativeConsole {
     app_state: Entity<AppStateEntity>,
     layout: ConsoleLayout,
     target: NativeConsoleTarget,
@@ -134,7 +133,7 @@ pub struct NativeConsole {
 impl EventEmitter<NativeConsoleEvent> for NativeConsole {}
 
 impl NativeConsole {
-    pub fn new(
+    pub(crate) fn new(
         target: NativeConsoleTarget,
         profile: NativeConsoleProfile,
         shortcut_context: ContextId,
@@ -223,14 +222,14 @@ impl NativeConsole {
 
     /// This console as the whole content of a tab: open from the start and
     /// never collapsed.
-    pub fn in_tab(mut self) -> Self {
+    pub(crate) fn in_tab(mut self) -> Self {
         self.layout = ConsoleLayout::Tab;
         self.open = true;
         self
     }
 
     /// Moves the keyboard into the input.
-    pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |state, cx| state.focus(window, cx));
         // The Focus event arrives with the next frame; until then the host
         // would keep reporting its own context and claim the letters typed.
@@ -245,18 +244,18 @@ impl NativeConsole {
 
     /// Whether the keyboard is in the console's input, so the host reports a
     /// text-entry context and bare letters are typed rather than run.
-    pub fn input_has_focus(&self) -> bool {
+    pub(crate) fn input_has_focus(&self) -> bool {
         self.open && self.input_focused
     }
 
-    pub fn has_pending(&self) -> bool {
+    pub(crate) fn has_pending(&self) -> bool {
         self.pending.is_some()
     }
 
     /// Shows or hides the console, moving focus into its input when it
     /// opens. Returns whether it is now open; on close the host takes focus
     /// back. A tab console stays open and only takes the focus.
-    pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.layout == ConsoleLayout::Docked {
             self.open = !self.open;
         }
@@ -458,7 +457,7 @@ impl NativeConsole {
 
     /// Runs the pending command with the ceiling its confirmation
     /// authorises (Run anyway, or Enter in the empty field).
-    pub fn confirm_pending(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn confirm_pending(&mut self, cx: &mut Context<Self>) {
         let Some(pending) = self.pending.take() else {
             return;
         };
@@ -489,7 +488,7 @@ impl NativeConsole {
     }
 
     /// Drops the pending command (Cancel, or Escape in the host).
-    pub fn cancel_pending(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn cancel_pending(&mut self, cx: &mut Context<Self>) {
         if let Some(pending) = self.pending.take() {
             self.remember_unrecorded(&pending.command);
             self.push_entry(
@@ -558,10 +557,7 @@ impl NativeConsole {
 
         // Drivers that cannot enforce a row limit refuse a request carrying
         // one, so the editor's cap only goes to drivers that honour it.
-        if connection
-            .metadata()
-            .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
-        {
+        if crate::code::enforces_request_row_limit(connection.as_ref()) {
             let limit = self.app_state.read(cx).general_settings().editor_row_limit;
             request = request.with_limit(u32::try_from(limit).unwrap_or(u32::MAX));
         }
@@ -672,6 +668,10 @@ impl NativeConsole {
             .text_size(FontSizes::XS)
             .when(docked, |header| {
                 header
+                    .role(Role::Button)
+                    // The header folds the console away, so it says whether the
+                    // console is currently open.
+                    .aria_expanded(open)
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle(window, cx);
@@ -935,6 +935,9 @@ fn execution_audit_event(
 
             if let Some(extra) = &result.metadata_extra {
                 for (key, value) in extra {
+                    if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
+                        continue;
+                    }
                     details.insert(key.clone(), value.clone());
                 }
             }

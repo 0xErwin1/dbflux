@@ -86,6 +86,11 @@ impl QueryBuilderPanel {
     /// and refreshes the mutation preview. Called by the column input subscription
     /// in `rebuild_assign_inputs`.
     pub fn set_assignment_column(&mut self, row_ix: usize, text: String, cx: &mut Context<Self>) {
+        // row_ix < state.assignments.len() is checked in the if-let chain.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "row_ix < state.assignments.len() is checked in the enclosing if-let chain"
+        )]
         if let Some(state) = self.mutation_state.as_mut()
             && row_ix < state.assignments.len()
         {
@@ -101,6 +106,11 @@ impl QueryBuilderPanel {
     /// variants. `Null` and `Default` are left untouched because their value
     /// inputs are hidden and no text can be entered for them.
     pub fn set_assignment_raw_text(&mut self, row_ix: usize, text: String, cx: &mut Context<Self>) {
+        // row_ix < state.assignments.len() is checked in the if-let chain.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "row_ix < state.assignments.len() is checked in the enclosing if-let chain"
+        )]
         if let Some(state) = self.mutation_state.as_mut()
             && row_ix < state.assignments.len()
         {

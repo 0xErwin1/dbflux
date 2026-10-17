@@ -39,7 +39,7 @@ use dbflux_components::modals::ModalFocus;
 use dbflux_core::{
     ColumnProjection, Connection, DEFAULT_PAGE_ROWS, DEFAULT_PROJECTION_BUDGET_BYTES,
     DEFAULT_PROJECTION_MAX_COLUMNS, DbError, EstimateScope, PartUnit, ProfileSource, ReadEstimate,
-    TableProfile, default_projection,
+    TableFact, TableFactKind, TableProfile, default_projection,
 };
 use dbflux_parquet::{
     CellPage, ParquetError, ParquetFile, ReadEstimate as FileReadEstimate, RowWindow, cells_of,
@@ -1590,7 +1590,7 @@ fn open_rows(
         return Ok(OpenedFile::Empty);
     }
 
-    let profile = table_profile(&file)?;
+    let profile = table_profile(&file, &version)?;
 
     let window = RowWindow::new(0, page_rows);
     let columns = default_columns(&file, &profile, window)?;
@@ -1612,19 +1612,47 @@ fn open_rows(
 
 /// The profile of `file` from its footer: each top-level column in schema
 /// order, the row count and the sizes of the whole file.
-fn table_profile(file: &ParquetFile) -> Result<TableProfile, ParquetError> {
-    let columns = column_statistics(file)?
-        .iter()
-        .map(column_profile)
-        .collect();
+fn table_profile(
+    file: &ParquetFile,
+    version: &SourceVersion,
+) -> Result<TableProfile, ParquetError> {
+    let statistics = column_statistics(file)?;
     let totals = file_statistics(file)?;
 
+    let mut sorted: Vec<(u16, &str)> = statistics
+        .iter()
+        .filter_map(|column| Some((column.sort_position?, column.name.as_ref())))
+        .collect();
+    sorted.sort_unstable();
+
+    let mut facts = vec![TableFact::new(
+        TableFactKind::RowGroups,
+        totals.row_group_count.to_string(),
+    )];
+
+    if !sorted.is_empty() {
+        let names = sorted
+            .iter()
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        facts.push(TableFact::new(TableFactKind::SortKey, names));
+    }
+
+    if let Some(writer) = &totals.created_by {
+        facts.push(TableFact::new(TableFactKind::CreatedBy, writer.as_ref()));
+    }
+
     Ok(TableProfile {
-        columns,
         row_count: Some(totals.row_count),
         total_compressed_bytes: Some(totals.compressed_bytes),
         total_uncompressed_bytes: Some(totals.uncompressed_bytes),
-        source_label: ProfileSource::FileFooter,
+        facts,
+        captured_at: version.modified_at(),
+        ..TableProfile::new(
+            statistics.iter().map(column_profile).collect(),
+            ProfileSource::FileFooter,
+        )
     })
 }
 
@@ -1665,11 +1693,13 @@ fn core_estimate(estimate: FileReadEstimate) -> ReadEstimate {
     ReadEstimate {
         total_bytes: estimate.total_bytes,
         per_column: estimate.per_column,
-        scope: EstimateScope::Parts {
+        scopes: vec![EstimateScope::Parts {
             touched: estimate.row_groups_touched,
             total: estimate.row_group_count,
             unit: PartUnit::RowGroups,
-        },
+        }],
+        rows: None,
+        exact: true,
     }
 }
 

@@ -1,7 +1,7 @@
 use super::context_menu::ExportMenuEntry;
 use super::{
-    ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
-    documents,
+    ChartRailTab, DataGridEvent, DataGridPanel, DataSource, EditState, GridFocusMode, GridState,
+    LimitedRowTotal, ToolbarFocus, documents,
 };
 use crate::data_grid_panel::filter_bar::{
     filter_input_has_error, render_relational_chip, render_relational_error,
@@ -74,7 +74,6 @@ struct RenderState {
     can_undo: bool,
     can_redo: bool,
     show_grouped_warning: bool,
-    show_rows_omitted_warning: bool,
     show_pk_warning: bool,
     show_builder_readonly_hint: bool,
     show_edit_toolbar: bool,
@@ -97,6 +96,9 @@ struct EditControls {
     dirty_count: usize,
     can_undo: bool,
     can_redo: bool,
+    /// The rows are similar rows: every action is drawn disabled and the
+    /// status says why.
+    neighbors: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,26 +109,107 @@ pub(super) enum DataGridContentMode {
     Table,
 }
 
-fn shows_rows_omitted_warning(result: &QueryResult) -> bool {
-    result.rows_truncated()
-}
+impl DataGridPanel {
+    /// What a query result without columns reports instead of an empty grid:
+    /// the statement ran, and how many rows it changed when the driver says.
+    pub(super) fn statement_outcome(&self) -> Option<String> {
+        if !self.is_statement_without_result_set() {
+            return None;
+        }
 
-#[cfg(test)]
-mod omission_tests {
-    use super::shows_rows_omitted_warning;
-    use dbflux_core::QueryResult;
+        let executed = dbflux_i18n::t!("document.data.grid.status.executed");
+        Some(match self.result.affected_rows {
+            Some(count) => format!("{executed} · {}", crate::labels::affected_rows_label(count)),
+            None => executed,
+        })
+    }
 
-    #[test]
-    fn banner_follows_current_result_set_even_when_empty() {
-        let mut first = QueryResult::empty();
-        let mut second = QueryResult::empty();
-        second.set_rows_truncated(true);
-        assert!(!shows_rows_omitted_warning(&first));
-        assert!(shows_rows_omitted_warning(&second));
-        first = second;
-        assert!(shows_rows_omitted_warning(&first));
-        first = QueryResult::empty();
-        assert!(!shows_rows_omitted_warning(&first));
+    /// The footer's row figure: the rows a statement without columns
+    /// changed, otherwise the rows it returned.
+    pub(super) fn rows_footer(&self, row_count: usize) -> String {
+        if self.nearest_neighbors.is_some() {
+            let total = match &self.source {
+                DataSource::Table { total_rows, .. } => *total_rows,
+                _ => None,
+            };
+            return crate::labels::nearest_rows_label(row_count.saturating_sub(1), total);
+        }
+
+        match self.result.affected_rows {
+            Some(count) if self.is_statement_without_result_set() => {
+                crate::labels::affected_rows_label(count)
+            }
+            _ => self.row_count_footer(row_count),
+        }
+    }
+
+    /// The server notices the result carries, one line each, as
+    /// "WARNING: there is no transaction in progress".
+    pub(super) fn server_notice_lines(&self) -> Vec<String> {
+        self.result
+            .server_notices()
+            .into_iter()
+            .map(|notice| format!("{}: {}", notice.severity, notice.message))
+            .collect()
+    }
+
+    /// The notices drawn in the body, under the statement line. Every other
+    /// result carries them in the footer, so each notice shows once.
+    pub(super) fn body_notice_lines(&self) -> Vec<String> {
+        if self.is_statement_without_result_set() {
+            self.server_notice_lines()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// A query result that is a table without columns: a statement such as
+    /// `UPDATE` or `COMMIT` that returned no result set.
+    fn is_statement_without_result_set(&self) -> bool {
+        matches!(self.source, DataSource::QueryResult { .. })
+            && self.result.shape == dbflux_core::QueryResultShape::Table
+            && self.result.columns.is_empty()
+    }
+
+    /// The footer's row count. A result the row limit cut short says it holds
+    /// only the first rows, and how many there are in all once counted.
+    fn row_count_footer(&self, row_count: usize) -> String {
+        if !self.result.rows_truncated() {
+            return crate::labels::row_count_label(row_count);
+        }
+
+        match self.limited_rows.total {
+            LimitedRowTotal::Known(total) => {
+                crate::labels::limited_row_count_of_total_label(row_count, total)
+            }
+            LimitedRowTotal::Unknown | LimitedRowTotal::Counting => {
+                crate::labels::limited_row_count_label(row_count)
+            }
+        }
+    }
+
+    pub(super) fn offers_count_rows(&self) -> bool {
+        self.result.rows_truncated()
+            && self.limited_rows.actions.count
+            && self.limited_rows.total == LimitedRowTotal::Unknown
+    }
+
+    pub(super) fn offers_load_all_rows(&self) -> bool {
+        self.result.rows_truncated() && self.limited_rows.actions.load_all
+    }
+
+    pub(super) fn request_count_rows(&mut self, cx: &mut Context<Self>) {
+        if self.offers_count_rows() {
+            self.limited_rows.total = LimitedRowTotal::Counting;
+            cx.emit(DataGridEvent::CountRowsRequested);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn request_load_all_rows(&mut self, cx: &mut Context<Self>) {
+        if self.offers_load_all_rows() {
+            cx.emit(DataGridEvent::LoadAllRowsRequested);
+        }
     }
 }
 
@@ -150,8 +233,15 @@ pub(super) fn content_mode_for_result(
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.process_pending_actions(window, cx);
+        self.apply_pending_neighbor_controls(window, cx);
         self.flush_aggregate_json(window, cx);
+        self.ensure_table_view_controls(window, cx);
         let st = self.derive_render_state(cx);
+
+        // The Columns and Partitions views of a table replace the filter row,
+        // the grid and the status bar; the header with the tabs stays.
+        let table_side_view =
+            !st.document_collection && self.table_tab() != super::table_views::TableTab::Data;
 
         // The Schema view of a collection shows only its sample toolbar and
         // field table (IslDocSchema): no query bar and no documents footer.
@@ -176,31 +266,50 @@ impl Render for DataGridPanel {
                             .child(self.render_document_view_row(cx))
                     })
             })
-            .when(st.show_data_toolbar && !st.document_collection, |d| {
-                let edit_controls = st.show_edit_toolbar.then_some(EditControls {
-                    dirty_count: st.dirty_count,
-                    can_undo: st.can_undo,
-                    can_redo: st.can_redo,
-                });
+            .when(
+                st.show_data_toolbar && !st.document_collection && table_side_view,
+                |d| d.child(self.render_table_header(None, &st.theme, cx)),
+            )
+            .when(
+                st.show_data_toolbar && !st.document_collection && !table_side_view,
+                |d| {
+                    let neighbors = self.nearest_neighbors.is_some();
+                    let edit_controls = st.show_edit_toolbar.then_some(EditControls {
+                        dirty_count: if neighbors { 0 } else { st.dirty_count },
+                        can_undo: st.can_undo && !neighbors,
+                        can_redo: st.can_redo && !neighbors,
+                        neighbors,
+                    });
 
-                d.child(self.render_toolbar(
-                    &st.filter_keyword,
-                    &st.filter_input,
-                    st.filter_has_value,
-                    &st.limit_input,
-                    st.show_toolbar_focus,
-                    st.toolbar_focus,
-                    edit_controls,
-                    &st.theme,
-                    cx,
-                ))
+                    d.child(self.render_toolbar(
+                        &st.filter_keyword,
+                        &st.filter_input,
+                        st.filter_has_value,
+                        &st.limit_input,
+                        st.show_toolbar_focus,
+                        st.toolbar_focus,
+                        edit_controls,
+                        &st.theme,
+                        cx,
+                    ))
+                },
+            )
+            .when(
+                st.show_data_toolbar && self.shows_table_read_estimate(),
+                |d| d.children(self.render_table_read_estimate(cx)),
+            )
+            .when(!table_side_view, |d| {
+                d.child(self.render_warning_banners(&st))
             })
-            .child(self.render_warning_banners(&st))
             .when(st.show_panel_controls && st.shows_content_controls, |d| {
                 d.child(self.render_panel_controls_header(&st, cx))
             })
-            .child(self.render_content_body(&st, cx))
-            .when(!schema_view && !aggregate_view, |d| {
+            .child(if table_side_view {
+                self.render_table_view_body(cx)
+            } else {
+                self.render_content_body(&st, cx)
+            })
+            .when(!schema_view && !aggregate_view && !table_side_view, |d| {
                 d.child(self.render_status_bar(
                     st.row_count,
                     &st.exec_time,
@@ -301,7 +410,9 @@ impl DataGridPanel {
         if std::mem::take(&mut self.pending.refresh) {
             if std::mem::take(&mut self.pending.refresh_keeps_edits) {
                 self.refresh_keeping_edits(window, cx);
-            } else {
+            } else if !self.rerun_nearest_neighbors(cx) {
+                // An auto-refresh tick over similar rows reads them again;
+                // every other source reads its page.
                 self.refresh(window, cx);
             }
         }
@@ -456,15 +567,19 @@ impl DataGridPanel {
             && shows_table_content
             && !is_editable
             && !is_grouped_result
-            && !self.pk_details_pending
-            && self.builder.current_visual_spec.is_none();
+            && !self.primary_key_still_resolving()
+            && self.builder.current_visual_spec.is_none()
+            && self.nearest_neighbors.is_none();
         let show_builder_readonly_hint = is_table_view
             && shows_table_content
             && !is_editable
             && !is_grouped_result
             && self.builder.current_visual_spec.is_some()
             && self.builder.builder_editable_binding.is_none();
-        let show_edit_toolbar = is_table_view && has_columns && is_editable;
+        // Similar rows keep the edit controls drawn, disabled, so the header
+        // does not change shape when the search lands.
+        let show_edit_toolbar =
+            is_table_view && has_columns && (is_editable || self.nearest_neighbors.is_some());
         let result_view_mode = self.chrome.result_view_mode;
         let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
 
@@ -498,7 +613,6 @@ impl DataGridPanel {
             can_undo,
             can_redo,
             show_grouped_warning,
-            show_rows_omitted_warning: shows_rows_omitted_warning(&self.result),
             show_pk_warning,
             show_builder_readonly_hint,
             show_edit_toolbar,
@@ -530,24 +644,6 @@ impl DataGridPanel {
     /// always emitted so the call site never needs a conditional.
     fn render_warning_banners(&self, st: &RenderState) -> impl IntoElement {
         div()
-            .when(st.show_rows_omitted_warning, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .bg(st.theme.warning.opacity(0.15))
-                        .border_b_1()
-                        .border_color(st.theme.warning.opacity(0.3))
-                        .child(Icon::new(AppIcon::TriangleAlert).small().warning())
-                        .child(
-                            Text::caption(dbflux_i18n::t!("document.data.grid.rows_omitted"))
-                                .warning(),
-                        ),
-                )
-            })
             .when(st.show_grouped_warning, |d| {
                 d.child(
                     div()
@@ -573,6 +669,7 @@ impl DataGridPanel {
             .when(st.show_pk_warning, |d| {
                 d.child(
                     div()
+                        .debug_selector(|| "missing-primary-key-banner".to_string())
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
@@ -797,7 +894,26 @@ impl DataGridPanel {
                             .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
                             .into_any_element()
                     } else {
-                        Text::caption(dbflux_i18n::t!("document.data.grid.empty"))
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(Spacing::XS)
+                            .child(Text::caption(self.statement_outcome().unwrap_or_else(
+                                || dbflux_i18n::t!("document.data.grid.empty"),
+                            )))
+                            .children(self.body_notice_lines().into_iter().map(|line| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(Spacing::XS)
+                                    .child(
+                                        Icon::new(AppIcon::TriangleAlert)
+                                            .size(ui(12.0))
+                                            .color(theme.warning),
+                                    )
+                                    .child(Text::caption(line))
+                            }))
                             .into_any_element()
                     })
             },
@@ -825,31 +941,27 @@ impl DataGridPanel {
     /// driver logo and connection name, the database and schema, then the
     /// table itself with its column and row counts. `None` for query results.
     pub(super) fn source_breadcrumb(&self, cx: &App) -> Option<Breadcrumb> {
-        let (profile_id, database, schema, name, total_rows) = match &self.source {
+        let (profile_id, database, schema, name) = match &self.source {
             DataSource::Table {
                 profile_id,
                 database,
                 table,
-                total_rows,
                 ..
             } => (
                 *profile_id,
                 database.clone(),
                 table.schema.clone(),
                 table.name.clone(),
-                *total_rows,
             ),
             DataSource::Collection {
                 profile_id,
                 collection,
-                total_docs,
                 ..
             } => (
                 *profile_id,
                 Some(collection.database.clone()),
                 None,
                 collection.name.clone(),
-                *total_docs,
             ),
             DataSource::QueryResult { .. } => return None,
         };
@@ -897,9 +1009,28 @@ impl DataGridPanel {
 
         segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Table, None));
 
-        let meta = crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows);
+        Some(Breadcrumb::new(segments).meta(self.source_breadcrumb_meta()))
+    }
 
-        Some(Breadcrumb::new(segments).meta(meta))
+    /// The column and row counts beside a table's breadcrumb.
+    pub(super) fn source_breadcrumb_meta(&self) -> String {
+        // Similar rows count what is on screen: the neighbors, without the
+        // anchor row pinned above them.
+        if self.nearest_neighbors.is_some() {
+            let neighbors = self.result.rows.len().saturating_sub(1) as u64;
+            return crate::labels::breadcrumb_meta_label(
+                self.result.columns.len(),
+                Some(neighbors),
+            );
+        }
+
+        let total_rows = match &self.source {
+            DataSource::Table { total_rows, .. } => *total_rows,
+            DataSource::Collection { total_docs, .. } => *total_docs,
+            DataSource::QueryResult { .. } => None,
+        };
+
+        crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows)
     }
 }
 
@@ -1021,6 +1152,9 @@ impl DataGridPanel {
             })
             .when(self.collection_tabs(cx).len() > 1, |header| {
                 header.child(self.render_collection_tabs(cx))
+            })
+            .when(self.table_tabs().len() > 1, |header| {
+                header.child(self.render_table_tabs(cx))
             })
             .when_some(self.render_document_builder_toggle(cx), |header, toggle| {
                 header.child(toggle)
@@ -1162,6 +1296,12 @@ impl DataGridPanel {
             .limit_focused(limit_field_focused)
             .error(toolbar_has_filter_error);
 
+        // Similar rows put the neighbor bar in this row, at the same height,
+        // so the grid under it does not move; WHERE, LIMIT, the view toggle,
+        // the column picker and the builder do not apply to them.
+        let neighbor_search = self.neighbor_bar_search().cloned();
+        let filter_shown = neighbor_search.is_none();
+
         div()
             .flex()
             .flex_shrink_0()
@@ -1171,20 +1311,29 @@ impl DataGridPanel {
             .px(TableViewMetrics::FILTER_ROW_PADDING_X)
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .when(self.builder_notice_visible(), |d| {
-                        d.child(self.render_builder_notice(theme, cx))
-                    })
-                    .child(field)
-                    .when_some(toolbar_error, |d, err| d.child(err)),
-            )
-            .when(self.can_toggle_view(), |d| {
+            .when(filter_shown, |row| {
+                row.debug_selector(|| "data-grid-filter-controls".to_string())
+            })
+            .when_some(neighbor_search, |row, search| {
+                row.debug_selector(|| "nearest-neighbors-bar".to_string())
+                    .child(self.render_neighbor_bar(&search, theme, cx))
+            })
+            .when(filter_shown, |row| {
+                row.child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .when(self.builder_notice_visible(), |d| {
+                            d.child(self.render_builder_notice(theme, cx))
+                        })
+                        .child(field)
+                        .when_some(toolbar_error, |d, err| d.child(err)),
+                )
+            })
+            .when(filter_shown && self.can_toggle_view(cx), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {
                     DataViewMode::Table => AppIcon::Table,
@@ -1210,7 +1359,10 @@ impl DataGridPanel {
                         })),
                 )
             })
-            .when(self.can_open_builder(cx), |d| {
+            .when(filter_shown && self.shows_table_column_picker(), |d| {
+                d.children(self.table_views.picker.clone())
+            })
+            .when(filter_shown && self.can_open_builder(cx), |d| {
                 d.child(builder_button(cx.listener(|this, _, window, cx| {
                     this.open_query_builder(window, cx);
                 })))
@@ -1305,6 +1457,25 @@ impl DataGridPanel {
         } else {
             theme.muted_foreground
         };
+        let (status_icon, status_icon_color, status_label) = if controls.neighbors {
+            (
+                AppIcon::Lock,
+                theme.muted_foreground,
+                dbflux_i18n::t!("document.data.grid.nearest.read_only"),
+            )
+        } else if has_changes {
+            (
+                AppIcon::CircleAlert,
+                theme.warning,
+                crate::labels::unsaved_changes_label(controls.dirty_count),
+            )
+        } else {
+            (
+                AppIcon::Check,
+                theme.success,
+                crate::labels::unsaved_changes_label(controls.dirty_count),
+            )
+        };
 
         div()
             .flex()
@@ -1319,19 +1490,11 @@ impl DataGridPanel {
                     .text_size(TableViewMetrics::STATUS_FONT)
                     .text_color(status_color)
                     .child(
-                        Icon::new(if has_changes {
-                            AppIcon::CircleAlert
-                        } else {
-                            AppIcon::Check
-                        })
-                        .size(TableViewMetrics::STATUS_ICON)
-                        .color(if has_changes {
-                            theme.warning
-                        } else {
-                            theme.success
-                        }),
+                        Icon::new(status_icon)
+                            .size(TableViewMetrics::STATUS_ICON)
+                            .color(status_icon_color),
                     )
-                    .child(crate::labels::unsaved_changes_label(controls.dirty_count)),
+                    .child(status_label),
             )
             .child(
                 div()
@@ -2175,6 +2338,10 @@ impl DataGridPanel {
         use dbflux_components::primitives::Text;
         use gpui_component::Sizable;
 
+        #[expect(
+            clippy::expect_used,
+            reason = "the sole call site renders this overlay only when pending_collection_chart_save.is_some(); this function itself does not re-check"
+        )]
         let name_input = self
             .pending_collection_chart_save
             .as_ref()
@@ -3492,9 +3659,11 @@ impl DataGridPanel {
                 .child(label)
         };
 
-        let pager_arrow = |id: &'static str, icon: AppIcon, enabled: bool| {
+        let pager_arrow = |id: &'static str, icon: AppIcon, name: String, enabled: bool| {
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(name)
                 .flex()
                 .items_center()
                 .text_color(muted)
@@ -3523,28 +3692,34 @@ impl DataGridPanel {
                     .gap(ResultMetrics::PAGER_GAP)
                     .font_family(dbflux_components::fonts::editor_family(cx))
                     .child(
-                        pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
+                        pager_arrow(
+                            "prev-page",
+                            AppIcon::ChevronLeft,
+                            dbflux_i18n::t!("document.results.actions.results_prev_page"),
                             can_prev,
-                            |arrow| {
-                                arrow.on_click(cx.listener(|this, _, window, cx| {
-                                    this.go_to_prev_page(window, cx);
-                                }))
-                            },
-                        ),
+                        )
+                        .when(can_prev, |arrow| {
+                            arrow.on_click(cx.listener(|this, _, window, cx| {
+                                this.go_to_prev_page(window, cx);
+                            }))
+                        }),
                     )
                     .child(div().text_color(strong).child(page.to_string()))
                     .when_some(total_pages, |pager, total| {
                         pager.child(format!("/ {}", total))
                     })
                     .child(
-                        pager_arrow("next-page", AppIcon::ChevronRight, can_next).when(
+                        pager_arrow(
+                            "next-page",
+                            AppIcon::ChevronRight,
+                            dbflux_i18n::t!("document.results.actions.results_next_page"),
                             can_next,
-                            |arrow| {
-                                arrow.on_click(cx.listener(|this, _, window, cx| {
-                                    this.go_to_next_page(window, cx);
-                                }))
-                            },
-                        ),
+                        )
+                        .when(can_next, |arrow| {
+                            arrow.on_click(cx.listener(|this, _, window, cx| {
+                                this.go_to_next_page(window, cx);
+                            }))
+                        }),
                     )
             });
 
@@ -3598,9 +3773,54 @@ impl DataGridPanel {
                 if self.collection.raw.is_some() {
                     self.document_count_footer()
                 } else {
-                    crate::labels::row_count_label(row_count)
+                    self.rows_footer(row_count)
                 },
             ))
+            // A result with rows has no room for the notices in its body, so
+            // the footer carries them, cut to the space it has.
+            .when(!self.is_statement_without_result_set(), |d| {
+                let notices = self.server_notice_lines();
+                d.when(!notices.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .id("footer-server-notices")
+                            .flex()
+                            .min_w_0()
+                            .items_center()
+                            .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                            .child(
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .size(ResultMetrics::FOOTER_ICON)
+                                    .color(cx.theme().warning),
+                            )
+                            .child(div().min_w_0().truncate().child(notices.join(" · "))),
+                    )
+                })
+            })
+            .when(self.offers_count_rows(), |d| {
+                d.child(
+                    Button::new("footer-count-rows", crate::labels::count_rows_label())
+                        .ghost()
+                        .icon(AppIcon::Hash)
+                        .icon_only()
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_count_rows(cx);
+                        })),
+                )
+            })
+            .when(self.offers_load_all_rows(), |d| {
+                d.child(
+                    Button::new("footer-load-all-rows", crate::labels::load_all_rows_label())
+                        .ghost()
+                        .icon(AppIcon::FileScan)
+                        .icon_only()
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_load_all_rows(cx);
+                        })),
+                )
+            })
             .when(shows_read_only, |d| {
                 d.child(
                     footer_item(
@@ -4003,6 +4223,9 @@ mod tests {
         "document.data.grid.views.raw",
         "document.data.grid.views.truncated",
         "document.data.grid.views.empty",
+        "document.data.grid.status.executed",
+        "document.data.grid.status.affected_rows.one",
+        "document.data.grid.status.affected_rows.many",
         "document.data.grid.status.rows.one",
         "document.data.grid.status.rows.many",
         "document.data.grid.status.pending_changes.one",

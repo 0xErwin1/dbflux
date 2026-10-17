@@ -219,6 +219,78 @@ pub struct ScriptsDirectory {
     external: Vec<MountedScriptRoot>,
 }
 
+/// The identity of a just-written entry.
+///
+/// Rollback acts on the entry's pathname, so a replacement at that pathname
+/// between the write and the rollback would otherwise be removed or renamed.
+/// Comparing this id right before the rollback keeps it from acting on a
+/// replacement. It cannot make the check and the rollback one step, which
+/// still needs `openat` with `O_NOFOLLOW` for every component.
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EntryId {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(unix)]
+impl EntryId {
+    /// The identity described by `metadata`.
+    fn of(metadata: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        }
+    }
+
+    /// The identity of the entry at `path`, following no symlink.
+    fn at(path: &Path) -> Result<Self, DbError> {
+        fs::symlink_metadata(path)
+            .map(|metadata| Self::of(&metadata))
+            .map_err(DbError::IoError)
+    }
+
+    /// Whether `path` still names this entry.
+    fn matches(self, path: &Path) -> bool {
+        Self::at(path).is_ok_and(|current| current == self)
+    }
+}
+
+/// Without a portable inode identity, a rollback keeps its pathname behavior.
+#[cfg(not(unix))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EntryId;
+
+#[cfg(not(unix))]
+impl EntryId {
+    fn of(_metadata: &fs::Metadata) -> Self {
+        Self
+    }
+
+    fn at(_path: &Path) -> Result<Self, DbError> {
+        Ok(Self)
+    }
+
+    fn matches(self, path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok()
+    }
+}
+
+/// What a write just put on disk, so a write that landed outside an external
+/// root can be undone.
+#[derive(Clone, Copy)]
+enum WrittenEntry<'a> {
+    /// A file created empty (`create_file`) or copied (`import`).
+    File(EntryId),
+    /// A folder created empty (`create_folder`).
+    Folder(EntryId),
+    /// An entry moved into place (`rename`, `move_entry`); the move is undone
+    /// by renaming it back to where it came from.
+    Moved { from: &'a Path, id: EntryId },
+}
+
 /// The cached tree of one root, borrowed for an in-memory edit.
 struct RootTree<'a> {
     root: &'a Path,
@@ -283,8 +355,12 @@ impl ScriptsDirectory {
         Ok(hooks_dir)
     }
 
+    /// Whether there is nothing to list: no script in the managed root and no
+    /// external folder. An external folder is a node of its own in the
+    /// sidebar, so it counts even while it is scanning, unreadable or holds no
+    /// script yet.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.external.is_empty()
     }
 
     /// Registers external roots without scanning them.
@@ -468,11 +544,88 @@ impl ScriptsDirectory {
         if resolved.starts_with(root) {
             Ok(())
         } else {
-            Err(io_error(format!(
-                "{} resolves outside the scripts folder {}",
-                dir.display(),
-                root.display()
-            )))
+            Err(io_error(resolved_outside_message(dir, root)))
+        }
+    }
+
+    /// Confirms a write inside an external root still resolves inside it.
+    ///
+    /// The check before a write and the write itself cannot be one step with
+    /// std, so a directory on the way can be swapped for a symlink and send the
+    /// write outside the root. Re-resolving the folder the entry was written
+    /// into, right after the write, turns that into a detected, reverted write:
+    /// the entry just created is removed (a move is renamed back), and the
+    /// caller reports the same error [`Self::ensure_contained`] uses.
+    ///
+    /// The folder, not the entry: a moved symlink may dangle or point outside
+    /// while the entry itself is still inside the root, and a write can only be
+    /// redirected through a component above it. A folder that does not resolve
+    /// is treated as outside, so a failed resolution reverts the write instead
+    /// of leaving it in place.
+    ///
+    /// The managed root is exempt, like `ensure_contained`: symlinks the user
+    /// placed in DBFlux's own folder keep working.
+    fn ensure_contained_after_write(
+        &self,
+        root: &Path,
+        path: &Path,
+        written: WrittenEntry<'_>,
+    ) -> Result<(), DbError> {
+        if root == self.root {
+            return Ok(());
+        }
+
+        let inside = match path.parent() {
+            Some(parent) => match fs::canonicalize(parent) {
+                Ok(resolved) => resolved.starts_with(root),
+                Err(error) => {
+                    log::warn!(
+                        "Could not resolve {} after writing {}: {}",
+                        parent.display(),
+                        path.display(),
+                        error
+                    );
+                    false
+                }
+            },
+            None => false,
+        };
+
+        if inside {
+            return Ok(());
+        }
+
+        // Roll back only the entry this write created, never whatever an
+        // attacker may have put at the same path in the meantime.
+        let still_written = match written {
+            WrittenEntry::File(id) | WrittenEntry::Folder(id) => id.matches(path),
+            WrittenEntry::Moved { id, .. } => id.matches(path),
+        };
+
+        if !still_written {
+            log::warn!(
+                "Not undoing the write past {}: the entry there is no longer the one just written",
+                path.display()
+            );
+            return Err(io_error(resolved_outside_message(path, root)));
+        }
+
+        let undo = match written {
+            WrittenEntry::File(_) => remove_file_or_link(path),
+            WrittenEntry::Folder(_) => fs::remove_dir(path),
+            WrittenEntry::Moved { from, .. } => fs::rename(path, from),
+        };
+
+        match undo {
+            Ok(()) => Err(io_error(resolved_outside_message(path, root))),
+            Err(undo_error) => Err(DbError::IoError(std::io::Error::new(
+                undo_error.kind(),
+                format!(
+                    "{}; undoing the write past it failed: {}",
+                    resolved_outside_message(path, root),
+                    undo_error
+                ),
+            ))),
         }
     }
 
@@ -640,11 +793,26 @@ impl ScriptsDirectory {
         };
 
         let path = dir.join(&filename);
-        if path.exists() {
-            return Err(io_error(format!("File already exists: {}", filename)));
-        }
 
-        fs::write(&path, "").map_err(DbError::IoError)?;
+        // `create_new` refuses any existing entry, a dangling symlink included,
+        // and never follows a link in the final component the way `fs::write`
+        // would.
+        let created = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::AlreadyExists => {
+                    io_error(format!("File already exists: {}", filename))
+                }
+                _ => DbError::IoError(error),
+            })?;
+        // The handle's metadata is the entry just created, whatever a later
+        // replacement puts at its pathname.
+        let id = EntryId::of(&created.metadata().map_err(DbError::IoError)?);
+        drop(created);
+
+        self.ensure_contained_after_write(&root, &path, WrittenEntry::File(id))?;
         self.record_insert(&path, false);
         Ok(path)
     }
@@ -657,11 +825,25 @@ impl ScriptsDirectory {
         self.ensure_contained(&root, &dir)?;
 
         let path = dir.join(name);
-        if path.exists() {
-            return Err(io_error(format!("Folder already exists: {}", name)));
-        }
 
-        fs::create_dir_all(&path).map_err(DbError::IoError)?;
+        // Only the managed root can be missing parents; an external root's
+        // parent was already resolved and must exist. Recursive creation stays
+        // off the external-root path, where a swapped component could have it
+        // create directories outside the root.
+        if root == self.root {
+            fs::create_dir_all(&dir).map_err(DbError::IoError)?;
+        }
+        // The last component goes through `create_dir` alone: it refuses any
+        // existing entry, a dangling symlink included.
+        fs::create_dir(&path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                io_error(format!("Folder already exists: {}", name))
+            }
+            _ => DbError::IoError(error),
+        })?;
+
+        let id = EntryId::at(&path)?;
+        self.ensure_contained_after_write(&root, &path, WrittenEntry::Folder(id))?;
         self.record_insert(&path, true);
         Ok(path)
     }
@@ -670,6 +852,12 @@ impl ScriptsDirectory {
     ///
     /// A root itself cannot be renamed: renaming an external root would rename
     /// the user's folder, which is not DBFlux's to rename.
+    ///
+    /// The destination is checked and then renamed onto, which is two steps:
+    /// std has no portable no-replace rename, so a race between them can still
+    /// replace a destination that appears in between. The check uses
+    /// `symlink_metadata`, so a dangling symlink counts as an existing entry
+    /// instead of a free name the rename would replace.
     pub fn rename(&mut self, old_path: &Path, new_name: &str) -> Result<PathBuf, DbError> {
         if new_name.contains('/') || new_name.contains('\\') || new_name.contains("..") {
             return Err(io_error(
@@ -689,11 +877,17 @@ impl ScriptsDirectory {
         self.ensure_contained(&root, parent)?;
 
         let new_path = parent.join(new_name);
-        if new_path.exists() {
+        if fs::symlink_metadata(&new_path).is_ok() {
             return Err(io_error(format!("Already exists: {}", new_name)));
         }
 
+        let id = EntryId::at(old_path)?;
         fs::rename(old_path, &new_path).map_err(DbError::IoError)?;
+        self.ensure_contained_after_write(
+            &root,
+            &new_path,
+            WrittenEntry::Moved { from: old_path, id },
+        )?;
         self.record_move(old_path, &new_path);
         Ok(new_path)
     }
@@ -729,6 +923,12 @@ impl ScriptsDirectory {
     ///
     /// Moving between roots is refused: it would move a file out of the user's
     /// folder (or into it), and across filesystems `rename` cannot do it anyway.
+    ///
+    /// The destination is checked and then renamed onto, which is two steps:
+    /// std has no portable no-replace rename, so a race between them can still
+    /// replace a destination that appears in between. The check uses
+    /// `symlink_metadata`, so a dangling symlink counts as an existing entry
+    /// instead of a free name the rename would replace.
     pub fn move_entry(&mut self, source: &Path, target_dir: &Path) -> Result<PathBuf, DbError> {
         let source_root = self.require_owning_root(source, "Source")?;
         let target_root = self.require_owning_root(target_dir, "Target")?;
@@ -763,13 +963,23 @@ impl ScriptsDirectory {
             self.ensure_contained(&source_root, parent)?;
         }
 
-        if dest.exists() {
+        if fs::symlink_metadata(&dest).is_ok() {
             return Err(io_error(format!("Already exists: {}", dest.display())));
         }
 
         self.ensure_contained(&target_root, target_dir)?;
-        fs::create_dir_all(target_dir).map_err(DbError::IoError)?;
+        // As in `create_folder`: an external root's target already exists, and
+        // recursive creation stays off that path.
+        if target_root == self.root {
+            fs::create_dir_all(target_dir).map_err(DbError::IoError)?;
+        }
+        let id = EntryId::at(source)?;
         fs::rename(source, &dest).map_err(DbError::IoError)?;
+        self.ensure_contained_after_write(
+            &target_root,
+            &dest,
+            WrittenEntry::Moved { from: source, id },
+        )?;
         self.record_move(source, &dest);
         Ok(dest)
     }
@@ -786,14 +996,58 @@ impl ScriptsDirectory {
             .ok_or_else(|| io_error("Source has no filename".to_string()))?;
 
         let dest = dir.join(filename);
-        if dest.exists() {
-            return Err(io_error(format!(
-                "File already exists: {}",
-                filename.to_string_lossy()
-            )));
-        }
 
-        fs::copy(source, &dest).map_err(DbError::IoError)?;
+        let mut source_file = fs::File::open(source).map_err(DbError::IoError)?;
+        // `create_new` refuses any existing entry, a dangling symlink included,
+        // and never writes through a link at the destination the way `fs::copy`
+        // would.
+        let mut destination = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::AlreadyExists => io_error(format!(
+                    "File already exists: {}",
+                    filename.to_string_lossy()
+                )),
+                _ => DbError::IoError(error),
+            })?;
+
+        if let Err(error) = std::io::copy(&mut source_file, &mut destination) {
+            // The partial copy is the entry the handle holds, whatever a later
+            // replacement puts at its pathname; it is removed only while it is
+            // still that entry.
+            let id = match destination.metadata() {
+                Ok(metadata) => Some(EntryId::of(&metadata)),
+                Err(metadata_error) => {
+                    log::warn!(
+                        "Could not identify the incomplete copy {}: {}",
+                        dest.display(),
+                        metadata_error
+                    );
+                    None
+                }
+            };
+            // Close the handle before removing the partial copy: Windows
+            // refuses to remove a file that is still open.
+            drop(destination);
+            if id.is_some_and(|id| id.matches(&dest))
+                && let Err(cleanup) = fs::remove_file(&dest)
+            {
+                log::warn!(
+                    "Failed to remove the incomplete copy {}: {}",
+                    dest.display(),
+                    cleanup
+                );
+            }
+            return Err(DbError::IoError(error));
+        }
+        // The handle's metadata is the entry just copied, whatever a later
+        // replacement puts at its pathname.
+        let id = EntryId::of(&destination.metadata().map_err(DbError::IoError)?);
+        drop(destination);
+
+        self.ensure_contained_after_write(&root, &dest, WrittenEntry::File(id))?;
         self.record_insert(&dest, false);
         Ok(dest)
     }
@@ -879,6 +1133,16 @@ impl ScriptsDirectory {
 
 fn io_error(message: String) -> DbError {
     DbError::IoError(std::io::Error::other(message))
+}
+
+/// The message for a path that resolves outside the root it was written to,
+/// shared by the pre-write check and the post-write one.
+fn resolved_outside_message(path: &Path, root: &Path) -> String {
+    format!(
+        "{} resolves outside the scripts folder {}",
+        path.display(),
+        root.display()
+    )
 }
 
 /// Whether one of the two folders contains the other (or they are the same).
@@ -1264,6 +1528,15 @@ mod tests {
 
     fn external_path(dir: &ScriptsDirectory, id: Uuid) -> PathBuf {
         dir.external_root(id).unwrap().path().to_path_buf()
+    }
+
+    #[test]
+    fn a_registered_external_folder_makes_the_directory_non_empty() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        assert!(!dir.is_empty());
+
+        dir.remove_external_root(id);
+        assert!(dir.is_empty(), "no scripts and no external folder");
     }
 
     #[test]
@@ -1704,6 +1977,273 @@ mod tests {
             .is_err()
         );
         assert!(!outside.path().join("x.sql").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_not_followed_by_create_file_in_an_external_root() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("x.sql");
+        std::os::unix::fs::symlink(&outside_file, root.join("x.sql")).unwrap();
+
+        let error = dir
+            .create_file(Some(&root), "x", "sql")
+            .expect_err("a dangling symlink is an existing entry, not a free name");
+
+        assert!(error.to_string().contains("File already exists"), "{error}");
+        assert!(!outside_file.exists(), "nothing is written past the link");
+        assert!(
+            fs::symlink_metadata(root.join("x.sql")).is_ok(),
+            "the link itself is left alone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_not_followed_by_import_in_an_external_root() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("incoming.sql");
+        std::os::unix::fs::symlink(&outside_file, root.join("incoming.sql")).unwrap();
+
+        let source_dir = TempDir::new().unwrap();
+        let source = source_dir.path().join("incoming.sql");
+        fs::write(&source, "SELECT 1;").unwrap();
+
+        let error = dir
+            .import(&source, Some(&root))
+            .expect_err("a dangling symlink is an existing entry, not a free name");
+
+        assert!(error.to_string().contains("File already exists"), "{error}");
+        assert!(!outside_file.exists(), "nothing is written past the link");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_external_folder_symlinked_outside_is_still_refused() {
+        let (_managed, _external, dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+
+        let error = dir
+            .ensure_contained(&root, &root.join("escape"))
+            .expect_err("a link out of an external root is refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert!(
+            fs::read_dir(outside.path()).unwrap().next().is_none(),
+            "nothing is written past the link"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_that_resolves_outside_an_external_root_is_reverted() {
+        let (_managed, _external, dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+
+        // Simulate the directory swap instead of racing it: `escape` is a
+        // symlink to a folder outside the root, so a path below it resolves
+        // outside while its spelling still starts with the root.
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+        let escaped = root.join("escape").join("x.sql");
+        fs::write(&escaped, "").unwrap();
+        let id = EntryId::at(&escaped).unwrap();
+
+        let error = dir
+            .ensure_contained_after_write(&root, &escaped, WrittenEntry::File(id))
+            .expect_err("a path that resolves outside the root is refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert!(!escaped.exists(), "the write inside the root is undone");
+        assert!(
+            !outside.path().join("x.sql").exists(),
+            "and the one outside it is gone too"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_move_that_resolves_outside_an_external_root_is_undone() {
+        let (_managed, _external, dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+
+        // A file the user owns, reachable only through the swapped folder.
+        let original = root.join("escape").join("mine.sql");
+        fs::write(&original, "SELECT 1;").unwrap();
+        let moved = root.join("escape").join("renamed.sql");
+        fs::rename(&original, &moved).unwrap();
+
+        let id = EntryId::at(&moved).unwrap();
+        let error = dir
+            .ensure_contained_after_write(
+                &root,
+                &moved,
+                WrittenEntry::Moved {
+                    from: &original,
+                    id,
+                },
+            )
+            .expect_err("a move that resolves outside the root is refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert!(original.exists(), "the move is undone, not deleted");
+        assert!(!moved.exists());
+        assert_eq!(fs::read_to_string(&original).unwrap(), "SELECT 1;");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replacement_at_the_written_path_is_not_removed_by_rollback() {
+        let (_managed, _external, dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+
+        // The entry the write created, and a different one put in its place
+        // afterwards. Both are created while the first still exists, so their
+        // inodes differ.
+        let written = root.join("escape").join("x.sql");
+        fs::write(&written, "written").unwrap();
+        let id_of_written = EntryId::at(&written).unwrap();
+        let foreign = root.join("escape").join("foreign.sql");
+        fs::write(&foreign, "foreign").unwrap();
+        fs::rename(&foreign, &written).unwrap();
+        assert!(
+            !id_of_written.matches(&written),
+            "the replacement has a different identity"
+        );
+
+        let error = dir
+            .ensure_contained_after_write(&root, &written, WrittenEntry::File(id_of_written))
+            .expect_err("the path still resolves outside the root");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(&written).unwrap(),
+            "foreign",
+            "the replacement is left alone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_through_a_symlinked_folder_is_detected_and_reverted() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+
+        let error = dir
+            .create_file(Some(&root), "escape/x", "sql")
+            .expect_err("the write is sent outside the root");
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert!(!outside.path().join("x.sql").exists());
+
+        let error = dir
+            .create_folder(Some(&root), "escape/sub")
+            .expect_err("the write is sent outside the root");
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the scripts folder"),
+            "{error}"
+        );
+        assert!(!outside.path().join("sub").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn renaming_a_dangling_link_inside_an_external_root_still_works() {
+        let (_managed, _external, mut dir, id) = with_external_root();
+        let root = external_path(&dir, id);
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("gone"), root.join("link.sql")).unwrap();
+
+        let renamed = dir.rename(&root.join("link.sql"), "moved.sql").unwrap();
+
+        assert_eq!(renamed, root.join("moved.sql"));
+        assert!(
+            fs::symlink_metadata(&renamed)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(fs::symlink_metadata(root.join("link.sql")).is_err());
+        assert!(!outside.path().join("gone").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_writes_still_work_in_both_roots_and_through_a_managed_link() {
+        let (managed, _external, mut dir, id) = with_external_root();
+        let external = external_path(&dir, id);
+
+        let folder = dir.create_folder(Some(&external), "reports").unwrap();
+        let file = dir.create_file(Some(&folder), "daily", "sql").unwrap();
+        let renamed = dir.rename(&file, "weekly.sql").unwrap();
+        let archive = dir.create_folder(Some(&external), "archive").unwrap();
+        let moved = dir.move_entry(&renamed, &archive).unwrap();
+        assert!(moved.exists());
+
+        let source_dir = TempDir::new().unwrap();
+        let source = source_dir.path().join("imported.sql");
+        fs::write(&source, "SELECT 1;").unwrap();
+        let imported = dir.import(&source, Some(&external)).unwrap();
+        assert_eq!(fs::read_to_string(&imported).unwrap(), "SELECT 1;");
+
+        let managed_folder = dir.create_folder(None, "managed").unwrap();
+        let managed_file = dir
+            .create_file(Some(&managed_folder), "query", "sql")
+            .unwrap();
+        assert!(managed_file.exists());
+
+        // A missing parent is still created in the managed root.
+        let deep = managed.path().join("a").join("b");
+        let deep_folder = dir.create_folder(Some(&deep), "c").unwrap();
+        assert!(deep_folder.is_dir());
+
+        // A symlink the user placed in DBFlux's own folder keeps working: a
+        // write through a linked folder is still spelled inside the root.
+        let real = managed.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let link = managed.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let through_link = dir.create_file(Some(&link), "through", "sql").unwrap();
+        assert_eq!(through_link, link.join("through.sql"));
+        assert!(real.join("through.sql").exists());
     }
 
     #[test]

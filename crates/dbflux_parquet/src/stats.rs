@@ -54,6 +54,10 @@ pub struct ColumnStatistics {
     /// Whether every chunk of the field has both a column index and an
     /// offset index. False for a file with no row groups.
     pub has_page_index: bool,
+    /// The one-based position of a primitive field in the sort order the
+    /// writer declared (`sorting_columns`), when every row group declares the
+    /// same order. `None` when the field is not part of it.
+    pub sort_position: Option<u16>,
 }
 
 /// The smallest and largest value of a column, shown the way a cell shows
@@ -94,6 +98,7 @@ pub fn column_statistics(file: &ParquetFile) -> Result<Vec<ColumnStatistics>, Pa
     let roots = leaf_roots(schema_descriptor);
 
     let column_count = file.schema().fields().len().min(root_fields.len());
+    let sort_positions = declared_sort_positions(metadata);
 
     let mut statistics = Vec::with_capacity(column_count);
 
@@ -136,10 +141,46 @@ pub fn column_statistics(file: &ParquetFile) -> Result<Vec<ColumnStatistics>, Pa
                 .iter()
                 .any(|chunk| chunk.dictionary_page_offset().is_some()),
             has_page_index: has_page_index(metadata, &leaves),
+            sort_position: primitive_leaf.and_then(|leaf| {
+                sort_positions
+                    .iter()
+                    .position(|sorted| *sorted == leaf)
+                    .and_then(|index| u16::try_from(index + 1).ok())
+            }),
         });
     }
 
     Ok(statistics)
+}
+
+/// The leaf columns of the sort order every row group declares, in order.
+/// Empty when a row group declares none, declares an index that is not a valid
+/// leaf position, or row groups disagree: rows are then not known to be sorted
+/// across the file.
+fn declared_sort_positions(metadata: &ParquetMetaData) -> Vec<usize> {
+    let mut declared: Option<Vec<usize>> = None;
+
+    for row_group in metadata.row_groups() {
+        let Some(sorting) = row_group.sorting_columns() else {
+            return Vec::new();
+        };
+
+        let Ok(leaves) = sorting
+            .iter()
+            .map(|column| usize::try_from(column.column_idx))
+            .collect::<Result<Vec<usize>, _>>()
+        else {
+            return Vec::new();
+        };
+
+        match &declared {
+            Some(previous) if *previous != leaves => return Vec::new(),
+            Some(_) => {}
+            None => declared = Some(leaves),
+        }
+    }
+
+    declared.unwrap_or_default()
 }
 
 /// The totals of `file`, summed over every column chunk in the footer.

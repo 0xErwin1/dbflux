@@ -17,20 +17,19 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
-    when_unchecked, with_default,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+    SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mysql::prelude::*;
 use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 
@@ -1444,23 +1443,14 @@ impl MysqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials.
-        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
-
-        log::info!(
-            "[SSH] Starting dual tunnels to {}:{} via {}@{}:{}",
-            db_host,
-            db_port,
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port
-        );
+        log::info!("[SSH] Starting dual tunnels to {}:{}", db_host, db_port);
 
         // === Tunnel 1: Catalog connection ===
         log::info!("[SSH] Creating catalog tunnel (session 1/2)");
-        let session1 = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        let tunnel1 = SshTunnel::start(session1, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel {
+            tunnel: tunnel1,
+            ssh_host,
+        } = dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port1 = tunnel1.local_port();
         log::info!("[SSH] Catalog tunnel on local port {}", local_port1);
         let ssh_catalog_tunnel = Arc::new(std::sync::Mutex::new(tunnel1));
@@ -1516,8 +1506,9 @@ impl MysqlDriver {
 
         // === Tunnel 2: Query connection ===
         log::info!("[SSH] Creating query tunnel (session 2/2)");
-        let session2 = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        let tunnel2 = SshTunnel::start(session2, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel {
+            tunnel: tunnel2, ..
+        } = dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port2 = tunnel2.local_port();
         log::info!("[SSH] Query tunnel on local port {}", local_port2);
         let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
@@ -1551,7 +1542,7 @@ impl MysqlDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         let initial_database = initial_database_from_opts(&query_opts);
@@ -1870,7 +1861,8 @@ fn plan_mysql_table_browse(
 ) -> Result<SemanticPlan, DbError> {
     let sql = if let Some(filter) = request.semantic_filter.as_ref() {
         let mut sql = format!(
-            "SELECT * FROM {}",
+            "SELECT {} FROM {}",
+            request.select_list_with(&MYSQL_DIALECT),
             request.table.quoted_with(&MYSQL_DIALECT)
         );
         let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;
@@ -2855,103 +2847,8 @@ impl Connection for MysqlConnection {
         plan_mysql_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MYSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let (where_clause, _filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MYSQL_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let _conflict_cols = conflict_columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| {
-                format!(
-                    "{} = VALUES({})",
-                    MYSQL_DIALECT.quote_identifier(col),
-                    MYSQL_DIALECT.quote_identifier(col)
-                )
-            })
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
-            quoted_table, cols, placeholders_str, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(truncate_table_statement(table))
     }
 
     fn build_drop_index_sql(
@@ -2959,19 +2856,12 @@ impl Connection for MysqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
-        let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
-        let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
-
-        if let Some(table) = quoted_table {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
-        } else {
-            format!("DROP INDEX {} ", quoted_index)
-        }
+    ) -> Result<String, DbError> {
+        Ok(drop_index_statement(index_name, table_name))
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT VERSION()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -2980,6 +2870,59 @@ impl Connection for MysqlConnection {
 }
 
 impl RelationalConnection for MysqlConnection {}
+
+/// SQL text of `build_truncate_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn truncate_table_statement(table: &str) -> String {
+    let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+    format!("TRUNCATE TABLE {}", quoted_table)
+}
+
+/// SQL text of `build_drop_index_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn drop_index_statement(index_name: &str, table_name: Option<&str>) -> String {
+    let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
+    let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
+
+    if let Some(table) = quoted_table {
+        format!("DROP INDEX {} ON {}", quoted_index, table)
+    } else {
+        format!("DROP INDEX {} ", quoted_index)
+    }
+}
+
+/// SQL text of `version_query`, kept as a constant so the exact query is
+/// testable without a live server.
+const VERSION_QUERY: &str = "SELECT VERSION()";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn truncate_table_statement_matches_the_driver_contract() {
+        assert_eq!(truncate_table_statement("users"), "TRUNCATE TABLE `users`");
+    }
+
+    #[test]
+    fn drop_index_statement_matches_the_driver_contract() {
+        assert_eq!(
+            drop_index_statement("idx_users_email", Some("users")),
+            "DROP INDEX `idx_users_email` ON `users`"
+        );
+        // The historical statement keeps its trailing space when no table is
+        // given; it is preserved byte-for-byte.
+        assert_eq!(
+            drop_index_statement("idx_users_email", None),
+            "DROP INDEX `idx_users_email` "
+        );
+    }
+
+    #[test]
+    fn version_query_is_the_mysql_version_select() {
+        assert_eq!(VERSION_QUERY, "SELECT VERSION()");
+    }
+}
 
 impl ConnectionExt for MysqlConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {
@@ -4240,41 +4183,6 @@ fn fetch_foreign_keys(
     }
 
     Ok(builder.build_sorted())
-}
-
-/// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
-/// Returns (SQL string with ? placeholders, parameter values).
-fn translate_filter_to_sql(filter: &Value) -> (String, Vec<Value>) {
-    match filter {
-        Value::Document(doc) => {
-            let mut parts = Vec::new();
-            let mut params = Vec::new();
-            for (key, value) in doc {
-                let quoted_col = MYSQL_DIALECT.quote_identifier(key);
-                match value {
-                    Value::Null => {
-                        parts.push(format!("{} IS NULL", quoted_col));
-                    }
-                    _ => {
-                        parts.push(format!("{} = ?", quoted_col));
-                        params.push(value.clone());
-                    }
-                }
-            }
-            if parts.is_empty() {
-                (String::new(), Vec::new())
-            } else {
-                (parts.join(" AND "), params)
-            }
-        }
-        Value::Text(s) => {
-            // Treat a plain text filter as a raw SQL expression (for advanced users)
-            // WARNING: This is intentionally allowed for power users but is a SQL injection risk
-            // if the filter comes from untrusted input. The caller must validate.
-            (s.clone(), Vec::new())
-        }
-        _ => (String::new(), Vec::new()),
-    }
 }
 
 fn fetch_constraints(

@@ -85,6 +85,7 @@ Base de datos embebida basada en archivos.
 - No existe la sentencia `TRUNCATE TABLE`; la opción de carga Truncate del motor
   de transferencia de datos no está disponible para destinos SQLite
   (`DriverCapabilities::TRUNCATE_TABLE` no está fijado).
+- El descubrimiento del esquema lista solo las columnas con nombre de un índice: una columna de expresión, como `lower(name)` en `CREATE INDEX ... ON t (lower(name), id)`, queda fuera de la lista de columnas del índice.
 - Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta bajo `PRAGMA query_only`, que se comprueba antes de cada sentencia y se restaura después, y se rechaza dentro de una transacción abierta. SQLite rechaza entonces las escrituras en la base de datos, pero no los efectos de extensiones cargadas ni de funciones definidas por la aplicación; los permisos de archivo siguen siendo el límite real.
 
 ## Capacidades de DDL

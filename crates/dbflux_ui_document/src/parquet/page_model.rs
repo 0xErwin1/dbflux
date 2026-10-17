@@ -124,12 +124,21 @@ pub(super) fn column_profile(statistics: &ColumnStatistics) -> ColumnProfile {
     ColumnProfile {
         name: statistics.name.clone(),
         type_name: statistics.type_name.clone(),
-        badges: Vec::new(),
+        badges: statistics
+            .sort_position
+            .map(|position| {
+                vec![dbflux_core::ColumnBadge::SortKey {
+                    position: Some(position),
+                }]
+            })
+            .unwrap_or_default(),
         codec: statistics.codec.clone(),
         compressed_bytes: Some(statistics.compressed_bytes),
         uncompressed_bytes: Some(statistics.uncompressed_bytes),
         null_count: statistics.null_count,
         distinct_count: statistics.distinct_count,
+        distinct_exact: true,
+        top_values: Vec::new(),
         range: statistics
             .range
             .as_ref()

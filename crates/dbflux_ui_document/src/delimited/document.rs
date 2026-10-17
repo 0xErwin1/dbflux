@@ -51,6 +51,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use super::columns::{ColumnPrompt, ColumnPromptRequest, LoadRestPrompt, LoadingRest};
+use super::columns_view::ColumnsViewState;
 use super::editing::{CellEditRequest, CellEditTarget, install_page_model, pad_pending_inserts};
 use super::page_model::{PageModel, PageModelError};
 use super::text::{MAX_TEXT_BYTES, SourceSpan};
@@ -515,6 +516,9 @@ pub struct DelimitedDocument {
     /// Which view shows the file, and the text view's state.
     pub(super) text: TextViewState,
 
+    /// The Columns view and the profiles it shows.
+    pub(super) columns: ColumnsViewState,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -618,6 +622,7 @@ impl DelimitedDocument {
             column_prompt: None,
             load_rest_prompt: None,
             text: TextViewState::default(),
+            columns: ColumnsViewState::default(),
             _subscriptions: Vec::new(),
         };
 
@@ -719,9 +724,11 @@ impl DelimitedDocument {
     /// a save request of the table. The commands of the document are the
     /// next page, which a loaded file answers by loading one, the reload
     /// (`RefreshSchema`), the save commands that reach the tab from
-    /// elsewhere, and the view switches: `CycleDocumentView` switches
-    /// between the table and the text, and `CycleResultView` between the raw
-    /// and the aligned text while the text is shown. In the text view Escape
+    /// elsewhere, and the view switches: `CycleDocumentView` cycles the
+    /// table, the text and the Columns view, and `CycleResultView` switches
+    /// between the raw and the aligned text while the text is shown. In the
+    /// Columns view `CycleResultView` cycles the sort of the columns and
+    /// `FocusSearch` (or `FocusToolbar`) focuses their filter. In the text view Escape
     /// hands the keyboard from the editor to the tab, as the object editor
     /// does, so that the `Results` keys reach it, and Enter hands it back.
     pub fn dispatch_command(
@@ -742,6 +749,29 @@ impl DelimitedDocument {
                 if self.loaded().is_some() && self.view() == DelimitedView::Text =>
             {
                 self.cycle_text_mode(cx);
+                true
+            }
+
+            dbflux_app::keymap::Command::CycleResultView
+                if self.loaded().is_some() && self.view() == DelimitedView::Columns =>
+            {
+                let Some(view) = self.column_profile_view().cloned() else {
+                    return false;
+                };
+
+                view.update(cx, |view, cx| view.cycle_sort(cx));
+                true
+            }
+
+            dbflux_app::keymap::Command::FocusSearch
+            | dbflux_app::keymap::Command::FocusToolbar
+                if self.loaded().is_some() && self.view() == DelimitedView::Columns =>
+            {
+                let Some(view) = self.column_profile_view().cloned() else {
+                    return false;
+                };
+
+                view.update(cx, |view, cx| view.focus_filter(window, cx));
                 true
             }
 
@@ -778,10 +808,23 @@ impl DelimitedDocument {
         }
     }
 
-    /// Gives the keyboard to the view that is shown: the table, or the text
-    /// view's editor.
+    /// Gives the keyboard to the view that is shown: the table, the text
+    /// view's editor, or the rows of the Columns view.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.focus_text(window, cx) {
+            return;
+        }
+
+        if self.loaded().is_some() && self.view() == super::text_view::DelimitedView::Columns {
+            match self.column_profile_view().cloned() {
+                Some(view) => view.update(cx, |view, cx| view.focus(window, cx)),
+
+                None => {
+                    self.text.pending_focus = true;
+                    self.focus_handle.focus(window, cx);
+                }
+            }
+
             return;
         }
 
@@ -1531,6 +1574,10 @@ impl DelimitedDocument {
     ) {
         let location = self.location.clone();
         let reader_options = self.reader_options;
+
+        // The reread gives the file a new reader, so a profile of the whole
+        // file read with the old one would be stale.
+        self.stop_profiling_whole_file(cx);
 
         let Some(loaded) = self.loaded_mut() else {
             return;

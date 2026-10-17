@@ -10,6 +10,9 @@
 )]
 
 pub mod driver;
+mod facets;
 pub mod instance_catalog;
+mod table_views;
+mod vector;
 
 pub use driver::{METADATA, POSTGRES_FORM, PostgresDriver};

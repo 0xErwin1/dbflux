@@ -9,6 +9,9 @@
 
 pub mod actions;
 pub mod density;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod accessibility;
 pub mod fonts;
 pub mod helpers;
 pub mod icon;
@@ -16,6 +19,7 @@ pub mod semantic;
 pub mod tokens;
 pub mod typography;
 
+pub mod category;
 pub mod chart;
 pub mod common;
 pub mod components;

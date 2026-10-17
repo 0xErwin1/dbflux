@@ -139,12 +139,69 @@ pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String
 ///
 /// Uses the singular catalog bucket only for exactly one row; every other
 /// count, including zero, uses the plural bucket.
+/// Rows a statement without a result set changed: "3 rows affected".
+pub(crate) fn affected_rows_label(count: u64) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.data.grid.status.affected_rows.one", count = count)
+    } else {
+        dbflux_i18n::t!(
+            "document.data.grid.status.affected_rows.many",
+            count = grouped_count(count)
+        )
+    }
+}
+
 pub(crate) fn row_count_label(count: usize) -> String {
     if count == 1 {
         dbflux_i18n::t!("document.data.grid.status.rows.one", count = count)
     } else {
-        dbflux_i18n::t!("document.data.grid.status.rows.many", count = count)
+        dbflux_i18n::t!(
+            "document.data.grid.status.rows.many",
+            count = grouped_count(count as u64)
+        )
     }
+}
+
+/// Footer row count of similar rows: the neighbors shown, out of the
+/// table's rows when they are counted.
+pub(crate) fn nearest_rows_label(count: usize, total: Option<u64>) -> String {
+    match total {
+        Some(total) => dbflux_i18n::t!(
+            "document.data.grid.nearest.rows.of_total",
+            count = grouped_count(count as u64),
+            total = grouped_count(total)
+        ),
+        None => dbflux_i18n::t!(
+            "document.data.grid.nearest.rows.count",
+            count = grouped_count(count as u64)
+        ),
+    }
+}
+
+/// Footer row count of a result the row limit cut short.
+pub(crate) fn limited_row_count_label(count: usize) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.status.limited_rows.first",
+        count = grouped_count(count as u64)
+    )
+}
+
+/// Footer row count of a result the row limit cut short, once its rows have
+/// been counted.
+pub(crate) fn limited_row_count_of_total_label(loaded: usize, total: u64) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.status.limited_rows.of_total",
+        loaded = grouped_count(loaded as u64),
+        total = grouped_count(total)
+    )
+}
+
+pub(crate) fn count_rows_label() -> String {
+    dbflux_i18n::t!("document.data.grid.status.limited_rows.count")
+}
+
+pub(crate) fn load_all_rows_label() -> String {
+    dbflux_i18n::t!("document.data.grid.status.limited_rows.load_all")
 }
 
 /// Label for the status bar's pending-change pill, with the count
@@ -3835,10 +3892,23 @@ mod tests {
     }
 
     #[test]
+    fn limited_row_count_labels() {
+        assert_eq!(
+            super::limited_row_count_label(10_000),
+            "First 10,000 rows loaded"
+        );
+        assert_eq!(
+            super::limited_row_count_of_total_label(10_000, 52_310),
+            "10,000/52,310 rows loaded"
+        );
+    }
+
+    #[test]
     fn row_count_label_one_many() {
         assert_eq!(row_count_label(1), "1 row");
         assert_eq!(row_count_label(2), "2 rows");
         assert_eq!(row_count_label(0), "0 rows");
+        assert_eq!(row_count_label(25_000), "25,000 rows");
     }
 
     #[test]
@@ -4216,7 +4286,7 @@ mod tests {
             "document.code.toolbar.checking",
             "document.code.toolbar.run",
             "document.code.toolbar.last_run",
-            "document.code.toolbar.new_tab",
+            "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
             "document.code.toolbar.save",
@@ -4242,6 +4312,10 @@ mod tests {
             "document.code.script_confirm.message.many",
             "document.code.script_confirm.cancel",
             "document.code.script_confirm.run",
+            "document.code.script_confirm.run_statement",
+            "document.code.script_confirm.transaction.title",
+            "document.code.script_confirm.transaction.message",
+            "document.code.script_confirm.transaction.message_statement_only",
         ];
 
         for key in keys {

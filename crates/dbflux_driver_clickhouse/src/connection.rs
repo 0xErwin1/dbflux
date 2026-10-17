@@ -6,15 +6,17 @@ use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
     DocumentConnection, DriverMetadata, ExecutionSourceContext, InstanceCatalog,
     KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest, QueryResult,
-    RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    TableInfo, Value, WritePrivilege,
+    ReadEstimate, RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, TableBrowseRequest, TableInfo, TablePartitions, TableProfile,
+    TableRef, TableViewFeatures, Value, WritePrivilege,
 };
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 
 use crate::dialect::CLICKHOUSE_DIALECT;
 use crate::driver::{METADATA, READ_ONLY_GENERATOR};
 use crate::error_formatter::ClickHouseErrorFormatter;
-use crate::http::{ClickHouseHttpClient, HttpResponse};
+use crate::http::{ClickHouseHttpClient, HttpResponse, LimitedResponse};
 use crate::introspection;
 use crate::types::{
     clickhouse_type_is_nullable, clickhouse_type_to_column_kind, json_to_value,
@@ -67,7 +69,7 @@ impl ClickHouseConnection {
     /// this request while still accepting the settings DBFlux sends with it.
     /// Each HTTP request is its own query, so no session or transaction state
     /// carries over from earlier requests.
-    fn execute_sql_read_only(
+    pub(crate) fn execute_sql_read_only(
         &self,
         sql: &str,
         database: Option<&str>,
@@ -92,7 +94,7 @@ impl ClickHouseConnection {
         parse_response(response, started.elapsed())
     }
 
-    fn current_database(&self) -> Result<String, DbError> {
+    pub(crate) fn current_database(&self) -> Result<String, DbError> {
         self.active_database
             .read()
             .map(|database| database.clone())
@@ -269,10 +271,9 @@ impl Connection for ClickHouseConnection {
     }
 
     fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
-        if request.limit.is_some() || request.statement_timeout.is_some() {
+        if request.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "ClickHouse HTTP queries do not support explicit row limits or statement timeouts"
-                    .to_string(),
+                "ClickHouse HTTP queries do not support statement timeouts".to_string(),
             ));
         }
 
@@ -280,6 +281,20 @@ impl Connection for ClickHouseConnection {
             .execution_context
             .as_ref()
             .and_then(|context| context.source.as_ref());
+        if request.limit.is_some()
+            && matches!(
+                source,
+                Some(
+                    ExecutionSourceContext::InstanceMetricQuery { .. }
+                        | ExecutionSourceContext::InstanceInspectorQuery { .. }
+                )
+            )
+        {
+            return Err(DbError::NotSupported(
+                "ClickHouse: row limits on instance catalog queries are unsupported; rejected before execution"
+                    .to_string(),
+            ));
+        }
         request.refuse_read_only_for_instance_catalog("ClickHouse")?;
 
         if let Some(source) = source {
@@ -307,22 +322,43 @@ impl Connection for ClickHouseConnection {
         }
         let active_database = self.current_database()?;
         let database = request.database.as_deref().unwrap_or(&active_database);
-        if request.read_only.is_required() {
-            return self.execute_sql_read_only(
+        let read_only = request.read_only.is_required();
+        let Some(row_limit) = request.limit else {
+            return if read_only {
+                self.execute_sql_read_only(
+                    &request.sql,
+                    Some(database),
+                    request.statement_timeout,
+                    None,
+                    request.offset,
+                )
+            } else {
+                self.execute_sql(
+                    &request.sql,
+                    Some(database),
+                    request.statement_timeout,
+                    None,
+                    request.offset,
+                )
+            };
+        };
+
+        let started = Instant::now();
+        let settings = if read_only { READ_ONLY_SETTINGS } else { &[] };
+        let response = self
+            .client
+            .execute_row_limited(
                 &request.sql,
                 Some(database),
                 request.statement_timeout,
-                request.limit,
+                row_limit,
                 request.offset,
-            );
-        }
-        self.execute_sql(
-            &request.sql,
-            Some(database),
-            request.statement_timeout,
-            request.limit,
-            request.offset,
-        )
+                settings,
+            )
+            .map_err(|error| {
+                ClickHouseErrorFormatter::format_http_error(&error).into_query_error()
+            })?;
+        parse_limited_response(response, started.elapsed())
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -407,6 +443,46 @@ impl Connection for ClickHouseConnection {
         resolve_clickhouse_write_privilege(readonly_setting, &grants)
     }
 
+    fn table_view_features(&self) -> TableViewFeatures {
+        TableViewFeatures::COLUMN_PROFILE
+            | TableViewFeatures::PARTITIONS
+            | TableViewFeatures::READ_ESTIMATE
+            | TableViewFeatures::SAMPLE_PROFILE
+            | TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(&self, table: &TableRef) -> Result<TableProfile, DbError> {
+        crate::table_views::table_profile(self, table)
+    }
+
+    fn table_partitions(&self, table: &TableRef) -> Result<TablePartitions, DbError> {
+        crate::table_views::table_partitions(self, table)
+    }
+
+    fn estimate_table_read(
+        &self,
+        request: &TableBrowseRequest,
+        profile: &TableProfile,
+    ) -> Result<ReadEstimate, DbError> {
+        crate::table_views::estimate_table_read(self, request, profile)
+    }
+
+    fn sample_table_profile(
+        &self,
+        table: &TableRef,
+        columns: &[String],
+        row_limit: u64,
+    ) -> Result<TableProfile, DbError> {
+        let profile = crate::table_views::table_profile(self, table)?;
+        let types = profile
+            .columns
+            .iter()
+            .map(|column| (column.name.to_string(), column.type_name.to_string()))
+            .collect();
+
+        crate::table_views::sample_table_profile(self, table, columns, &types, row_limit)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         Some(Box::new(
             crate::instance_catalog::ClickHouseInstanceCatalog::new_probed(Arc::clone(
@@ -452,22 +528,7 @@ pub(crate) fn parse_response(
     execution_time: Duration,
 ) -> Result<QueryResult, DbError> {
     if response.body.iter().all(u8::is_ascii_whitespace) {
-        let affected_rows = response
-            .headers
-            .get("X-ClickHouse-Summary")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| serde_json::from_str::<HashMap<String, String>>(value).ok())
-            .and_then(|summary| {
-                summary
-                    .get("written_rows")
-                    .and_then(|value| value.parse().ok())
-            });
-        return Ok(QueryResult::table(
-            Vec::new(),
-            Vec::new(),
-            affected_rows,
-            execution_time,
-        ));
+        return Ok(statement_result(&response.headers, execution_time));
     }
 
     let compact: CompactResponse = serde_json::from_slice(&response.body).map_err(|error| {
@@ -475,25 +536,82 @@ pub(crate) fn parse_response(
             format!("Invalid JSONCompact response from ClickHouse: {error}").into(),
         )
     })?;
-    let parsed_types = compact
+    let (names, types): (Vec<_>, Vec<_>) = compact
         .meta
+        .into_iter()
+        .map(|column| (column.name, column.type_name))
+        .unzip();
+    table_result(&names, &types, &compact.data, execution_time)
+}
+
+/// Builds the result of a row-limited request, marking it truncated only
+/// when the server had rows past the limit.
+pub(crate) fn parse_limited_response(
+    response: LimitedResponse,
+    execution_time: Duration,
+) -> Result<QueryResult, DbError> {
+    if response.names.is_empty() && response.rows.is_empty() {
+        return Ok(statement_result(&response.headers, execution_time));
+    }
+    if response.names.len() != response.types.len() {
+        return Err(DbError::QueryFailed(
+            format!(
+                "Invalid JSONCompactEachRow header from ClickHouse: {} names, {} types",
+                response.names.len(),
+                response.types.len()
+            )
+            .into(),
+        ));
+    }
+
+    let mut result = table_result(
+        &response.names,
+        &response.types,
+        &response.rows,
+        execution_time,
+    )?;
+    result.set_rows_truncated(response.truncated);
+    Ok(result)
+}
+
+/// A statement without a result set; ClickHouse reports written rows in the
+/// summary header.
+fn statement_result(headers: &HeaderMap, execution_time: Duration) -> QueryResult {
+    let affected_rows = headers
+        .get("X-ClickHouse-Summary")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| serde_json::from_str::<HashMap<String, String>>(value).ok())
+        .and_then(|summary| {
+            summary
+                .get("written_rows")
+                .and_then(|value| value.parse().ok())
+        });
+    QueryResult::table(Vec::new(), Vec::new(), affected_rows, execution_time)
+}
+
+fn table_result(
+    names: &[String],
+    types: &[String],
+    data: &[Vec<serde_json::Value>],
+    execution_time: Duration,
+) -> Result<QueryResult, DbError> {
+    let parsed_types = types
         .iter()
-        .map(|column| parse_clickhouse_type(&column.type_name))
+        .map(|type_name| parse_clickhouse_type(type_name))
         .collect::<Vec<_>>();
-    let columns = compact
-        .meta
+    let columns = names
         .iter()
+        .zip(types)
         .zip(&parsed_types)
-        .map(|(column, data_type)| ColumnMeta {
-            name: column.name.clone(),
-            type_name: column.type_name.clone(),
+        .map(|((name, type_name), data_type)| ColumnMeta {
+            name: name.clone(),
+            type_name: type_name.clone(),
             kind: clickhouse_type_to_column_kind(data_type),
             nullable: clickhouse_type_is_nullable(data_type),
             is_primary_key: false,
         })
         .collect::<Vec<_>>();
-    let rows = compact
-        .data
+    let rows = data
         .iter()
         .map(|row| {
             if row.len() != parsed_types.len() {
@@ -524,11 +642,12 @@ pub(crate) fn parse_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        ClickHouseGrantRow, classify_clickhouse_grant_row, classify_clickhouse_grants,
-        parse_response, resolve_clickhouse_write_privilege,
+        ClickHouseConnection, ClickHouseGrantRow, classify_clickhouse_grant_row,
+        classify_clickhouse_grants, parse_limited_response, parse_response,
+        resolve_clickhouse_write_privilege,
     };
-    use crate::http::HttpResponse;
-    use dbflux_core::{ColumnKind, Value, WritePrivilege};
+    use crate::http::{ClickHouseHttpClient, HttpResponse, LimitedResponse};
+    use dbflux_core::{ColumnKind, Connection, QueryRequest, Value, WritePrivilege};
     use reqwest::header::HeaderMap;
     use std::time::Duration;
 
@@ -669,5 +788,173 @@ mod tests {
             Value::Decimal("18446744073709551615".to_string())
         );
         assert_eq!(result.affected_rows, None);
+    }
+
+    /// Answers one HTTP request with `body` and hands back the request head
+    /// (request line and headers).
+    fn serve_one_request(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut head = String::new();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request head");
+                if line.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+                head.push_str(&line);
+            }
+            let mut request_body = vec![0u8; content_length];
+            reader.read_exact(&mut request_body).expect("read body");
+
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+            head
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn local_connection(endpoint: &str) -> ClickHouseConnection {
+        let client = ClickHouseHttpClient::new(
+            endpoint,
+            "default".to_string(),
+            None,
+            "default".to_string(),
+            Duration::from_secs(5),
+        )
+        .expect("loopback endpoint");
+        ClickHouseConnection::new(client, "default".to_string())
+    }
+
+    const THREE_ROWS: &str = "[\"n\"]\n[\"UInt8\"]\n[1]\n[2]\n[3]\n";
+
+    #[test]
+    fn limited_execute_streams_rows_and_marks_truncation() {
+        let (endpoint, server) = serve_one_request(THREE_ROWS);
+        let connection = local_connection(&endpoint);
+
+        let result = connection
+            .execute(&QueryRequest::new("SELECT n").with_limit(2))
+            .expect("the local server answers");
+
+        assert_eq!(result.rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        assert_eq!(result.columns.len(), 1);
+        assert!(result.rows_truncated());
+
+        let head = server.join().expect("server thread").to_ascii_lowercase();
+        assert!(
+            head.contains("x-clickhouse-format: jsoncompacteachrowwithnamesandtypes"),
+            "{head}"
+        );
+        for forbidden in [
+            "max_result_rows",
+            "max_result_bytes",
+            "&limit=",
+            "wait_end_of_query",
+        ] {
+            assert!(!head.contains(forbidden), "{forbidden} in {head}");
+        }
+    }
+
+    #[test]
+    fn limited_execute_equal_to_row_count_is_not_truncation() {
+        let (endpoint, server) = serve_one_request(THREE_ROWS);
+        let connection = local_connection(&endpoint);
+
+        let result = connection
+            .execute(&QueryRequest::new("SELECT n").with_limit(3))
+            .expect("the local server answers");
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn limited_read_only_execute_keeps_the_readonly_setting() {
+        let (endpoint, server) = serve_one_request(THREE_ROWS);
+        let connection = local_connection(&endpoint);
+
+        let request = QueryRequest::new("SELECT n")
+            .with_limit(0)
+            .with_read_only(dbflux_core::ReadOnlyEnforcement::Required);
+        let result = connection
+            .execute(&request)
+            .expect("the local server answers");
+
+        assert!(result.rows.is_empty());
+        assert!(result.rows_truncated());
+        let head = server.join().expect("server thread");
+        assert!(head.contains("readonly=2"), "{head}");
+    }
+
+    #[test]
+    fn unlimited_execute_keeps_the_byte_cap_and_full_response() {
+        let (endpoint, server) =
+            serve_one_request(r#"{"meta":[{"name":"n","type":"UInt8"}],"data":[[1],[2],[3]]}"#);
+        let connection = local_connection(&endpoint);
+
+        let result = connection
+            .execute(&QueryRequest::new("SELECT n"))
+            .expect("the local server answers");
+
+        assert_eq!(result.rows.len(), 3);
+        assert!(!result.rows_truncated());
+        let head = server.join().expect("server thread").to_ascii_lowercase();
+        assert!(
+            head.contains("x-clickhouse-format: jsoncompact\r\n"),
+            "{head}"
+        );
+        assert!(head.contains("max_result_bytes=134217728"), "{head}");
+        assert!(head.contains("result_overflow_mode=throw"), "{head}");
+        assert!(head.contains("wait_end_of_query=1"), "{head}");
+    }
+
+    #[test]
+    fn limited_statement_without_result_set_reports_written_rows() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-ClickHouse-Summary",
+            reqwest::header::HeaderValue::from_static(r#"{"written_rows":"4"}"#),
+        );
+        let response = LimitedResponse {
+            headers,
+            ..LimitedResponse::default()
+        };
+        let result = parse_limited_response(response, Duration::ZERO).expect("valid");
+        assert!(result.columns.is_empty());
+        assert_eq!(result.affected_rows, Some(4));
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn limited_response_decodes_values_like_the_unlimited_path() {
+        let response = LimitedResponse {
+            names: vec!["big".to_string()],
+            types: vec!["UInt64".to_string()],
+            rows: vec![vec![serde_json::json!("18446744073709551615")]],
+            truncated: false,
+            headers: HeaderMap::new(),
+        };
+        let result = parse_limited_response(response, Duration::ZERO).expect("valid");
+        assert_eq!(
+            result.rows[0][0],
+            Value::Decimal("18446744073709551615".to_string())
+        );
     }
 }

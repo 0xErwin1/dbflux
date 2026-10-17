@@ -118,19 +118,19 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
 
-The editor's toolbar is also a menu. `Shift+F10` opens the **pane actions** menu
+The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
 editor (Lua, Python, Bash) has no connection controls, so its context bar holds
 only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
 presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
-history, Explain, Chart, Refresh and the auto-refresh interval, each with its
-shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
-[context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
-the interval list with keyboard focus (see [Dropdowns](#dropdowns)). While the
-query has results, the menu goes on with the results header: Next and Previous
-result tab, Close result tab, Maximize (Restore) results and Hide (Show)
-results. The menu is also in the command palette as **Open pane actions**.
+history, Explain and Chart, each with its shortcut when it has one. Move with
+`j` / `k` and choose with `Enter`, as in any [context menu](#context-menu);
+`Escape` closes it. While the query has results, the menu goes on with the
+results header: Refresh and the auto-refresh interval, Next and Previous result
+tab, Close result tab, Maximize (Restore) results and Hide (Show)
+results. The auto-refresh entry opens the interval list with keyboard focus (see
+[Dropdowns](#dropdowns)). The menu is also in the command palette as **Open pane actions**.
 
 ## Vim mode (opt-in)
 
@@ -234,7 +234,8 @@ of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of
 the line; after a nonzero digit it remains part of the count (for example,
 `20w`). An interrupted count does not carry over to the next command. In
-Visual mode, counted motions extend the editor selection. `gg` and `G` place the
+Visual mode, counted motions extend the editor selection, and a plain left
+click returns to Normal mode with the cursor where you clicked, as in Vim. `gg` and `G` place the
 cursor at the first non-blank character of the destination logical line; `G`
 is a single uppercase key. A pending `g` clears if interrupted or focus leaves
 the editor. In Normal mode, `d` / `y` / `c` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
@@ -381,7 +382,7 @@ A read-only delete does not change the clipboard.
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
-| `Alt+l` / `Alt+h` | Next / previous result tab of a query, or next / previous view (Documents, Schema, Aggregate) of a document collection, wrapping at either end |
+| `Alt+l` / `Alt+h` | Next / previous result tab of a query, next / previous view (Documents, Schema, Aggregate) of a document collection, or next / previous view (Data, Columns, Partitions) of a table, wrapping at either end |
 | `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
@@ -396,6 +397,8 @@ A read-only delete does not change the clipboard.
 | `Shift+t` | Show the next view of the result (Data or Grid, JSON, Chart and the other views it offers), wrapping; the keyboard stays in the results |
 | `v` | Toggle the value panel for the selected cell |
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
+| `Shift+s` | Find the rows nearest to the selected row by its vector column, on a table with a `pgvector` `vector` column (also in the row context menu) |
+| `Esc` | Leave similar rows and return to the table page |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
 | `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
@@ -419,6 +422,15 @@ A dump analysis tab takes the table keys in each of its two tables: `Alt+l` and
 that is still reading the file, and `m` lists the other table, a sort per column
 of the table the keyboard is in (as a header click sorts it) and Cancel while
 the file is read.
+
+A table's Columns view takes `j` / `k` to move between columns, `Space` to add
+the column under the cursor to the Data view or drop it, `Shift+t` to cycle the
+order (table order, size, name), `/` to filter the columns, and `F5` to read
+the statistics again. In the Partitions view, `F5` reads the partitions again.
+The Toolbar submenu of `m` lists Show Data, Show Columns, Show Partitions,
+Choose columns, Refresh column statistics, Profile the first rows and Refresh
+partitions when the table offers them. See [Columns and
+Partitions](TABLE_VIEWS.md).
 
 ## Schema diff
 
@@ -534,6 +546,8 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 | `z` | Toggle panel collapse |
 
 The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** is also a command palette entry.
+
+**Cancel task** is offered only for work that stops when cancelled, such as a query, an export or a key scan. A write already sent to the server, a key read, or a single metadata request runs to the end and shows no cancel.
 
 ## Notifications center
 
@@ -739,13 +753,14 @@ these. See [CSV and TSV Files](CSV_FILES.md).
 
 | Keys | Action |
 |------|--------|
-| `t` | Switch between the table and the text |
-| `Shift+t` | Switch the text between Raw and Aligned |
+| `t` | Show the next view: table, text, Columns |
+| `Shift+t` | Switch the text between Raw and Aligned, or cycle the order of the columns in the Columns view |
+| `/` | In the Columns view, filter the columns by name or type |
 | `Escape` / `Enter` | Take the keyboard out of the text / put it back |
 | `]` | Load the next 500 records |
 | `F5` | Read the file again from its source |
 | `Ctrl+s` / `Cmd+s` | Save, from the table or from the text |
-| `m` (or `Shift+F10`) | Pane actions: the dialect controls, Insert row above, Add column, Rename column, Discard changes, Reload from file, and Cancel loading while the rest of the file loads |
+| `m` (or `Shift+F10`) | Pane actions: the dialect controls, Insert row above, Add column, Rename column, Discard changes, Reload from file, Profile whole file, and Cancel loading while the rest of the file loads |
 
 ## Audit viewer
 

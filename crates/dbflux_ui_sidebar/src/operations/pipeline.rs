@@ -199,7 +199,15 @@ fn pipeline_stage_task_detail_line(state: &PipelineState) -> Option<String> {
 
 impl Sidebar {
     /// Connect using the pipeline path (auth, value resolution, access, connect).
-    pub(super) fn connect_via_pipeline(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+    /// `password` is the password typed into the connect prompt; it replaces
+    /// the keyring lookup and serves the whole live session.
+    pub(super) fn connect_via_pipeline(
+        &mut self,
+        profile_id: Uuid,
+        password: Option<dbflux_core::secrecy::SecretString>,
+        cx: &mut Context<Self>,
+    ) {
+        let session_password = password.clone();
         let (
             input,
             profile_name,
@@ -227,7 +235,7 @@ impl Sidebar {
 
             match state.prepare_pipeline_input(profile_id, cancel) {
                 Ok((input, profile_name, driver)) => {
-                    let keyring_password = state.get_password(&input.profile);
+                    let keyring_password = password.or_else(|| state.get_password(&input.profile));
                     let hooks = state.resolve_profile_hooks(&input.profile);
                     let hook_context = HookContext::from_profile(&input.profile);
 
@@ -334,6 +342,9 @@ impl Sidebar {
                                     format!("  ↳ {}", description),
                                     Some(profile_id),
                                 );
+                            // The parent Connect task owns the pipeline's
+                            // cancel; a stage row only reports progress.
+                            app_state.tasks_mut().mark_uncancellable(stage_task_id);
                             current_stage = Some((description.clone(), stage_task_id));
 
                             cx.emit(AppStateChanged);
@@ -668,6 +679,9 @@ impl Sidebar {
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
+                            // A remembered password may be the reason the
+                            // connect failed; ask again next time.
+                            state.forget_connection_password(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
@@ -843,6 +857,9 @@ impl Sidebar {
                         false,
                         probe,
                     );
+                    if let Some(password) = session_password {
+                        state.set_session_password(profile_id, password);
+                    }
                     cx.emit(dbflux_ui_base::AppStateChanged);
                     cx.notify();
                 });

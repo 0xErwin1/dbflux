@@ -48,6 +48,14 @@ Embedded analytical database, with optional DuckLake catalogs.
 - Each editor tab, grid mutation, and MCP call runs in its own session (a
   separate DuckDB connection to the shared instance), so a transaction left
   open in the editor does not capture other requests.
+- Table views (`TableViewFeatures`): a table's Columns view reads
+  `duckdb_columns()` and `pragma_storage_info` for each column's compression,
+  min and max from segment statistics, nulls, row groups and rows. The Data
+  view gets a column picker that names only the chosen columns in the query
+  and keeps the primary key on an editable table. **Profile the first
+  1 000 000 rows** fills in nulls, approximate distinct counts
+  (`approx_count_distinct`) and ranges on request, and is recorded in the
+  audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 
 ## Limitations
 
@@ -91,3 +99,32 @@ Embedded analytical database, with optional DuckLake catalogs.
   environment-based providers instead.
 - Extensions that are not bundled are downloaded from the DuckDB extension
   repository the first time they load, which needs network access.
+- The Columns view has no per-column sizes. String bounds from segment
+  statistics are prefixes, marked `≈`. Nulls show 0% when no segment saw a
+  null and are unknown otherwise. A DuckLake catalog has no storage
+  information, so its tables show names and types only until a profile runs.
+  There is no partitions view and no read estimate.
+- **Profile the first 1 000 000 rows** reads the first rows DuckDB returns, not
+  a random sample.
+
+## Files and DuckDB
+
+CSV, TSV and Parquet files open with DBFlux's own readers, not with DuckDB.
+They read pages of rows and only the chosen columns, and need no DuckDB
+connection. See [CSV and TSV Files](../../docs/CSV_FILES.md) and [Parquet
+Files](../../docs/PARQUET_FILES.md).
+
+DuckDB's role is querying files with SQL. From a DuckDB connection, the editor
+runs `read_csv(...)` and `read_parquet(...)` like any other query.
+
+The Columns view is shared by files and tables, so a Parquet file, a CSV file
+and a DuckDB table show their columns in the same view. There is no separate
+columnar grid.
+
+Known gaps:
+
+- The Parquet document has no row filter, so it does not skip row groups by a
+  filter.
+- MCP read-only requests to DuckDB refuse file-reading table functions by
+  design (see Limitations), so an agent cannot read arbitrary local files
+  through MCP.

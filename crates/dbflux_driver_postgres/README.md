@@ -19,13 +19,18 @@ Advanced open-source relational database.
 - Supports query cancellation through PostgreSQL cancel tokens.
 - Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
 - Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
+- Server notices and warnings raised by a query (for example `WARNING: there is no transaction in progress` from a bare `COMMIT`, or `RAISE NOTICE`) are returned with its result; a batch attaches them all to the primary result, and a failed query drops them. A query keeps its first 100 notices, followed by one that counts the rest.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
+- Finds the rows nearest to a selected row on a table with a `pgvector` `vector` column, by L2 distance, cosine distance or inner product. The query names the distance `nearest_distance` (`dbflux_core::NEAREST_DISTANCE_COLUMN`); the grid shows it first, under the selected row, and shows the inner product itself rather than pgvector's negative product. `halfvec` and `sparsevec` columns do not offer the search.
+- A table with a `json` or `jsonb` column offers a Document view next to the grid: each row opens as a document with its JSON values expanded. The tree is read-only; edits go through the grid.
+- A TimescaleDB hypertable is read as a time series: its details carry a `Hypertable` storage hint naming the time dimension, and the table opens with a chart over that column next to the rows. On a server without TimescaleDB nothing changes.
 - Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
 - Displays `numeric` values, including one-dimensional `numeric[]` arrays, as the exact decimal PostgreSQL stores.
 - Displays `infinity` and `-infinity` dates, timestamps, and their one-dimensional arrays as PostgreSQL's own text.
 - Reports its client identity to the server as `application_name=dbflux/<version>` unless the connection string already sets `application_name`, in which case the user-supplied value is kept.
 - Probes write privilege after connecting: a replica or a read-only transaction mode resolves to read-only regardless of grants, otherwise the authenticated role's `INSERT`/`UPDATE`/`DELETE` privileges on visible base tables decide it; an empty database or a probe failure is inconclusive and leaves the profile's own mutation policy unchanged.
+- Table views (`TableViewFeatures`): a table's Columns view shows planner statistics from `pg_stats` (null share, distinct estimate, histogram bounds as the range, most common values with their shares) and the table's access method, partition key for a partitioned table, when the statistics were last updated (last `ANALYZE` or autoanalyze, or "never"), estimated rows and `pg_table_size`. Reading them reads no table rows. The Data view gets a column picker that names only the chosen columns in the query and keeps the primary key on an editable table. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 
 ### Instance Metrics
 
@@ -75,6 +80,7 @@ Exposes tabular snapshots of running server state:
 - Cancellation is best effort and depends on server/session state at cancellation time.
 - Code generation targets supported PostgreSQL constructs only; unsupported generator IDs return `NotSupported`.
 - Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs in `BEGIN READ ONLY` and is rolled back, and is refused inside an open transaction. PostgreSQL then rejects data modification in the session, except on `TEMPORARY` tables, which a read-only transaction may still change, and it does not stop functions with external effects such as `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` or advisory locks; least-privilege database credentials remain the real boundary. To detect an open transaction, the driver first runs a `SAVEPOINT` probe, which fails with SQLSTATE `25P01` (no active transaction) outside a transaction, so the server logs one `ERROR` for every read-only request that runs outside a transaction, including each editor auto-refresh tick.
+- The Columns view shows planner estimates, as fresh as the last `ANALYZE`. A column the planner has no statistics for shows every fact as unknown. It has no per-column sizes or codecs, no partitions view, no read estimate and no row profile.
 
 ## DDL Capabilities
 

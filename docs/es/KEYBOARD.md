@@ -121,22 +121,22 @@ búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
 reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
 entre paneles, igual que fuera del editor.
 
-La toolbar del editor también es un menú. `Shift+F10` abre el menú de **acciones
+La barra de acciones del borde izquierdo del editor también es un menú. `Shift+F10` abre el menú de **acciones
 del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 `Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
 `Shift+F10`) también lo abre. Un editor de scripts (Lua, Python, Bash) no tiene
 controles de conexión, así que su barra de contexto solo contiene un botón
 **Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
 menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
-una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar, Gráfico,
-Actualizar y el intervalo de actualización automática, cada una con su atajo
-cuando lo tiene. Muévete con `j` / `k` y elige con `Enter`, como en cualquier
-[menú contextual](#menú-contextual); `Escape` lo cierra. La entrada de
+una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar y
+Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
+`Enter`, como en cualquier [menú contextual](#menú-contextual); `Escape` lo
+cierra. Mientras la consulta tiene resultados, el menú sigue con la cabecera de
+resultados: Actualizar y el intervalo de actualización automática, Pestaña de
+resultados siguiente y anterior, Cerrar pestaña de resultados, Maximizar
+(Restaurar) resultados y Ocultar (Mostrar) resultados. La entrada de
 actualización automática abre la lista de intervalos con el foco del teclado (ver
-[Desplegables](#desplegables)). Mientras la consulta tiene resultados, el menú
-sigue con la cabecera de resultados: Pestaña de resultados siguiente y anterior,
-Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
-(Mostrar) resultados. El menú también está en la command palette como
+[Desplegables](#desplegables)). El menú también está en la command palette como
 **Abrir acciones del panel**.
 
 ## Modo Vim (opcional)
@@ -245,7 +245,8 @@ hasta el final de la línea sin unir líneas; `u` con contador deshace esa canti
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
-selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
+selección del editor, y un clic izquierdo simple vuelve al modo Normal con el cursor
+donde se hizo clic, como en Vim. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
 se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
 
@@ -399,7 +400,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
-| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, o vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, dando la vuelta en los extremos |
+| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, o vista siguiente / anterior (Datos, Columnas, Particiones) de una tabla, dando la vuelta en los extremos |
 | `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
@@ -414,6 +415,8 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Shift+t`                                     | Mostrar la vista siguiente del resultado (Datos o Cuadrícula, JSON, Gráfico y las demás que ofrezca), dando la vuelta; el teclado sigue en los resultados |
 | `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |
+| `Shift+s` | Buscar las filas más cercanas a la fila seleccionada por su columna vectorial, en una tabla con una columna `vector` de `pgvector` (también en el menú contextual de la fila) |
+| `Esc` | Salir de las filas similares y volver a la página de la tabla |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
@@ -441,6 +444,16 @@ tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa
 `Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
 tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
 clic en la cabecera) y Cancelar mientras se lee el archivo.
+
+La vista Columnas de una tabla toma `j` / `k` para moverse entre columnas,
+`Space` para agregar a la vista Datos la columna bajo el cursor o quitarla,
+`Shift+t` para recorrer el orden (orden de la tabla, tamaño, nombre), `/` para
+filtrar las columnas y `F5` para volver a leer las estadísticas. En la vista
+Particiones, `F5` vuelve a leer las particiones. El submenú Barra de
+herramientas de `m` lista Mostrar Datos, Mostrar Columnas, Mostrar Particiones,
+Elegir columnas, Actualizar estadísticas de columnas, Perfilar las primeras
+filas y Actualizar particiones cuando la tabla los ofrece. Ver [Columnas y
+particiones](TABLE_VIEWS.md).
 
 ## Diferencia de esquemas
 
@@ -558,6 +571,8 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 | `z`                                           | Alternar colapso del panel               |
 
 La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en una fila también la selecciona. El menú de acciones lista **Mostrar salida**, **Cancelar tarea** y **Descartar** de la tarea seleccionada, y después **Limpiar terminadas** y **Ocultar el panel de tareas**, cada una con su atajo; se maneja con las teclas del menú contextual. **Borrar tareas terminadas** también está en la paleta de comandos.
+
+**Cancelar tarea** solo se ofrece para el trabajo que se detiene al cancelarlo, como una consulta, una exportación o un escaneo de claves. Una escritura ya enviada al servidor, una lectura de clave o una única consulta de metadatos llega hasta el final y no muestra cancelar.
 
 ## Centro de notificaciones
 
@@ -774,13 +789,14 @@ Una pestaña CSV o TSV toma en su tabla las teclas de
 
 | Teclas | Acción |
 |--------|--------|
-| `t` | Cambiar entre la tabla y el texto |
-| `Shift+t` | Cambiar el texto entre Sin formato y Alineado |
+| `t` | Mostrar la vista siguiente: tabla, texto, Columnas |
+| `Shift+t` | Cambiar el texto entre Sin formato y Alineado, o recorrer el orden de las columnas en la vista Columnas |
+| `/` | En la vista Columnas, filtrar las columnas por nombre o tipo |
 | `Escape` / `Enter` | Sacar el teclado del texto / devolverlo |
 | `]` | Cargar los siguientes 500 registros |
 | `F5` | Volver a leer el archivo desde su origen |
 | `Ctrl+s` / `Cmd+s` | Guardar, desde la tabla o desde el texto |
-| `m` (o `Shift+F10`) | Acciones del panel: los controles del dialecto, Insertar fila arriba, Agregar columna, Renombrar columna, Descartar cambios, Recargar desde el archivo y Cancelar la carga mientras se carga el resto del archivo |
+| `m` (o `Shift+F10`) | Acciones del panel: los controles del dialecto, Insertar fila arriba, Agregar columna, Renombrar columna, Descartar cambios, Recargar desde el archivo, Perfilar el archivo completo y Cancelar la carga mientras se carga el resto del archivo |
 
 ## Visor de auditoría
 

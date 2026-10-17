@@ -126,6 +126,7 @@ impl Workspace {
             | Command::CycleResultView
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
+            | Command::FindSimilarRows
             | Command::ToggleConsole => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(cmd, window, cx);

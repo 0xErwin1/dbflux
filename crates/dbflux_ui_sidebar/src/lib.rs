@@ -266,6 +266,12 @@ pub enum SidebarEvent {
         profile_id: Uuid,
     },
 
+    /// Request to ask for the connection password before connecting a profile
+    /// whose password is neither saved nor supplied by a value source.
+    RequestConnectionPassword {
+        prompt: dbflux_app::ConnectionPasswordPrompt,
+    },
+
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///
     /// Emitted when a connection attempt fails with a passphrase-required error
@@ -515,12 +521,12 @@ pub enum ContextMenuAction {
     GenerateCollectionCode(CollectionCodeKind),
     /// Open a new code document pre-seeded with a query template for this collection.
     ///
-    /// Available for any `DatabaseCategory::TimeSeries` measurement. The template
+    /// Available for any collection with the time-series facet. The template
     /// text is produced by the driver's `QueryGenerator::template_for_collection`.
     QueryCollection,
     /// Open a new empty code document for writing queries against this database/bucket.
     ///
-    /// Available for database nodes belonging to a time-series connection.
+    /// Available for database nodes whose objects sit in a measurement folder.
     NewQueryForDatabase,
     /// Open the connection's native console against this database, in its
     /// own tab. Offered where the driver advertises `NATIVE_CONSOLE`.
@@ -1092,6 +1098,9 @@ pub struct Sidebar {
     /// Profile ID waiting for an SSH passphrase to be supplied via the tunnel-auth modal.
     /// Set when a connect attempt fails with a passphrase-required error.
     pub pending_tunnel_auth_profile_id: Option<Uuid>,
+    /// Connection password of the attempt waiting for the SSH passphrase, so
+    /// the retry does not ask for it again.
+    pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
     /// In-flight metric catalog fetch tasks, keyed by profile_id.
     ///
     /// Dropping the task on collapse abandons the await; the underlying cache fetch
@@ -1420,6 +1429,7 @@ impl Sidebar {
             scripts_gutter_metadata,
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
+            pending_tunnel_auth_password: None,
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
             pending_remote_dashboard_fetches: HashMap::new(),
@@ -1437,6 +1447,12 @@ impl Sidebar {
     /// Return the profile ID that is currently awaiting SSH passphrase input, if any.
     pub fn pending_tunnel_auth_profile_id(&self) -> Option<Uuid> {
         self.pending_tunnel_auth_profile_id
+    }
+
+    /// Drops the connect attempt that was waiting for an SSH passphrase.
+    pub fn clear_pending_tunnel_auth(&mut self) {
+        self.pending_tunnel_auth_profile_id = None;
+        self.pending_tunnel_auth_password = None;
     }
 
     /// Records whether the sidebar holds keyboard focus. Gaining it, including

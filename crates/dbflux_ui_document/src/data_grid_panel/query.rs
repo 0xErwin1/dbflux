@@ -61,6 +61,12 @@ impl DataGridPanel {
             return;
         }
 
+        // Refresh keeps its place in the neighbor bar and reads the same
+        // neighbors again.
+        if self.rerun_nearest_neighbors(cx) {
+            return;
+        }
+
         self.refresh(window, cx);
     }
 
@@ -102,6 +108,10 @@ impl DataGridPanel {
     /// a structured SELECT), the parameterized query takes precedence over the
     /// normal `TableBrowseRequest` path.
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A search still running is dropped by this read; its bar must not
+        // come back while the table page loads.
+        self.nearest.running = None;
+
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -253,8 +263,10 @@ impl DataGridPanel {
         let keep_edits = std::mem::take(&mut self.grid_table.keep_edits_on_reload);
 
         let mut request = TableBrowseRequest::new(table.clone())
+            .with_database(database.clone())
             .with_pagination(pagination.clone())
-            .with_order_by(order_by.clone());
+            .with_order_by(order_by.clone())
+            .with_columns(self.table_projection_columns());
 
         if let Some(ref f) = filter {
             request = request.with_filter(f.clone());
@@ -309,14 +321,22 @@ impl DataGridPanel {
             browse_request.table.qualified_name()
         );
 
+        let estimate_request = browse_request.clone();
+
         let task_target = TaskTarget {
             profile_id,
             database: database.clone(),
         };
 
+        let select_list = if browse_request.columns.is_empty() {
+            "*".to_string()
+        } else {
+            browse_request.columns.join(", ")
+        };
+
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
             TaskKind::Query,
-            format!("SELECT * FROM {}", table.qualified_name()),
+            format!("SELECT {select_list} FROM {}", table.qualified_name()),
             Some(task_target),
             cx,
         );
@@ -374,6 +394,7 @@ impl DataGridPanel {
                                 query_result,
                                 cx,
                             );
+                            panel.estimate_table_read(estimate_request, cx);
                         });
                     }
                     Err(e) => {
@@ -381,6 +402,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
+                            panel.pk_requery_pending = false;
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
                                 message: crate::labels::query_failed_error(&e.to_string()),
@@ -513,6 +535,11 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.builder.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
+                            // Both orders describe the rows just replaced, not the
+                            // new ones; keeping them would leave the grid indexing
+                            // row positions that are gone.
+                            panel.grid_table.local_sort_state = None;
+                            panel.grid_table.original_row_order = None;
                             panel.refresh.state = GridState::Ready;
 
                             let binding = panel.compute_builder_binding(
@@ -838,6 +865,9 @@ impl DataGridPanel {
         result: QueryResult,
         cx: &mut Context<Self>,
     ) {
+        self.pk_requery_pending = false;
+        self.nearest_neighbors = None;
+
         // Determine sort state from order_by for visual indicator
         let initial_sort = order_by.first().and_then(|col| {
             let pos = result
@@ -904,7 +934,7 @@ impl DataGridPanel {
             }
         };
 
-        let mut count_request = TableCountRequest::new(table.clone());
+        let mut count_request = TableCountRequest::new(table.clone()).with_database(database);
         if let Some(f) = filter {
             count_request = count_request.with_filter(f);
         }

@@ -76,7 +76,7 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 DBFlux 先建立连接并发送 `Hello`。
 
-当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号是追加式的，在同一主版本线内以确定方式协商得出。
+当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号在同一主版本线内以确定方式协商得出。v1.7 及之前的次版本号是追加式的；v1.8 是一次线路格式修正，改变了部分现有载荷的编码方式，而之前能够解码的所有形态都逐字节相同（见下文的**线路格式修正**）。
 
 客户端请求：
 
@@ -91,6 +91,9 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
+        ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -179,6 +182,40 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `KvKeyCount { keyspace }` 请求某个键空间中的键数量（`None` 表示会话当前的键空间），并返回 `KvKeyCountResult { count }`。宿主进程将请求分派到连接的 `KeyValueApi::key_count` 接口；未实现它的驱动会以 trait 默认的 `NotSupported` 响应，客户端收到的是 `UnsupportedMethod`。
 
 出于上文所述的线路索引原因，这两个变体都追加在各自枚举中最后一个 v1.4 变体之后。客户端同样在本地进行版本拦截：当协商的次版本低于 1.5 时，`IpcConnection::key_count` 直接返回 `DbError::NotSupported` 而不发送任何内容。键浏览器将该错误视为“无总数”，只显示本页键数。
+
+### 请求行数上限（v1.6+）
+
+`Execute` 和 `ExecuteWithHandle` 可以携带编辑器行数上限 `QueryRequestDto::limit`。由于 `QueryResultDto` 无处容纳该标志，宿主以 `ExecuteResultWithTruncation { result, rows_truncated }` 和 `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }` 代替 `ExecuteResult` 和 `ExecuteWithHandleResult` 作答。仅当驱动为遵守上限而丢弃了行时，`rows_truncated` 才为 `true`。
+
+出于上文所述的线路索引原因，这两个响应变体都追加在 `KvKeyCountResult` 之后。宿主只在协商结果恰为 v1.6 的会话中，对执行调用发送它们；v1.7 用下文的结果集响应取代它们，更早的会话继续使用 v1.5 的响应。哪些请求会携带上限，见下文的**受保护的执行**。
+
+### 结果集（v1.7+）
+
+一批语句或一个存储过程可能返回多个结果集，每个结果集都可能各自省略行。从 v1.7 起，宿主以全部结果集作答，而不只是第一个：
+
+| 请求 | v1.7 响应 |
+| --- | --- |
+| `Execute` | `ExecuteResultSets { results }` |
+| `ExecuteWithHandle` | `ExecuteWithHandleResultSets { handle_id, results }` |
+| `BrowseTable`、`BrowseCollection`、`Explain`、`DescribeTable` | `BrowseResultSets { results }` |
+
+`results` 是一个 `QueryResultSetsDto { primary, additional }`。每一项都是 `ResultSetDto { result, rows_truncated }`：`primary` 是第一个结果集，`additional` 按驱动返回的顺序保存其余结果集。只有当驱动从该结果集中丢弃了行时，`rows_truncated` 才为 `true`，因此从不限制行数的驱动总是发送 `false`。
+
+出于上文所述的线路索引原因，这三个变体追加在 `ExecuteWithHandleResultWithTruncation` 之后。宿主只在协商为 v1.7 或更高版本的会话中发送它们。v1.6 会话继续使用 `ExecuteResultWithTruncation`、`ExecuteWithHandleResultWithTruncation` 和 `BrowseResult`，更早的会话继续使用 v1.5 的响应；在这些会话中只有主结果集会通过线路传输。无论协商的版本如何，客户端都接受所有变体，因此宿主无需知道自己在与哪个客户端构建通信。
+
+### 线路格式修正（v1.8）
+
+v1.8 没有新增任何请求或响应变体。它改变了部分现有载荷的编码方式，使协议定义的每一种载荷都能用 postcard 解码：
+
+| 载荷 | v1.8 编码 |
+| --- | --- |
+| JSON 文档：`BrowseCollection`（`CollectionBrowseRequestDto`）的 `filter`、`projection` 和 `sort`，`CountCollection`（`CollectionCountRequestDto`）的 `filter`，`UpdateDocument`（`DocumentUpdateDto`）的过滤条件和更新内容，`InsertDocument`（`DocumentInsertDto`）的文档，`DeleteDocument`（`DocumentDeleteDto`）的过滤条件，以及 `CrudResult`（`CrudResultDto`）的 `metadata_extra` 值 | JSON 文本：一个存放序列化后 JSON 的 postcard 字符串，在协议边界处重新解析 |
+| 过去带有 `skip_serializing_if` 的可选字段和列表字段，例如 browse 和 count 请求的 `semantic_filter` 与 `columns`、`ColumnInfo` 的 `enum_values`、`CrudResult` 的 `metadata_extra`、`ColumnAssignment` 的 `type_name`、`ExecutionContext` 的 `source` 以及 `FormSection` 的 `icon` | 始终编码，未设置时编码为 `None` 或空列表 |
+| `IndexData` | 外部标记：先是变体索引，然后是索引列表 |
+
+原始的 `serde_json::Value` 只能通过 `deserialize_any` 反序列化，而 postcard 不支持它，因此这类值能写入却永远读不回来。被跳过的字段会让帧变短，而解码器仍会读取该字段，导致其后的所有字段错位。内部标记的 `IndexData` 根本无法编码，因此任何带索引的表的 `TableDetails` 和 `GenerateCode` 都会失败。
+
+该编码不受协商版本的控制。在 v1.8 之前能够解码的形态，在 v1.8 中逐字节相同；只有任何对端都无法解码的形态，其字节才会改变，因此使用更早次版本的对端仍可正常工作。
 
 ## 认证提供程序 RPC 契约
 
@@ -280,13 +317,13 @@ DbConfig::External {
 | `OpenSession` → `SessionOpened` | 打开连接 / 会话 |
 | `CloseSession` → `SessionClosed` | 关闭会话 |
 | `Ping` → `Pong` | 存活探测 |
-| `Execute` → `ExecuteResult` | 执行查询 |
+| `Execute` → `ExecuteResult`（自 v1.7 起为 `ExecuteResultSets`） | 执行查询 |
 | `Schema` → `Schema` | Schema 快照 |
 | `ListDatabases` → `Databases` | 数据库列表 |
 
 该协议还支持浏览、CRUD、键值与代码生成类操作。完整的枚举集合参见 `crates/dbflux_ipc/src/driver_protocol.rs`。
 
-**受保护的执行：**目前没有任何协商能力可以让外部驱动证明它会执行行数限制或语句超时，因此受保护的查询会被拒绝。当 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）或 `statement_timeout` 为 `Some(...)` 时，`IpcConnection` 会在发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。宿主会话分发也会在调用插件连接之前，以 `UnsupportedMethod` 独立拒绝同样的请求。两个选项均为 `None` 的请求仍可运行，浏览和 CRUD 操作不受影响。
+**受保护的执行：**在协商为 v1.6 或更高版本的会话中，元数据声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动会收到 `QueryRequestDto::limit`。驱动必须在收集行时执行该上限（在所有结果集之间只计一次），并且仅在丢弃了行时设置 `rows_truncated`；否则必须在执行任何内容之前拒绝该请求。驱动未声明该能力时，宿主会话以 `UnsupportedMethod` 拒绝带上限的请求。低于 v1.6 时客户端从不发送上限：`IpcConnection` 不宣告 `REQUEST_ROW_LIMIT`，并在 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）时，于发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。在所有版本中，客户端都以同样方式拒绝 `statement_timeout` 或只读强制，宿主也会拒绝 `statement_timeout`。低于 v1.7 时只有主结果集会通过线路传输，因此额外的结果集及其标志会被丢弃；从 v1.7 起，每个结果集都带着自己的标志通过线路（见上文的**结果集**）。客户端信任驱动的声明：声明了 `REQUEST_ROW_LIMIT` 却忽略上限的驱动，会返回未受限且标记为未截断的行。浏览和 CRUD 操作不受影响。
 
 ## 驱动的审计事件上报（v1.2+）
 

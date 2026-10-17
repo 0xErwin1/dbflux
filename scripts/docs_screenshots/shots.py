@@ -94,8 +94,13 @@ def click(element_id: str) -> Step:
     return call("click_element", id=element_id)
 
 
-def click_label(label: str, *, exact: bool = True) -> Step:
-    return Step("click_label", {"label": label, "exact": exact})
+def click_label(label: str, *, exact: bool = True, role: str | None = None) -> Step:
+    arguments: dict = {"label": label, "exact": exact}
+
+    if role is not None:
+        arguments["role"] = role
+
+    return Step("click_label", arguments)
 
 
 def set_text(element_id: str, text: str) -> Step:
@@ -173,8 +178,10 @@ def open_sidebar_item(label: str, loaded: str, *, exact: bool = False) -> tuple[
     the selection: pressed on another row it would open that one.
     """
 
+    # The row's expand arrow carries the row's name too, so the click targets
+    # the tree item itself.
     return (
-        ensure(wait_selected(label), click_label(label)),
+        ensure(wait_selected(label), click_label(label, role="tree_item")),
         ensure(wait_for(loaded, exact=exact), key("enter")),
     )
 
@@ -385,6 +392,22 @@ def run_query(sql: str, check: Step) -> Step:
     )
 
 
+def run_script(sql: str, check: Step) -> Step:
+    """Types `sql` into the query tab and runs the whole buffer until `check` passes.
+
+    Without a selection Ctrl+Enter runs only the statement under the cursor,
+    so the buffer is selected first.
+    """
+
+    return ensure(
+        check,
+        call("focus_element", label="Enter SQL here", exact=False),
+        call("set_text", label="Enter SQL here", exact=False, text=sql),
+        key("ctrl-a"),
+        key("ctrl-enter"),
+    )
+
+
 SHOTS = (
     Shot(
         page="getting-started",
@@ -440,8 +463,8 @@ SHOTS = (
         name="multi-statement",
         steps=(
             *open_query_tab(),
-            run_query(MULTI_STATEMENT_SQL, wait_visible("script-confirm-run-btn")),
-            ensure(wait_for("Result 3"), click("script-confirm-run-btn")),
+            # A selection runs as-is, without the script confirmation.
+            run_script(MULTI_STATEMENT_SQL, wait_for("Result 3")),
         ),
     ),
     Shot(
@@ -488,6 +511,16 @@ SHOTS = (
                 call("set_text", input_value="Brazil", text="Portugal"),
                 key("enter"),
             ),
+        ),
+    ),
+    Shot(
+        page="table-views",
+        name="columns",
+        steps=(
+            *open_customers_table(),
+            # The connection toast covers the view switch until it closes.
+            wait_gone(r"^toast-\d"),
+            ensure(wait_for("Filter columns"), click("segmented-table-view-columns")),
         ),
     ),
     Shot(

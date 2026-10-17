@@ -94,18 +94,39 @@ caracteres; explica el *por qué* en el body cuando no sea obvio.
 3. Enlaza el issue que cierra con `Resolves #N` en la descripción.
 4. Aplica los labels que describen el cambio. Ver [Guía de
    etiquetas](#label-guide) más abajo.
-5. Mantén los diffs revisables. Los PRs de más de ~400 líneas cambiadas deben
-   dividirse en PRs apilados/encadenados salvo que el maintainer apruebe un
-   `size:exception`.
+5. Mantén los diffs revisables, alrededor de 400 líneas cambiadas por PR. Divide
+   una funcionalidad más grande en varios PRs que partan cada uno de `main` y se
+   sostengan por sí solos, integrados en orden. Evita pilas largas de PRs basados
+   unos en otros: los PRs se integran con squash merge, así que cada merge
+   reescribe la base del siguiente y la pila vuelve a tener conflictos. Un PR más
+   grande necesita un `size:exception` aprobado por un maintainer.
 6. CI debe pasar (`tests.yml`, `style.yml`). Vuelve a ejecutar localmente antes
    de hacer push si algo falla.
 7. Un cambio de documentación viaja con sus traducciones. Cuando edites una
    página bajo `docs/`, un README de driver o un documento raíz que el sitio
    renderiza (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
    `TRADEMARK.md`, `PRIVACY.md`), aplica el mismo cambio a cada contraparte
-   existente bajo `docs/es/` y `docs/zh_Hans/` en el mismo PR. Una página que
-   aún no tiene contraparte no necesita ninguna. Ver
+   existente bajo `docs/es/`, `docs/ko/` y `docs/zh_Hans/` en el mismo PR. Una
+   página que aún no tiene contraparte no necesita ninguna. Ver
    [Traducciones](TRANSLATIONS.md).
+8. Mantén las funciones por debajo de unas 100 líneas. Una función nueva que
+   supere ese límite se divide en funciones auxiliares antes de la revisión, y lo
+   mismo ocurre con una función existente que reescribas sustancialmente. Cambiar
+   unas pocas líneas de una función larga existente no obliga a refactorizarla.
+9. Mantén los archivos fuente por debajo de unas 1000 líneas de código de
+   producción (sin contar los módulos de tests). Cuando un cambio lleve un
+   archivo más allá de ese límite, divídelo por responsabilidad en un directorio
+   de módulo: `foo.rs` pasa a ser `foo/mod.rs` más submódulos bajo `foo/`, en el
+   mismo PR o en un issue abierto junto a él. Los tests viven en el submódulo
+   `tests` propio del módulo (`foo/tests.rs`, o `foo/tests/mod.rs` con un archivo
+   por tema cuando crezca), declarado con `#[cfg(test)] mod tests;`, nunca como
+   archivos hermanos sueltos como `foo_tests.rs`.
+
+Las funciones y los archivos existentes que ya superan estos límites quedan
+exentos hasta que se refactoricen; no necesitan cambiar para que un PR no
+relacionado pueda integrarse. Los maintainers pueden omitir el paso de abrir el
+issue primero y el límite de tamaño de PR, pero no los límites de tamaño de
+funciones y archivos.
 
 
 ### Los mensajes de commit y el changelog
@@ -165,7 +186,32 @@ cargo nextest run --workspace _covered
 
 Una ejecución del workspace compila los crates de UI con las features con las que se distribuye la app, así que también comprueba las superficies MCP y el modo Lua de los hooks. Los tests propios del helper se ejecutan con `cargo nextest run -p dbflux_ui_base keyboard_coverage`.
 
+## Nombres accesibles
+
+Todo control debe ser identificable por las tecnologías de asistencia y por la automatización de UI: un nombre accesible, y el rol y el estado que lo acompañan. Un control que no dibuja texto propio —un botón que solo muestra un ícono, una casilla dibujada a mano— se anuncia como un control sin nombre, y un lector de pantalla no puede distinguir uno de otro.
+
+Un elemento clickeable se nombra con su `aria_label` cuando la define, y si no, con el texto que dibuja, para los roles que toman el nombre de su contenido (botón, casilla, botón de opción, interruptor, enlace, ítem de menú, pestaña). Elige la corrección más pequeña que nombre el control:
+
+- `Button` se nombra con su label, y un botón que solo muestra un ícono con su tooltip (su label, cuando no define otro). Agrega `.aria_label(...)` solo cuando ninguno de los dos diga qué hace el botón.
+- `Checkbox` se nombra con `.label(...)`, para el texto que dibuja junto a la casilla, o con `.aria_label(...)`, para el texto que dibuja la fila que la rodea.
+- Un control dibujado a mano define su propia semántica: `.role(Role::CheckBox)`, `.aria_label(...)` y `.aria_toggled(...)` para una casilla; `.role(Role::Switch)` y `.aria_toggled(...)` para un interruptor de encendido/apagado; `.aria_expanded(...)` para una flecha que despliega.
+
+Nombra el control con el texto que la persona usuaria ve junto a él, para que el nombre hablado y la etiqueta visible coincidan. La única excepción es la casilla que activa una anulación: nombra el campo que anula («Anular política de actualización», no «Política de actualización»). El texto que tiene al lado nombra el campo, no lo que hace la casilla, y cuando el control del propio campo lleva esa misma etiqueta, un lector de pantalla no puede distinguir uno de otro. Un test de render por superficie lo demuestra: captura el frame con `dbflux_components::accessibility::FrameCapture` y compruébalo con `accessible_name`, `accessibility_node` o `unnamed_clickables`.
+
+```bash
+cargo nextest run -p dbflux_components accessibility
+```
+
 ## Issues
+
+Abre primero el issue y espera a que un maintainer lo apruebe antes de
+empezar a trabajar en una funcionalidad o un cambio de comportamiento. La
+aprobación es la etiqueta `status:approved` en el issue. Una propuesta suele
+necesitar ajustes antes de construirse, y un issue aprobado te evita invertir
+tiempo en código que habrá que rehacer.
+
+Una corrección de bug no necesita esperar: abre el issue y la corrección a la
+vez, y enlaza el issue desde el PR.
 
 Antes de abrir un issue:
 

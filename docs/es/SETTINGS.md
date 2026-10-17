@@ -143,19 +143,29 @@ cuántas filas devuelve una query ejecutada desde el editor. Es una opción de
 seguridad independiente de los tres controles de queries peligrosas de arriba.
 Acepta cualquier número entero desde 1 y no se puede poner en cero ni
 desactivar: al guardar cualquier otro valor se muestra un error y se conserva
-el límite anterior. DBFlux envía el límite al driver con cada query del editor
-en lugar de agregar un `LIMIT` al texto de la query, y muestra una advertencia
-cuando un resultado omitió filas. En un script con varias sentencias, el límite
-es un único presupuesto compartido por todos sus resultados, y todas las
-sentencias se ejecutan igual.
+el límite anterior. DBFlux envía el límite al driver
+en lugar de agregar un `LIMIT` al texto de la query. Cuando un resultado omitió
+filas, su pie dice "Primeras 10,000 filas cargadas" en lugar del número de
+filas. Para una sola sentencia que solo lee, el pie ofrece entonces **Contar
+filas**, que ejecuta la sentencia dentro de `SELECT COUNT(*)` sin traer sus
+filas y muestra "10,000/52,310 filas cargadas" (solo conexiones SQL), y
+**Cargar todas las filas**, que vuelve a ejecutar la sentencia sin el límite en
+la misma pestaña de resultados. Ambas están también en el menú de la tabla
+(`m`). En un script con varias sentencias, el límite es un único presupuesto
+compartido por todos sus resultados, y todas las sentencias se ejecutan igual.
 
-Los drivers que no pueden aplicar un límite de filas rechazan la query antes de
-ejecutarla en lugar de ignorar el límite. Por eso las queries del editor fallan
-con un error "Operation not supported" en MongoDB, Redis, Turso, InfluxDB, ClickHouse,
-Redshift, CloudWatch, drivers RPC externos y escrituras de DynamoDB (PartiQL
-`INSERT`/`UPDATE`/`DELETE` y los comandos put, update y delete). Cambiar el
-límite no cambia esto. El límite no agrega un timeout y no se aplica a scripts
-Lua, Python o Bash, hooks de conexión ni métricas. La
+El límite solo llega a un driver cuyo `execute` lo aplica: PostgreSQL,
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch y DynamoDB. Algunos todavía leen la respuesta
+completa antes de recortarla, y Redis solo limita las respuestas que se muestran
+como tabla; la página de cada driver detalla sus límites. Los drivers RPC
+externos reciben el límite cuando DBFlux y el driver hablan driver RPC 1.6 o
+posterior y el driver declara `REQUEST_ROW_LIMIT`; cualquier otro driver externo
+no recibe ninguno y la query se ejecuta sin límite. Un resultado sin límite muestra su recuento de filas
+completo, porque no se omitió ninguna, y su pie no ofrece ni Contar filas ni
+Cargar todas las filas; agrega un `LIMIT` o un `.limit()` a la sentencia cuando
+el resultado pueda ser grande. El límite no agrega un timeout y no se aplica a
+scripts Lua, Python o Bash, hooks de conexión ni métricas. La
 [consola](CONSOLE.md) envía el mismo límite a los drivers que pueden aplicarlo y
 ejecuta sus comandos sin él en los demás.
 

@@ -198,6 +198,13 @@ components:
       name: "Ordem: nome"
     source:
       file_footer: "Tamanhos do rodapé do arquivo"
+      catalog: "Tamanhos de %{name}"
+      planner_statistics: "Estatísticas de %{name}"
+      loaded_rows: "Das %{rows} linhas carregadas"
+      full_scan: "De todas as %{rows} linhas"
+      sample: "Distribuições das primeiras %{rows} linhas lidas"
+      read_at: "lido às %{time}"
+      file_modified: "arquivo modificado %{time}"
     header:
       column: "Coluna"
       codec: "Codec"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} colunas · %{shown} exibidas em Dados"
       hint: "Alterne uma coluna para adicioná-la à projeção de Dados ou removê-la"
+      counts_only: "%{total} colunas"
     loading: "Lendo estatísticas das colunas…"
     empty: "Esta tabela não tem colunas"
     no_match: "Nenhuma coluna corresponde ao filtro"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "Chave de ordenação"
       partition_key: "Chave de partição"
+      sort_key_position: "Chave de ordenação %{position}"
+      distribution_key: "Chave de distribuição"
+    action:
+      refresh: "Atualizar estatísticas"
+      sample: "Perfilar as primeiras %{rows} linhas"
+      full_scan: "Perfilar o arquivo inteiro"
+      running: "Perfilando…"
+    fact:
+      engine: "Mecanismo"
+      sort_key: "Chave de ordenação"
+      partition_key: "Chave de partição"
+      primary_key: "Chave primária"
+      sampling_key: "Chave de amostragem"
+      ttl: "TTL"
+      distribution_style: "Distribuição"
+      active_parts: "Partes ativas"
+      statistics_updated: "Estatísticas atualizadas"
+      rows: "Linhas"
+      on_disk: "Em disco"
+      raw: "Sem compressão"
+      ratio: "Taxa"
+      row_groups: "Grupos de linhas"
+      unsorted: "Não ordenado"
+      created_by: "Escrito por"
   read_estimate:
     lead: "Vai ler"
     row_groups: "%{touched} de %{total} grupos de linhas"
     more:
       one: "+%{count} a mais"
       many: "+%{count} a mais"
+    parts: "%{touched} de %{total} partes"
+    granules: "%{touched} de %{total} grânulos"
+    rows: "%{rows} linhas"
+    lead_upper: "Lerá até"
+  partition_list:
+    summary: "%{count} partições"
+    summary_with_key: "%{count} partições · PARTITION BY %{key}"
+    refresh: "Atualizar partições"
+    loading: "Lendo partições…"
+    empty: "Esta tabela não tem partições"
+    error_title: "Não foi possível ler as partições"
+    header:
+      partition: "Partição"
+      parts: "Partes"
+      rows: "Linhas"
+      on_disk: "Em disco"
+      raw: "Sem compressão"
+      ratio: "Taxa"
+      range: "Intervalo da chave"
+      modified: "Última alteração"
 composites:
   rail:
     add: "Adicionar"
@@ -406,10 +458,9 @@ connection_manager:
       relational: "Relacional"
       document: "Documento"
       key_value: "Chave-valor"
-      wide_column: "Colunar amplo"
       time_series_and_logs: "Séries temporais e logs"
-      graph: "Grafo"
       object_storage: "Armazenamento de objetos"
+      other: "Outros"
   export:
     target:
       connection: conexão
@@ -495,6 +546,8 @@ connection_manager:
       bundle_file: Arquivo do pacote
       bundle_encrypted: O pacote está criptografado
       passphrase: Senha
+      show_passphrase: Mostrar frase secreta
+      hide_passphrase: Ocultar frase secreta
     hint:
       no_native_picker: Este sistema não tem um seletor de arquivos nativo — digite ou cole o caminho do pacote acima.
       external_refs: Referências externas de valor são mantidas como estão
@@ -1206,7 +1259,6 @@ document:
       checking: "Verificando…"
       run: Executar
       last_run: "última execução %{seconds} s"
-      new_tab: Nova aba
       read_only: Somente leitura
       saved: Salvo
       save: Salvar
@@ -1260,6 +1312,11 @@ document:
         many: "Nenhum texto está selecionado, então o script inteiro será executado em ordem como %{count} instruções. Continuar?"
       cancel: Cancelar
       run: Executar script
+      run_statement: "Executar apenas esta instrução"
+      transaction:
+        title: "Instrução de transação sob o cursor"
+        message: "A instrução sob o cursor (linha %{line}) é \"%{statement}\", que apenas abre ou encerra uma transação. Executá-la sozinha não executa o restante do script. Executar o script inteiro de %{count} instruções em vez disso?"
+        message_statement_only: "A instrução sob o cursor (linha %{line}) é \"%{statement}\", que apenas abre ou encerra uma transação. Executá-la sozinha não executa o restante do script, e esta conexão não pode executar um script inteiro de uma vez: selecione as instruções para executá-las juntas. Executar apenas esta instrução?"
     dangerous_query:
       fallback:
         title: Aviso
@@ -1358,6 +1415,7 @@ document:
         run_script: "Executar script %{name}"
       copy_error: Copiar erro
       result_tab_title: "Resultado %{index}"
+      count_rows_failed: Não foi possível contar as linhas da consulta
       error:
         select_source: Selecione pelo menos uma origem
         start_time_required: O horário inicial é obrigatório
@@ -1541,6 +1599,7 @@ document:
         set_null: Definir como NULL
         add_row: Adicionar linha
         inspect_row: Inspecionar linha
+        find_similar_rows: Encontrar linhas semelhantes
         view_value: Ver valor
         duplicate_row: Duplicar linha
         delete_row: Excluir linha
@@ -1591,6 +1650,16 @@ document:
         value_compact: "Compactar o valor"
         value_revert: "Reverter o valor"
         value_save: "Salvar o valor"
+        view_table_data: "Mostrar Dados"
+        view_table_columns: "Mostrar Colunas"
+        view_table_partitions: "Mostrar Partições"
+        column_picker: "Escolher colunas"
+        refresh_profile: "Atualizar estatísticas das colunas"
+        sample_profile: "Perfilar as primeiras linhas"
+        refresh_partitions: "Atualizar partições"
+        nearest_distance: "Alterar a distância (atual: %{distance})"
+        nearest_clear: "Voltar às linhas da tabela"
+        nearest_column: "Mudar a coluna vetorial"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -1621,7 +1690,6 @@ document:
           insert_failed: "Falha ao inserir o documento: %{error}"
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
-      rows_omitted: Linhas omitidas deste conjunto de resultados porque um limite de execução foi atingido.
       edit_bar:
         clean: Nenhuma alteração não salva
         dirty:
@@ -1665,6 +1733,15 @@ document:
         rows:
           one: "%{count} linha"
           many: "%{count} linhas"
+        executed: "Instrução executada"
+        affected_rows:
+          one: "%{count} linha afetada"
+          many: "%{count} linhas afetadas"
+        limited_rows:
+          first: "Primeiras %{count} linhas carregadas"
+          of_total: "%{loaded}/%{total} linhas carregadas"
+          count: Contar linhas
+          load_all: Carregar todas as linhas
         pending_changes:
           one: "%{count} alteração pendente"
           many: "%{count} alterações pendentes"
@@ -1707,6 +1784,39 @@ document:
         builder_notice: As linhas vêm da consulta do construtor
         edit_in_builder: Editar no construtor
         reset_builder: Redefinir
+      nearest:
+        summary: "Semelhantes a %{anchor} por %{column}"
+        similar_to: "Semelhantes a"
+        by: "por"
+        k: "K"
+        anchor: "referência"
+        anchor_row: "linha %{row}"
+        read_only: "Linhas semelhantes são somente leitura"
+        menu_detail: "por %{column} · %{limit} mais próximas"
+        menu_blocked:
+          no_vector: "Sem valor em %{column}"
+          pending_edits:
+            one: "Salve ou reverta 1 alteração antes"
+            many: "Salve ou reverta %{count} alterações antes"
+        column:
+          l2: "Distância L2"
+          cosine: "Distância cosseno"
+          inner_product: "Produto interno"
+        rows:
+          of_total: "%{count} mais próximas de %{total} linhas"
+          count: "%{count} linhas mais próximas"
+        back_to_table: Voltar à tabela
+        distance:
+          l2: L2
+          cosine: Cosseno
+          inner_product: Produto interno
+        error:
+          no_vector: "A linha selecionada não tem valor em %{column}"
+          failed: "Falha ao encontrar linhas semelhantes: %{error}"
+          pending_edits:
+            one: "Salve ou reverta sua alteração antes"
+            many: "Salve ou reverta suas %{count} alterações antes"
+          invalid_k: "K deve ser um número inteiro de 1 a %{max}"
       toast:
         query_imported: Consulta importada com sucesso
         mutation_queued: Alteração enviada para aprovação.
@@ -1810,6 +1920,20 @@ document:
         references: REFERÊNCIAS
         row: LINHA
       title: "Linha %{row}"
+    table_views:
+      tab:
+        data: "Dados"
+        columns: "Colunas"
+        partitions: "Partições"
+      projection_keeps_keys: "A chave primária continua na projeção para que as linhas possam ser editadas: %{columns}"
+      sample_failed: "Falha ao perfilar a amostra: %{error}"
+      badge:
+        sort_position: "Ordem %{position}"
+        sort: "Ordem"
+        partition: "Part."
+        distribution: "Dist."
+      header_nulls: "%{percent} nulos"
+      refresh_failed: "Falha ao atualizar as estatísticas das colunas: %{error}"
   delimited:
     unsaved_summary: "Edições não salvas em %{name}"
     loading: "Carregando %{name}…"
@@ -1927,6 +2051,7 @@ document:
       text: "Texto"
       raw: "Bruto"
       aligned: "Alinhado"
+      columns: "Colunas"
     text:
       more_in_file: "O arquivo tem mais registros. Carregue mais para mostrá-los aqui."
       capped: "O texto mostra os primeiros %{shown} dos %{loaded} registros carregados. A tabela mostra todos."
@@ -1935,6 +2060,17 @@ document:
       apply_failed: "O texto não pode ser aplicado: %{cause}"
       read_only_capped: "Este texto não pode ser editado porque não mostra todos os registros carregados, e uma edição de parte dos registros não pode ser associada a eles. Edite na tabela."
       raw_edit_hint: "As edições são aplicadas à tabela quando você troca de visualização, salva ou carrega mais. Do texto só são usados os valores dos campos: uma linha cujos valores não mudaram mantém a quebra de linha e as aspas do arquivo, e linhas alteradas ou adicionadas são escritas com as colunas do arquivo."
+    columns:
+      type:
+        integer: "Inteiro"
+        decimal: "Decimal"
+        boolean: "Booleano"
+        date: "Data"
+        timestamp: "Data e hora"
+        text: "Texto"
+      progress: "%{scanned} de %{total}"
+      error:
+        scan_failed: "Não foi possível criar o perfil de %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analisando %{file} (%{analyzer})"
@@ -3226,9 +3362,6 @@ document:
       custom: Personalizado
       on_open: Ao abrir
     result_warnings:
-      rows_omitted:
-        summary: Linhas omitidas do resultado da consulta
-        cause: Pelo menos um conjunto de resultados omitiu linhas porque um limite de execução foi atingido.
       context:
         query: resultado da consulta
         table_browse: resultado da navegação na tabela
@@ -3246,6 +3379,7 @@ document:
       close_others: Fechar as outras
       close_right: Fechar à direita
     new: Nova aba
+    close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
 document_tree:
   search_placeholder: Buscar…
@@ -3383,6 +3517,7 @@ login:
     no_url: Nenhuma URL de login está disponível para este provedor.
     no_url_provided: A URL de login não foi fornecida pelo provedor
 modals:
+  close: Fechar
   active_query:
     title: Consulta ativa em execução
     prompt: Ainda há uma consulta em execução nesta conexão. O que você gostaria de fazer?
@@ -3545,6 +3680,13 @@ modals:
     remember: Lembrar durante esta sessão
     cancel: Cancelar
     connect: Conectar
+  connection_password:
+    title: "Senha necessária"
+    connection_label: "Conexão"
+    placeholder: "Senha"
+    show_password: "Mostrar senha"
+    hide_password: "Ocultar senha"
+    remember: "Lembrar até fechar o DBFlux"
   unsaved_changes:
     title: Alterações não salvas
     prompt: Você tem alterações não salvas nos documentos a seguir. O que você gostaria de fazer?
@@ -3885,6 +4027,7 @@ settings:
       error: Falha ao atualizar a configuração de banco de dados compartilhado
       hint: "Aplicado na próxima inicialização. Compartilha o banco de dados estável (dbflux.db) em vez do dbflux-nightly.db desta versão nightly."
     override_value_header: Valor de substituição
+    override_field: "Substituir %{field}"
     placeholder:
       refresh_policy: Política de atualização
     save:
@@ -4026,6 +4169,7 @@ settings:
       cycle_result_view: "Alternar visão do resultado"
       toggle_value_panel: Alternar painel de valor
       toggle_row_inspector: Alternar inspetor de linha
+      find_similar_rows: Encontrar linhas semelhantes
       results_set_null: Definir célula como NULL
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel
@@ -4766,6 +4910,8 @@ shutdown:
   failed: Falha no encerramento
 
 sidebar:
+  row:
+    actions: "Ações para %{name}"
   header:
     new_dashboard: "Novo dashboard"
     add: "Adicionar"
@@ -4963,9 +5109,7 @@ sidebar:
       relational: Tabelas (%{count})
       document: Coleções (%{count})
       key_value: Chaves (%{count})
-      graph: Nós (%{count})
       time_series: Measurements (%{count})
-      wide_column: Tabelas (%{count})
       log_stream: Grupos de logs (%{count})
       object_storage: Buckets (%{count})
     folder:

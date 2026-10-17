@@ -274,6 +274,11 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::ExecuteResult { result } => Ok(result.into()),
+            DriverResponseBody::ExecuteResultWithTruncation {
+                result,
+                rows_truncated,
+            } => Ok(truncatable_result(result, rows_truncated)),
+            DriverResponseBody::ExecuteResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol("Unexpected response to Execute".into())),
         }
@@ -293,6 +298,14 @@ impl RpcClient {
         match body {
             DriverResponseBody::ExecuteWithHandleResult { handle_id, result } => {
                 Ok((handle_id, result.into()))
+            }
+            DriverResponseBody::ExecuteWithHandleResultWithTruncation {
+                handle_id,
+                result,
+                rows_truncated,
+            } => Ok((handle_id, truncatable_result(result, rows_truncated))),
+            DriverResponseBody::ExecuteWithHandleResultSets { handle_id, results } => {
+                Ok((handle_id, results.into()))
             }
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
@@ -450,6 +463,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to BrowseTable".into(),
@@ -480,11 +494,14 @@ impl RpcClient {
     ) -> Result<dbflux_core::QueryResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::BrowseCollection { request },
+            DriverRequestBody::BrowseCollection {
+                request: request.into(),
+            },
         )?;
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to BrowseCollection".into(),
@@ -499,7 +516,9 @@ impl RpcClient {
     ) -> Result<u64, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::CountCollection { request },
+            DriverRequestBody::CountCollection {
+                request: request.into(),
+            },
         )?;
 
         match body {
@@ -520,6 +539,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol("Unexpected response to Explain".into())),
         }
@@ -537,6 +557,7 @@ impl RpcClient {
 
         match body {
             DriverResponseBody::BrowseResult { result } => Ok(result.into()),
+            DriverResponseBody::BrowseResultSets { results } => Ok(results.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to DescribeTable".into(),
@@ -554,7 +575,7 @@ impl RpcClient {
         let body = self.call(Some(session_id), DriverRequestBody::UpdateRow { patch })?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to UpdateRow".into(),
@@ -570,7 +591,7 @@ impl RpcClient {
         let body = self.call(Some(session_id), DriverRequestBody::InsertRow { insert })?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to InsertRow".into(),
@@ -586,7 +607,7 @@ impl RpcClient {
         let body = self.call(Some(session_id), DriverRequestBody::DeleteRow { delete })?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to DeleteRow".into(),
@@ -603,11 +624,13 @@ impl RpcClient {
     ) -> Result<dbflux_core::CrudResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::UpdateDocument { update },
+            DriverRequestBody::UpdateDocument {
+                update: update.into(),
+            },
         )?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to UpdateDocument".into(),
@@ -622,11 +645,13 @@ impl RpcClient {
     ) -> Result<dbflux_core::CrudResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::InsertDocument { insert },
+            DriverRequestBody::InsertDocument {
+                insert: insert.into(),
+            },
         )?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to InsertDocument".into(),
@@ -641,11 +666,13 @@ impl RpcClient {
     ) -> Result<dbflux_core::CrudResult, RpcError> {
         let body = self.call(
             Some(session_id),
-            DriverRequestBody::DeleteDocument { delete },
+            DriverRequestBody::DeleteDocument {
+                delete: delete.into(),
+            },
         )?;
 
         match body {
-            DriverResponseBody::CrudResult { result } => Ok(result),
+            DriverResponseBody::CrudResult { result } => Ok(result.into()),
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol(
                 "Unexpected response to DeleteDocument".into(),
@@ -910,6 +937,18 @@ impl RpcClient {
             .or_insert_with(|| Uuid::new_v4().to_string())
             .clone()
     }
+}
+
+/// The DTO has no room for the truncation flag, so v1.6 carries it beside the
+/// result and it is restored here, after the conversion that resets
+/// `metadata_extra`.
+fn truncatable_result(
+    result: dbflux_ipc::driver_protocol::QueryResultDto,
+    rows_truncated: bool,
+) -> dbflux_core::QueryResult {
+    let mut result = dbflux_core::QueryResult::from(result);
+    result.set_rows_truncated(rows_truncated);
+    result
 }
 
 fn protocol_supports_semantic_planning(version: ProtocolVersion) -> bool {

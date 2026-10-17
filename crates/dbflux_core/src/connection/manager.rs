@@ -787,6 +787,8 @@ pub struct ConnectionManager {
     /// entry exists only while the failure is the latest outcome: a new
     /// attempt, a successful connect, or a profile edit removes it.
     connect_failures: HashMap<Uuid, String>,
+    /// Passwords supplied at connect time, kept only while that session lives.
+    session_passwords: HashMap<Uuid, SecretString>,
     policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
@@ -806,6 +808,7 @@ impl ConnectionManager {
             table_details_revisions: HashMap::new(),
             view_refresh_revisions: HashMap::new(),
             connect_failures: HashMap::new(),
+            session_passwords: HashMap::new(),
             policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
     }
@@ -910,6 +913,7 @@ impl ConnectionManager {
         self.pending_operations
             .retain(|operation| operation.profile_id != id);
         self.connect_failures.remove(&id);
+        self.session_passwords.remove(&id);
 
         self.connections.insert(
             id,
@@ -963,6 +967,7 @@ impl ConnectionManager {
             .retain(|(profile, ..), _| *profile != profile_id);
         self.pending_operations
             .retain(|operation| operation.profile_id != profile_id);
+        self.session_passwords.remove(&profile_id);
         teardown
     }
 
@@ -1433,6 +1438,19 @@ impl ConnectionManager {
         self.connect_failures.get(&profile_id).map(String::as_str)
     }
 
+    /// Keeps the password supplied at connect time for the live session of
+    /// `profile_id`, so per-database connections and database switches reuse
+    /// it. Ignored when the profile is not connected.
+    pub fn set_session_password(&mut self, profile_id: Uuid, password: SecretString) {
+        if self.connections.contains_key(&profile_id) {
+            self.session_passwords.insert(profile_id, password);
+        }
+    }
+
+    pub fn session_password(&self, profile_id: Uuid) -> Option<&SecretString> {
+        self.session_passwords.get(&profile_id)
+    }
+
     // --- Prepare methods ---
 
     #[allow(clippy::too_many_arguments)]
@@ -1486,6 +1504,7 @@ impl ConnectionManager {
             secret_store: secret_store_param,
             ssh_secret,
             proxy: resolved_proxy,
+            password_override: None,
         })
     }
 
@@ -1582,6 +1601,7 @@ impl ConnectionManager {
             original_profile,
             driver,
             secret_store: secret_store.clone(),
+            session_password: self.session_passwords.get(&profile_id).cloned(),
         })
     }
 
@@ -1643,6 +1663,7 @@ impl ConnectionManager {
             original_profile,
             driver,
             secret_store: secret_store.clone(),
+            session_password: self.session_passwords.get(&profile_id).cloned(),
         })
     }
 
@@ -2583,6 +2604,7 @@ impl ConnectionManager {
         let count = self.connections.len();
         let connections = std::mem::take(&mut self.connections);
         self.active_connection_id = None;
+        self.session_passwords.clear();
         self.database_lists.clear();
         self.session_generations.clear();
         self.invalidation_revisions.clear();
@@ -2616,6 +2638,9 @@ pub struct ConnectProfileParams {
     pub secret_store: Option<Arc<RwLock<Box<dyn SecretStore>>>>,
     pub ssh_secret: Option<SecretString>,
     pub proxy: Option<ResolvedProxy>,
+    /// Password the user supplied for this connect, consulted before the
+    /// keyring. Set when the profile does not save its password.
+    pub password_override: Option<SecretString>,
 }
 
 pub struct HookExecutionContext {
@@ -2703,6 +2728,10 @@ impl ConnectProfileParams {
     }
 
     fn get_password(&self) -> Option<SecretString> {
+        if let Some(password) = &self.password_override {
+            return Some(password.clone());
+        }
+
         if !self.profile.save_password {
             return None;
         }
@@ -2749,6 +2778,8 @@ pub struct SwitchDatabaseParams {
     pub original_profile: ConnectionProfile,
     pub driver: Arc<dyn DbDriver>,
     pub secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
+    /// Password supplied when the profile connected, preferred over the keyring.
+    pub session_password: Option<SecretString>,
 }
 
 impl SwitchDatabaseParams {
@@ -2796,7 +2827,10 @@ impl SwitchDatabaseParams {
     /// than falling back to the stored password.
     fn resolve_password(&self) -> Result<Option<SecretString>, String> {
         match self.original_profile.value_refs.get(PASSWORD_VALUE_REF) {
-            None => Ok(self.get_password()),
+            None => Ok(self
+                .session_password
+                .clone()
+                .or_else(|| self.get_password())),
             Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
             Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
                 .map(|value| Some(SecretString::from(value)))
@@ -3987,6 +4021,7 @@ mod tests {
             secret_store: None,
             ssh_secret: None,
             proxy: Some(resolved),
+            password_override: None,
         };
 
         let result = params.execute(None);
@@ -4042,6 +4077,7 @@ mod tests {
             secret_store: None,
             ssh_secret: None,
             proxy: Some(resolved),
+            password_override: None,
         };
 
         let result = params.execute(Some(noop_tunnel));
@@ -4155,6 +4191,7 @@ mod tests {
             secret_store: None,
             ssh_secret: None,
             proxy: Some(resolved),
+            password_override: None,
         };
 
         let result = params.execute(Some(noop_tunnel));
@@ -6589,6 +6626,166 @@ mod tests {
                 Some(KEYRING_PASSWORD_VALUE.to_string())
             )]
         );
+    }
+
+    // --- Passwords supplied at connect time for an unsaved password ---
+
+    const PROMPTED_PASSWORD_VALUE: &str = "prompted-password";
+
+    #[test]
+    fn per_database_connection_reuses_the_session_password() {
+        let (mut manager, profile, recorded) = switch_manager_with(None, false);
+        manager.set_session_password(profile.id, SecretString::from(PROMPTED_PASSWORD_VALUE));
+
+        manager
+            .prepare_database_connection(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare database connection should succeed")
+            .execute()
+            .expect("per-database connection should succeed");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some(PROMPTED_PASSWORD_VALUE.to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn switch_database_reuses_the_session_password() {
+        let (mut manager, profile, recorded) = switch_manager_with(None, false);
+        manager.set_session_password(profile.id, SecretString::from(PROMPTED_PASSWORD_VALUE));
+
+        manager
+            .prepare_switch_database(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare switch should succeed")
+            .execute()
+            .expect("switch should succeed");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some(PROMPTED_PASSWORD_VALUE.to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn session_password_is_dropped_when_the_profile_disconnects() {
+        let (mut manager, profile, recorded) = switch_manager_with(None, false);
+        manager.set_session_password(profile.id, SecretString::from(PROMPTED_PASSWORD_VALUE));
+
+        if let Some(teardown) = manager.disconnect(profile.id) {
+            teardown.join().expect("teardown thread").expect("teardown");
+        }
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::ConnectionPerDatabase, "app");
+        connect_profile_with_schema(
+            &mut manager,
+            &profile,
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        manager
+            .prepare_database_connection(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare database connection should succeed")
+            .execute()
+            .expect("per-database connection should succeed");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![("analytics".to_string(), None)]
+        );
+    }
+
+    #[test]
+    fn session_password_is_dropped_when_every_connection_closes_at_shutdown() {
+        let (mut manager, profile, _recorded) = switch_manager_with(None, false);
+        manager.set_session_password(profile.id, SecretString::from(PROMPTED_PASSWORD_VALUE));
+        assert!(manager.session_password(profile.id).is_some());
+
+        let shutdown = crate::ShutdownCoordinator::new();
+        shutdown.set_phase(crate::ShutdownPhase::CancellingTasks);
+        for teardown in manager.close_all_connections(&shutdown) {
+            teardown.join().expect("teardown thread").expect("teardown");
+        }
+
+        assert!(manager.session_password(profile.id).is_none());
+    }
+
+    #[test]
+    fn session_password_requires_a_live_connection() {
+        let mut manager = ConnectionManager::new(HashMap::new());
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+
+        manager.set_session_password(profile.id, SecretString::from(PROMPTED_PASSWORD_VALUE));
+
+        assert!(manager.session_password(profile.id).is_none());
+    }
+
+    #[test]
+    fn connect_uses_the_provided_password_instead_of_the_keyring() {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = false;
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(fixed_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: Some(SecretString::from(PROMPTED_PASSWORD_VALUE)),
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.as_deref(), Some(PROMPTED_PASSWORD_VALUE));
+    }
+
+    #[test]
+    fn connect_accepts_an_empty_provided_password() {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = false;
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(fixed_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: Some(SecretString::from(String::new())),
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn connect_without_a_provided_password_keeps_the_saved_password() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(fixed_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.as_deref(), Some(KEYRING_PASSWORD_VALUE));
     }
 
     #[test]

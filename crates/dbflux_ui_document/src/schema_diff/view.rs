@@ -1345,6 +1345,10 @@ impl SchemaDiffDocument {
         };
         let (connection, event_sink, connection_id, driver_id, policy, read_only_reason) = {
             let state = self.app_state.read(cx);
+            #[expect(
+                clippy::expect_used,
+                reason = "preparation_context above returned Some, which requires connections() to contain profile_id; both reads happen in the same synchronous call"
+            )]
             let connected = state
                 .connections()
                 .get(&self.profile_id)
@@ -2462,6 +2466,11 @@ impl SchemaDiffDocument {
         .into_any_element()
     }
 
+    // group_index comes from 0..self.groups.len() at the only call site.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the only call site passes index from 0..self.groups.len()"
+    )]
     fn render_group(
         &self,
         group_index: usize,
@@ -2525,6 +2534,13 @@ impl SchemaDiffDocument {
             .id(SharedString::from(format!(
                 "chk-{group_index}-{change_index}"
             )))
+            .role(Role::CheckBox)
+            .aria_label(description.clone())
+            .aria_toggled(if checked {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
             .size(Fields::CHECKBOX_SIZE)
             .rounded(Radii::SM)
             .border_1()
@@ -2576,6 +2592,13 @@ impl SchemaDiffDocument {
 
                 let checkbox = div()
                     .id(SharedString::from(format!("chk-table-{group_index}")))
+                    .role(Role::CheckBox)
+                    .aria_label(description.clone())
+                    .aria_toggled(if checked {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
                     .size(Fields::CHECKBOX_SIZE)
                     .rounded(Radii::SM)
                     .border_1()
@@ -2775,10 +2798,11 @@ mod tests {
     use super::SchemaDiffDocument;
     use super::{
         ComputeBinding, ComputeState, PreparationBinding, PreparationContext, PreparationState,
-        ReferenceMetadataMap, apply_completion_disposition, apply_snapshot_load_result,
-        binding_is_current, build_groups, deep_resolve, document_state_for,
-        invalidate_snapshot_profile_if_missing, load_existing_profile_snapshots,
-        read_only_toast_message, release_stale_apply_loading, schema_diff_is_busy,
+        ReferenceMetadataMap, TableDiffGroup, apply_completion_disposition,
+        apply_snapshot_load_result, binding_is_current, build_groups, deep_resolve,
+        document_state_for, invalidate_snapshot_profile_if_missing,
+        load_existing_profile_snapshots, read_only_toast_message, release_stale_apply_loading,
+        schema_diff_is_busy,
     };
     use std::collections::HashMap;
 
@@ -3912,5 +3936,101 @@ mod tests {
         let es = dbflux_i18n::t!("document.schema_diff.summary.apply", locale = "es");
 
         assert_ne!(en, es);
+    }
+
+    #[gpui::test]
+    fn the_selection_checkboxes_are_named_checkboxes(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_components::accessibility::{FrameCapture, accessibility_node, accessible_name};
+        use dbflux_core::{
+            ColumnSnapshot, ExecutionClassification, RiskedChange, SchemaChange, TableRef,
+        };
+        use gpui::{Entity, Role, Toggled};
+
+        init_keyboard_runtime(cx);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("storage"),
+                )
+                .expect("app state")
+            })
+        });
+        let profile = ConnectionProfile::new("test", DbConfig::default_sqlite());
+        let profile_id = profile.id;
+        app_state.update(cx, |state, _| state.add_profile_in_folder(profile, None));
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    SchemaDiffDocument::new(profile_id, Some("db".into()), app_state, window, cx)
+                })
+            },
+            |document, _cx| document.active_context(),
+            |document, command, window, cx| document.dispatch_command(command, window, cx),
+        );
+        let document: Entity<SchemaDiffDocument> =
+            window.update(|_, cx| host.read(cx).document.clone());
+        window.run_until_parked();
+
+        // The test profile has no connection, so the tab's own comparison
+        // never runs; the group and its state are installed directly.
+        let change = SchemaChange::ColumnAdded(ColumnSnapshot {
+            name: "email".to_string(),
+            type_name: "text".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+        });
+        let expected = crate::labels::schema_change_description(&change);
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.groups = vec![TableDiffGroup {
+                    table: TableRef {
+                        schema: None,
+                        name: "users".to_string(),
+                    },
+                    header: "users".to_string(),
+                    applicable: vec![RiskedChange {
+                        change,
+                        risk: ExecutionClassification::AdminSafe,
+                    }],
+                    unsupported: Vec::new(),
+                    table_action: None,
+                }];
+                document.compute_state = ComputeState::Diff;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+
+        assert_eq!(
+            accessible_name(&frame, "chk-0-0"),
+            Some(expected),
+            "the checkbox is named after the change it applies"
+        );
+        let node =
+            accessibility_node(&frame, "chk-0-0").expect("the checkbox is an accessible node");
+        assert_eq!(node.role(), Role::CheckBox);
+        assert_eq!(node.toggled(), Some(Toggled::False));
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| document.toggle_selection(0, 0, cx));
+        });
+        let frame = capture.frame(window);
+        let node =
+            accessibility_node(&frame, "chk-0-0").expect("the checkbox is an accessible node");
+
+        assert_eq!(
+            node.toggled(),
+            Some(Toggled::True),
+            "selecting is announced"
+        );
     }
 }

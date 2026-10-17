@@ -12,6 +12,16 @@ license: MIT
 - Proposing a feature or improvement
 - Opening a tracking issue before implementation work
 
+## Approval Gate
+
+| Issue | Before implementing |
+|---|---|
+| Feature or behavior change (`feature_request.yml`) | Stop after filing. Start work only once a maintainer applies `status:approved`. `status:needs-review` means it is still being evaluated; `status:rejected` means do not build it. |
+| Bug (`bug_report.yml`) | No wait. Open the fix PR together with the issue and link it with `Resolves #N`. |
+| Filed by the maintainer | The maintainer may skip the wait. |
+
+Check the label with `gh issue view <N> --json labels`. A comment that sounds positive is not approval.
+
 ## Repository Facts
 
 - Issues are created from the forms in `.github/ISSUE_TEMPLATE/`: `bug_report.yml` for a defect, `feature_request.yml` for a capability. They are the only issue templates in the repo.
@@ -27,7 +37,9 @@ license: MIT
 - Fill every required field. `bug_report.yml` asks for the DBFlux version, operating system, OS detail, architecture, the affected driver, reproducible steps, expected and actual behavior, and logs; `feature_request.yml` asks for the problem, the proposed solution, alternatives considered, and the primary area.
 - Keep the form's shape when filing through `gh` (the CLI shows no form): keep the field labels as `### <label>` headings, and keep the `Labels I plan to apply` checklist in the body.
 - Keep the issue grounded in observed repo behavior, failing commands, or a concrete user/problem statement
-- Do not require `status:approved`, `status:needs-review`, or any other label before work can start
+- Follow the Approval Gate above: a feature or behavior-change issue waits for `status:approved`; a bug fix and an issue filed by the maintainer do not
+- Keep a feature proposal small enough to land in PRs of about 400 changed lines that each branch from `main`; if it cannot, say in the proposal how it splits (PRs are squash-merged, so avoid stacks)
+- Do not apply `status:*` labels yourself; maintainers set them during triage
 - Do not invent milestones, assignees, labels, or project board fields unless the user explicitly asks
 - If key reproduction details or scope are missing, ask one concise follow-up question instead of guessing
 

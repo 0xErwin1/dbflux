@@ -10,7 +10,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme;
 
-use crate::components::column_facts::format_bytes;
+use crate::components::column_facts::{format_bytes, group_thousands};
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Spacing};
@@ -111,9 +111,16 @@ impl ReadEstimateBar {
         let hidden = columns.len().saturating_sub(MAX_CHIPS);
 
         Self {
-            lead: dbflux_i18n::t!("components.read_estimate.lead").into(),
+            // An inexact estimate counts what the index cannot skip; a limit
+            // may stop the read sooner, so it is an upper bound.
+            lead: if estimate.exact {
+                dbflux_i18n::t!("components.read_estimate.lead")
+            } else {
+                dbflux_i18n::t!("components.read_estimate.lead_upper")
+            }
+            .into(),
             total: format!("≈ {}", format_bytes(estimate.total_bytes)).into(),
-            scope: scope_label(&estimate.scope).into(),
+            scope: scopes_label(estimate).into(),
             segments,
             chips,
             more: (hidden > 0).then(|| more_label(hidden).into()),
@@ -260,17 +267,37 @@ fn column_name(profile: &TableProfile, index: usize) -> SharedString {
 
 /// "k of n row groups", in the unit the estimate counts.
 fn scope_label(scope: &EstimateScope) -> String {
-    match scope {
-        EstimateScope::Parts {
-            touched,
-            total,
-            unit: PartUnit::RowGroups,
-        } => dbflux_i18n::t!(
-            "components.read_estimate.row_groups",
-            touched = touched,
-            total = total
-        ),
+    let EstimateScope::Parts {
+        touched,
+        total,
+        unit,
+    } = scope;
+
+    let key = match unit {
+        PartUnit::RowGroups => "components.read_estimate.row_groups",
+        PartUnit::Parts => "components.read_estimate.parts",
+        PartUnit::Granules => "components.read_estimate.granules",
+    };
+
+    dbflux_i18n::t!(
+        key,
+        touched = group_thousands(*touched as u64),
+        total = group_thousands(*total as u64)
+    )
+}
+
+/// Every scope of the estimate, coarsest first, then the rows it scans.
+fn scopes_label(estimate: &ReadEstimate) -> String {
+    let mut parts: Vec<String> = estimate.scopes.iter().map(scope_label).collect();
+
+    if let Some(rows) = estimate.rows {
+        parts.push(dbflux_i18n::t!(
+            "components.read_estimate.rows",
+            rows = group_thousands(rows)
+        ));
     }
+
+    parts.join(", ")
 }
 
 fn more_label(count: usize) -> String {
@@ -290,26 +317,13 @@ mod tests {
     use super::ReadEstimateBar;
 
     fn profile(names: &[&str]) -> TableProfile {
-        TableProfile {
-            columns: names
+        TableProfile::new(
+            names
                 .iter()
-                .map(|name| ColumnProfile {
-                    name: (*name).into(),
-                    type_name: "INT64".into(),
-                    badges: Vec::new(),
-                    codec: None,
-                    compressed_bytes: None,
-                    uncompressed_bytes: None,
-                    null_count: None,
-                    distinct_count: None,
-                    range: None,
-                })
+                .map(|name| ColumnProfile::new(*name, "INT64"))
                 .collect(),
-            row_count: None,
-            total_compressed_bytes: None,
-            total_uncompressed_bytes: None,
-            source_label: ProfileSource::FileFooter,
-        }
+            ProfileSource::FileFooter,
+        )
     }
 
     const MIB: u64 = 1024 * 1024;
@@ -327,11 +341,13 @@ mod tests {
                 (4, 4 * MIB),
                 (5, 13 * MIB),
             ],
-            scope: EstimateScope::Parts {
+            scopes: vec![EstimateScope::Parts {
                 touched: 1,
                 total: 13,
                 unit: PartUnit::RowGroups,
-            },
+            }],
+            rows: None,
+            exact: true,
         };
 
         let bar = ReadEstimateBar::new(&estimate, &table);
@@ -346,16 +362,48 @@ mod tests {
     }
 
     #[test]
+    fn an_estimate_lists_every_scope_and_the_rows() {
+        let table = profile(&["path"]);
+        let estimate = ReadEstimate {
+            total_bytes: 96 * MIB,
+            per_column: vec![(0, 96 * MIB)],
+            scopes: vec![
+                EstimateScope::Parts {
+                    touched: 1,
+                    total: 13,
+                    unit: PartUnit::Parts,
+                },
+                EstimateScope::Parts {
+                    touched: 512,
+                    total: 224_600,
+                    unit: PartUnit::Granules,
+                },
+            ],
+            rows: Some(4_194_304),
+            exact: false,
+        };
+
+        let bar = ReadEstimateBar::new(&estimate, &table);
+
+        assert_eq!(
+            bar.summary(),
+            "Reads up to ≈ 96 MiB · 1 of 13 parts, 512 of 224\u{202F}600 granules, 4\u{202F}194\u{202F}304 rows"
+        );
+    }
+
+    #[test]
     fn a_column_missing_from_the_profile_is_named_by_position() {
         let table = profile(&["only"]);
         let estimate = ReadEstimate {
             total_bytes: 3 * MIB,
             per_column: vec![(0, MIB), (7, 2 * MIB)],
-            scope: EstimateScope::Parts {
+            scopes: vec![EstimateScope::Parts {
                 touched: 2,
                 total: 2,
                 unit: PartUnit::RowGroups,
-            },
+            }],
+            rows: None,
+            exact: true,
         };
 
         let bar = ReadEstimateBar::new(&estimate, &table);
@@ -373,11 +421,13 @@ mod tests {
         let estimate = ReadEstimate {
             total_bytes: 300 * MIB,
             per_column: (0..300).map(|index| (index, MIB)).collect(),
-            scope: EstimateScope::Parts {
+            scopes: vec![EstimateScope::Parts {
                 touched: 1,
                 total: 1,
                 unit: PartUnit::RowGroups,
-            },
+            }],
+            rows: None,
+            exact: true,
         };
 
         let bar = ReadEstimateBar::new(&estimate, &table);
@@ -396,7 +446,11 @@ mod tests {
     fn estimate_keys_resolve_in_every_locale() {
         for key in [
             "components.read_estimate.lead",
+            "components.read_estimate.lead_upper",
             "components.read_estimate.row_groups",
+            "components.read_estimate.parts",
+            "components.read_estimate.granules",
+            "components.read_estimate.rows",
             "components.read_estimate.more.one",
             "components.read_estimate.more.many",
         ] {

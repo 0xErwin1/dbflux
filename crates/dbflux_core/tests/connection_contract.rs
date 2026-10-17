@@ -1,4 +1,4 @@
-use dbflux_core::{ColumnKind, ColumnMeta, DefaultSqlDialect, DriverKey, KeySetRequest};
+use dbflux_core::{ColumnKind, ColumnMeta, DbError, DefaultSqlDialect, DriverKey, KeySetRequest};
 use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, DocumentFilter, DocumentUpdate,
     GeneratedQuery, MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, QueryResult,
@@ -132,6 +132,43 @@ fn count_table_falls_back_to_zero_for_non_integer_cell() {
         .expect("count_table should succeed");
 
     assert_eq!(count, 0);
+}
+
+// =========================================================================
+// SQL-building trait defaults
+// =========================================================================
+
+#[test]
+fn default_sql_builders_return_not_supported_instead_of_panicking() {
+    let driver = FakeDriver::new(DbKind::Postgres);
+    let profile = ConnectionProfile::new("fake", DbConfig::default_postgres());
+    let connection = driver
+        .connect(&profile)
+        .expect("fake driver should connect");
+
+    let truncate = connection
+        .build_truncate_sql("users")
+        .expect_err("the default build_truncate_sql should report not-supported, not panic");
+    assert!(
+        matches!(truncate, DbError::NotSupported(_)),
+        "expected NotSupported, got {truncate:?}"
+    );
+
+    let drop_index = connection
+        .build_drop_index_sql("idx_users_email", Some("users"), true)
+        .expect_err("the default build_drop_index_sql should report not-supported, not panic");
+    assert!(
+        matches!(drop_index, DbError::NotSupported(_)),
+        "expected NotSupported, got {drop_index:?}"
+    );
+
+    let version = connection
+        .version_query()
+        .expect_err("the default version_query should report not-supported, not panic");
+    assert!(
+        matches!(version, DbError::NotSupported(_)),
+        "expected NotSupported, got {version:?}"
+    );
 }
 
 // =========================================================================

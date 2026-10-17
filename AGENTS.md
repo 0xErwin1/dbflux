@@ -17,6 +17,7 @@ Both are created from the repository's own templates — never from a remembered
 - An issue uses one of the forms in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` for a defect, `feature_request.yml` for a capability. Fill the form's fields in the order it declares them, and keep the `[bug] ` / `[feature] ` title prefix and the `Labels I plan to apply` checklist it renders.
 - A pull request uses `.github/pull_request_template.md` verbatim: `Summary`, `What does this resolve?`, `How was this solved?`, `Validation`, `Where was this tested?`, `Checklist`, `Labels to apply`. Do not add sections of your own; follow-up work and known limitations belong where the template asks for them.
 - The mechanics (duplicate search, choosing the form, `gh` commands, reading the full branch delta) live in `skills/issue-creation/SKILL.md` and `skills/branch-pr/SKILL.md`.
+- Open the issue first and wait for maintainer approval (the `status:approved` label) before implementing a feature or behavior change; a bug fix may open its issue and PR together, and the maintainer may skip the wait. PRs are squash-merged, so split large work into independent PRs from `main` rather than long stacks (see `CONTRIBUTING.md` § Pull Requests).
 - Use only labels from the taxonomy in `CONTRIBUTING.md` § Label Guide, and never invent labels such as `area:*`.
 - A contributor without write access to `0xErwin1/dbflux` cannot apply labels from a fork. State the labels the change needs where the template asks for them and ask a maintainer to apply them during triage — do not drop that part of the template.
 
@@ -136,8 +137,9 @@ cargo run -p dbflux --features ui-automation
 
 - Prioritize correctness and clarity over speed
 - Do not write comments that summarize code; only explain non-obvious "why"
-- Prefer implementing in existing files unless it's a new logical component
-- Avoid creating many small files
+- Keep code organized by module: extend the module that owns the behavior, and once a file passes ~1000 lines of production code, split it into a module directory (`foo/mod.rs` plus submodules) by responsibility. New files belong inside the module directory they serve, not loose next to unrelated files.
+- Keep tests in the module's `tests` submodule (`foo/tests.rs` or `foo/tests/`), not inline in large files and not as sibling `*_tests.rs` files.
+- Keep functions under ~100 lines; split new or substantially rewritten functions that exceed it into private helpers. Existing functions and files over these limits are exempt until they are refactored.
 - Avoid creative additions unless explicitly requested
 - Use full words for variable names (no abbreviations like "q" for "queue")
 
@@ -370,7 +372,7 @@ The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate ma
 - `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, DashboardDocument, KeyValueDocument, AuditDocument, InstanceInspectorDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
-- `dbflux_ui` — thin integrator (~16k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server, app_menu (the macOS application menu bar). Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+- `dbflux_ui` — thin integrator: workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server, app_menu (the macOS application menu bar). Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
 
 `dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
 
@@ -419,6 +421,7 @@ Key abstractions for UI adaptation:
 - `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
 - `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
 - `CollectionPresentation`: Determines how a collection/container opens (for example data grid vs event stream)
+- `ObjectFacet` (via `Connection::object_facets` for tables and `Connection::collection_facets` for collections, both default `[Tabular]`): Determines the view modes, gates, filter wording and grid actions inside the data document, per object. A table can carry several (PostgreSQL adds `Document` for a `jsonb` column, `TimeSeries` for a hypertable and `Vector` for each `vector(n)` column). Never derive them from `DatabaseCategory` in the UI; only the RPC adapter uses `category_collection_facets`
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
@@ -469,6 +472,7 @@ Key abstractions for UI adaptation:
 4. Define the connection form in the driver crate (e.g. `const DRIVER_FORM: DriverFormDef`) and return it from `DbDriver::form_definition()`. Form definitions live with the driver, not in `dbflux_core`.
 5. Implement `ErrorFormatter` for driver-specific error messages
 6. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
+   - Override `Connection::object_facets` when an object exposes more than one paradigm, and implement the matching `QueryGenerator` method (for example `generate_nearest_neighbors` for `ObjectFacet::Vector`).
 7. Implement `LanguageService` when the driver speaks a non-SQL dialect (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). SQL drivers can reuse `SqlLanguageService` from `dbflux_core`.
 8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag. The feature MUST also be added to `default` in `crates/dbflux/Cargo.toml` — release builds ship default features, so a driver left out of `default` silently ships disabled.
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
@@ -483,14 +487,16 @@ For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_s
 
 Drivers declare their capabilities via `DriverMetadata`:
 
-- `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
+- `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
+- `ObjectFacet` (`dbflux_core/src/schema/facet.rs`): per-object paradigms. A new paradigm lands as one facet variant, a driver that emits it and the view that renders it, in the same plan. Never add a core facet, `DataStructure` variant or view kind as a skeleton to be filled in later.
+- A new `DatabaseCategory` also needs its arm in `category_presentation` (`dbflux_components/src/category.rs`), the single source of category icons, tones and container labels.
 
 ### Documentation translations
 
-- `docs/es/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
-- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
+- `docs/es/`, `docs/ko/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
+- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/`, `docs/ko/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
 - A page with no counterpart yet needs none; the site serves the English body with a notice.
 - Keep headings, relative links, and ```mermaid fences aligned with the English page, because the site pairs pages by structure. See `docs/TRANSLATIONS.md`.
 
@@ -504,10 +510,10 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 Documents are open-tab entities managed through a closure-erasing shell. The polymorphism mechanism is `PaneHandle`, not a closed enum. See `ARCHITECTURE.md` § Document System for the full picture.
 
-1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
+1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures covering rendering and focus, command dispatch, pure metadata reads, dedup matching, event subscription, and optional document-specific helpers such as the close and quit policy. `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
 2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
-3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`). No per-document event enums.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — the identity key for tab deduplication; the variant list lives in that file and is the source of truth. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
 6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
@@ -612,7 +618,7 @@ The right-rail builder composes SELECT / UPDATE / DELETE without writing SQL. It
 The document query builder is a separate rail for document collections, with the same rules:
 
 - The spec is `DocumentQuerySpec` in `dbflux_core/src/query/document_query.rs`. Drivers implement `DocumentQueryCodec` and return it from `Connection::document_query_codec()`; the codec renders a spec as find slots, a pipeline and preview text, and parses the slots back with the clauses it cannot represent.
-- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder.rs`.
+- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder/mod.rs`.
 - Execution goes through the query slots and `browse_collection` (Find) or the Aggregate view (Aggregate); the builder never executes generated shell text.
 - Persistence: migration `037_qry_saved_document_queries`, `DocumentQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_document_queries.rs`) and `SavedDocumentQueryManager` (`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
 

@@ -14,6 +14,7 @@ use dbflux_core::{
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
 use postgres::config::SslMode;
+use postgres::fallible_iterator::FallibleIterator;
 use postgres::types::{FromSql, Type};
 use postgres::{CancelToken, Client, Config, NoTls};
 use postgres_native_tls::MakeTlsConnector;
@@ -341,11 +342,50 @@ fn map_statement_error(error: &postgres::Error) -> DbError {
     }
 }
 
-/// Prepares and runs one statement, returning its column metadata and rows.
+/// Rows one statement produced, already converted, and whether the request's
+/// row budget dropped any of them.
+struct StatementRows {
+    columns: Vec<ColumnMeta>,
+    rows: Vec<Row>,
+    truncated: bool,
+}
+
+/// Pulls every item from `next_item`, retaining items only while
+/// `remaining_rows` lasts and deducting the items it retains. `None` means no
+/// budget, so every item is retained.
+///
+/// The source is always drained to the end, so the statement completes on the
+/// server before the session is reused. The returned flag is `true` only when
+/// this source produced items the budget could not retain.
+fn retain_within_budget<Item, Retained, Error>(
+    mut next_item: impl FnMut() -> Result<Option<Item>, Error>,
+    remaining_rows: &mut Option<usize>,
+    mut convert: impl FnMut(Item) -> Retained,
+) -> Result<(Vec<Retained>, bool), Error> {
+    let mut retained = Vec::new();
+    let mut truncated = false;
+
+    while let Some(item) = next_item()? {
+        match remaining_rows {
+            Some(0) => truncated = true,
+            Some(remaining) => {
+                *remaining -= 1;
+                retained.push(convert(item));
+            }
+            None => retained.push(convert(item)),
+        }
+    }
+
+    Ok((retained, truncated))
+}
+
+/// Prepares and streams one statement, retaining rows only within
+/// `remaining_rows`.
 fn run_statement(
     client: &mut postgres::Client,
     sql: &str,
-) -> Result<(Vec<ColumnMeta>, Vec<postgres::Row>), DbError> {
+    remaining_rows: &mut Option<usize>,
+) -> Result<StatementRows, DbError> {
     let statement = client
         .prepare(sql)
         .map_err(|error| map_statement_error(&error))?;
@@ -362,11 +402,26 @@ fn run_statement(
         })
         .collect();
 
-    let rows = client
-        .query(&statement, &[])
+    let mut stream = client
+        .query_raw(&statement, std::iter::empty::<i32>())
         .map_err(|error| map_statement_error(&error))?;
 
-    Ok((columns, rows))
+    let column_count = columns.len();
+    let (rows, truncated) = retain_within_budget(
+        || stream.next().map_err(|error| map_statement_error(&error)),
+        remaining_rows,
+        |row| {
+            (0..column_count)
+                .map(|index| redshift_value_to_value(&row, index))
+                .collect()
+        },
+    )?;
+
+    Ok(StatementRows {
+        columns,
+        rows,
+        truncated,
+    })
 }
 
 /// Runs one statement inside `BEGIN READ ONLY` and always rolls it back, so
@@ -378,12 +433,13 @@ fn run_statement(
 fn run_read_only_statement(
     client: &mut postgres::Client,
     sql: &str,
-) -> Result<(Vec<ColumnMeta>, Vec<postgres::Row>), DbError> {
+    remaining_rows: &mut Option<usize>,
+) -> Result<StatementRows, DbError> {
     client
         .batch_execute("BEGIN READ ONLY")
         .map_err(|error| format_redshift_query_error(&error))?;
 
-    let outcome = run_statement(client, sql);
+    let outcome = run_statement(client, sql, remaining_rows);
 
     match client.batch_execute("ROLLBACK") {
         Ok(()) => outcome,
@@ -694,9 +750,9 @@ impl Connection for RedshiftConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "Redshift cannot enforce a requested row limit or statement timeout before execution"
+                "Redshift cannot enforce a requested statement timeout before execution"
                     .to_string(),
             ));
         }
@@ -718,31 +774,25 @@ impl Connection for RedshiftConnection {
         // would land on the next statement run on this connection.
         let active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
-        let (columns, rows) = if req.read_only.is_required() {
-            run_read_only_statement(&mut client, &req.sql)?
+        let mut remaining_rows = req.limit.map(|limit| limit as usize);
+
+        let statement_rows = if req.read_only.is_required() {
+            run_read_only_statement(&mut client, &req.sql, &mut remaining_rows)?
         } else {
-            run_statement(&mut client, &req.sql)?
+            run_statement(&mut client, &req.sql, &mut remaining_rows)?
         };
 
         drop(active_query_guard);
         drop(client);
 
-        let result_rows: Vec<Row> = rows
-            .iter()
-            .take(req.limit.unwrap_or(u32::MAX) as usize)
-            .map(|row| {
-                (0..columns.len())
-                    .map(|i| redshift_value_to_value(row, i))
-                    .collect()
-            })
-            .collect();
-
-        Ok(QueryResult::table(
-            columns,
-            result_rows,
+        let mut result = QueryResult::table(
+            statement_rows.columns,
+            statement_rows.rows,
             None,
             start.elapsed(),
-        ))
+        );
+        result.set_rows_truncated(statement_rows.truncated);
+        Ok(result)
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
@@ -838,6 +888,23 @@ impl Connection for RedshiftConnection {
     /// constraints, so those feature flags stay unset.
     fn schema_features(&self) -> SchemaFeatures {
         SchemaFeatures::FOREIGN_KEYS | SchemaFeatures::UNIQUE_CONSTRAINTS
+    }
+
+    fn table_view_features(&self) -> dbflux_core::TableViewFeatures {
+        dbflux_core::TableViewFeatures::COLUMN_PROFILE
+            | dbflux_core::TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(
+        &self,
+        table: &dbflux_core::TableRef,
+    ) -> Result<dbflux_core::TableProfile, DbError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+        crate::table_views::table_profile(&mut client, table)
     }
 
     fn kind(&self) -> DbKind {
@@ -1022,6 +1089,104 @@ mod tests {
     use std::sync::RwLock;
     use std::time::Duration;
     use uuid::Uuid;
+
+    fn drain_into_budget(
+        produced: Vec<u32>,
+        remaining_rows: &mut Option<usize>,
+    ) -> (Vec<u32>, bool) {
+        let mut source = produced.into_iter();
+        super::retain_within_budget(
+            || Ok::<_, DbError>(source.next()),
+            remaining_rows,
+            |value| value,
+        )
+        .expect("infallible source")
+    }
+
+    #[test]
+    fn bounded_collection_retains_everything_within_the_budget() {
+        let mut remaining = Some(5);
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(remaining, Some(2));
+    }
+
+    #[test]
+    fn bounded_collection_exactly_at_budget_is_not_truncated() {
+        let mut remaining = Some(3);
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(remaining, Some(0));
+    }
+
+    #[test]
+    fn bounded_collection_drops_rows_past_the_budget_and_flags_truncation() {
+        let mut remaining = Some(2);
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3, 4], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2]);
+        assert!(truncated);
+        assert_eq!(remaining, Some(0));
+    }
+
+    #[test]
+    fn bounded_collection_budget_is_shared_across_result_sets() {
+        let mut remaining = Some(3);
+
+        let (first, first_truncated) = drain_into_budget(vec![1, 2], &mut remaining);
+        let (second, second_truncated) = drain_into_budget(vec![3, 4], &mut remaining);
+        let (third, third_truncated) = drain_into_budget(vec![], &mut remaining);
+
+        assert_eq!(first, vec![1, 2]);
+        assert!(!first_truncated);
+        assert_eq!(second, vec![3]);
+        assert!(second_truncated);
+        assert!(third.is_empty());
+        assert!(!third_truncated);
+    }
+
+    #[test]
+    fn bounded_collection_with_zero_limit_retains_nothing() {
+        let mut remaining = Some(0);
+
+        let (rows, truncated) = drain_into_budget(vec![1], &mut remaining);
+        assert!(rows.is_empty());
+        assert!(truncated);
+
+        let (empty, empty_truncated) = drain_into_budget(vec![], &mut remaining);
+        assert!(empty.is_empty());
+        assert!(!empty_truncated);
+    }
+
+    #[test]
+    fn unbounded_collection_retains_every_row() {
+        let mut remaining = None;
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(remaining, None);
+    }
+
+    #[test]
+    fn bounded_collection_propagates_source_errors() {
+        let mut remaining = Some(1);
+        let outcome = super::retain_within_budget(
+            || Err::<Option<u32>, _>(DbError::Cancelled),
+            &mut remaining,
+            |value| value,
+        );
+
+        assert!(matches!(outcome, Err(DbError::Cancelled)));
+    }
 
     #[test]
     fn has_active_query_reports_false_when_nothing_is_running() {

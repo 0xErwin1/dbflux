@@ -1,20 +1,29 @@
 mod document;
 mod format;
 mod inline;
+mod inline_element;
 mod inline_flow;
+mod inline_object;
+#[cfg(test)]
+mod inline_virtual_tests;
 mod markdown_ext;
 mod node;
+mod range_highlight;
 pub(crate) mod selection;
 mod selection_adapter;
 mod state;
+mod stream_fade;
 mod style;
 mod text_view;
 mod utils;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
+pub use inline_element::*;
 pub use markdown_ext::*;
 pub use node::{CodeBlock, TableData};
+pub use range_highlight::{RangeHighlight, RangeHighlightError, RenderedText};
 pub use state::*;
+pub use stream_fade::TextViewMotion;
 pub use style::*;
 pub use text_view::*;
 

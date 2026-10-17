@@ -30,7 +30,6 @@ use crate::{
         ZSetRangePage, ZSetRangeRequest,
     },
     query::generator::QueryGenerator,
-    query::table_browser::OrderByColumn,
     render_semantic_filter_sql,
 };
 
@@ -533,6 +532,25 @@ pub trait DbDriver: Send + Sync {
 pub trait KeyValueApi: Send + Sync {
     /// Scan keys with cursor-based pagination.
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError>;
+
+    /// Scan one key page, stopping with `DbError::Cancelled` once `cancel`
+    /// is set.
+    ///
+    /// Drivers that fill a page from several server round trips override this
+    /// to check the token between them. The default can only refuse a token
+    /// that is already cancelled, so an in-flight `scan_keys` call still runs
+    /// to completion.
+    fn scan_keys_with_cancel(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &crate::CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
+        self.scan_keys(request)
+    }
 
     /// Get key value plus metadata.
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError>;
@@ -1259,6 +1277,22 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Paradigm facets of a table whose details are loaded.
+    ///
+    /// The default is tabular only. A driver adds facets it can derive from
+    /// the table's columns, such as a vector column.
+    fn object_facets(&self, _table: &TableInfo) -> Vec<crate::ObjectFacet> {
+        vec![crate::ObjectFacet::Tabular]
+    }
+
+    /// Paradigm facets of a collection.
+    ///
+    /// The default is tabular only. A driver whose collections hold documents
+    /// or time-indexed rows declares so here, per collection.
+    fn collection_facets(&self, _collection: &crate::CollectionRef) -> Vec<crate::ObjectFacet> {
+        vec![crate::ObjectFacet::Tabular]
+    }
+
     /// Fetch columns and indexes for a table.
     fn table_details(
         &self,
@@ -1483,7 +1517,8 @@ pub trait Connection: Send + Sync {
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
         let sql = if let Some(filter) = request.semantic_filter.as_ref() {
             let mut sql = format!(
-                "SELECT * FROM {}",
+                "SELECT {} FROM {}",
+                request.select_list_with(self.dialect()),
                 request.table.quoted_with(self.dialect())
             );
 
@@ -1607,6 +1642,68 @@ pub trait Connection: Send + Sync {
     /// `DocumentFeatures::VISUAL_BUILDER`.
     fn document_query_codec(&self) -> Option<&dyn crate::DocumentQueryCodec> {
         None
+    }
+
+    // =========================================================================
+    // Table views (Columns, Partitions, read estimate)
+    // =========================================================================
+
+    /// The table views this connection fills beyond the data grid. The default
+    /// fills none; drivers report the seams below they implement.
+    fn table_view_features(&self) -> crate::TableViewFeatures {
+        crate::TableViewFeatures::empty()
+    }
+
+    /// Per-column storage facts of `table`, read from metadata only: catalogs,
+    /// planner statistics or storage information. It must never read table
+    /// rows, because the UI calls it when the table opens. Connections that
+    /// implement it report `TableViewFeatures::COLUMN_PROFILE`.
+    fn table_profile(&self, _table: &crate::TableRef) -> Result<crate::TableProfile, DbError> {
+        Err(DbError::NotSupported(
+            "Column profiles are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The partitions of `table`, read from metadata only. Connections that
+    /// implement it report `TableViewFeatures::PARTITIONS`.
+    fn table_partitions(
+        &self,
+        _table: &crate::TableRef,
+    ) -> Result<crate::TablePartitions, DbError> {
+        Err(DbError::NotSupported(
+            "Table partitions are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// What `request` would read, worked out without reading table rows.
+    /// `profile` is the table's metadata profile, used to put bytes on the
+    /// columns the request reads. Connections that implement it report
+    /// `TableViewFeatures::READ_ESTIMATE`.
+    fn estimate_table_read(
+        &self,
+        _request: &TableBrowseRequest,
+        _profile: &crate::TableProfile,
+    ) -> Result<crate::ReadEstimate, DbError> {
+        Err(DbError::NotSupported(
+            "Read estimates are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Null counts, distinct counts, ranges and top values of `columns`,
+    /// computed from at most `row_limit` rows of `table`, with the limit
+    /// inside the query the driver runs. This reads table data, so the UI
+    /// runs it only on an explicit action. The returned profile's source is
+    /// [`crate::ProfileSource::Sample`] with the rows actually read.
+    /// Connections that implement it report `TableViewFeatures::SAMPLE_PROFILE`.
+    fn sample_table_profile(
+        &self,
+        _table: &crate::TableRef,
+        _columns: &[String],
+        _row_limit: u64,
+    ) -> Result<crate::TableProfile, DbError> {
+        Err(DbError::NotSupported(
+            "Sample profiles are not supported by this driver".to_string(),
+        ))
     }
 
     /// Count documents matching a filter, allowing the driver to answer from
@@ -1923,76 +2020,21 @@ pub trait Connection: Send + Sync {
     // SQL Building Methods
     // =========================================================================
 
-    /// Build a SELECT query with optional filtering, ordering, and pagination.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to query
-    /// * `columns` - The columns to select
-    /// * `filter` - Optional WHERE clause expression
-    /// * `order_by` - Columns to order by
-    /// * `limit` - Maximum number of rows to return
-    /// * `offset` - Number of rows to skip
-    ///
-    /// # Returns
-    /// A SQL string for the SELECT query
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let _ = (table, columns, filter, order_by, limit, offset);
-        unimplemented!("build_select_sql not implemented for this driver")
-    }
-
-    /// Build an UPSERT (INSERT ON CONFLICT) query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name
-    /// * `columns` - The columns to insert/update
-    /// * `values` - The values
-    /// * `conflict_columns` - Columns that define uniqueness for conflict detection
-    /// * `update_columns` - Columns to update on conflict
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let _ = (table, columns, values, conflict_columns, update_columns);
-        unimplemented!("build_upsert_sql not implemented for this driver")
-    }
-
     /// Build a TRUNCATE TABLE statement.
     ///
     /// # Arguments
     /// * `table` - The table name to truncate
     ///
     /// # Returns
-    /// A SQL string for TRUNCATE TABLE
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn build_truncate_sql(&self, table: &str) -> String {
+    /// A SQL string for TRUNCATE TABLE.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let _ = table;
-        unimplemented!("build_truncate_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_truncate_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Build a DROP INDEX statement.
@@ -2003,28 +2045,30 @@ pub trait Connection: Send + Sync {
     /// * `if_exists` - Whether to add IF EXISTS clause
     ///
     /// # Returns
-    /// A SQL string for DROP INDEX
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
+    /// A SQL string for DROP INDEX.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
     fn build_drop_index_sql(
         &self,
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let _ = (index_name, table_name, if_exists);
-        unimplemented!("build_drop_index_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_drop_index_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns the SQL query to get the server version.
-    #[expect(
-        clippy::unimplemented,
-        reason = "Drivers must override this method; preserve the existing default panic contract."
-    )]
-    fn version_query(&self) -> &'static str {
-        unimplemented!("version_query not implemented for this driver")
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no version query.
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Err(DbError::NotSupported(
+            "version_query not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns whether this driver supports transactional DDL.
@@ -2192,6 +2236,36 @@ pub trait ConnectionExt {
 mod tests {
     use super::*;
     use crate::{DbError, DbKind, DriverMetadata, QueryRequest, QueryResult, SchemaSnapshot};
+
+    #[test]
+    fn object_facets_default_to_tabular() {
+        let table = TableInfo {
+            name: "items".to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            pseudo_columns: Box::default(),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: crate::CollectionPresentation::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+
+        assert_eq!(
+            StubConnection.object_facets(&table),
+            vec![crate::ObjectFacet::Tabular]
+        );
+    }
+
+    #[test]
+    fn collection_facets_default_to_tabular() {
+        assert_eq!(
+            StubConnection.collection_facets(&crate::CollectionRef::new("app", "events")),
+            vec![crate::ObjectFacet::Tabular]
+        );
+    }
 
     /// Minimal Connection stub that only implements the required methods and
     /// relies on default impls for everything else.
@@ -2421,6 +2495,32 @@ mod tests {
         fn exists_key(&self, _request: &KeyExistsRequest) -> Result<bool, DbError> {
             Err(DbError::NotSupported("stub".to_string()))
         }
+    }
+
+    #[test]
+    fn scan_keys_with_cancel_default_refuses_a_cancelled_token_before_scanning() {
+        let token = crate::CancelToken::new();
+        token.cancel();
+
+        let result = StubKeyValue.scan_keys_with_cancel(&KeyScanRequest::new(10), &token);
+
+        assert!(
+            matches!(result, Err(DbError::Cancelled)),
+            "a cancelled token must stop the scan before the driver call, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn scan_keys_with_cancel_default_delegates_to_scan_keys_while_not_cancelled() {
+        let result = StubKeyValue
+            .scan_keys_with_cancel(&KeyScanRequest::new(10), &crate::CancelToken::new());
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "a live token must reach scan_keys, got: {:?}",
+            result
+        );
     }
 
     #[test]

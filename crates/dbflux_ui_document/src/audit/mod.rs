@@ -3,15 +3,15 @@
 mod chart_view;
 mod commands;
 mod filters;
-pub mod pane;
+pub(crate) mod pane;
 mod render;
 mod source_adapter;
-pub mod view;
+pub(crate) mod view;
 
-pub use chart_view::{AuditChartState, AuditTimeline, AuditViewMode, TimelineBucket};
-pub use filters::{AuditFilters, TimeRange, TimestampDisplayMode};
-pub use source_adapter::AuditSourceAdapter;
-pub use view::LogStreamView;
+pub(crate) use chart_view::{AuditChartState, AuditTimeline, AuditViewMode, TimelineBucket};
+pub(crate) use filters::{AuditFilters, TimeRange, TimestampDisplayMode};
+pub(crate) use source_adapter::AuditSourceAdapter;
+pub(crate) use view::LogStreamView;
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,7 +49,7 @@ use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 // ── Context menu ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditContextMenuAction {
+pub(crate) enum AuditContextMenuAction {
     CopyRowAsCsv,
     CopySummary,
     CopyJson,
@@ -1120,6 +1120,7 @@ impl AuditDocument {
                         crate::labels::audit_loading_event_stream_task_label(&self.title),
                         Some(*profile_id),
                     );
+                    state.tasks_mut().mark_uncancellable(task_id);
                     task_id
                 });
 

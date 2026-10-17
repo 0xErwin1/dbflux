@@ -17,9 +17,9 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
     FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData, IndexInfo,
     InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
-    MissingCreationMetadata, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    MissingCreationMetadata, MutationCapabilities, PaginationStyle, PlaceholderStyle,
+    PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
     RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
     SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
@@ -30,7 +30,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Runtime};
@@ -1212,28 +1212,9 @@ impl MssqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        // Resolve before logging, so a tunnel that references a host from the user's SSH
-        // config reports the target it actually dials.
-        let tunnel_config = dbflux_ssh::resolve_for_dial(tunnel_config)?;
-
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            config.host,
-            config.port
-        );
-
-        let ssh_session = dbflux_ssh::establish_session(&tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, config.host.clone(), config.port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            total_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         let tiberius_config = build_tiberius_config(&MssqlConnectParams {
             host: "127.0.0.1",
@@ -1259,7 +1240,7 @@ impl MssqlDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             config.host,
             config.port,
-            tunnel_config.host,
+            ssh_host,
             established.spid
         );
 
@@ -2828,75 +2809,22 @@ impl Connection for MssqlConnection {
     /// and (b) forwards the table's schema (e.g. `dbo`) as the *database* via
     /// `with_database`, which would make the driver issue `USE [dbo]` — a 911
     /// "database does not exist" error, since `dbo` is a schema. We embed the
-    /// schema in the `FROM` clause and leave the active database alone.
+    /// schema in the `FROM` clause and leave the active database alone. The
+    /// request's database, when the caller knows it, is embedded the same way,
+    /// which is what lets a table in another database be read without a `USE`
+    /// and without depending on where the session happens to be.
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
-        let table = request.table.quoted_with(&MSSQL_DIALECT);
-        let mut sql = format!("SELECT * FROM {}", table);
-
-        if let Some(filter) = request.semantic_filter.as_ref() {
-            let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        } else if let Some(filter) = request.filter.as_ref() {
-            let trimmed = filter.trim();
-            if !trimmed.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(trimmed);
-            }
-        }
-
-        // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to an order-neutral
-        // `ORDER BY (SELECT NULL)` when the caller didn't supply one, which is valid
-        // for every column type.
-        if request.order_by.is_empty() {
-            sql.push_str(" ORDER BY (SELECT NULL)");
-        } else {
-            sql.push_str(" ORDER BY ");
-            let parts: Vec<String> = request
-                .order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
-                })
-                .collect();
-            sql.push_str(&parts.join(", "));
-        }
-
-        sql.push_str(&format!(
-            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            request.pagination.offset(),
-            request.pagination.limit()
-        ));
-
-        self.execute(&QueryRequest::new(sql))
+        self.execute(&QueryRequest::new(browse_sql(request)?))
     }
 
     /// SQL Server-specific count implementation.
     ///
     /// The default impl is mostly correct, but we override it for symmetry with
-    /// `browse_table` and to make explicit that the schema is part of the
-    /// `FROM` clause — never the active database.
+    /// `browse_table` and to make explicit that the schema, and the request's
+    /// database when it has one, are part of the `FROM` clause — never the
+    /// active database.
     fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
-        let table = request.table.quoted_with(&MSSQL_DIALECT);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", table);
-
-        if let Some(filter) = request.semantic_filter.as_ref() {
-            let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        } else if let Some(filter) = request.filter.as_ref() {
-            let trimmed = filter.trim();
-            if !trimmed.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(trimmed);
-            }
-        }
-
-        let result = self.execute(&QueryRequest::new(sql))?;
+        let result = self.execute(&QueryRequest::new(count_sql(request)?))?;
         Ok(result
             .rows
             .first()
@@ -2910,21 +2838,13 @@ impl Connection for MssqlConnection {
 
     fn fetch_row_by_pk(
         &self,
-        _database: &str,
+        database: &str,
         schema: &str,
         table: &str,
         pk_column: &str,
         pk_value: &Value,
     ) -> Result<Option<std::collections::HashMap<String, Value>>, DbError> {
-        let pk_literal = MSSQL_DIALECT.value_to_literal(pk_value);
-        let sql = format!(
-            "SELECT TOP 1 * FROM {}.{} WHERE {} = {}",
-            MSSQL_DIALECT.quote_identifier(schema),
-            MSSQL_DIALECT.quote_identifier(table),
-            MSSQL_DIALECT.quote_identifier(pk_column),
-            pk_literal,
-        );
-
+        let sql = row_by_pk_sql(Some(database), schema, table, pk_column, pk_value);
         let result = self.execute(&QueryRequest::new(sql))?;
         let columns = result.columns;
         let Some(row) = result.rows.into_iter().next() else {
@@ -3136,58 +3056,9 @@ impl Connection for MssqlConnection {
         Some(&GENERATOR)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        _filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MSSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        let order_by_clause = if order_by.is_empty() {
-            // OFFSET requires ORDER BY in SQL Server; an order-neutral constant keeps
-            // paginated reads valid for every column type when no order was supplied.
-            "ORDER BY (SELECT NULL)".to_string()
-        } else {
-            let parts: Vec<String> = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
-                })
-                .collect();
-            format!("ORDER BY {}", parts.join(", "))
-        };
-
-        sql.push(' ');
-        sql.push_str(&order_by_clause);
-        sql.push_str(&format!(
-            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            offset, limit
-        ));
-        sql
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+        Ok(format!("TRUNCATE TABLE {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -3195,21 +3066,24 @@ impl Connection for MssqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = MSSQL_DIALECT.quote_identifier(index_name);
         let table = table_name
             .map(|t| MSSQL_DIALECT.quote_identifier(t))
             .unwrap_or_else(|| "[table_name]".to_string());
 
         if if_exists {
-            format!("DROP INDEX IF EXISTS {} ON {}", quoted_index, table)
+            Ok(format!(
+                "DROP INDEX IF EXISTS {} ON {}",
+                quoted_index, table
+            ))
         } else {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
+            Ok(format!("DROP INDEX {} ON {}", quoted_index, table))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT @@VERSION"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT @@VERSION")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -5121,10 +4995,182 @@ fn mssql_bracket_identifier(identifier: &str) -> String {
     format!("[{}]", identifier.replace(']', "]]"))
 }
 
+/// The `FROM` target for a table. SQL Server keeps the database separate from
+/// the schema, so a table outside the session's current database has to be
+/// named with it. With no database in the request the two-part form is what the
+/// session database resolves against, which is the behaviour callers had before
+/// the request carried one.
+fn qualified_table_in(database: Option<&str>, schema: Option<&str>, table: &str) -> String {
+    let Some(database) = database else {
+        return MSSQL_DIALECT.qualified_table(schema, table);
+    };
+
+    match schema {
+        Some(schema) => format!(
+            "{}.{}.{}",
+            MSSQL_DIALECT.quote_identifier(database),
+            MSSQL_DIALECT.quote_identifier(schema),
+            MSSQL_DIALECT.quote_identifier(table)
+        ),
+        // `[db]..[table]` leaves the schema to the database's own default.
+        None => format!(
+            "{}..{}",
+            MSSQL_DIALECT.quote_identifier(database),
+            MSSQL_DIALECT.quote_identifier(table)
+        ),
+    }
+}
+
+/// The statement a table browse runs. Built outside the connection so a unit
+/// test can pin the SQL without a live server.
+fn browse_sql(request: &TableBrowseRequest) -> Result<String, DbError> {
+    let table = qualified_table_in(
+        request.database.as_deref(),
+        request.table.schema.as_deref(),
+        &request.table.name,
+    );
+    let mut sql = format!(
+        "SELECT {} FROM {}",
+        request.select_list_with(&MSSQL_DIALECT),
+        table
+    );
+
+    if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+    } else if let Some(filter) = request.filter.as_ref() {
+        let trimmed = filter.trim();
+        if !trimmed.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(trimmed);
+        }
+    }
+
+    // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to an order-neutral
+    // `ORDER BY (SELECT NULL)` when the caller didn't supply one, which is valid
+    // for every column type.
+    if request.order_by.is_empty() {
+        sql.push_str(" ORDER BY (SELECT NULL)");
+    } else {
+        sql.push_str(" ORDER BY ");
+        let parts: Vec<String> = request
+            .order_by
+            .iter()
+            .map(|col| {
+                let dir = match col.direction {
+                    SortDirection::Ascending => "ASC",
+                    SortDirection::Descending => "DESC",
+                };
+                format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
+            })
+            .collect();
+        sql.push_str(&parts.join(", "));
+    }
+
+    sql.push_str(&format!(
+        " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
+        request.pagination.offset(),
+        request.pagination.limit()
+    ));
+
+    Ok(sql)
+}
+
+/// The statement a row count runs.
+fn count_sql(request: &TableCountRequest) -> Result<String, DbError> {
+    let table = qualified_table_in(
+        request.database.as_deref(),
+        request.table.schema.as_deref(),
+        &request.table.name,
+    );
+    let mut sql = format!("SELECT COUNT(*) FROM {}", table);
+
+    if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+    } else if let Some(filter) = request.filter.as_ref() {
+        let trimmed = filter.trim();
+        if !trimmed.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(trimmed);
+        }
+    }
+
+    Ok(sql)
+}
+
+/// The statement that reads one row back by primary key after an edit.
+fn row_by_pk_sql(
+    database: Option<&str>,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    pk_value: &Value,
+) -> String {
+    let table = qualified_table_in(database, Some(schema), table);
+    format!(
+        "SELECT TOP 1 * FROM {table} WHERE {} = {}",
+        MSSQL_DIALECT.quote_identifier(pk_column),
+        MSSQL_DIALECT.value_to_literal(pk_value),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::DefaultSpec;
+    use dbflux_core::{DefaultSpec, OrderByColumn};
+
+    #[test]
+    fn browse_sql_qualifies_the_source_database() {
+        let scoped = TableBrowseRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"))
+            .with_database(Some("reporting".to_string()))
+            .with_order_by(vec![OrderByColumn::asc("id")]);
+        let sql = browse_sql(&scoped).unwrap();
+        assert!(
+            sql.starts_with("SELECT * FROM [reporting].[dbo].[events] "),
+            "browse must name the source database; got: {sql}"
+        );
+
+        let session_local =
+            TableBrowseRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"));
+        let sql = browse_sql(&session_local).unwrap();
+        assert!(
+            sql.starts_with("SELECT * FROM [dbo].[events] "),
+            "a request without a database must keep the two-part name; got: {sql}"
+        );
+    }
+
+    #[test]
+    fn count_sql_qualifies_the_source_database() {
+        let scoped = TableCountRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"))
+            .with_database(Some("reporting".to_string()));
+        assert_eq!(
+            count_sql(&scoped).unwrap(),
+            "SELECT COUNT(*) FROM [reporting].[dbo].[events]"
+        );
+
+        let session_local =
+            TableCountRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"));
+        assert_eq!(
+            count_sql(&session_local).unwrap(),
+            "SELECT COUNT(*) FROM [dbo].[events]"
+        );
+    }
+
+    #[test]
+    fn row_by_pk_sql_qualifies_the_source_database() {
+        assert_eq!(
+            row_by_pk_sql(Some("reporting"), "dbo", "events", "id", &Value::Int(7)),
+            "SELECT TOP 1 * FROM [reporting].[dbo].[events] WHERE [id] = 7"
+        );
+
+        assert_eq!(
+            row_by_pk_sql(None, "dbo", "events", "id", &Value::Int(7)),
+            "SELECT TOP 1 * FROM [dbo].[events] WHERE [id] = 7"
+        );
+    }
 
     #[test]
     fn time_type_is_not_classified_as_timestamp() {
@@ -6883,6 +6929,48 @@ mod query_safety_tests {
         assert!(
             matches!(outcome, Err(DbError::NotSupported(_))),
             "expected NotSupported, got {outcome:?}"
+        );
+    }
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    /// The lockless connection never opens a client, and these builders only
+    /// format text.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use dbflux_core::Connection;
+
+        let connection = lockless_connection();
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("dbo.users")
+                .expect("MSSQL supports truncate"),
+            "TRUNCATE TABLE [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), true)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX IF EXISTS [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", None, false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [table_name]"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("MSSQL has a version query"),
+            "SELECT @@VERSION"
         );
     }
 

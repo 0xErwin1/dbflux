@@ -112,6 +112,20 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("open-builder-btn", KeyboardPath::Menu("open-builder")),
         ("builder-notice-edit", KeyboardPath::Menu("open-builder")),
         ("builder-notice-reset", KeyboardPath::Menu("reset-builder")),
+        (
+            "nearest-neighbors-distance",
+            KeyboardPath::Menu("nearest-neighbors-distance"),
+        ),
+        (
+            "nearest-neighbors-clear",
+            KeyboardPath::Menu("nearest-neighbors-clear"),
+        ),
+        (
+            "nearest-neighbors-column.dropdown-trigger",
+            KeyboardPath::Menu("nearest-neighbors-column"),
+        ),
+        ("footer-count-rows", KeyboardPath::Menu("count-rows")),
+        ("footer-load-all-rows", KeyboardPath::Menu("load-all-rows")),
         ("toggle-maximize", KeyboardPath::Menu("maximize")),
         ("hide-panel", KeyboardPath::Menu("hide")),
         ("undo-btn", KeyboardPath::Command(Command::Undo)),
@@ -186,6 +200,50 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         (
             "collection-builder-toggle",
             KeyboardPath::Menu("open-builder"),
+        ),
+        // The Data / Columns / Partitions views of a table whose connection
+        // offers them.
+        (
+            "segmented-table-view-*",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        // The column picker of a table's Data view.
+        (
+            "column-projection-trigger",
+            KeyboardPath::Menu("column-picker"),
+        ),
+        (
+            "column-projection-row-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        ("column-projection-select-all", KeyboardPath::TabStop),
+        ("column-projection-select-none", KeyboardPath::TabStop),
+        ("column-projection-apply", KeyboardPath::TabStop),
+        // The Columns view of a table.
+        (
+            "column-profile-eye-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "column-profile-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "column-profile-sample",
+            KeyboardPath::Menu("sample-profile"),
+        ),
+        // The Partitions view of a table.
+        (
+            "partition-list-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
         ),
     ],
 };
@@ -637,6 +695,19 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
         (
             "segmented-delimited-view-*",
             KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        // The Columns view of the file.
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "column-profile-full-scan",
+            KeyboardPath::Menu("delimited-profile-full-scan"),
         ),
         (
             "segmented-delimited-text-mode-*",

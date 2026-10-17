@@ -3,6 +3,7 @@
 //! fields answer Left and Right.
 
 use super::hooks_section::{HookFocus, HookFormField};
+use super::keybindings_section::{KeybindingsListItem, KeybindingsSelection};
 use super::{ActiveSettingsSection, SettingsCoordinator, SettingsFocus, SettingsSectionId};
 use dbflux_app::keymap::Command;
 use dbflux_core::{HookExecutionMode, ThemeSetting};
@@ -237,6 +238,12 @@ fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAp
         })
     });
     window.run_until_parked();
+    // The editor row opens below the drawn rows of the virtual list; opening
+    // it scrolls it into view, or its input could not take keys.
+    for _ in 0..2 {
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
 
     let set_predicate_text = |text: &str, window: &mut VisualTestContext| {
         window.update(|window, cx| {
@@ -353,6 +360,148 @@ fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppConte
         ProxyFocus::Form,
         "the new key adds one"
     );
+}
+
+/// `G` jumps to the last row of the virtual list, which is far below the
+/// rows that were measured.
+#[gpui::test]
+fn shift_g_scrolls_the_keybindings_list_to_its_last_row(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    // Expand every context, so the list is long.
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.keybindings_expanded.extend(
+                dbflux_app::keymap::ContextId::all_variants()
+                    .iter()
+                    .copied(),
+            );
+            cx.notify();
+        });
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("shift-g");
+    for _ in 0..2 {
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
+
+    window.update(|_, cx| {
+        let section = keybindings.read(cx);
+        let last = section.keybindings_items.len() - 1;
+        assert!(
+            section.keybindings_list.bounds_for_item(last).is_some(),
+            "the last row is drawn"
+        );
+    });
+}
+
+/// Collapsing a group halfway down the list keeps the list where it was,
+/// instead of jumping back to the top.
+#[gpui::test]
+fn collapsing_a_keybindings_group_keeps_the_scroll_position(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.keybindings_expanded.extend(
+                dbflux_app::keymap::ContextId::all_variants()
+                    .iter()
+                    .copied(),
+            );
+            cx.notify();
+        });
+    });
+    window.run_until_parked();
+
+    // Scroll to a context header far down, select it, and collapse it.
+    let header_index = window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            let (header_index, ctx_idx) = section
+                .keybindings_items
+                .iter()
+                .enumerate()
+                .find_map(|(index, item)| match item {
+                    KeybindingsListItem::ContextHeader { ctx_idx, .. } if index > 20 => {
+                        Some((index, *ctx_idx))
+                    }
+                    _ => None,
+                })
+                .expect("a context header far down the list");
+            section.keybindings_selection = KeybindingsSelection::Context(ctx_idx);
+            section.keybindings_list.scroll_to(gpui::ListOffset {
+                item_ix: header_index,
+                offset_in_item: gpui::px(0.),
+            });
+            cx.notify();
+            header_index
+        })
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("enter");
+    for _ in 0..2 {
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    }
+
+    let top = window.update(|_, cx| keybindings.read(cx).keybindings_list.logical_scroll_top());
+    assert_eq!(top.item_ix, header_index, "the list stays where it was");
+}
+
+/// Typing in the key bindings filter types: its letters are not the page's
+/// single-key commands, however the field got focus.
+#[gpui::test]
+fn typing_in_the_keybindings_filter_does_not_run_the_page_commands(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    window.update(|window, cx| {
+        // Focus events reach an input only in the active window.
+        window.activate_window();
+        let filter = keybindings.read(cx).keybindings_filter.clone();
+        filter.update(cx, |state, cx| state.focus(window, cx));
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("c");
+
+    let (open, value) = window.update(|_, cx| {
+        let section = keybindings.read(cx);
+        (
+            section.context_filter.read(cx).is_open(),
+            section.keybindings_filter.read(cx).value().to_string(),
+        )
+    });
+    assert!(
+        !open,
+        "`c` typed in the filter does not open the context filter"
+    );
+    assert_eq!(value, "c");
 }
 
 /// In the key bindings editor `c` opens the context filter with keyboard

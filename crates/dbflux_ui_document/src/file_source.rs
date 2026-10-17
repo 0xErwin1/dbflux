@@ -70,6 +70,14 @@ impl SourceVersion {
         }
     }
 
+    /// When the file or object was last modified, when the storage says.
+    pub fn modified_at(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Local { modified, .. } => modified.map(DateTime::<Utc>::from),
+            Self::Object { last_modified, .. } => *last_modified,
+        }
+    }
+
     /// Whether comparing this version with a later one can tell that the
     /// content was replaced by other content of the same length.
     ///

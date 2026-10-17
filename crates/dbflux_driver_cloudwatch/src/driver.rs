@@ -42,7 +42,8 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
         .union(DriverCapabilities::METRIC_CATALOG)
         .union(DriverCapabilities::DASHBOARD_IMPORT)
         .union(DriverCapabilities::DASHBOARD_SYNC)
-        .union(DriverCapabilities::CHART_AUTHORING),
+        .union(DriverCapabilities::CHART_AUTHORING)
+        .union(DriverCapabilities::REQUEST_ROW_LIMIT),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -89,6 +90,10 @@ pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFor
 const CLOUDWATCH_DEFAULT_DATABASE: &str = "logs";
 const DEFAULT_BROWSE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const MAX_QUERY_WAIT_ATTEMPTS: usize = 120;
+const DEFAULT_LOGS_INSIGHTS_LIMIT: i32 = 1000;
+/// A single GetQueryResults call returns at most 10,000 events, and the
+/// driver reads one page.
+const MAX_LOGS_INSIGHTS_LIMIT: i32 = 10_000;
 const QUERY_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const CLOUDWATCH_QUERY_MODE_CWLI: &str = "cwli";
 const CLOUDWATCH_QUERY_MODE_PPL: &str = "ppl";
@@ -275,9 +280,9 @@ impl Connection for CloudWatchConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "CloudWatch query row limits and statement timeouts are not supported".to_string(),
+                "CloudWatch query statement timeouts are not supported".to_string(),
             ));
         }
         req.refuse_read_only_enforcement("CloudWatch")?;
@@ -306,6 +311,9 @@ impl Connection for CloudWatchConnection {
                 start_ms,
                 end_ms,
             } => {
+                if req.limit.is_some() {
+                    return Err(DbError::NotSupported("CloudWatch: row limits on metric queries are unsupported; rejected before execution".to_string()));
+                }
                 return execute_metric_query(
                     &self.metrics_client,
                     series,
@@ -338,13 +346,14 @@ impl Connection for CloudWatchConnection {
         let start_seconds = start_ms.div_euclid(1000);
         let end_seconds = end_ms.div_euclid(1000);
 
+        let server_limit = logs_insights_server_limit(req.limit);
         let mut start_request = self
             .client
             .start_query()
             .query_string(req.sql.clone())
             .start_time(start_seconds)
             .end_time(end_seconds)
-            .limit(1000)
+            .limit(server_limit)
             .query_language(cloudwatch_sdk_query_language(query_mode));
 
         if query_mode != CLOUDWATCH_QUERY_MODE_SQL {
@@ -384,7 +393,24 @@ impl Connection for CloudWatchConnection {
                     let mut seen = HashSet::new();
                     let mut row_maps = Vec::new();
 
-                    for result_row in output.results() {
+                    // Bound before building columns so a dropped row cannot add
+                    // an all-null column to the retained ones.
+                    let returned_rows = output.results().len();
+                    let (result_rows, budget_dropped_rows) =
+                        retain_within_row_limit(output.results().iter().collect(), req.limit);
+                    // Without a request limit the result keeps today's
+                    // unflagged 1000-row behavior.
+                    let rows_truncated = req.limit.is_some()
+                        && logs_insights_rows_truncated(
+                            budget_dropped_rows,
+                            returned_rows,
+                            server_limit,
+                            output
+                                .statistics()
+                                .map(|statistics| statistics.records_matched()),
+                        );
+
+                    for result_row in result_rows {
                         let mut row_map = HashMap::new();
 
                         for field in result_row {
@@ -428,7 +454,9 @@ impl Connection for CloudWatchConnection {
                         })
                         .collect::<Vec<_>>();
 
-                    return Ok(QueryResult::table(columns, rows, None, started.elapsed()));
+                    let mut result = QueryResult::table(columns, rows, None, started.elapsed());
+                    result.set_rows_truncated(rows_truncated);
+                    return Ok(result);
                 }
                 "Scheduled" | "Running" => {
                     if attempts >= MAX_QUERY_WAIT_ATTEMPTS {
@@ -702,8 +730,8 @@ impl Connection for CloudWatchConnection {
         &dbflux_core::DefaultSqlDialect
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT 'cloudwatch'"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT 'cloudwatch'")
     }
 }
 
@@ -1252,6 +1280,42 @@ pub(crate) fn check_period_nonzero(period_s: u32) -> Result<(), DbError> {
         ));
     }
     Ok(())
+}
+
+/// Logs Insights returns one materialized result set per request, so the whole
+/// request budget applies to it. The flag is set only when the budget dropped rows.
+fn retain_within_row_limit<T>(mut rows: Vec<T>, limit: Option<u32>) -> (Vec<T>, bool) {
+    match limit.map(|limit| usize::try_from(limit).unwrap_or(usize::MAX)) {
+        Some(limit) if rows.len() > limit => {
+            rows.truncate(limit);
+            (rows, true)
+        }
+        _ => (rows, false),
+    }
+}
+
+/// One row past the request budget lets the result show that rows were dropped.
+fn logs_insights_server_limit(limit: Option<u32>) -> i32 {
+    match limit {
+        None => DEFAULT_LOGS_INSIGHTS_LIMIT,
+        Some(limit) => i32::try_from(limit)
+            .map_or(MAX_LOGS_INSIGHTS_LIMIT, |limit| limit.saturating_add(1))
+            .min(MAX_LOGS_INSIGHTS_LIMIT),
+    }
+}
+
+fn logs_insights_rows_truncated(
+    budget_dropped_rows: bool,
+    returned_rows: usize,
+    server_limit: i32,
+    records_matched: Option<f64>,
+) -> bool {
+    // Aggregations match more records than the rows they return, so the
+    // statistics only reveal a server cut when the page came back full.
+    let page_full = i32::try_from(returned_rows).map_or(true, |rows| rows >= server_limit);
+    let server_dropped_rows =
+        page_full && records_matched.is_some_and(|matched| matched > returned_rows as f64);
+    budget_dropped_rows || server_dropped_rows
 }
 
 /// Execute a CloudWatch GetMetricData call batching every requested series
@@ -1872,8 +1936,9 @@ mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchConnection,
         CloudWatchDriver, CloudWatchProfileConfig, build_clients, classify_cw,
-        cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
-        metric_data_output_to_multi_series_result,
+        cloudwatch_column_kind, cwli_column_kind, cwli_field_value, logs_insights_rows_truncated,
+        logs_insights_server_limit, metric_data_output_to_multi_series_result,
+        retain_within_row_limit,
     };
     use crate::dashboard_import::CloudWatchDashboardImporter;
     use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
@@ -1890,6 +1955,51 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// The version probe must stay byte-for-byte identical while the trait
+    /// default moves to `Result`. The SDK client points at a closed local
+    /// port; building it contacts no server and the probe is a constant.
+    #[test]
+    fn version_query_matches_the_driver_contract() {
+        let credentials = Credentials::new("test", "test", None, None, "cloudwatch-test");
+        let metrics_client = aws_sdk_cloudwatch::Client::from_conf(
+            CloudWatchMetricsConfigBuilder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .credentials_provider(credentials.clone())
+                .endpoint_url("http://127.0.0.1:1")
+                .build(),
+        );
+        let connection = CloudWatchConnection {
+            client: Client::from_conf(
+                CloudWatchConfigBuilder::new()
+                    .behavior_version(BehaviorVersion::latest())
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(credentials.clone())
+                    .endpoint_url("http://127.0.0.1:1")
+                    .build(),
+            ),
+            metrics_client: metrics_client.clone(),
+            config: CloudWatchProfileConfig {
+                region: "us-east-1".to_string(),
+                profile: None,
+                endpoint: Some("http://127.0.0.1:1".to_string()),
+            },
+            metric_catalog_impl: CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient::new(
+                metrics_client.clone(),
+            ))),
+            dashboard_importer_impl: CloudWatchDashboardImporter,
+            dashboard_source_impl: CloudWatchDashboardSource::new(Box::new(
+                RealCloudWatchDashboardApi::new(metrics_client),
+            )),
+        };
+
+        assert_eq!(
+            Connection::version_query(&connection)
+                .expect("the CloudWatch version probe is a constant"),
+            "SELECT 'cloudwatch'"
+        );
+    }
 
     #[test]
     fn cloudwatch_query_safety() {
@@ -1936,6 +2046,7 @@ mod tests {
             listener.set_nonblocking(true).expect("nonblocking fixture");
             let deadline = std::time::Instant::now() + Duration::from_secs(15);
             let mut requests = Vec::new();
+            let mut server_limit = None;
             while std::time::Instant::now() < deadline {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
@@ -1950,13 +2061,36 @@ mod tests {
                         let request = String::from_utf8_lossy(&bytes[..count]).into_owned();
                         let start = request.contains("StartQuery");
                         let metric = request.contains("GetMetricData");
-                        requests.push((start, metric));
+                        if start {
+                            server_limit = request.split("\"limit\":").nth(1).and_then(|rest| {
+                                rest.split(|character: char| !character.is_ascii_digit())
+                                    .next()
+                                    .and_then(|digits| digits.parse::<u32>().ok())
+                            });
+                        }
+                        requests.push((start, metric, if start { server_limit } else { None }));
                         let body = if start {
-                            r#"{"queryId":"fixture-query"}"#
+                            r#"{"queryId":"fixture-query"}"#.to_string()
                         } else if metric {
-                            r#"{"MetricDataResults":[],"Messages":[]} "#
+                            r#"{"MetricDataResults":[],"Messages":[]} "#.to_string()
                         } else {
-                            r#"{"status":"Complete","results":[]}"#
+                            // A full 10,000-row page reports more matches than
+                            // it returned; the 6-row request behaves like an
+                            // aggregation that matched many records.
+                            let (row_count, records_matched) = match server_limit {
+                                Some(10_000) => (10_000, 20_000),
+                                Some(6) => (3, 50),
+                                _ => (3, 3),
+                            };
+                            let results = (0..row_count)
+                                .map(|index| {
+                                    format!(r#"[{{"field":"@message","value":"m{index}"}}]"#)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            format!(
+                                r#"{{"status":"Complete","results":[{results}],"statistics":{{"recordsMatched":{records_matched},"recordsScanned":{records_matched},"bytesScanned":1}}}}"#
+                            )
                         };
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/x-amz-json-1.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2004,14 +2138,6 @@ mod tests {
         };
         let mut failures = Vec::new();
         for context in [log_context.clone(), metric_context.clone()] {
-            for limit in [Some(0), Some(5)] {
-                let mut request = QueryRequest::new("fields @message".to_string())
-                    .with_execution_context(Some(context.clone()));
-                request.limit = limit;
-                if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
-                    failures.push(format!("limit {limit:?} was not refused"));
-                }
-            }
             for timeout in [Duration::ZERO, Duration::from_secs(1)] {
                 let mut request = QueryRequest::new("fields @message".to_string())
                     .with_execution_context(Some(context.clone()));
@@ -2030,25 +2156,149 @@ mod tests {
                 failures.push("read-only enforcement was not refused".to_string());
             }
         }
+        for limit in [Some(0), Some(5)] {
+            let mut request = QueryRequest::new("fields @message".to_string())
+                .with_execution_context(Some(metric_context.clone()));
+            request.limit = limit;
+            if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
+                failures.push(format!("metric limit {limit:?} was not refused"));
+            }
+        }
         let healthy = connection.execute(
             &QueryRequest::new("fields @message".to_string())
-                .with_execution_context(Some(log_context)),
+                .with_execution_context(Some(log_context.clone())),
         );
+        let mut limited = QueryRequest::new("fields @message".to_string())
+            .with_execution_context(Some(log_context.clone()));
+        limited.limit = Some(2);
+        let limited = connection.execute(&limited);
+        let mut aggregated = QueryRequest::new("stats count(*)".to_string())
+            .with_execution_context(Some(log_context.clone()));
+        aggregated.limit = Some(5);
+        let aggregated = connection.execute(&aggregated);
+        let mut full_page = QueryRequest::new("fields @message".to_string())
+            .with_execution_context(Some(log_context));
+        full_page.limit = Some(10_000);
+        let full_page = connection.execute(&full_page);
         sender.send(()).expect("stop fixture");
         let requests = server.join().expect("fixture thread");
         assert!(
             healthy.is_ok(),
             "unprotected log request failed: {healthy:?}; requests: {requests:?}"
         );
+        let healthy = healthy.expect("unprotected log request");
+        assert_eq!(healthy.rows.len(), 3);
+        assert!(!healthy.rows_truncated());
+        let limited = limited.unwrap_or_else(|error| {
+            panic!("row-limited log request failed: {error:?}; requests: {requests:?}")
+        });
+        assert_eq!(limited.rows.len(), 2);
+        assert!(limited.rows_truncated());
+        let aggregated = aggregated.unwrap_or_else(|error| {
+            panic!("aggregated log request failed: {error:?}; requests: {requests:?}")
+        });
+        assert_eq!(aggregated.rows.len(), 3);
+        assert!(!aggregated.rows_truncated());
+        let full_page = full_page.unwrap_or_else(|error| {
+            panic!("full-page log request failed: {error:?}; requests: {requests:?}")
+        });
+        assert_eq!(full_page.rows.len(), 10_000);
+        assert!(full_page.rows_truncated());
         assert_eq!(
             requests,
-            vec![(true, false), (false, false)],
+            vec![
+                (true, false, Some(1000)),
+                (false, false, None),
+                (true, false, Some(3)),
+                (false, false, None),
+                (true, false, Some(6)),
+                (false, false, None),
+                (true, false, Some(10_000)),
+                (false, false, None),
+            ],
             "protected request reached fixture"
         );
         assert!(
             failures.is_empty(),
             "{}; observed requests: {requests:?}",
             failures.join("; ")
+        );
+    }
+
+    #[test]
+    fn retain_within_row_limit_bounds_rows_and_flags_only_dropped_rows() {
+        let rows = vec![1, 2, 3];
+
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), None),
+            (vec![1, 2, 3], false)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(5)),
+            (vec![1, 2, 3], false)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(3)),
+            (vec![1, 2, 3], false)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(2)),
+            (vec![1, 2], true)
+        );
+        assert_eq!(
+            retain_within_row_limit(rows.clone(), Some(0)),
+            (Vec::new(), true)
+        );
+        assert_eq!(
+            retain_within_row_limit(Vec::<i32>::new(), Some(0)),
+            (Vec::new(), false)
+        );
+    }
+
+    #[test]
+    fn logs_insights_server_limit_asks_one_row_past_the_budget_up_to_the_page_maximum() {
+        assert_eq!(logs_insights_server_limit(None), 1000);
+        assert_eq!(logs_insights_server_limit(Some(0)), 1);
+        assert_eq!(logs_insights_server_limit(Some(5)), 6);
+        assert_eq!(logs_insights_server_limit(Some(9999)), 10_000);
+        assert_eq!(logs_insights_server_limit(Some(10_000)), 10_000);
+        assert_eq!(logs_insights_server_limit(Some(u32::MAX)), 10_000);
+    }
+
+    #[test]
+    fn logs_insights_rows_truncated_combines_budget_and_statistics() {
+        assert!(logs_insights_rows_truncated(true, 3, 3, None));
+        assert!(logs_insights_rows_truncated(true, 3, 3, Some(3.0)));
+        assert!(!logs_insights_rows_truncated(false, 10_000, 10_000, None));
+        assert!(!logs_insights_rows_truncated(
+            false,
+            10_000,
+            10_000,
+            Some(10_000.0)
+        ));
+        assert!(logs_insights_rows_truncated(
+            false,
+            10_000,
+            10_000,
+            Some(10_001.0)
+        ));
+        // Aggregations match more records than the rows they return, so
+        // statistics only count when the server page was full.
+        assert!(!logs_insights_rows_truncated(
+            false,
+            1,
+            10_000,
+            Some(50_000.0)
+        ));
+        assert!(!logs_insights_rows_truncated(false, 3, 6, Some(50.0)));
+    }
+
+    #[test]
+    fn cloudwatch_metadata_advertises_request_row_limit() {
+        assert!(
+            CLOUDWATCH_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
         );
     }
 

@@ -347,6 +347,42 @@ fn the_native_console_is_covered(cx: &mut TestAppContext) {
     }
 }
 
+/// The docked header folds the console away, so it says whether the console is
+/// currently open.
+#[gpui::test]
+fn the_docked_header_reports_whether_the_console_is_open(cx: &mut TestAppContext) {
+    use dbflux_components::accessibility::{FrameCapture, accessibility_node};
+    use gpui::Role;
+
+    let (harness, window) = open(cx);
+    let capture = FrameCapture::observe(window);
+
+    let frame = capture.frame(window);
+    let header = accessibility_node(&frame, "native-console-header")
+        .expect("the header is an accessible node");
+    assert_eq!(header.role(), Role::Button);
+    assert_eq!(
+        header.is_expanded(),
+        Some(false),
+        "the console starts closed"
+    );
+
+    window.update(|window, cx| {
+        harness
+            .console
+            .update(cx, |console, cx| console.toggle(window, cx))
+    });
+    let frame = capture.frame(window);
+    let header = accessibility_node(&frame, "native-console-header")
+        .expect("the header is an accessible node");
+
+    assert_eq!(
+        header.is_expanded(),
+        Some(true),
+        "an open console reports that it is open"
+    );
+}
+
 #[gpui::test]
 fn drivers_that_enforce_a_row_limit_get_the_editor_limit(cx: &mut TestAppContext) {
     let driver = FakeDriver::new(DbKind::Postgres)

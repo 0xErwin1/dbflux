@@ -198,6 +198,13 @@ components:
       name: "排序：名称"
     source:
       file_footer: "大小来自文件尾部"
+      catalog: "大小来自 %{name}"
+      planner_statistics: "统计信息来自 %{name}"
+      loaded_rows: "基于已加载的 %{rows} 行"
+      full_scan: "基于全部 %{rows} 行"
+      sample: "分布来自最先读取的 %{rows} 行"
+      read_at: "读取于 %{time}"
+      file_modified: "文件修改于 %{time}"
     header:
       column: "列"
       codec: "编码"
@@ -210,6 +217,7 @@ components:
     footer:
       counts: "%{total} 列 · 数据中显示 %{shown} 列"
       hint: "切换某列即可将其加入或移出数据投影"
+      counts_only: "%{total} 列"
     loading: "正在读取列统计信息…"
     empty: "此表没有列"
     no_match: "没有与筛选匹配的列"
@@ -217,12 +225,56 @@ components:
     badge:
       sort_key: "排序键"
       partition_key: "分区键"
+      sort_key_position: "排序键 %{position}"
+      distribution_key: "分布键"
+    action:
+      refresh: "刷新统计信息"
+      sample: "分析前 %{rows} 行"
+      full_scan: "分析整个文件"
+      running: "正在分析…"
+    fact:
+      engine: "引擎"
+      sort_key: "排序键"
+      partition_key: "分区键"
+      primary_key: "主键"
+      sampling_key: "采样键"
+      ttl: "TTL"
+      distribution_style: "分布"
+      active_parts: "活动分片"
+      statistics_updated: "统计信息更新时间"
+      rows: "行数"
+      on_disk: "磁盘占用"
+      raw: "未压缩"
+      ratio: "压缩比"
+      row_groups: "行组"
+      unsorted: "未排序"
+      created_by: "写入程序"
   read_estimate:
     lead: "将读取"
     row_groups: "%{total} 个行组中的 %{touched} 个"
     more:
       one: "另外 %{count} 个"
       many: "另外 %{count} 个"
+    parts: "%{total} 个分片中的 %{touched} 个"
+    granules: "%{total} 个颗粒中的 %{touched} 个"
+    rows: "%{rows} 行"
+    lead_upper: "最多读取"
+  partition_list:
+    summary: "%{count} 个分区"
+    summary_with_key: "%{count} 个分区 · PARTITION BY %{key}"
+    refresh: "刷新分区"
+    loading: "正在读取分区…"
+    empty: "此表没有分区"
+    error_title: "无法读取分区"
+    header:
+      partition: "分区"
+      parts: "分片"
+      rows: "行数"
+      on_disk: "磁盘占用"
+      raw: "未压缩"
+      ratio: "压缩比"
+      range: "键范围"
+      modified: "最后更改"
 composites:
   rail:
     add: "添加"
@@ -406,10 +458,9 @@ connection_manager:
       relational: "关系型"
       document: "文档"
       key_value: "键值"
-      wide_column: "宽列"
       time_series_and_logs: "时间序列和日志"
-      graph: "图"
       object_storage: "对象存储"
+      other: "其他"
   export:
     target:
       connection: 连接
@@ -495,6 +546,8 @@ connection_manager:
       bundle_file: 捆绑包文件
       bundle_encrypted: 捆绑包已加密
       passphrase: 口令
+      show_passphrase: 显示口令
+      hide_passphrase: 隐藏口令
     hint:
       no_native_picker: 此系统没有原生文件选择器 — 请在上方输入或粘贴捆绑包路径。
       external_refs: 外部值引用将原样保留
@@ -1206,7 +1259,6 @@ document:
       checking: 正在检查…
       run: 执行
       last_run: "上次运行 %{seconds} 秒"
-      new_tab: 新建标签页
       read_only: 只读
       saved: 已保存
       save: 保存
@@ -1260,6 +1312,11 @@ document:
         many: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句执行。是否继续？"
       cancel: 取消
       run: 执行脚本
+      run_statement: "仅执行此语句"
+      transaction:
+        title: "光标处的事务语句"
+        message: "光标处的语句（第 %{line} 行）是 \"%{statement}\"，它只会开始或结束事务。单独执行它不会执行脚本的其余部分。是否改为执行包含 %{count} 条语句的整个脚本？"
+        message_statement_only: "光标处的语句（第 %{line} 行）是 \"%{statement}\"，它只会开始或结束事务。单独执行它不会执行脚本的其余部分，且此连接无法一次执行整个脚本：请选中这些语句以一起执行。是否仅执行此语句？"
     dangerous_query:
       fallback:
         title: 警告
@@ -1358,6 +1415,7 @@ document:
         run_script: "执行 %{name} 脚本"
       copy_error: 复制错误
       result_tab_title: "结果 %{index}"
+      count_rows_failed: 无法统计查询的行数
       error:
         select_source: 请至少选择一个来源
         start_time_required: 需要开始时间
@@ -1541,6 +1599,7 @@ document:
         set_null: 设为 NULL
         add_row: 添加行
         inspect_row: 检查行
+        find_similar_rows: 查找相似行
         view_value: 查看值
         duplicate_row: 复制行
         delete_row: 删除行
@@ -1591,6 +1650,16 @@ document:
         value_compact: "压缩值"
         value_revert: "还原值"
         value_save: "保存值"
+        view_table_data: "显示数据"
+        view_table_columns: "显示列"
+        view_table_partitions: "显示分区"
+        column_picker: "选择列"
+        refresh_profile: "刷新列统计信息"
+        sample_profile: "分析前几行"
+        refresh_partitions: "刷新分区"
+        nearest_distance: "更改距离（当前：%{distance}）"
+        nearest_clear: "返回表中的行"
+        nearest_column: "更改向量列"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1621,7 +1690,6 @@ document:
           insert_failed: "插入文档失败：%{error}"
           update_failed: "更新文档失败：%{error}"
     grid:
-      rows_omitted: 达到执行限制后，此结果集中的部分行被省略。
       edit_bar:
         clean: 无未保存的更改
         dirty:
@@ -1665,6 +1733,15 @@ document:
         rows:
           one: "%{count} 行"
           many: "%{count} 行"
+        executed: "语句已执行"
+        affected_rows:
+          one: "%{count} 行受影响"
+          many: "%{count} 行受影响"
+        limited_rows:
+          first: "已加载前 %{count} 行"
+          of_total: "已加载 %{loaded}/%{total} 行"
+          count: 统计行数
+          load_all: 加载全部行
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
@@ -1707,6 +1784,39 @@ document:
         builder_notice: 行来自构建器查询
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
+      nearest:
+        summary: "按 %{column} 与 %{anchor} 相似"
+        similar_to: "相似于"
+        by: "按"
+        k: "K"
+        anchor: "参照行"
+        anchor_row: "第 %{row} 行"
+        read_only: "相似行为只读"
+        menu_detail: "按 %{column} · 最近 %{limit} 行"
+        menu_blocked:
+          no_vector: "%{column} 无值"
+          pending_edits:
+            one: "请先保存或还原 1 处更改"
+            many: "请先保存或还原 %{count} 处更改"
+        column:
+          l2: "L2 距离"
+          cosine: "余弦距离"
+          inner_product: "内积"
+        rows:
+          of_total: "%{total} 行中最近的 %{count} 行"
+          count: "最近的 %{count} 行"
+        back_to_table: 返回表
+        distance:
+          l2: L2
+          cosine: 余弦
+          inner_product: 内积
+        error:
+          no_vector: "所选行在 %{column} 中没有值"
+          failed: "查找相似行失败：%{error}"
+          pending_edits:
+            one: "请先保存或还原更改"
+            many: "请先保存或还原 %{count} 处更改"
+          invalid_k: "K 必须是 1 到 %{max} 之间的整数"
       toast:
         query_imported: 查询导入成功
         mutation_queued: 变更已排队等待审批。
@@ -1810,6 +1920,20 @@ document:
         references: 引用
         row: 行
       title: "行 %{row}"
+    table_views:
+      tab:
+        data: "数据"
+        columns: "列"
+        partitions: "分区"
+      projection_keeps_keys: "主键保留在投影中，以便仍可编辑行：%{columns}"
+      sample_failed: "分析样本失败：%{error}"
+      badge:
+        sort_position: "排序 %{position}"
+        sort: "排序"
+        partition: "分区"
+        distribution: "分布"
+      header_nulls: "%{percent} 为空"
+      refresh_failed: "刷新列统计信息失败：%{error}"
   delimited:
     unsaved_summary: "%{name} 有未保存的编辑"
     loading: "正在加载 %{name}…"
@@ -1927,6 +2051,7 @@ document:
       text: "文本"
       raw: "原始"
       aligned: "对齐"
+      columns: "列"
     text:
       more_in_file: "文件中还有更多记录。加载更多即可在此显示。"
       capped: "文本只显示已加载的 %{loaded} 条记录中的前 %{shown} 条。表格会显示全部记录。"
@@ -1935,6 +2060,17 @@ document:
       apply_failed: "无法应用文本：%{cause}"
       read_only_capped: "此文本无法编辑，因为它没有显示所有已加载的记录，而对部分记录的编辑无法对应回这些记录。请在表格中编辑。"
       raw_edit_hint: "切换视图、保存或加载更多时，编辑会应用到表格。只从文本中取字段值：值没有变化的行保留文件中的换行和引号，修改或新增的行按文件的列写入。"
+    columns:
+      type:
+        integer: "整数"
+        decimal: "小数"
+        boolean: "布尔值"
+        date: "日期"
+        timestamp: "时间戳"
+        text: "文本"
+      progress: "%{scanned} / %{total}"
+      error:
+        scan_failed: "无法分析 %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"
@@ -3226,9 +3362,6 @@ document:
       custom: 自定义
       on_open: 打开时
     result_warnings:
-      rows_omitted:
-        summary: 查询结果中有行被省略
-        cause: 达到执行限制后，至少一个结果集中的部分行被省略。
       context:
         query: 查询结果
         table_browse: 表浏览结果
@@ -3246,6 +3379,7 @@ document:
       close_others: 关闭其他
       close_right: 关闭右侧
     new: 新建标签页
+    close_named: "关闭 %{title}"
     unsaved_changes: 未保存的更改
 document_tree:
   search_placeholder: 搜索…
@@ -3383,6 +3517,7 @@ login:
     no_url: 此提供程序没有可用的登录 URL。
     no_url_provided: 提供程序未提供登录 URL
 modals:
+  close: 关闭
   active_query:
     title: 有查询正在执行
     prompt: 此连接上仍有查询在执行。您想怎么做？
@@ -3545,6 +3680,13 @@ modals:
     remember: 在此会话中记住
     cancel: 取消
     connect: 连接
+  connection_password:
+    title: "需要密码"
+    connection_label: "连接"
+    placeholder: "密码"
+    show_password: "显示密码"
+    hide_password: "隐藏密码"
+    remember: "在 DBFlux 关闭前记住"
   unsaved_changes:
     title: 未保存的更改
     prompt: 以下文档中有未保存的更改。您想怎么做？
@@ -3885,6 +4027,7 @@ settings:
       error: 更新共享数据库设置失败
       hint: 下次启动时生效。共享稳定数据库（dbflux.db），而非此 nightly 构建的 dbflux-nightly.db。
     override_value_header: 覆盖值
+    override_field: "覆盖%{field}"
     placeholder:
       refresh_policy: 刷新策略
     save:
@@ -4026,6 +4169,7 @@ settings:
       cycle_result_view: "切换结果视图"
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
+      find_similar_rows: 查找相似行
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作
@@ -4764,6 +4908,8 @@ shutdown:
   complete: 关闭完成
   failed: 关闭失败
 sidebar:
+  row:
+    actions: "%{name} 的操作"
   header:
     new_dashboard: "新建仪表板"
     add: "添加"
@@ -4961,9 +5107,7 @@ sidebar:
       relational: "表（%{count}）"
       document: "集合（%{count}）"
       key_value: "键（%{count}）"
-      graph: "节点（%{count}）"
       time_series: "测量（%{count}）"
-      wide_column: "表（%{count}）"
       log_stream: "日志组（%{count}）"
       object_storage: "存储桶（%{count}）"
     folder:

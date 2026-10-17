@@ -10,6 +10,7 @@ use crate::DataViewMode;
 use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
+use crate::data_grid_panel::table_views::TableTab;
 use crate::data_grid_panel::value_panel::ValuePanelButton;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
 use crate::result_view::ResultViewMode;
@@ -42,6 +43,12 @@ pub(crate) enum ToolbarAction {
     OpenBuilder,
     /// Reset in the "rows come from the builder query" notice.
     ResetBuilder,
+    /// The distance button of the nearest-neighbors notice.
+    NearestDistance,
+    /// Back to table in the nearest-neighbors notice.
+    ClearNearest,
+    /// Opens the vector column picker of the neighbor bar.
+    NearestColumn,
     /// Save in the edit bar.
     SaveChanges,
     /// Revert in the edit bar.
@@ -74,6 +81,16 @@ pub(crate) enum ToolbarAction {
     StepToRoot,
     /// A view tab of a document collection (Documents, Schema, Aggregate).
     CollectionView(CollectionTab),
+    /// A view tab of a table (Data, Columns, Partitions).
+    TableView(TableTab),
+    /// The column picker of a table's Data view: opens it for the keyboard.
+    ColumnPicker,
+    /// Reads a table's column profile again (Columns view).
+    RefreshProfile,
+    /// Profiles a sample of a table's rows (Columns view).
+    SampleProfile,
+    /// Reads a table's partitions again (Partitions view).
+    RefreshPartitions,
     /// Reload in the commit conflict panel.
     ConflictReload,
     /// Apply anyway in the commit conflict panel.
@@ -86,6 +103,10 @@ pub(crate) enum ToolbarAction {
     ToggleMaximize,
     /// Hide in the embedded panel's header.
     HidePanel,
+    /// Count rows next to the footer's row count of a limited result.
+    CountRows,
+    /// Load all rows next to the footer's row count of a limited result.
+    LoadAllRows,
 }
 
 /// A control of the chart's custom range row.
@@ -123,6 +144,9 @@ impl ToolbarAction {
             ToolbarAction::ResultView(ResultViewMode::Raw) => "result-view-raw",
             ToolbarAction::OpenBuilder => "open-builder",
             ToolbarAction::ResetBuilder => "reset-builder",
+            ToolbarAction::NearestDistance => "nearest-neighbors-distance",
+            ToolbarAction::ClearNearest => "nearest-neighbors-clear",
+            ToolbarAction::NearestColumn => "nearest-neighbors-column",
             ToolbarAction::SaveChanges => "save-changes",
             ToolbarAction::RevertChanges => "revert-changes",
             ToolbarAction::AutoRefresh => "auto-refresh",
@@ -148,6 +172,13 @@ impl ToolbarAction {
             ToolbarAction::CollectionView(CollectionTab::Documents) => "view-documents",
             ToolbarAction::CollectionView(CollectionTab::Schema) => "view-schema",
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => "view-aggregate",
+            ToolbarAction::TableView(TableTab::Data) => "view-table-data",
+            ToolbarAction::TableView(TableTab::Columns) => "view-table-columns",
+            ToolbarAction::TableView(TableTab::Partitions) => "view-table-partitions",
+            ToolbarAction::ColumnPicker => "column-picker",
+            ToolbarAction::RefreshProfile => "refresh-profile",
+            ToolbarAction::SampleProfile => "sample-profile",
+            ToolbarAction::RefreshPartitions => "refresh-partitions",
             ToolbarAction::ConflictReload => "conflict-reload",
             ToolbarAction::ConflictApply => "conflict-apply",
             ToolbarAction::PinRowInspector => "pin-row-inspector",
@@ -167,6 +198,8 @@ impl ToolbarAction {
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => "value-save",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
+            ToolbarAction::CountRows => "count-rows",
+            ToolbarAction::LoadAllRows => "load-all-rows",
         }
     }
 
@@ -178,6 +211,9 @@ impl ToolbarAction {
             ToolbarAction::ResultView(mode) => DataGridPanel::result_mode_icon(mode),
             ToolbarAction::OpenBuilder => AppIcon::ListFilter,
             ToolbarAction::ResetBuilder => AppIcon::RotateCcw,
+            ToolbarAction::NearestDistance => AppIcon::Search,
+            ToolbarAction::ClearNearest => AppIcon::X,
+            ToolbarAction::NearestColumn => AppIcon::ChartScatter,
             ToolbarAction::SaveChanges => AppIcon::Save,
             ToolbarAction::RevertChanges => AppIcon::RotateCcw,
             ToolbarAction::AutoRefresh => AppIcon::Clock,
@@ -194,6 +230,12 @@ impl ToolbarAction {
             ToolbarAction::CollectionView(CollectionTab::Documents) => AppIcon::Table,
             ToolbarAction::CollectionView(CollectionTab::Schema) => AppIcon::Layers,
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => AppIcon::Braces,
+            ToolbarAction::TableView(TableTab::Data) => AppIcon::Table,
+            ToolbarAction::TableView(TableTab::Columns) => AppIcon::Columns,
+            ToolbarAction::TableView(TableTab::Partitions) => AppIcon::Layers,
+            ToolbarAction::ColumnPicker => AppIcon::Columns,
+            ToolbarAction::RefreshProfile | ToolbarAction::RefreshPartitions => AppIcon::RefreshCcw,
+            ToolbarAction::SampleProfile => AppIcon::ChartBar,
             ToolbarAction::ConflictReload => AppIcon::RefreshCcw,
             ToolbarAction::ConflictApply => AppIcon::Check,
             ToolbarAction::PinRowInspector => AppIcon::Pin,
@@ -205,6 +247,8 @@ impl ToolbarAction {
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => AppIcon::Save,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
+            ToolbarAction::CountRows => AppIcon::Hash,
+            ToolbarAction::LoadAllRows => AppIcon::Download,
         }
     }
 
@@ -215,7 +259,12 @@ impl ToolbarAction {
             ToolbarAction::ClearFilter => Some(Command::ClearFilter),
             ToolbarAction::ToggleView => Some(Command::CycleDocumentView),
             ToolbarAction::ResultView(_) => Some(Command::CycleResultView),
-            ToolbarAction::CollectionView(_) => Some(Command::NextResultTab),
+            ToolbarAction::CollectionView(_) | ToolbarAction::TableView(_) => {
+                Some(Command::NextResultTab)
+            }
+            ToolbarAction::RefreshProfile | ToolbarAction::RefreshPartitions => {
+                Some(Command::RefreshSchema)
+            }
             _ => None,
         }
     }
@@ -244,28 +293,65 @@ impl DataGridPanel {
         let filter_row_shown = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        ) && !document_collection;
+        ) && !document_collection
+            && self.table_tab() == TableTab::Data;
         let shows_chart = self.result_view_mode().shows_chart() && self.chart.chart_shell.is_some();
 
         if has_data {
             actions.push(ToolbarAction::Export);
         }
 
-        if self.filter_is_clearable(cx) {
+        // The neighbor bar replaces the filter row: its own actions stand in
+        // for the filter's.
+        let neighbors_shown = self.neighbor_bar_search().is_some();
+        let filter_controls_shown = filter_row_shown && !neighbors_shown;
+
+        if !neighbors_shown && self.filter_is_clearable(cx) {
             actions.push(ToolbarAction::ClearFilter);
         }
 
-        if filter_row_shown && self.builder_notice_visible() {
+        if filter_controls_shown && self.builder_notice_visible() {
             actions.push(ToolbarAction::ResetBuilder);
         }
 
-        if filter_row_shown && self.can_toggle_view() {
+        if filter_row_shown && neighbors_shown {
+            actions.push(ToolbarAction::NearestDistance);
+            actions.push(ToolbarAction::NearestColumn);
+            actions.push(ToolbarAction::ClearNearest);
+        }
+
+        if filter_controls_shown && self.can_toggle_view(cx) {
             actions.push(ToolbarAction::ToggleView);
         }
 
-        if filter_row_shown && !self.builder.builder_open && self.can_open_builder(cx) {
+        if filter_controls_shown && !self.builder.builder_open && self.can_open_builder(cx) {
             actions.push(ToolbarAction::OpenBuilder);
         }
+
+        if filter_controls_shown && self.shows_table_column_picker() {
+            actions.push(ToolbarAction::ColumnPicker);
+        }
+
+        let current_tab = self.table_tab();
+
+        if current_tab == TableTab::Columns && self.table_views.profile_view.is_some() {
+            actions.push(ToolbarAction::RefreshProfile);
+
+            if self.offers_sample_profile() {
+                actions.push(ToolbarAction::SampleProfile);
+            }
+        }
+
+        if current_tab == TableTab::Partitions && self.table_views.partitions_view.is_some() {
+            actions.push(ToolbarAction::RefreshPartitions);
+        }
+
+        actions.extend(
+            self.table_tabs()
+                .into_iter()
+                .filter(|tab| *tab != current_tab)
+                .map(ToolbarAction::TableView),
+        );
 
         let current_view = self.result_view_mode();
         actions.extend(
@@ -343,6 +429,14 @@ impl DataGridPanel {
                     .into_iter()
                     .map(ToolbarAction::ValuePanel),
             );
+        }
+
+        if self.offers_count_rows() {
+            actions.push(ToolbarAction::CountRows);
+        }
+
+        if self.offers_load_all_rows() {
+            actions.push(ToolbarAction::LoadAllRows);
         }
 
         if self.chrome.show_panel_controls {
@@ -431,6 +525,19 @@ impl DataGridPanel {
             ToolbarAction::ResetBuilder => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.reset_builder")
             }
+            ToolbarAction::NearestDistance => dbflux_i18n::t!(
+                "document.data.context_menu.toolbar.nearest_distance",
+                distance = self
+                    .neighbor_bar_search()
+                    .map(|search| super::super::nearest_neighbors::distance_label(search.distance))
+                    .unwrap_or_default()
+            ),
+            ToolbarAction::ClearNearest => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_clear")
+            }
+            ToolbarAction::NearestColumn => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_column")
+            }
             ToolbarAction::SaveChanges => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.save_changes")
             }
@@ -500,6 +607,27 @@ impl DataGridPanel {
             ToolbarAction::CollectionView(CollectionTab::Aggregate) => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.view_aggregate")
             }
+            ToolbarAction::TableView(TableTab::Data) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_table_data")
+            }
+            ToolbarAction::TableView(TableTab::Columns) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_table_columns")
+            }
+            ToolbarAction::TableView(TableTab::Partitions) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_table_partitions")
+            }
+            ToolbarAction::ColumnPicker => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.column_picker")
+            }
+            ToolbarAction::RefreshProfile => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.refresh_profile")
+            }
+            ToolbarAction::SampleProfile => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.sample_profile")
+            }
+            ToolbarAction::RefreshPartitions => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.refresh_partitions")
+            }
             ToolbarAction::ConflictReload => {
                 dbflux_i18n::t!("document.collection.conflict.reload")
             }
@@ -540,12 +668,20 @@ impl DataGridPanel {
             ToolbarAction::HidePanel => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.hide")
             }
+            ToolbarAction::CountRows => crate::labels::count_rows_label(),
+            ToolbarAction::LoadAllRows => crate::labels::load_all_rows_label(),
         }
     }
 
     /// Whether the WHERE field shows a value its × would clear, or a
     /// document collection's filter slot holds a filter.
     fn filter_is_clearable(&self, cx: &App) -> bool {
+        // The neighbor bar hides the WHERE field; its filter waits for Back
+        // to table.
+        if self.neighbor_bar_search().is_some() {
+            return false;
+        }
+
         let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
         let has_filter = !self.filter_bar.filter_input.read(cx).value().is_empty();
 
@@ -609,6 +745,13 @@ impl DataGridPanel {
             ToolbarAction::ResetBuilder => {
                 self.reset_builder_query(window, cx);
                 cx.notify();
+            }
+            ToolbarAction::NearestDistance => self.cycle_nearest_neighbor_distance(cx),
+            ToolbarAction::ClearNearest => self.clear_nearest_neighbors(window, cx),
+            ToolbarAction::NearestColumn => {
+                self.nearest
+                    .column_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
             }
             // A document collection commits and reverts through its edit
             // bar's Commit and Revert, which patch fields per document.
@@ -685,6 +828,18 @@ impl DataGridPanel {
             ToolbarAction::QueryHistory => self.open_query_history(window, cx),
             ToolbarAction::StepToRoot => self.step_to_depth(0, cx),
             ToolbarAction::CollectionView(tab) => self.set_collection_tab(tab, cx),
+            ToolbarAction::TableView(tab) => {
+                self.set_table_tab(tab, window, cx);
+                self.focus_table_view(window, cx);
+            }
+            ToolbarAction::ColumnPicker => {
+                if let Some(picker) = self.table_views.picker.clone() {
+                    picker.update(cx, |picker, cx| picker.open(window, cx));
+                }
+            }
+            ToolbarAction::RefreshProfile => self.load_table_profile(cx),
+            ToolbarAction::SampleProfile => self.request_sample_profile(cx),
+            ToolbarAction::RefreshPartitions => self.load_table_partitions(cx),
             ToolbarAction::ConflictReload => self.reload_conflicting_document(window, cx),
             ToolbarAction::ConflictApply => self.apply_conflicting_commit(cx),
             ToolbarAction::PinRowInspector => self.handle_row_inspector_event(
@@ -698,6 +853,8 @@ impl DataGridPanel {
             }
             ToolbarAction::ToggleMaximize => self.request_toggle_maximize(cx),
             ToolbarAction::HidePanel => self.request_hide(cx),
+            ToolbarAction::CountRows => self.request_count_rows(cx),
+            ToolbarAction::LoadAllRows => self.request_load_all_rows(cx),
         }
 
         cx.notify();
@@ -1116,6 +1273,13 @@ mod tests {
             "value_compact",
             "value_revert",
             "value_save",
+            "view_table_data",
+            "view_table_columns",
+            "view_table_partitions",
+            "column_picker",
+            "refresh_profile",
+            "sample_profile",
+            "refresh_partitions",
         ];
 
         for key in keys {

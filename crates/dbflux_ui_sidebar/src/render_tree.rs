@@ -419,6 +419,10 @@ pub(super) fn render_tree_item(
                     let item_id = item_id.clone();
                     move || format!("row-{item_id}")
                 })
+                // Named by the item rather than by what the row draws: while the
+                // inline editor stands in for the label, the drawn text is the
+                // editor, and the name would be the menu glyph on its own.
+                .aria_label(label_text.clone())
                 .w_full()
                 .flex()
                 .items_center()
@@ -488,7 +492,14 @@ pub(super) fn render_tree_item(
                         .flex()
                         .justify_center()
                         .when_some(chevron_icon, |el, icon| {
-                            el.cursor_pointer()
+                            // The arrow draws only an icon, so the row's own
+                            // text names it, and its expanded state says which
+                            // way it folds.
+                            let chevron_name = label_text.clone();
+                            el.role(Role::Button)
+                                .aria_label(chevron_name)
+                                .aria_expanded(is_expanded)
+                                .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
@@ -1124,6 +1135,13 @@ pub(super) fn render_tree_item(
                                 let item_id = item_id_for_menu.clone();
                                 move || format!("menu-btn-{item_id}")
                             })
+                            // The button draws only an ellipsis, so it is named
+                            // after the row it opens the menu for.
+                            .role(Role::Button)
+                            .aria_label(dbflux_i18n::t!(
+                                "sidebar.row.actions",
+                                name = label_text.clone()
+                            ))
                             .flex_shrink_0()
                             .ml_auto()
                             .px_1()

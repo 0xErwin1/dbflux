@@ -19,6 +19,7 @@ use crate::{
         SearchableListAdapter, SearchableListChange, SearchableListDelegate, SearchableListItem,
         SearchableListState,
     },
+    sizing::DROPDOWN_LIST_PADDING,
     v_flex,
 };
 use gpui_base::{GlobalState, Select as BaseSelect};
@@ -116,6 +117,8 @@ impl Default for SelectOptions {
 // MARK: SelectState
 
 /// State of the [`Select`] component.
+///
+/// Emits [`DismissEvent`] when an open menu closes, including after a selection is confirmed.
 pub struct SelectState<D: SearchableListDelegate + 'static>
 where
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
@@ -193,37 +196,43 @@ where
                             .delegate
                             .on_will_change(&mut selection, &changes);
 
-                        let new_selection = weak_confirm.update(cx, |this, cx| {
+                        let confirmed = weak_confirm.update(cx, |this, cx| {
                             this.state.selection = selection;
 
                             let final_value =
                                 this.state.selection.first().map(|(_, i)| i.value().clone());
 
-                            cx.emit(SelectEvent::Confirm(final_value));
+                            cx.emit(SelectEvent::Confirm(final_value.clone()));
                             cx.notify();
                             this.set_open(false, cx);
                             this.focus(window, cx);
 
-                            this.state.selection.clone()
+                            (this.state.selection.clone(), final_value)
                         });
 
-                        // Sync snapshot and fire on_confirm directly — same re-entrancy guard.
-                        if let Ok(mut new_selection) = new_selection {
-                            let committed =
-                                new_selection.first().map(|(_, item)| item.value().clone());
-                            let committed_ix = Self::restore_list_to_selection(
-                                list_state,
-                                committed.as_ref(),
-                                window,
-                                cx,
-                            );
+                        // Clear the query through list_state directly — an entity-handle
+                        // update here would re-enter the ListState lock held above.
+                        // The committed index pointed into the filtered view, so resolve
+                        // the confirmed value in the restored full list; otherwise the
+                        // cursor and the mark would disagree on the next open.
+                        if let Ok((mut new_selection, final_value)) = confirmed {
+                            if !list_state.query_input.read(cx).value().is_empty() {
+                                list_state.set_query("", window, cx);
+                            }
 
-                            if let (Some(ix), Some(first)) =
-                                (committed_ix, new_selection.first_mut())
+                            if let Some(ix) = final_value
+                                .as_ref()
+                                .and_then(|value| list_state.delegate().delegate.position(value))
                             {
-                                first.0 = ix;
-                                _ = weak_confirm.update(cx, |this, _| {
-                                    this.state.selection = new_selection.clone();
+                                list_state.set_selected_index(Some(ix), window, cx);
+                                if let Some((slot, _)) = new_selection.first_mut() {
+                                    *slot = ix;
+                                }
+                                _ = weak_confirm.update(cx, |this, cx| {
+                                    if let Some((slot, _)) = this.state.selection.first_mut() {
+                                        *slot = ix;
+                                    }
+                                    cx.notify();
                                 });
                             }
 
@@ -238,43 +247,24 @@ where
                     }
                 });
             },
-            // on_cancel — restore cursor to committed index, close
+            // on_cancel — clear the query, restore cursor to committed index, close
             move |_final_selected_index, window, cx| {
                 cx.defer_in(window, {
                     let weak_cancel = weak_cancel.clone();
                     move |list_state, window, cx| {
-                        let committed = weak_cancel.upgrade().and_then(|e| {
-                            e.read(cx)
-                                .state
-                                .selection
-                                .first()
-                                .map(|(_, item)| item.value().clone())
-                        });
+                        let committed_ix = weak_cancel
+                            .upgrade()
+                            .and_then(|e| e.read(cx).state.selection.first().map(|(ix, _)| *ix));
 
-                        let committed_ix = Self::restore_list_to_selection(
-                            list_state,
-                            committed.as_ref(),
-                            window,
-                            cx,
-                        );
+                        if !list_state.query_input.read(cx).value().is_empty() {
+                            list_state.set_query("", window, cx);
+                        }
+                        list_state.set_selected_index(committed_ix, window, cx);
 
-                        let selection = weak_cancel.update(cx, |this, cx| {
-                            if let (Some(ix), Some(first)) =
-                                (committed_ix, this.state.selection.first_mut())
-                            {
-                                first.0 = ix;
-                            }
-
+                        _ = weak_cancel.update(cx, |this, cx| {
                             this.set_open(false, cx);
                             this.focus(window, cx);
-                            this.state.selection.clone()
                         });
-
-                        if let Ok(selection) = selection {
-                            list_state
-                                .delegate_mut()
-                                .update_selection_snapshot(selection);
-                        }
                     }
                 });
             },
@@ -396,31 +386,50 @@ where
             return;
         }
 
-        self.reset_list(window, cx);
+        self.clear_query_and_restore_cursor(window, cx);
         self.set_open(false, cx);
         cx.notify();
     }
 
-    /// Clears the search query and puts the list cursor on the committed value
-    /// of `list`. Returns the committed value's index in the unfiltered list.
-    ///
-    /// An index recorded while a query filtered the list points into the
-    /// filtered rows; resolving the value again after clearing the query keeps
-    /// the selection, the cursor and the next open on the full list.
-    fn restore_list_to_selection(
-        list: &mut ListState<SearchableListAdapter<D>>,
-        committed: Option<&<D::Item as SearchableListItem>::Value>,
-        window: &mut Window,
-        cx: &mut Context<ListState<SearchableListAdapter<D>>>,
-    ) -> Option<IndexPath> {
-        if !list.query_input.read(cx).value().is_empty() {
-            list.set_query("", window, cx);
+    fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+
+        self.set_open(!self.state.open, cx);
+
+        if self.state.open {
+            self.state.list.focus_handle(cx).focus(window, cx);
+        } else {
+            self.clear_query_and_restore_cursor(window, cx);
         }
 
-        let committed_ix = committed.and_then(|value| list.delegate().delegate.position(value));
-        list.set_selected_index(committed_ix, window, cx);
+        cx.notify();
+    }
 
-        committed_ix
+    fn escape(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.state.open {
+            cx.propagate();
+            return;
+        }
+
+        cx.stop_propagation();
+        self.clear_query_and_restore_cursor(window, cx);
+        self.set_open(false, cx);
+        self.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Drop the search query and move the cursor back to the committed
+    /// selection, so the next open shows every item. Call on every menu
+    /// close that does not go through the confirm/cancel callbacks.
+    fn clear_query_and_restore_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.clear_query(window, cx);
+
+        let committed_ix = self.state.selection.first().map(|(ix, _)| *ix);
+        self.state.list.update(cx, |list, cx| {
+            if list.selected_index() != committed_ix {
+                list.set_selected_index(committed_ix, window, cx);
+            }
+        });
     }
 
     /// Highlights the first match when the open list has rows and no
@@ -448,51 +457,14 @@ where
         }
     }
 
-    /// [`Self::restore_list_to_selection`] for this select's list, keeping the
-    /// committed selection's index in step.
-    fn reset_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let committed = self.selected_value().cloned();
-        let committed_ix = self.state.list.update(cx, |list, cx| {
-            Self::restore_list_to_selection(list, committed.as_ref(), window, cx)
-        });
-
-        if let (Some(ix), Some(first)) = (committed_ix, self.state.selection.first_mut()) {
-            first.0 = ix;
-        }
-
-        self.state.sync_snapshot(cx);
-    }
-
-    fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        cx.stop_propagation();
-
-        self.reset_list(window, cx);
-        self.set_open(!self.state.open, cx);
-
-        if self.state.open {
-            self.state.list.focus_handle(cx).focus(window, cx);
-        }
-
-        cx.notify();
-    }
-
-    fn escape(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.state.open {
-            cx.propagate();
-            return;
-        }
-
-        cx.stop_propagation();
-        self.reset_list(window, cx);
-        self.set_open(false, cx);
-        self.focus(window, cx);
-        cx.notify();
-    }
-
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        let dismissed = self.state.open && !open;
         self.state.open = open;
         self.state.deferred_context = open.then(|| GlobalState::register_deferred_popover(cx));
 
+        if dismissed {
+            cx.emit(DismissEvent);
+        }
         cx.notify();
     }
 
@@ -663,7 +635,7 @@ where
                             v_flex()
                                 .occlude()
                                 .map(|this| match self.state.menu_width {
-                                    Length::Auto => this.w(bounds.size.width + px(2.)),
+                                    Length::Auto => this.w(bounds.size.width),
                                     Length::Definite(w) => this.w(w),
                                 })
                                 .popover_style(cx)
@@ -677,7 +649,7 @@ where
                                         )
                                         .with_size(self.state.size)
                                         .max_h(self.state.menu_max_h)
-                                        .paddings(Edges::all(px(4.))),
+                                        .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
                                 )
                                 .on_mouse_down_out(cx.listener(|this, _, window, cx| {
                                     this.escape(&Cancel, window, cx);
@@ -899,7 +871,9 @@ where
             .accessibility_value(accessibility_value)
             .on_open_change(move |open, window, cx| {
                 open_state.update(cx, |state, cx| {
-                    state.reset_list(window, cx);
+                    if !open {
+                        state.clear_query_and_restore_cursor(window, cx);
+                    }
                     state.set_open(open, cx);
                 });
             })
