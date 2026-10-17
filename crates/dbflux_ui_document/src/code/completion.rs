@@ -2172,8 +2172,10 @@ fn append_table_aliases(
     }
 
     let mut reference_start = scan_identifier_start(source, cursor);
-    if reference_start > 0 && source.as_bytes()[reference_start - 1] == b'.' {
-        reference_start = scan_identifier_start(source, reference_start - 1);
+    if let Some(dot_index) = reference_start.checked_sub(1)
+        && source.as_bytes().get(dot_index) == Some(&b'.')
+    {
+        reference_start = scan_identifier_start(source, dot_index);
     }
 
     let use_as = match table_reference_position(&source[..reference_start]) {
