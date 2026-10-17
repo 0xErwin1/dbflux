@@ -464,6 +464,10 @@ struct ContextMenuItem {
     icon: Option<dbflux_components::icons::AppIcon>,
     is_separator: bool,
     is_danger: bool,
+    /// A muted second line under the label.
+    detail: Option<SharedString>,
+    /// Drawn but not activatable; `detail` says why.
+    disabled: bool,
 }
 
 /// Kind of SQL statement to generate from row data.
@@ -849,6 +853,8 @@ pub struct DataGridPanel {
     /// The rows on screen are the nearest neighbors of a row, not a page of
     /// the table. Cleared by any other result.
     nearest_neighbors: Option<nearest_neighbors::NearestNeighborSearch>,
+    /// The neighbor bar's controls and the search in flight.
+    nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
@@ -1301,6 +1307,7 @@ impl DataGridPanel {
         );
 
         let collection = documents::CollectionViewState::new(window, cx);
+        let nearest = nearest_neighbors::NearestNeighborsUi::new(window, cx);
 
         if matches!(source, DataSource::Collection { .. }) && filter_completion_cache.is_none() {
             let provider: Rc<dyn CompletionProvider> =
@@ -1431,6 +1438,7 @@ impl DataGridPanel {
             pk_details_pending: false,
             pk_requery_pending: false,
             nearest_neighbors: None,
+            nearest,
             view_config,
             context_menu: None,
             is_active_tab: true,

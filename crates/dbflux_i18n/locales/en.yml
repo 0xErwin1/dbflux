@@ -1659,6 +1659,7 @@ document:
         refresh_partitions: "Refresh partitions"
         nearest_distance: "Change the distance (now %{distance})"
         nearest_clear: "Back to the table rows"
+        nearest_column: "Change the vector column"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1784,7 +1785,26 @@ document:
         edit_in_builder: Edit in builder
         reset_builder: Reset
       nearest:
-        notice: "Rows nearest to the selected row by %{column} · k = %{limit}"
+        summary: "Similar to %{anchor} by %{column}"
+        similar_to: "Similar to"
+        by: "by"
+        k: "K"
+        anchor: "anchor"
+        anchor_row: "row %{row}"
+        read_only: "Similar rows are read-only"
+        menu_detail: "by %{column} · nearest %{limit}"
+        menu_blocked:
+          no_vector: "No value in %{column}"
+          pending_edits:
+            one: "Save or revert 1 change first"
+            many: "Save or revert %{count} changes first"
+        column:
+          l2: "L2 distance"
+          cosine: "Cosine distance"
+          inner_product: "Inner product"
+        rows:
+          of_total: "%{count} nearest of %{total} rows"
+          count: "%{count} nearest rows"
         back_to_table: Back to table
         distance:
           l2: L2
@@ -1793,6 +1813,10 @@ document:
         error:
           no_vector: "The selected row has no value in %{column}"
           failed: "Finding similar rows failed: %{error}"
+          pending_edits:
+            one: "Save or revert your change first"
+            many: "Save or revert your %{count} changes first"
+          invalid_k: "K must be a whole number from 1 to %{max}"
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.

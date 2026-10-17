@@ -145,6 +145,11 @@ pub struct DataTableState {
     /// unless `positional_rows` is set).
     is_editable: bool,
 
+    /// Whether the first row is the reference the others are compared to
+    /// (the anchor of a similar-rows search): it is marked in the gutter and
+    /// the rows under it are numbered from 1.
+    reference_row: bool,
+
     /// Whether rows are identified by their position instead of by
     /// `pk_columns`. Set for a source that has no key, such as a file.
     positional_rows: bool,
@@ -205,6 +210,7 @@ impl DataTableState {
             fk_columns: HashSet::new(),
             readonly_columns: HashSet::new(),
             is_editable: false,
+            reference_row: false,
             positional_rows: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
@@ -1017,6 +1023,13 @@ impl DataTableState {
         self.pk_columns = pk_columns;
     }
 
+    /// Set the primary key column indices of a table whose rows cannot be
+    /// edited: the key headers keep their icon, nothing is editable.
+    pub fn set_read_only_pk_columns(&mut self, pk_columns: Vec<usize>) {
+        self.set_pk_columns(pk_columns);
+        self.is_editable = false;
+    }
+
     /// Make the table editable with rows identified by their position, for a
     /// source whose rows have no key. No column is a key column, so no header
     /// draws a key icon. `false` makes the table read-only.
@@ -1033,6 +1046,15 @@ impl DataTableState {
     /// Whether the table is editable with rows identified by their position.
     pub fn is_positional_editing(&self) -> bool {
         self.positional_rows
+    }
+
+    /// Marks the first row as the reference row, or clears the mark.
+    pub fn set_reference_row(&mut self, reference_row: bool) {
+        self.reference_row = reference_row;
+    }
+
+    pub fn has_reference_row(&self) -> bool {
+        self.reference_row
     }
 
     /// Get the primary key column indices.

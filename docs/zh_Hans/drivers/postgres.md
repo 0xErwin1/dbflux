@@ -22,7 +22,7 @@
 - 查询引发的服务器通知和警告（例如单独的 `COMMIT` 产生的 `WARNING: there is no transaction in progress`，或 `RAISE NOTICE`）会随其结果一并返回；批次会把它们全部附加到主结果上，失败的查询会丢弃它们。每个查询保留前 100 条通知，并附加一条说明其余数量的通知。
 - 数据传输引擎：原生的多行 `INSERT` 批量装载（`BULK_INSERT`）、依据源表列生成的驱动程序原生 `CREATE TABLE` DDL、`TRUNCATE TABLE` 支持，以及用于外键安全迁移的参照完整性开关（`SET session_replication_role`）。
 - 以文本形式展示 `pgvector` 的 `vector`、`halfvec` 与 `sparsevec` 取值，包括经验证的一维数组。
-- 在含有 `pgvector` `vector` 列的表上，按 L2 距离、余弦距离或负内积查找与所选行最接近的行，并显示每个近邻及其 `nearest_distance`。`halfvec` 与 `sparsevec` 列不提供该搜索。
+- 在含有 `pgvector` `vector` 列的表上，按 L2 距离、余弦距离或内积查找与所选行最接近的行。查询将距离命名为 `nearest_distance`（`dbflux_core::NEAREST_DISTANCE_COLUMN`）；表格在所选行下方将其显示为第一列，并显示内积本身而非 pgvector 的负内积。`halfvec` 与 `sparsevec` 列不提供该搜索。
 - 含有 `json` 或 `jsonb` 列的表在表格旁提供文档视图：每一行作为文档打开，其中的 JSON 值会展开。该树为只读；编辑通过表格进行。
 - TimescaleDB 超表按时间序列读取：其详情带有一个注明时间维度的 `Hypertable` 存储提示，表格打开时会在行旁显示基于该列的图表。在未安装 TimescaleDB 的服务器上不受影响。
 - 以 PostgreSQL 的规范文本形式展示全文检索的 `tsvector` 与 `tsquery` 取值，包括一维数组。

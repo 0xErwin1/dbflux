@@ -98,8 +98,10 @@ pub(crate) fn nearest_neighbors_sql(
         pg_quote_string(&anchor)
     );
 
-    let mut sql =
-        format!("SELECT *, {distance} AS nearest_distance FROM {table} WHERE {column} IS NOT NULL");
+    let mut sql = format!(
+        "SELECT *, {distance} AS {alias} FROM {table} WHERE {column} IS NOT NULL",
+        alias = dbflux_core::NEAREST_DISTANCE_COLUMN
+    );
 
     // A key value that renders as NULL would make `NOT (key = NULL)` match
     // no row at all, so the anchor is kept rather than every row lost.

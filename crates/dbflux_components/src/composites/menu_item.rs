@@ -45,6 +45,9 @@ pub struct MenuItem {
     pub has_submenu: bool,
     pub disabled: bool,
     pub shortcut: Option<SharedString>,
+    /// A second, muted line under the label: what the item acts on, or why
+    /// it is disabled.
+    pub detail: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,6 +167,7 @@ impl MenuItem {
             has_submenu: false,
             disabled: false,
             shortcut: None,
+            detail: None,
         }
     }
 
@@ -205,6 +209,12 @@ impl MenuItem {
 
     pub fn shortcut(mut self, shortcut: impl Into<SharedString>) -> Self {
         self.shortcut = Some(shortcut.into());
+        self
+    }
+
+    /// Adds a muted second line under the label.
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
         self
     }
 
@@ -267,7 +277,11 @@ pub fn menu_row(
         .flex_shrink_0()
         .items_center()
         .gap(MenuMetrics::ROW_GAP)
-        .h(MenuMetrics::ROW_HEIGHT)
+        .h(if item.detail.is_some() {
+            MenuMetrics::DETAIL_ROW_HEIGHT
+        } else {
+            MenuMetrics::ROW_HEIGHT
+        })
         .mx(MenuMetrics::ROW_INSET)
         .px(MenuMetrics::ROW_PADDING_X)
         .font_family(crate::fonts::ui_family(cx))
@@ -276,7 +290,8 @@ pub fn menu_row(
         .text_color(text_color)
         .when(interaction_state.interactive, |row| row.cursor_pointer())
         .when(item.disabled, |row| {
-            row.opacity(MenuMetrics::DISABLED_OPACITY)
+            row.aria_disabled(true)
+                .opacity(MenuMetrics::DISABLED_OPACITY)
         })
         .child(shape)
         .child(match item.icon.clone() {
@@ -289,13 +304,26 @@ pub fn menu_row(
                 .size(MenuMetrics::ICON)
                 .into_any_element(),
         })
-        .child(
-            div()
+        .child(match item.detail.clone() {
+            None => div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
                 .child(item.label.clone()),
-        )
+            Some(detail) => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(div().truncate().child(item.label.clone()))
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(MenuMetrics::DETAIL_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(detail),
+                ),
+        })
         .when_some(item.shortcut.as_ref(), |row, shortcut| {
             row.child(
                 div()

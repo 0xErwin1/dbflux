@@ -248,7 +248,7 @@ pub use schema::{
     DbSchemaInfo, DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo,
     IdentitySpec, IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo,
     KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
-    NearestNeighborRequest, ObjectFacet, ObjectFolder, OrderResult, ParseSchemaNodeIdError,
+    NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, ObjectFolder, OrderResult, ParseSchemaNodeIdError,
     PrimaryKeySpec, QueryTableRef, RelationKind, RelationRef, RelationalSchema,
     RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind, SchemaChange, SchemaColumnInfo,
     SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
