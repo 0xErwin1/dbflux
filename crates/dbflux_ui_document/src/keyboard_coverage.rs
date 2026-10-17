@@ -120,6 +120,10 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "nearest-neighbors-clear",
             KeyboardPath::Menu("nearest-neighbors-clear"),
         ),
+        (
+            "nearest-neighbors-column.dropdown-trigger",
+            KeyboardPath::Menu("nearest-neighbors-column"),
+        ),
         ("footer-count-rows", KeyboardPath::Menu("count-rows")),
         ("footer-load-all-rows", KeyboardPath::Menu("load-all-rows")),
         ("toggle-maximize", KeyboardPath::Menu("maximize")),

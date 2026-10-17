@@ -96,6 +96,9 @@ struct EditControls {
     dirty_count: usize,
     can_undo: bool,
     can_redo: bool,
+    /// The rows are similar rows: every action is drawn disabled and the
+    /// status says why.
+    neighbors: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +127,14 @@ impl DataGridPanel {
     /// The footer's row figure: the rows a statement without columns
     /// changed, otherwise the rows it returned.
     pub(super) fn rows_footer(&self, row_count: usize) -> String {
+        if self.nearest_neighbors.is_some() {
+            let total = match &self.source {
+                DataSource::Table { total_rows, .. } => *total_rows,
+                _ => None,
+            };
+            return crate::labels::nearest_rows_label(row_count.saturating_sub(1), total);
+        }
+
         match self.result.affected_rows {
             Some(count) if self.is_statement_without_result_set() => {
                 crate::labels::affected_rows_label(count)
@@ -222,6 +233,7 @@ pub(super) fn content_mode_for_result(
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.process_pending_actions(window, cx);
+        self.apply_pending_neighbor_controls(window, cx);
         self.flush_aggregate_json(window, cx);
         self.ensure_table_view_controls(window, cx);
         let st = self.derive_render_state(cx);
@@ -261,10 +273,12 @@ impl Render for DataGridPanel {
             .when(
                 st.show_data_toolbar && !st.document_collection && !table_side_view,
                 |d| {
+                    let neighbors = self.nearest_neighbors.is_some();
                     let edit_controls = st.show_edit_toolbar.then_some(EditControls {
-                        dirty_count: st.dirty_count,
-                        can_undo: st.can_undo,
-                        can_redo: st.can_redo,
+                        dirty_count: if neighbors { 0 } else { st.dirty_count },
+                        can_undo: st.can_undo && !neighbors,
+                        can_redo: st.can_redo && !neighbors,
+                        neighbors,
                     });
 
                     d.child(self.render_toolbar(
@@ -396,7 +410,9 @@ impl DataGridPanel {
         if std::mem::take(&mut self.pending.refresh) {
             if std::mem::take(&mut self.pending.refresh_keeps_edits) {
                 self.refresh_keeping_edits(window, cx);
-            } else {
+            } else if !self.rerun_nearest_neighbors(cx) {
+                // An auto-refresh tick over similar rows reads them again;
+                // every other source reads its page.
                 self.refresh(window, cx);
             }
         }
@@ -552,14 +568,18 @@ impl DataGridPanel {
             && !is_editable
             && !is_grouped_result
             && !self.primary_key_still_resolving()
-            && self.builder.current_visual_spec.is_none();
+            && self.builder.current_visual_spec.is_none()
+            && self.nearest_neighbors.is_none();
         let show_builder_readonly_hint = is_table_view
             && shows_table_content
             && !is_editable
             && !is_grouped_result
             && self.builder.current_visual_spec.is_some()
             && self.builder.builder_editable_binding.is_none();
-        let show_edit_toolbar = is_table_view && has_columns && is_editable;
+        // Similar rows keep the edit controls drawn, disabled, so the header
+        // does not change shape when the search lands.
+        let show_edit_toolbar =
+            is_table_view && has_columns && (is_editable || self.nearest_neighbors.is_some());
         let result_view_mode = self.chrome.result_view_mode;
         let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
 
@@ -649,6 +669,7 @@ impl DataGridPanel {
             .when(st.show_pk_warning, |d| {
                 d.child(
                     div()
+                        .debug_selector(|| "missing-primary-key-banner".to_string())
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
@@ -920,31 +941,27 @@ impl DataGridPanel {
     /// driver logo and connection name, the database and schema, then the
     /// table itself with its column and row counts. `None` for query results.
     pub(super) fn source_breadcrumb(&self, cx: &App) -> Option<Breadcrumb> {
-        let (profile_id, database, schema, name, total_rows) = match &self.source {
+        let (profile_id, database, schema, name) = match &self.source {
             DataSource::Table {
                 profile_id,
                 database,
                 table,
-                total_rows,
                 ..
             } => (
                 *profile_id,
                 database.clone(),
                 table.schema.clone(),
                 table.name.clone(),
-                *total_rows,
             ),
             DataSource::Collection {
                 profile_id,
                 collection,
-                total_docs,
                 ..
             } => (
                 *profile_id,
                 Some(collection.database.clone()),
                 None,
                 collection.name.clone(),
-                *total_docs,
             ),
             DataSource::QueryResult { .. } => return None,
         };
@@ -992,9 +1009,28 @@ impl DataGridPanel {
 
         segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Table, None));
 
-        let meta = crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows);
+        Some(Breadcrumb::new(segments).meta(self.source_breadcrumb_meta()))
+    }
 
-        Some(Breadcrumb::new(segments).meta(meta))
+    /// The column and row counts beside a table's breadcrumb.
+    pub(super) fn source_breadcrumb_meta(&self) -> String {
+        // Similar rows count what is on screen: the neighbors, without the
+        // anchor row pinned above them.
+        if self.nearest_neighbors.is_some() {
+            let neighbors = self.result.rows.len().saturating_sub(1) as u64;
+            return crate::labels::breadcrumb_meta_label(
+                self.result.columns.len(),
+                Some(neighbors),
+            );
+        }
+
+        let total_rows = match &self.source {
+            DataSource::Table { total_rows, .. } => *total_rows,
+            DataSource::Collection { total_docs, .. } => *total_docs,
+            DataSource::QueryResult { .. } => None,
+        };
+
+        crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows)
     }
 }
 
@@ -1260,6 +1296,12 @@ impl DataGridPanel {
             .limit_focused(limit_field_focused)
             .error(toolbar_has_filter_error);
 
+        // Similar rows put the neighbor bar in this row, at the same height,
+        // so the grid under it does not move; WHERE, LIMIT, the view toggle,
+        // the column picker and the builder do not apply to them.
+        let neighbor_search = self.neighbor_bar_search().cloned();
+        let filter_shown = neighbor_search.is_none();
+
         div()
             .flex()
             .flex_shrink_0()
@@ -1269,23 +1311,29 @@ impl DataGridPanel {
             .px(TableViewMetrics::FILTER_ROW_PADDING_X)
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .when(self.builder_notice_visible(), |d| {
-                        d.child(self.render_builder_notice(theme, cx))
-                    })
-                    .when_some(self.nearest_neighbor_search().cloned(), |d, search| {
-                        d.child(self.render_nearest_neighbors_notice(&search, theme, cx))
-                    })
-                    .child(field)
-                    .when_some(toolbar_error, |d, err| d.child(err)),
-            )
-            .when(self.can_toggle_view(), |d| {
+            .when(filter_shown, |row| {
+                row.debug_selector(|| "data-grid-filter-controls".to_string())
+            })
+            .when_some(neighbor_search, |row, search| {
+                row.debug_selector(|| "nearest-neighbors-bar".to_string())
+                    .child(self.render_neighbor_bar(&search, theme, cx))
+            })
+            .when(filter_shown, |row| {
+                row.child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .when(self.builder_notice_visible(), |d| {
+                            d.child(self.render_builder_notice(theme, cx))
+                        })
+                        .child(field)
+                        .when_some(toolbar_error, |d, err| d.child(err)),
+                )
+            })
+            .when(filter_shown && self.can_toggle_view(), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {
                     DataViewMode::Table => AppIcon::Table,
@@ -1311,10 +1359,10 @@ impl DataGridPanel {
                         })),
                 )
             })
-            .when(self.shows_table_column_picker(), |d| {
+            .when(filter_shown && self.shows_table_column_picker(), |d| {
                 d.children(self.table_views.picker.clone())
             })
-            .when(self.can_open_builder(cx), |d| {
+            .when(filter_shown && self.can_open_builder(cx), |d| {
                 d.child(builder_button(cx.listener(|this, _, window, cx| {
                     this.open_query_builder(window, cx);
                 })))
@@ -1409,6 +1457,25 @@ impl DataGridPanel {
         } else {
             theme.muted_foreground
         };
+        let (status_icon, status_icon_color, status_label) = if controls.neighbors {
+            (
+                AppIcon::Lock,
+                theme.muted_foreground,
+                dbflux_i18n::t!("document.data.grid.nearest.read_only"),
+            )
+        } else if has_changes {
+            (
+                AppIcon::CircleAlert,
+                theme.warning,
+                crate::labels::unsaved_changes_label(controls.dirty_count),
+            )
+        } else {
+            (
+                AppIcon::Check,
+                theme.success,
+                crate::labels::unsaved_changes_label(controls.dirty_count),
+            )
+        };
 
         div()
             .flex()
@@ -1423,19 +1490,11 @@ impl DataGridPanel {
                     .text_size(TableViewMetrics::STATUS_FONT)
                     .text_color(status_color)
                     .child(
-                        Icon::new(if has_changes {
-                            AppIcon::CircleAlert
-                        } else {
-                            AppIcon::Check
-                        })
-                        .size(TableViewMetrics::STATUS_ICON)
-                        .color(if has_changes {
-                            theme.warning
-                        } else {
-                            theme.success
-                        }),
+                        Icon::new(status_icon)
+                            .size(TableViewMetrics::STATUS_ICON)
+                            .color(status_icon_color),
                     )
-                    .child(crate::labels::unsaved_changes_label(controls.dirty_count)),
+                    .child(status_label),
             )
             .child(
                 div()

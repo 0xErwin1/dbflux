@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "刷新分区"
         nearest_distance: "更改距离（当前：%{distance}）"
         nearest_clear: "返回表中的行"
+        nearest_column: "更改向量列"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1785,7 +1786,26 @@ document:
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
       nearest:
-        notice: "按 %{column} 与所选行最接近的行 · k = %{limit}"
+        summary: "按 %{column} 与 %{anchor} 相似"
+        similar_to: "相似于"
+        by: "按"
+        k: "K"
+        anchor: "参照行"
+        anchor_row: "第 %{row} 行"
+        read_only: "相似行为只读"
+        menu_detail: "按 %{column} · 最近 %{limit} 行"
+        menu_blocked:
+          no_vector: "%{column} 无值"
+          pending_edits:
+            one: "请先保存或还原 1 处更改"
+            many: "请先保存或还原 %{count} 处更改"
+        column:
+          l2: "L2 距离"
+          cosine: "余弦距离"
+          inner_product: "内积"
+        rows:
+          of_total: "%{total} 行中最近的 %{count} 行"
+          count: "最近的 %{count} 行"
         back_to_table: 返回表
         distance:
           l2: L2
@@ -1794,6 +1814,10 @@ document:
         error:
           no_vector: "所选行在 %{column} 中没有值"
           failed: "查找相似行失败：%{error}"
+          pending_edits:
+            one: "请先保存或还原更改"
+            many: "请先保存或还原 %{count} 处更改"
+          invalid_k: "K 必须是 1 到 %{max} 之间的整数"
       toast:
         query_imported: 查询导入成功
         mutation_queued: 变更已排队等待审批。

@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "Actualizar particiones"
         nearest_distance: "Cambiar la distancia (actual: %{distance})"
         nearest_clear: "Volver a las filas de la tabla"
+        nearest_column: "Cambiar la columna vectorial"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido
@@ -1785,7 +1786,26 @@ document:
         edit_in_builder: Editar en el generador
         reset_builder: Restablecer
       nearest:
-        notice: "Filas más cercanas a la fila seleccionada por %{column} · k = %{limit}"
+        summary: "Similares a %{anchor} por %{column}"
+        similar_to: "Similares a"
+        by: "por"
+        k: "K"
+        anchor: "referencia"
+        anchor_row: "fila %{row}"
+        read_only: "Las filas similares son de solo lectura"
+        menu_detail: "por %{column} · %{limit} más cercanas"
+        menu_blocked:
+          no_vector: "Sin valor en %{column}"
+          pending_edits:
+            one: "Guarda o revierte 1 cambio primero"
+            many: "Guarda o revierte %{count} cambios primero"
+        column:
+          l2: "Distancia L2"
+          cosine: "Distancia coseno"
+          inner_product: "Producto interno"
+        rows:
+          of_total: "%{count} más cercanas de %{total} filas"
+          count: "%{count} filas más cercanas"
         back_to_table: Volver a la tabla
         distance:
           l2: L2
@@ -1794,6 +1814,10 @@ document:
         error:
           no_vector: "La fila seleccionada no tiene valor en %{column}"
           failed: "No se pudieron buscar filas similares: %{error}"
+          pending_edits:
+            one: "Guarda o revierte tu cambio primero"
+            many: "Guarda o revierte tus %{count} cambios primero"
+          invalid_k: "K debe ser un número entero de 1 a %{max}"
       toast:
         query_imported: Consulta importada correctamente
         mutation_queued: Mutación en cola para aprobación.

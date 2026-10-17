@@ -162,6 +162,22 @@ pub(crate) fn row_count_label(count: usize) -> String {
     }
 }
 
+/// Footer row count of similar rows: the neighbors shown, out of the
+/// table's rows when they are counted.
+pub(crate) fn nearest_rows_label(count: usize, total: Option<u64>) -> String {
+    match total {
+        Some(total) => dbflux_i18n::t!(
+            "document.data.grid.nearest.rows.of_total",
+            count = grouped_count(count as u64),
+            total = grouped_count(total)
+        ),
+        None => dbflux_i18n::t!(
+            "document.data.grid.nearest.rows.count",
+            count = grouped_count(count as u64)
+        ),
+    }
+}
+
 /// Footer row count of a result the row limit cut short.
 pub(crate) fn limited_row_count_label(count: usize) -> String {
     dbflux_i18n::t!(

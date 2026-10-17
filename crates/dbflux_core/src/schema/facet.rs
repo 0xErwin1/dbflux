@@ -61,6 +61,11 @@ impl VectorDistance {
     ];
 }
 
+/// Name of the column a nearest-neighbor query adds to every row, holding its
+/// distance to the anchor. Drivers alias the computed distance to it so the
+/// grid can find it without knowing the driver.
+pub const NEAREST_DISTANCE_COLUMN: &str = "nearest_distance";
+
 /// Rows of a table closest to an anchor vector, rendered by
 /// [`QueryGenerator::generate_nearest_neighbors`](crate::QueryGenerator::generate_nearest_neighbors).
 #[derive(Debug, Clone, PartialEq)]

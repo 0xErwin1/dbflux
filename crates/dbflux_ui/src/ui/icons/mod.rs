@@ -121,6 +121,8 @@ embedded_icons! {
     ChartNoAxesColumn => "icons/ui/chart-no-axes-column.svg",
     ChartBar => "icons/ui/chart-bar.svg",
     ChartPie => "icons/ui/chart-pie.svg",
+    ChartScatter => "icons/ui/chart-scatter.svg",
+    Crosshair => "icons/ui/crosshair.svg",
     ChartNetwork => "icons/ui/chart-network.svg",
     BrandPostgres => "icons/brand/postgresql.svg",
     BrandMysql => "icons/brand/mysql.svg",

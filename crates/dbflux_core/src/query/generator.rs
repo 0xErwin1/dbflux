@@ -435,7 +435,7 @@ pub trait QueryGenerator: Send + Sync {
     }
 
     /// Render the rows of a table nearest to an anchor vector, closest first,
-    /// with their distance in a `nearest_distance` column.
+    /// with their distance in a [`crate::NEAREST_DISTANCE_COLUMN`] column.
     ///
     /// The default returns `Err(GeneratorError::Unsupported)`.
     fn generate_nearest_neighbors(

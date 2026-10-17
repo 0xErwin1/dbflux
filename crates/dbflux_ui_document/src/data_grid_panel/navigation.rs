@@ -80,6 +80,12 @@ impl DataGridPanel {
             return;
         }
 
+        // Neighbor rows are not a page of the table: ordering them by a
+        // column would read the table instead.
+        if self.nearest_neighbors.is_some() {
+            return;
+        }
+
         let col_name = self
             .result
             .columns
@@ -817,6 +823,14 @@ impl DataGridPanel {
                         return true;
                     }
                 }
+
+                // Esc leaves similar rows for the table page, as the bar's
+                // "Back to table" says.
+                if self.neighbor_bar_search().is_some() {
+                    self.clear_nearest_neighbors(window, cx);
+                    return true;
+                }
+
                 false
             }
             Command::SelectNext | Command::FocusDown => {

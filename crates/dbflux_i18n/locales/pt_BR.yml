@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "Atualizar partições"
         nearest_distance: "Alterar a distância (atual: %{distance})"
         nearest_clear: "Voltar às linhas da tabela"
+        nearest_column: "Mudar a coluna vetorial"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -1785,7 +1786,26 @@ document:
         edit_in_builder: Editar no construtor
         reset_builder: Redefinir
       nearest:
-        notice: "Linhas mais próximas da linha selecionada por %{column} · k = %{limit}"
+        summary: "Semelhantes a %{anchor} por %{column}"
+        similar_to: "Semelhantes a"
+        by: "por"
+        k: "K"
+        anchor: "referência"
+        anchor_row: "linha %{row}"
+        read_only: "Linhas semelhantes são somente leitura"
+        menu_detail: "por %{column} · %{limit} mais próximas"
+        menu_blocked:
+          no_vector: "Sem valor em %{column}"
+          pending_edits:
+            one: "Salve ou reverta 1 alteração antes"
+            many: "Salve ou reverta %{count} alterações antes"
+        column:
+          l2: "Distância L2"
+          cosine: "Distância cosseno"
+          inner_product: "Produto interno"
+        rows:
+          of_total: "%{count} mais próximas de %{total} linhas"
+          count: "%{count} linhas mais próximas"
         back_to_table: Voltar à tabela
         distance:
           l2: L2
@@ -1794,6 +1814,10 @@ document:
         error:
           no_vector: "A linha selecionada não tem valor em %{column}"
           failed: "Falha ao encontrar linhas semelhantes: %{error}"
+          pending_edits:
+            one: "Salve ou reverta sua alteração antes"
+            many: "Salve ou reverta suas %{count} alterações antes"
+          invalid_k: "K deve ser um número inteiro de 1 a %{max}"
       toast:
         query_imported: Consulta importada com sucesso
         mutation_queued: Alteração enviada para aprovação.
