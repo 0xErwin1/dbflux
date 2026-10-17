@@ -1039,6 +1039,7 @@ impl DataGridPanel {
         self.inspector.row_inspector_content = None;
         self.inspector._row_inspector_subscription = None;
         self.inspector.incoming_references.cancel();
+        self.inspector.outgoing_labels = None;
         self.inspector.document_inspector_content = None;
         self.inspector._document_inspector_subscription = None;
         self.inspector.value_panel_open = false;
