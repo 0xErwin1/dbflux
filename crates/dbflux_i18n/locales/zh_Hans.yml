@@ -1600,6 +1600,7 @@ document:
         set_null: 设为 NULL
         add_row: 添加行
         inspect_row: 检查行
+        find_similar_rows: 查找相似行
         view_value: 查看值
         duplicate_row: 复制行
         delete_row: 删除行
@@ -1657,6 +1658,8 @@ document:
         refresh_profile: "刷新列统计信息"
         sample_profile: "分析前几行"
         refresh_partitions: "刷新分区"
+        nearest_distance: "更改距离（当前：%{distance}）"
+        nearest_clear: "返回表中的行"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1781,6 +1784,16 @@ document:
         builder_notice: 行来自构建器查询
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
+      nearest:
+        notice: "按 %{column} 与所选行最接近的行 · k = %{limit}"
+        back_to_table: 返回表
+        distance:
+          l2: L2
+          cosine: 余弦
+          inner_product: 内积
+        error:
+          no_vector: "所选行在 %{column} 中没有值"
+          failed: "查找相似行失败：%{error}"
       toast:
         query_imported: 查询导入成功
         mutation_queued: 变更已排队等待审批。
@@ -4127,6 +4140,7 @@ settings:
       cycle_result_view: "切换结果视图"
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
+      find_similar_rows: 查找相似行
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作

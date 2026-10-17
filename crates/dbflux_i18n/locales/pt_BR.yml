@@ -1600,6 +1600,7 @@ document:
         set_null: Definir como NULL
         add_row: Adicionar linha
         inspect_row: Inspecionar linha
+        find_similar_rows: Encontrar linhas semelhantes
         view_value: Ver valor
         duplicate_row: Duplicar linha
         delete_row: Excluir linha
@@ -1657,6 +1658,8 @@ document:
         refresh_profile: "Atualizar estatísticas das colunas"
         sample_profile: "Perfilar as primeiras linhas"
         refresh_partitions: "Atualizar partições"
+        nearest_distance: "Alterar a distância (atual: %{distance})"
+        nearest_clear: "Voltar às linhas da tabela"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -1781,6 +1784,16 @@ document:
         builder_notice: As linhas vêm da consulta do construtor
         edit_in_builder: Editar no construtor
         reset_builder: Redefinir
+      nearest:
+        notice: "Linhas mais próximas da linha selecionada por %{column} · k = %{limit}"
+        back_to_table: Voltar à tabela
+        distance:
+          l2: L2
+          cosine: Cosseno
+          inner_product: Produto interno
+        error:
+          no_vector: "A linha selecionada não tem valor em %{column}"
+          failed: "Falha ao encontrar linhas semelhantes: %{error}"
       toast:
         query_imported: Consulta importada com sucesso
         mutation_queued: Alteração enviada para aprovação.
@@ -4127,6 +4140,7 @@ settings:
       cycle_result_view: "Alternar visão do resultado"
       toggle_value_panel: Alternar painel de valor
       toggle_row_inspector: Alternar inspetor de linha
+      find_similar_rows: Encontrar linhas semelhantes
       results_set_null: Definir célula como NULL
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel
