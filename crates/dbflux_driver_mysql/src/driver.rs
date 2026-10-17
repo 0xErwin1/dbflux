@@ -3732,6 +3732,20 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
         }
     }
 
+    // DECIMAL arrives as its exact text. The integer and float fallbacks below
+    // would round it, so keep the text as the PostgreSQL driver does for NUMERIC.
+    if matches!(
+        col_type,
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL
+    ) && let Some(val) = row.get_opt::<Option<String>, _>(idx)
+    {
+        match val {
+            Ok(Some(v)) => return Value::Decimal(v),
+            Ok(None) => return Value::Null,
+            Err(_) => {}
+        }
+    }
+
     // Try signed integer (covers most integer types)
     if let Some(val) = row.get_opt::<Option<i64>, _>(idx) {
         match val {

@@ -1235,3 +1235,30 @@ fn mysql_read_only_requests_are_refused_while_table_locks_may_be_held() -> Resul
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Exact numeric precision
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_decimal_values_keep_exact_precision() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT CAST('12345678901234567.89' AS DECIMAL(20,2)) AS money, \
+                    CAST('99999999999999999999' AS DECIMAL(20,0)) AS wide_integer, \
+                    CAST('1123.40' AS DECIMAL(10,2)) AS trailing_zero, \
+                    CAST('0.0001' AS DECIMAL(10,4)) AS small",
+        ))?;
+
+        let row = &result.rows[0];
+        assert_eq!(row[0], Value::Decimal("12345678901234567.89".to_string()));
+        assert_eq!(row[1], Value::Decimal("99999999999999999999".to_string()));
+        assert_eq!(row[2], Value::Decimal("1123.40".to_string()));
+        assert_eq!(row[3], Value::Decimal("0.0001".to_string()));
+
+        Ok(())
+    })
+}
