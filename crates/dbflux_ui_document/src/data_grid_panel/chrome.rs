@@ -50,7 +50,7 @@ impl DataGridPanel {
     /// The data views this source offers: a table's from its facets (a
     /// `jsonb` column adds the document tree), every other source's from its
     /// kind.
-    fn data_view_modes(&self, cx: &App) -> Vec<super::super::data_view::DataViewMode> {
+    pub(super) fn data_view_modes(&self, cx: &App) -> Vec<super::super::data_view::DataViewMode> {
         use super::super::data_view::DataViewMode;
 
         match &self.source {

@@ -349,3 +349,78 @@ fn a_hypertable_learns_its_time_axis_when_the_details_arrive(cx: &mut TestAppCon
         );
     });
 }
+
+#[gpui::test]
+fn a_reload_keeps_the_document_view_of_a_json_table(cx: &mut TestAppContext) {
+    let (panel, window) = open_events_table(
+        FacetStub::new(DatabaseCategory::Relational)
+            .with_table_facets(vec![ObjectFacet::Tabular, ObjectFacet::Document]),
+        cx,
+    );
+    window.update(|_, app| panel.update(app, |panel, cx| panel.toggle_view_mode(cx)));
+
+    window.update(|_, app| panel.update(app, |panel, cx| panel.set_result(events_page(), cx)));
+
+    window.update(|_, app| {
+        assert_eq!(
+            panel.read(app).view_config.mode,
+            crate::data_view::DataViewMode::Document
+        );
+    });
+}
+
+/// A key found in the schema snapshot skips the primary-key fetch, but the
+/// table's facets still come with its details.
+#[gpui::test]
+fn facets_load_when_the_key_comes_from_the_schema_snapshot(cx: &mut TestAppContext) {
+    let stub = FacetStub::new(DatabaseCategory::Relational)
+        .with_table_facets(vec![ObjectFacet::Tabular, ObjectFacet::Document]);
+    let (app_state, profile_id) = register_stub_connection(cx, Arc::new(stub));
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            let connected = state
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the stub is connected");
+            let details = connected
+                .connection
+                .table_details("default", Some("public"), "events")
+                .expect("stub details");
+            connected.database_schemas.insert(
+                "public".to_string(),
+                dbflux_core::DbSchemaInfo {
+                    name: "public".to_string(),
+                    tables: vec![details],
+                    views: Vec::new(),
+                    custom_types: None,
+                },
+            );
+        });
+    });
+
+    let panel_holder = Rc::new(RefCell::new(None));
+    let panel_handle = panel_holder.clone();
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let panel = cx.new(|cx| {
+            DataGridPanel::new_for_table(
+                profile_id,
+                TableRef::with_schema("public", "events"),
+                None,
+                app_state,
+                window,
+                cx,
+            )
+        });
+        panel_handle.replace(Some(panel.clone()));
+        Root::new(panel, window, cx)
+    });
+    window.run_until_parked();
+
+    let panel = panel_holder.borrow().clone().expect("the panel is created");
+    window.update(|_, app| {
+        assert!(
+            panel.read(app).can_toggle_view(app),
+            "the Document facet arrived"
+        );
+    });
+}

@@ -954,10 +954,9 @@ impl DataGridPanel {
         panel.init_table_views(window, cx);
         panel.refresh(window, cx);
 
-        // If pk_columns is empty, fetch table details to get PK info
-        if pk_columns.is_empty() {
-            panel.fetch_table_details_for_pk(profile_id, &table, cx);
-        }
+        // The details carry the primary key when the schema snapshot did not,
+        // and the table's facets either way; the fetch reuses cached details.
+        panel.fetch_table_details_for_pk(profile_id, &table, cx);
 
         panel.ensure_filter_source_columns_loaded(cx);
         panel.ensure_fk_cache_loaded(cx);

@@ -87,6 +87,15 @@ impl SchemaSnapshot {
     /// rows scoped to that database. Collections that name another database
     /// are left out. Empty for layouts without an object folder.
     pub fn folder_objects(&self, database: &str) -> Vec<TableInfo> {
+        // The snapshot only lists the current database's objects; another
+        // database has none here.
+        if self
+            .current_database()
+            .is_some_and(|current| current != database)
+        {
+            return Vec::new();
+        }
+
         match &self.structure {
             DataStructure::Document(schema) => schema
                 .collections
@@ -277,5 +286,29 @@ mod tests {
                 .folder_objects("db0")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn folder_objects_list_nothing_for_a_database_other_than_the_current_one() {
+        let documents = SchemaSnapshot::document(DocumentSchema {
+            databases: Vec::new(),
+            current_database: Some("app".to_string()),
+            collections: vec![collection("orders", Some("app")), collection("loose", None)],
+        });
+        assert_eq!(documents.folder_objects("app").len(), 2);
+        assert!(documents.folder_objects("other").is_empty());
+
+        let series = SchemaSnapshot::time_series(TimeSeriesSchema {
+            databases: Vec::new(),
+            current_database: Some("app".to_string()),
+            measurements: vec![MeasurementInfo {
+                name: "cpu".to_string(),
+                tags: Vec::new(),
+                fields: Vec::new(),
+            }],
+            retention_policies: Vec::new(),
+        });
+        assert_eq!(series.folder_objects("app").len(), 1);
+        assert!(series.folder_objects("other").is_empty());
     }
 }
