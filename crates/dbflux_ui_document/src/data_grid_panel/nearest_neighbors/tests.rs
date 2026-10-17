@@ -1016,7 +1016,7 @@ fn find_similar_rows_is_disabled_with_the_reason_while_edits_are_pending(cx: &mu
     let (_, detail, disabled) = find_similar_entry(&row_menu(&panel, window));
 
     assert!(disabled);
-    assert_eq!(detail.as_deref(), Some("Save or revert 1 changes first"));
+    assert_eq!(detail.as_deref(), Some("Save or revert 1 change first"));
     assert!(calls.lock().unwrap().neighbor_requests.is_empty());
 }
 
@@ -1252,4 +1252,117 @@ fn the_column_picker_keeps_its_width_for_any_column_name(cx: &mut TestAppContext
         .debug_bounds("nearest-neighbors-column-slot")
         .expect("the column picker is drawn");
     assert_eq!(after.size.width, before.size.width);
+}
+
+/// Shift+F clears a filter the user can see; the neighbor bar hides it, so
+/// the command leaves it for Back to table.
+#[gpui::test]
+fn clear_filter_keeps_the_hidden_filter_while_similar_rows_show(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    set_filter(&panel, "label <> ''", window);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    let browses = calls.lock().unwrap().browses;
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.dispatch_command(Command::ClearFilter, window, cx)
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(filter_text(&panel, window), "label <> ''");
+    assert_eq!(
+        calls.lock().unwrap().browses,
+        browses,
+        "the table is not read"
+    );
+    window.update(|_, app| {
+        assert!(panel.read(app).nearest_neighbor_search().is_some());
+    });
+}
+
+/// Sorting by a header would read the table ordered by a column of the
+/// neighbors (the distance does not exist in the table).
+#[gpui::test]
+fn header_sort_does_not_read_the_table_while_similar_rows_show(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    // Opening the table queues its own reads; let them land first.
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.process_pending_actions(window, cx))
+    });
+    window.run_until_parked();
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    let browses = calls.lock().unwrap().browses;
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.handle_sort_request(0, dbflux_core::SortDirection::Ascending, cx)
+        })
+    });
+
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert!(panel.pending.requery.is_none(), "no table read is queued");
+        assert!(panel.nearest_neighbor_search().is_some());
+    });
+    window.run_until_parked();
+    assert_eq!(calls.lock().unwrap().browses, browses);
+}
+
+/// An auto-refresh tick reads the neighbors again instead of the table page.
+#[gpui::test]
+fn a_queued_refresh_reruns_the_search(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    // Opening the table queues its own reads; let them land first.
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.process_pending_actions(window, cx))
+    });
+    window.run_until_parked();
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+    let browses = calls.lock().unwrap().browses;
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.pending.refresh = true;
+            panel.process_pending_actions(window, cx);
+        })
+    });
+    window.run_until_parked();
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.browses, browses);
+    assert_eq!(calls.executed.len(), 2, "the search ran again");
+}
+
+/// Filter, Order, Generate SQL and Copy as SQL build table queries from the
+/// row on screen, which carries the computed distance.
+#[gpui::test]
+fn table_query_actions_are_withheld_while_similar_rows_show(cx: &mut TestAppContext) {
+    let (panel, _, _, window) = open_table(true, cx);
+    window.update(|_, app| assert!(panel.read(app).offers_table_query_actions()));
+
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| assert!(!panel.read(app).offers_table_query_actions()));
+}
+
+/// The vector column picker is reachable from the Toolbar submenu.
+#[gpui::test]
+fn the_column_picker_has_a_toolbar_action(cx: &mut TestAppContext) {
+    let (panel, _, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        assert!(
+            panel
+                .read(app)
+                .toolbar_actions(app)
+                .contains(&ToolbarAction::NearestColumn)
+        );
+    });
 }

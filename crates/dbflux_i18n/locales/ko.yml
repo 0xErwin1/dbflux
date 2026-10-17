@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "파티션 새로 고침"
         nearest_distance: "거리 변경 (현재 %{distance})"
         nearest_clear: "테이블 행으로 돌아가기"
+        nearest_column: "벡터 열 변경"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -1795,7 +1796,9 @@ document:
         menu_detail: "%{column} 기준 · 가장 가까운 %{limit}개"
         menu_blocked:
           no_vector: "%{column} 값 없음"
-          pending_edits: "먼저 변경 %{count}개를 저장하거나 되돌리기"
+          pending_edits:
+            one: "먼저 변경 1개를 저장하거나 되돌리기"
+            many: "먼저 변경 %{count}개를 저장하거나 되돌리기"
         column:
           l2: "L2 거리"
           cosine: "코사인 거리"
@@ -1811,7 +1814,9 @@ document:
         error:
           no_vector: "선택한 행의 %{column} 값이 없습니다"
           failed: "유사한 행 찾기 실패: %{error}"
-          pending_edits: "먼저 변경 사항 %{count}개를 저장하거나 되돌리세요"
+          pending_edits:
+            one: "먼저 변경 사항을 저장하거나 되돌리세요"
+            many: "먼저 변경 사항 %{count}개를 저장하거나 되돌리세요"
           invalid_k: "K는 1부터 %{max}까지의 정수여야 합니다"
       toast:
         query_imported: 쿼리를 성공적으로 가져왔습니다

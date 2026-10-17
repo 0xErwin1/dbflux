@@ -782,10 +782,12 @@ impl DataGridPanel {
             .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
             .unwrap_or(false);
 
-        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
-        let has_generate_sql = !is_document_view && !is_column_header;
-        let has_copy_query = !is_column_header && self.has_copy_query_support();
+        let table_queries = self.offers_table_query_actions();
+        let has_filter = table_queries && self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order =
+            table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+        let has_generate_sql = table_queries && !is_document_view && !is_column_header;
+        let has_copy_query = table_queries && !is_column_header && self.has_copy_query_support();
         let can_chart = !is_column_header && self.can_chart_from_context_menu(cx);
 
         // Layout:
@@ -1686,12 +1688,15 @@ impl DataGridPanel {
                 cx,
             );
 
-            let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-            let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+            let table_queries = self.offers_table_query_actions();
+            let has_filter =
+                table_queries && self.has_filter_submenu(backend, is_document_view, cx);
+            let has_order =
+                table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
             let separators = QueryGroupSeparators::new(
                 has_filter,
                 has_order,
-                !is_document_view,
+                table_queries && !is_document_view,
                 self.has_copy_query_support(),
             );
 
@@ -1718,7 +1723,7 @@ impl DataGridPanel {
                 cx,
             );
             Self::render_generate_sql_submenu_section(
-                is_document_view,
+                is_document_view || !table_queries,
                 separators.generate_sql,
                 menu,
                 submenus_open_left,
@@ -3730,10 +3735,11 @@ impl DataGridPanel {
     }
 
     fn has_copy_query_support(&self) -> bool {
-        matches!(
-            self.source,
-            DataSource::Table { .. } | DataSource::Collection { .. }
-        )
+        self.offers_table_query_actions()
+            && matches!(
+                self.source,
+                DataSource::Table { .. } | DataSource::Collection { .. }
+            )
     }
 
     /// Returns true when a "Chart this query" context menu item should be shown.

@@ -136,8 +136,11 @@ impl SimilarRowsBlock {
                 "document.data.grid.nearest.menu_blocked.no_vector",
                 column = column.as_str()
             ),
+            SimilarRowsBlock::PendingEdits { count: 1 } => {
+                dbflux_i18n::t!("document.data.grid.nearest.menu_blocked.pending_edits.one")
+            }
             SimilarRowsBlock::PendingEdits { count } => dbflux_i18n::t!(
-                "document.data.grid.nearest.menu_blocked.pending_edits",
+                "document.data.grid.nearest.menu_blocked.pending_edits.many",
                 count = count
             ),
         }
@@ -149,8 +152,11 @@ impl SimilarRowsBlock {
                 "document.data.grid.nearest.error.no_vector",
                 column = column.as_str()
             ),
+            SimilarRowsBlock::PendingEdits { count: 1 } => {
+                dbflux_i18n::t!("document.data.grid.nearest.error.pending_edits.one")
+            }
             SimilarRowsBlock::PendingEdits { count } => dbflux_i18n::t!(
-                "document.data.grid.nearest.error.pending_edits",
+                "document.data.grid.nearest.error.pending_edits.many",
                 count = count
             ),
         }
@@ -181,6 +187,12 @@ impl DataGridPanel {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Whether the menus offer actions that build a table query from the row
+    /// on screen (Filter, Order, Generate SQL, Copy as SQL).
+    pub(crate) fn offers_table_query_actions(&self) -> bool {
+        self.nearest_neighbors.is_none()
     }
 
     /// The search shown in the grid, if the rows are nearest neighbors.

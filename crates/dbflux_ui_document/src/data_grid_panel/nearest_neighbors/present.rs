@@ -65,10 +65,12 @@ pub(crate) fn present_neighbors(
     distance: VectorDistance,
 ) -> QueryResult {
     let mut result = result;
+    // The query appends the distance after `*`, so the last column with the
+    // name is the computed one; a table column of the same name keeps its own.
     let distance_index = result
         .columns
         .iter()
-        .position(|column| column.name == NEAREST_DISTANCE_COLUMN);
+        .rposition(|column| column.name == NEAREST_DISTANCE_COLUMN);
 
     let order: Vec<usize> = match distance_index {
         Some(index) => std::iter::once(index)
@@ -80,8 +82,9 @@ pub(crate) fn present_neighbors(
     let columns: Vec<ColumnMeta> = order
         .iter()
         .filter_map(|index| result.columns.get(*index).cloned())
-        .map(|column| {
-            if column.name == NEAREST_DISTANCE_COLUMN {
+        .enumerate()
+        .map(|(position, column)| {
+            if position == 0 && distance_index.is_some() {
                 ColumnMeta {
                     name: distance_column_label(distance),
                     kind: ColumnKind::Text,
@@ -239,6 +242,37 @@ mod tests {
         assert_eq!(
             format_distance(&Value::Float(0.0), VectorDistance::InnerProduct),
             Value::Text("0.0000".into())
+        );
+    }
+
+    #[test]
+    fn a_table_column_named_like_the_distance_keeps_its_name_and_place() {
+        let result = QueryResult::table(
+            vec![
+                meta("id"),
+                meta(NEAREST_DISTANCE_COLUMN),
+                meta(NEAREST_DISTANCE_COLUMN),
+            ],
+            vec![vec![
+                Value::Int(10),
+                Value::Text("own".into()),
+                Value::Float(2.5),
+            ]],
+            None,
+            Duration::ZERO,
+        );
+
+        let shown = present_neighbors(result, &anchor(), VectorDistance::L2);
+        let names: Vec<&str> = shown.columns.iter().map(|c| c.name.as_str()).collect();
+
+        assert_eq!(names, vec!["L2 distance", "id", NEAREST_DISTANCE_COLUMN]);
+        assert_eq!(
+            shown.rows[1],
+            vec![
+                Value::Text("2.5000".into()),
+                Value::Int(10),
+                Value::Text("own".into())
+            ]
         );
     }
 }

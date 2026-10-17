@@ -80,6 +80,12 @@ impl DataGridPanel {
             return;
         }
 
+        // Neighbor rows are not a page of the table: ordering them by a
+        // column would read the table instead.
+        if self.nearest_neighbors.is_some() {
+            return;
+        }
+
         let col_name = self
             .result
             .columns

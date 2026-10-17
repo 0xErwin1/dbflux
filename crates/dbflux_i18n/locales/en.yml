@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "Refresh partitions"
         nearest_distance: "Change the distance (now %{distance})"
         nearest_clear: "Back to the table rows"
+        nearest_column: "Change the vector column"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1795,7 +1796,9 @@ document:
         menu_detail: "by %{column} · nearest %{limit}"
         menu_blocked:
           no_vector: "No value in %{column}"
-          pending_edits: "Save or revert %{count} changes first"
+          pending_edits:
+            one: "Save or revert 1 change first"
+            many: "Save or revert %{count} changes first"
         column:
           l2: "L2 distance"
           cosine: "Cosine distance"
@@ -1811,7 +1814,9 @@ document:
         error:
           no_vector: "The selected row has no value in %{column}"
           failed: "Finding similar rows failed: %{error}"
-          pending_edits: "Save or revert your %{count} changes first"
+          pending_edits:
+            one: "Save or revert your change first"
+            many: "Save or revert your %{count} changes first"
           invalid_k: "K must be a whole number from 1 to %{max}"
       toast:
         query_imported: Query imported successfully

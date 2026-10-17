@@ -47,6 +47,8 @@ pub(crate) enum ToolbarAction {
     NearestDistance,
     /// Back to table in the nearest-neighbors notice.
     ClearNearest,
+    /// Opens the vector column picker of the neighbor bar.
+    NearestColumn,
     /// Save in the edit bar.
     SaveChanges,
     /// Revert in the edit bar.
@@ -144,6 +146,7 @@ impl ToolbarAction {
             ToolbarAction::ResetBuilder => "reset-builder",
             ToolbarAction::NearestDistance => "nearest-neighbors-distance",
             ToolbarAction::ClearNearest => "nearest-neighbors-clear",
+            ToolbarAction::NearestColumn => "nearest-neighbors-column",
             ToolbarAction::SaveChanges => "save-changes",
             ToolbarAction::RevertChanges => "revert-changes",
             ToolbarAction::AutoRefresh => "auto-refresh",
@@ -210,6 +213,7 @@ impl ToolbarAction {
             ToolbarAction::ResetBuilder => AppIcon::RotateCcw,
             ToolbarAction::NearestDistance => AppIcon::Search,
             ToolbarAction::ClearNearest => AppIcon::X,
+            ToolbarAction::NearestColumn => AppIcon::ChartScatter,
             ToolbarAction::SaveChanges => AppIcon::Save,
             ToolbarAction::RevertChanges => AppIcon::RotateCcw,
             ToolbarAction::AutoRefresh => AppIcon::Clock,
@@ -312,6 +316,7 @@ impl DataGridPanel {
 
         if filter_row_shown && neighbors_shown {
             actions.push(ToolbarAction::NearestDistance);
+            actions.push(ToolbarAction::NearestColumn);
             actions.push(ToolbarAction::ClearNearest);
         }
 
@@ -530,6 +535,9 @@ impl DataGridPanel {
             ToolbarAction::ClearNearest => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_clear")
             }
+            ToolbarAction::NearestColumn => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_column")
+            }
             ToolbarAction::SaveChanges => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.save_changes")
             }
@@ -668,6 +676,12 @@ impl DataGridPanel {
     /// Whether the WHERE field shows a value its × would clear, or a
     /// document collection's filter slot holds a filter.
     fn filter_is_clearable(&self, cx: &App) -> bool {
+        // The neighbor bar hides the WHERE field; its filter waits for Back
+        // to table.
+        if self.neighbor_bar_search().is_some() {
+            return false;
+        }
+
         let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
         let has_filter = !self.filter_bar.filter_input.read(cx).value().is_empty();
 
@@ -734,6 +748,11 @@ impl DataGridPanel {
             }
             ToolbarAction::NearestDistance => self.cycle_nearest_neighbor_distance(cx),
             ToolbarAction::ClearNearest => self.clear_nearest_neighbors(window, cx),
+            ToolbarAction::NearestColumn => {
+                self.nearest
+                    .column_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
             // A document collection commits and reverts through its edit
             // bar's Commit and Revert, which patch fields per document.
             ToolbarAction::SaveChanges if self.commits_document_patches(cx) => {

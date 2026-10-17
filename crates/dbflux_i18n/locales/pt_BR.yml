@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "Atualizar partições"
         nearest_distance: "Alterar a distância (atual: %{distance})"
         nearest_clear: "Voltar às linhas da tabela"
+        nearest_column: "Mudar a coluna vetorial"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -1795,7 +1796,9 @@ document:
         menu_detail: "por %{column} · %{limit} mais próximas"
         menu_blocked:
           no_vector: "Sem valor em %{column}"
-          pending_edits: "Salve ou reverta %{count} alterações antes"
+          pending_edits:
+            one: "Salve ou reverta 1 alteração antes"
+            many: "Salve ou reverta %{count} alterações antes"
         column:
           l2: "Distância L2"
           cosine: "Distância cosseno"
@@ -1811,7 +1814,9 @@ document:
         error:
           no_vector: "A linha selecionada não tem valor em %{column}"
           failed: "Falha ao encontrar linhas semelhantes: %{error}"
-          pending_edits: "Salve ou reverta suas %{count} alterações primeiro"
+          pending_edits:
+            one: "Salve ou reverta sua alteração antes"
+            many: "Salve ou reverta suas %{count} alterações antes"
           invalid_k: "K deve ser um número inteiro de 1 a %{max}"
       toast:
         query_imported: Consulta importada com sucesso

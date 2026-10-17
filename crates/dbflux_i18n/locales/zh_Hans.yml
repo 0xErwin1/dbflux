@@ -1660,6 +1660,7 @@ document:
         refresh_partitions: "刷新分区"
         nearest_distance: "更改距离（当前：%{distance}）"
         nearest_clear: "返回表中的行"
+        nearest_column: "更改向量列"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1795,7 +1796,9 @@ document:
         menu_detail: "按 %{column} · 最近 %{limit} 行"
         menu_blocked:
           no_vector: "%{column} 无值"
-          pending_edits: "请先保存或还原 %{count} 处更改"
+          pending_edits:
+            one: "请先保存或还原 1 处更改"
+            many: "请先保存或还原 %{count} 处更改"
         column:
           l2: "L2 距离"
           cosine: "余弦距离"
@@ -1811,7 +1814,9 @@ document:
         error:
           no_vector: "所选行在 %{column} 中没有值"
           failed: "查找相似行失败：%{error}"
-          pending_edits: "请先保存或还原 %{count} 处更改"
+          pending_edits:
+            one: "请先保存或还原更改"
+            many: "请先保存或还原 %{count} 处更改"
           invalid_k: "K 必须是 1 到 %{max} 之间的整数"
       toast:
         query_imported: 查询导入成功
