@@ -104,9 +104,9 @@ impl DataGridPanel {
 
     /// Positions the table on one record: replaces the filter with an
     /// equality on `key_column = key_value`, rendered through the driver's
-    /// dialect, and reloads. No-op on a source that is not a table or
-    /// without a connected profile for it — the navigation target is
-    /// always a table.
+    /// dialect, and reloads from the first page with the cursor dropped.
+    /// No-op on a source that is not a table or without a connected profile
+    /// for it — the navigation target is always a table.
     pub(crate) fn focus_row_by_key(
         &mut self,
         key_column: &str,
@@ -137,6 +137,21 @@ impl DataGridPanel {
                 dialect.value_to_literal(key_value)
             )
         };
+
+        // Guarded before any state changes, like the sort handlers: a
+        // blocked reload leaves the page and the cursor as they are.
+        if self.reload_blocked_by_pending_edits(cx) {
+            return;
+        }
+
+        // The equality must run from the first page (an offset held over
+        // from the previous view can answer with no rows), and the reload
+        // replaces the row set the cursor addresses — the same reset a page
+        // change marks before it queries.
+        if let DataSource::Table { pagination, .. } = &mut self.source {
+            *pagination = pagination.reset_offset();
+        }
+        self.grid_table.reload = TableReload::ResetRows;
 
         self.replace_filter_and_reload(&filter, window, cx);
     }

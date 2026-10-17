@@ -431,6 +431,13 @@ impl DataDocument {
         self.data_grid.read(cx).source().collection_ref().cloned()
     }
 
+    /// The grid this document shows, for tests outside this crate that drive
+    /// a table tab's state directly (for example applying a builder spec).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn data_grid_for_tests(&self) -> &Entity<DataGridPanel> {
+        &self.data_grid
+    }
+
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
         if self

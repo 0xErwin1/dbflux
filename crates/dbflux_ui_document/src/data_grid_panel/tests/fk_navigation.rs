@@ -124,6 +124,177 @@ pub(super) fn orders_result(customer_value: dbflux_core::Value) -> QueryResult {
     )
 }
 
+// =========================================================================
+// Key-focus reload leaves from the first page
+// =========================================================================
+
+/// Connection stub for the key-focus navigation tests: it speaks the core
+/// default (ANSI, double-quote) dialect so the equality text can be pinned,
+/// answers every browse with a fixed one-row page, and records the requests
+/// so a reload's pagination and filter can be asserted.
+struct RecordingBrowseConnection {
+    browses: std::sync::Mutex<Vec<dbflux_core::TableBrowseRequest>>,
+}
+
+impl RecordingBrowseConnection {
+    fn browses(&self) -> Vec<dbflux_core::TableBrowseRequest> {
+        self.browses.lock().expect("browse log").clone()
+    }
+}
+
+impl Default for RecordingBrowseConnection {
+    fn default() -> Self {
+        Self {
+            browses: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl dbflux_core::Connection for RecordingBrowseConnection {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        static META: std::sync::OnceLock<dbflux_core::DriverMetadata> = std::sync::OnceLock::new();
+        META.get_or_init(|| {
+            dbflux_core::DriverMetadataBuilder::new(
+                "stub-fk-navigation",
+                "Stub",
+                dbflux_core::DatabaseCategory::Relational,
+                dbflux_core::QueryLanguage::Sql,
+            )
+            .build()
+        })
+    }
+
+    fn kind(&self) -> dbflux_core::DbKind {
+        dbflux_core::DbKind::SQLite
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        dbflux_core::SchemaLoadingStrategy::SingleDatabase
+    }
+
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        &dbflux_core::DefaultSqlDialect
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn execute(&self, _: &dbflux_core::QueryRequest) -> Result<QueryResult, dbflux_core::DbError> {
+        Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+    }
+
+    fn browse_table(
+        &self,
+        request: &dbflux_core::TableBrowseRequest,
+    ) -> Result<QueryResult, dbflux_core::DbError> {
+        self.browses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(request.clone());
+        Ok(orders_result(dbflux_core::Value::Int(8)))
+    }
+
+    fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        Ok(dbflux_core::SchemaSnapshot::default())
+    }
+}
+
+/// A reused tab that sits on a later page still lands on the referenced
+/// row: the equality reload leaves from offset 0, and the cursor that
+/// addressed the previous row set is dropped.
+#[gpui::test]
+fn focus_row_by_key_leaves_from_the_first_page_and_drops_the_cursor(cx: &mut TestAppContext) {
+    let connection = Arc::new(RecordingBrowseConnection::default());
+    let (app_state, profile_id) = register_stub_connection(cx, connection.clone());
+    let window = cx.add_empty_window();
+
+    let panel = window.update(|window, app| {
+        let source = DataSource::Table {
+            profile_id,
+            database: Some("app".to_string()),
+            table: TableRef::with_schema("public", "orders"),
+            // A later page: offset 100 under the panel's default limit, so
+            // the limit input holds no reset of its own.
+            pagination: Pagination::default().next_page(),
+            order_by: Vec::new(),
+            total_rows: Some(200),
+        };
+
+        app.new(|cx| {
+            let mut panel = DataGridPanel::new_internal(
+                source,
+                app_state,
+                vec!["customer_id".to_string()],
+                window,
+                cx,
+            );
+            panel.set_result(orders_result(dbflux_core::Value::Int(8)), cx);
+            panel
+        })
+    });
+    window.run_until_parked();
+
+    // A cursor on the rows the old page holds.
+    window.update(|_, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the result builds a table");
+        table_state.update(cx, |state, cx| {
+            state.select_cell(CellCoord::new(0, 1), cx);
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.focus_row_by_key("customer_id", &dbflux_core::Value::Int(8), window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    let browses = connection.browses();
+    let reload = browses.last().expect("the equality ran a table browse");
+    assert_eq!(
+        reload.pagination.offset(),
+        0,
+        "the reload must leave from the first page, not the offset the tab held"
+    );
+    assert_eq!(reload.filter.as_deref(), Some("\"customer_id\" = 8"));
+
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert_eq!(
+            panel.source.pagination().map(|page| page.offset()),
+            Some(0),
+            "the source is back on the first page"
+        );
+        assert_eq!(
+            panel
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table state")
+                .read(app)
+                .selection()
+                .active,
+            None,
+            "the cursor addressed the replaced row set and must be dropped"
+        );
+    });
+}
+
 #[gpui::test]
 fn fk_target_for_cell_resolves_a_single_column_fk_cell(cx: &mut TestAppContext) {
     let (app_state, profile_id) = register_stub_connection(cx, Arc::new(StubConnection));
