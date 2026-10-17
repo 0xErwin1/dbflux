@@ -237,7 +237,7 @@ impl DataGridPanel {
         let detection = detect_chart_columns(result);
         let detection_ok = matches!(detection, ChartDetection::Ok { .. });
 
-        let time_series_collection = self.chart.time_series_collection;
+        let time_series_collection = self.chart.time_series_source;
         let first_time_series_result =
             time_series_collection && !self.chart.time_series_result_seen;
 
@@ -284,7 +284,24 @@ impl DataGridPanel {
                 ref numeric_cols,
             } = detection
         {
-            let bindings = default_bindings_for_time_series(time_col, numeric_cols, result);
+            // The time column the driver named wins over the first timestamp
+            // column detection found.
+            let time_col = self
+                .chart
+                .time_series_column
+                .as_deref()
+                .and_then(|name| {
+                    result.columns.iter().position(|column| {
+                        column.name == name && column.kind == dbflux_core::ColumnKind::Timestamp
+                    })
+                })
+                .unwrap_or(time_col);
+            let numeric_cols: Vec<usize> = numeric_cols
+                .iter()
+                .copied()
+                .filter(|column| *column != time_col)
+                .collect();
+            let bindings = default_bindings_for_time_series(time_col, &numeric_cols, result);
             if let Some(shell) = &self.chart.chart_shell {
                 shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
             }

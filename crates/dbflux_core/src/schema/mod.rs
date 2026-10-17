@@ -4,6 +4,7 @@ pub(crate) mod dependents;
 pub(crate) mod drift_check;
 pub(crate) mod facet;
 pub(crate) mod fingerprint;
+pub(crate) mod listing;
 pub mod node_id;
 pub(crate) mod query_parser;
 pub(crate) mod schema_drift;
@@ -15,10 +16,11 @@ pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
 pub use drift_check::{DriftOutcome, TableKey, check_drift_sync, check_schema_drift};
 pub use facet::{
-    NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, VectorDistance, VectorFacet,
-    default_collection_facets,
+    NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, TimeSeriesFacet, VectorDistance,
+    VectorFacet, category_collection_facets,
 };
 pub use fingerprint::SchemaFingerprint;
+pub use listing::{DatabaseLayout, ObjectFolder};
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};
 pub use schema_drift::{
@@ -32,10 +34,9 @@ pub use types::{
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
     ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo, CreationBlocker, CustomTypeInfo,
     CustomTypeKind, DataStructure, DatabaseInfo, DbSchemaInfo, DocumentSchema, FieldInfo,
-    ForeignKeyInfo, GraphSchema, IdentitySpec, IndexData, IndexDirection, IndexInfo, KeyInfo,
-    KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
-    NodeLabelInfo, PrimaryKeySpec, PropertyInfo, RelationalSchema, RelationshipTypeInfo,
-    RetentionPolicyInfo, RoutineInfo, RoutineKind, SchemaColumnInfo, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, TableCreationMetadata, TableInfo, TableStorageHint,
-    TimeSeriesFieldInfo, TimeSeriesSchema, ViewInfo,
+    ForeignKeyInfo, IdentitySpec, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
+    KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata, PrimaryKeySpec,
+    RelationalSchema, RetentionPolicyInfo, RoutineInfo, RoutineKind, SchemaColumnInfo,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, TableCreationMetadata, TableInfo,
+    TableStorageHint, TimeSeriesFieldInfo, TimeSeriesSchema, ViewInfo,
 };

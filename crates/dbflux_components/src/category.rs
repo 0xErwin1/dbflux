@@ -19,7 +19,11 @@ pub struct CategoryPresentation {
 
 pub const fn category_presentation(category: DatabaseCategory) -> CategoryPresentation {
     let (fallback_icon, fallback_tone, container_label_key) = match category {
-        DatabaseCategory::Relational => (
+        // The reserved categories are never declared by a driver; they only
+        // keep wire indices, so they borrow the relational look.
+        DatabaseCategory::Relational
+        | DatabaseCategory::ReservedGraph
+        | DatabaseCategory::ReservedWideColumn => (
             AppIcon::Database,
             DriverIconTone::Info,
             "sidebar.tree.container.relational",
@@ -34,20 +38,10 @@ pub const fn category_presentation(category: DatabaseCategory) -> CategoryPresen
             DriverIconTone::Danger,
             "sidebar.tree.container.key_value",
         ),
-        DatabaseCategory::Graph => (
-            AppIcon::Database,
-            DriverIconTone::Info,
-            "sidebar.tree.container.graph",
-        ),
         DatabaseCategory::TimeSeries => (
             AppIcon::Database,
             DriverIconTone::Violet,
             "sidebar.tree.container.time_series",
-        ),
-        DatabaseCategory::WideColumn => (
-            AppIcon::Database,
-            DriverIconTone::Info,
-            "sidebar.tree.container.wide_column",
         ),
         DatabaseCategory::LogStream => (
             AppIcon::Database,
@@ -72,13 +66,11 @@ pub const fn category_presentation(category: DatabaseCategory) -> CategoryPresen
 mod tests {
     use super::*;
 
-    const ALL_CATEGORIES: [DatabaseCategory; 8] = [
+    const ALL_CATEGORIES: [DatabaseCategory; 6] = [
         DatabaseCategory::Relational,
         DatabaseCategory::Document,
         DatabaseCategory::KeyValue,
-        DatabaseCategory::Graph,
         DatabaseCategory::TimeSeries,
-        DatabaseCategory::WideColumn,
         DatabaseCategory::LogStream,
         DatabaseCategory::ObjectStorage,
     ];
@@ -125,19 +117,9 @@ mod tests {
                 DriverIconTone::Danger,
             ),
             (
-                DatabaseCategory::Graph,
-                AppIcon::Database,
-                DriverIconTone::Info,
-            ),
-            (
                 DatabaseCategory::TimeSeries,
                 AppIcon::Database,
                 DriverIconTone::Violet,
-            ),
-            (
-                DatabaseCategory::WideColumn,
-                AppIcon::Database,
-                DriverIconTone::Info,
             ),
             (
                 DatabaseCategory::LogStream,

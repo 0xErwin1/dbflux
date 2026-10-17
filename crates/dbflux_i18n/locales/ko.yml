@@ -458,10 +458,9 @@ connection_manager:
       relational: "관계형"
       document: "문서"
       key_value: "키-값"
-      wide_column: "와이드 컬럼"
       time_series_and_logs: "시계열 및 로그"
-      graph: "그래프"
       object_storage: "오브젝트 스토리지"
+      other: "기타"
   export:
     target:
       connection: 연결
@@ -5103,9 +5102,7 @@ sidebar:
       relational: 테이블 (%{count})
       document: 컬렉션 (%{count})
       key_value: 키 (%{count})
-      graph: 노드 (%{count})
       time_series: 측정값 (%{count})
-      wide_column: 테이블 (%{count})
       log_stream: 로그 그룹 (%{count})
       object_storage: 버킷 (%{count})
     folder:

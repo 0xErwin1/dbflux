@@ -2236,6 +2236,17 @@ fn json_to_value(value: &serde_json::Value) -> Value {
 }
 
 impl Connection for MongoConnection {
+    /// Every collection holds documents and can also be shown as a grid.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        vec![
+            dbflux_core::ObjectFacet::Document,
+            dbflux_core::ObjectFacet::Tabular,
+        ]
+    }
+
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
     }

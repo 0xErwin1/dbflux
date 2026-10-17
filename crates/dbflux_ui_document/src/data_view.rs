@@ -33,6 +33,9 @@ impl DataViewMode {
             ObjectFacet::Tabular => Some(DataViewMode::Table),
             ObjectFacet::Document => Some(DataViewMode::Document),
             ObjectFacet::Vector(_) => None,
+            // The time axis opens the chart next to the rows (a result view,
+            // see `result_view::result_view_mode_for_fresh_result`), not a data view.
+            ObjectFacet::TimeSeries(_) => None,
         }
     }
 

@@ -494,9 +494,9 @@ impl DbFluxServer {
             // error case so a future object-storage MCP tool can extend it.
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
-            | DatabaseCategory::Graph
+            | DatabaseCategory::ReservedGraph
             | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn
+            | DatabaseCategory::ReservedWideColumn
             | DatabaseCategory::ObjectStorage => {
                 Self::select_data_table_routed(&check, &request).await
             }
@@ -834,9 +834,9 @@ impl DbFluxServer {
             // table-shaped branch.
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
-            | DatabaseCategory::Graph
+            | DatabaseCategory::ReservedGraph
             | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn
+            | DatabaseCategory::ReservedWideColumn
             | DatabaseCategory::ObjectStorage => {
                 let mut request =
                     TableCountRequest::new(Self::table_ref_for_connection(&connection, table));

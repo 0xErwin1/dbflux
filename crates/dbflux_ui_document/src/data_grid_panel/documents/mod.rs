@@ -1,6 +1,6 @@
 //! Document collections in the data grid.
 //!
-//! A collection on a `DatabaseCategory::Document` connection opens as a table
+//! A collection whose driver declares the `Document` facet opens as a table
 //! of its documents, flattened by [`columns`]: `_id` first, the page's field
 //! order after it, objects expandable in place into column groups and arrays
 //! that can be stepped into. The same page is also shown as a tree or as JSON.
@@ -480,8 +480,15 @@ pub(super) fn flat_table_model(flat: &FlatView) -> TableModel {
 impl DataGridPanel {
     // === Capabilities ===
 
-    fn collection_capabilities(&self, cx: &App) -> Option<(DatabaseCategory, DocumentFeatures)> {
-        let DataSource::Collection { profile_id, .. } = &self.source else {
+    /// Whether the collection holds documents, as its driver declares, and the
+    /// document features the driver offers.
+    fn collection_capabilities(&self, cx: &App) -> Option<(bool, DocumentFeatures)> {
+        let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
+        else {
             return None;
         };
 
@@ -492,7 +499,9 @@ impl DataGridPanel {
             .map(|connected| {
                 let connection = &connected.connection;
                 (
-                    connection.metadata().category,
+                    connection
+                        .collection_facets(collection)
+                        .contains(&dbflux_core::ObjectFacet::Document),
                     connection.document_features(),
                 )
             })
@@ -501,24 +510,22 @@ impl DataGridPanel {
     /// Whether this grid shows a document collection.
     pub(super) fn is_document_collection(&self, cx: &App) -> bool {
         self.collection_capabilities(cx)
-            .is_some_and(|(category, _)| category == DatabaseCategory::Document)
+            .is_some_and(|(documents, _)| documents)
     }
 
     /// Whether the driver offers the four-slot query bar and the schema sample.
     pub(super) fn has_document_query_slots(&self, cx: &App) -> bool {
         self.collection_capabilities(cx)
-            .is_some_and(|(category, capabilities)| {
-                category == DatabaseCategory::Document
-                    && capabilities.contains(DocumentFeatures::QUERY_SLOTS)
+            .is_some_and(|(documents, capabilities)| {
+                documents && capabilities.contains(DocumentFeatures::QUERY_SLOTS)
             })
     }
 
     /// Whether edits are committed as field patches with the server check.
     pub(super) fn has_document_field_patch(&self, cx: &App) -> bool {
         self.collection_capabilities(cx)
-            .is_some_and(|(category, capabilities)| {
-                category == DatabaseCategory::Document
-                    && capabilities.contains(DocumentFeatures::FIELD_PATCH)
+            .is_some_and(|(documents, capabilities)| {
+                documents && capabilities.contains(DocumentFeatures::FIELD_PATCH)
             })
     }
 
@@ -579,7 +586,7 @@ impl DataGridPanel {
     /// The collection views this connection offers.
     pub(super) fn collection_tabs(&self, cx: &App) -> Vec<CollectionTab> {
         match self.collection_capabilities(cx) {
-            Some((DatabaseCategory::Document, features)) => available_collection_tabs(features),
+            Some((true, features)) => available_collection_tabs(features),
             _ => vec![CollectionTab::Documents],
         }
     }

@@ -28,9 +28,11 @@ impl DataGridPanel {
         // push the panel out of record mode.
         self.apply_record_mode(cx);
 
-        // Build document tree for collections OR JSON-shaped query results
+        // Build document tree for collections, JSON-shaped query results and
+        // tables whose facets include documents (a `jsonb` column).
         let should_build_tree = self.source.is_collection()
-            || matches!(&self.source, DataSource::QueryResult { result, .. } if result.shape.is_json());
+            || matches!(&self.source, DataSource::QueryResult { result, .. } if result.shape.is_json())
+            || (matches!(self.source, DataSource::Table { .. }) && self.has_document_facet(cx));
 
         if should_build_tree {
             self.rebuild_document_tree(cx);
@@ -47,9 +49,22 @@ impl DataGridPanel {
     }
 
     pub(super) fn rebuild_document_tree(&mut self, cx: &mut Context<Self>) {
+        // A table's rows open as documents with their JSON values expanded;
+        // the tree is read-only there, since edits go through the grid.
+        let table_documents = matches!(self.source, DataSource::Table { .. })
+            .then(|| super::table_documents::table_rows_as_documents(&self.result));
         let tree_state = cx.new(|cx| {
             let mut state = DocumentTreeState::new(cx);
-            state.load_from_result(self.collection.raw.as_ref().unwrap_or(&self.result), cx);
+            match &table_documents {
+                Some(documents) => {
+                    state.load_from_result(documents, cx);
+                    state.set_read_only(true, cx);
+                }
+                None => {
+                    state
+                        .load_from_result(self.collection.raw.as_ref().unwrap_or(&self.result), cx);
+                }
+            }
             state
         });
 

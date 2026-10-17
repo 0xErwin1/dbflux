@@ -77,11 +77,11 @@ impl DataGridPanel {
     }
 
     pub(in crate::data_grid_panel) fn document_builder_support(&self, cx: &App) -> BuilderSupport {
-        let Some((category, features)) = self.collection_capabilities(cx) else {
+        let Some((documents, features)) = self.collection_capabilities(cx) else {
             return BuilderSupport::Hidden;
         };
 
-        if category != DatabaseCategory::Document {
+        if !documents {
             return BuilderSupport::Hidden;
         }
 

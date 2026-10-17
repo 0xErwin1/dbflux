@@ -421,7 +421,7 @@ Key abstractions for UI adaptation:
 - `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
 - `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
 - `CollectionPresentation`: Determines how a collection/container opens (for example data grid vs event stream)
-- `ObjectFacet` (via `Connection::object_facets`, default `[Tabular]`; collections use `default_collection_facets`): Determines the view modes and grid actions inside the data document, per object. A table can carry several (PostgreSQL adds `Vector` for each `vector(n)` column)
+- `ObjectFacet` (via `Connection::object_facets` for tables and `Connection::collection_facets` for collections, both default `[Tabular]`): Determines the view modes, gates, filter wording and grid actions inside the data document, per object. A table can carry several (PostgreSQL adds `Document` for a `jsonb` column, `TimeSeries` for a hypertable and `Vector` for each `vector(n)` column). Never derive them from `DatabaseCategory` in the UI; only the RPC adapter uses `category_collection_facets`
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
@@ -487,7 +487,7 @@ For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_s
 
 Drivers declare their capabilities via `DriverMetadata`:
 
-- `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
+- `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
 - `ObjectFacet` (`dbflux_core/src/schema/facet.rs`): per-object paradigms. A new paradigm lands as one facet variant, a driver that emits it and the view that renders it, in the same plan. Never add a core facet, `DataStructure` variant or view kind as a skeleton to be filled in later.

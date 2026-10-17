@@ -559,6 +559,17 @@ struct DynamoConnection {
 }
 
 impl Connection for DynamoConnection {
+    /// Every table holds items, shown as documents or as a grid.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        vec![
+            dbflux_core::ObjectFacet::Document,
+            dbflux_core::ObjectFacet::Tabular,
+        ]
+    }
+
     fn metadata(&self) -> &DriverMetadata {
         &DYNAMODB_METADATA
     }

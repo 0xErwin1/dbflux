@@ -169,17 +169,20 @@ pub enum DatabaseCategory {
     /// Examples: Redis, Valkey, DynamoDB, etcd
     KeyValue,
 
-    /// Graph databases with nodes, edges, and graph queries.
-    /// Examples: Neo4j, ArangoDB, Amazon Neptune
-    Graph,
+    /// Holds postcard wire index 3 (formerly a graph category no driver
+    /// declared) so the categories after it keep their indices in the
+    /// `DriverMetadata` that driver RPC peers send.
+    #[doc(hidden)]
+    ReservedGraph,
 
     /// Time-series databases optimized for temporal data.
     /// Examples: InfluxDB, TimescaleDB, QuestDB
     TimeSeries,
 
-    /// Wide-column stores with keyspaces and column families.
-    /// Examples: Cassandra, ScyllaDB, HBase
-    WideColumn,
+    /// Holds postcard wire index 5 (formerly a wide-column category no
+    /// driver declared), like [`Self::ReservedGraph`].
+    #[doc(hidden)]
+    ReservedWideColumn,
 
     /// Log streaming services with log groups and queryable log events.
     /// Examples: AWS CloudWatch Logs
@@ -196,11 +199,10 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Relational",
             DatabaseCategory::Document => "Document",
             DatabaseCategory::KeyValue => "Key-Value",
-            DatabaseCategory::Graph => "Graph",
             DatabaseCategory::TimeSeries => "Time Series",
-            DatabaseCategory::WideColumn => "Wide Column",
             DatabaseCategory::LogStream => "Log Stream",
             DatabaseCategory::ObjectStorage => "Object Storage",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Unknown",
         }
     }
 
@@ -211,11 +213,10 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Tables",
             DatabaseCategory::Document => "Collections",
             DatabaseCategory::KeyValue => "Keys",
-            DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
-            DatabaseCategory::WideColumn => "Tables",
             DatabaseCategory::LogStream => "Log Groups",
             DatabaseCategory::ObjectStorage => "Buckets",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Objects",
         }
     }
 
@@ -225,11 +226,10 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Table",
             DatabaseCategory::Document => "Collection",
             DatabaseCategory::KeyValue => "Key",
-            DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
-            DatabaseCategory::WideColumn => "Table",
             DatabaseCategory::LogStream => "Log Group",
             DatabaseCategory::ObjectStorage => "Bucket",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Object",
         }
     }
 
@@ -239,11 +239,10 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Rows",
             DatabaseCategory::Document => "Documents",
             DatabaseCategory::KeyValue => "Values",
-            DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Points",
-            DatabaseCategory::WideColumn => "Rows",
             DatabaseCategory::LogStream => "Log events",
             DatabaseCategory::ObjectStorage => "Objects",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Records",
         }
     }
 
@@ -253,11 +252,10 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Row",
             DatabaseCategory::Document => "Document",
             DatabaseCategory::KeyValue => "Value",
-            DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Point",
-            DatabaseCategory::WideColumn => "Row",
             DatabaseCategory::LogStream => "Log event",
             DatabaseCategory::ObjectStorage => "Object",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Record",
         }
     }
 
@@ -298,22 +296,22 @@ impl DatabaseCategory {
         );
 
         let category_specific = match self {
-            DatabaseCategory::Relational
-            | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn => DriverCapabilities::from_bits_truncate(
-                DriverCapabilities::SCHEMAS.bits()
-                    | DriverCapabilities::VIEWS.bits()
-                    | DriverCapabilities::FOREIGN_KEYS.bits()
-                    | DriverCapabilities::INDEXES.bits()
-                    | DriverCapabilities::CHECK_CONSTRAINTS.bits()
-                    | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
-                    | DriverCapabilities::CUSTOM_TYPES.bits()
-                    | DriverCapabilities::TRIGGERS.bits()
-                    | DriverCapabilities::STORED_PROCEDURES.bits()
-                    | DriverCapabilities::SEQUENCES.bits()
-                    | DriverCapabilities::RETURNING.bits()
-                    | DriverCapabilities::ROUTINES.bits(),
-            ),
+            DatabaseCategory::Relational | DatabaseCategory::TimeSeries => {
+                DriverCapabilities::from_bits_truncate(
+                    DriverCapabilities::SCHEMAS.bits()
+                        | DriverCapabilities::VIEWS.bits()
+                        | DriverCapabilities::FOREIGN_KEYS.bits()
+                        | DriverCapabilities::INDEXES.bits()
+                        | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+                        | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+                        | DriverCapabilities::CUSTOM_TYPES.bits()
+                        | DriverCapabilities::TRIGGERS.bits()
+                        | DriverCapabilities::STORED_PROCEDURES.bits()
+                        | DriverCapabilities::SEQUENCES.bits()
+                        | DriverCapabilities::RETURNING.bits()
+                        | DriverCapabilities::ROUTINES.bits(),
+                )
+            }
 
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 DriverCapabilities::from_bits_truncate(
@@ -340,10 +338,9 @@ impl DatabaseCategory {
                     | DriverCapabilities::KV_STREAM_DELETE.bits(),
             ),
 
-            DatabaseCategory::Graph => DriverCapabilities::from_bits_truncate(
-                DriverCapabilities::GRAPH_TRAVERSAL.bits()
-                    | DriverCapabilities::EDGE_PROPERTIES.bits(),
-            ),
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => {
+                DriverCapabilities::empty()
+            }
 
             DatabaseCategory::ObjectStorage => DriverCapabilities::from_bits_truncate(
                 DriverCapabilities::OBJECT_STORAGE.bits()
@@ -2843,11 +2840,6 @@ mod tests {
         assert!(kv.contains(DriverCapabilities::KV_TTL));
         assert!(!kv.contains(DriverCapabilities::SCHEMAS));
         assert!(!kv.contains(DriverCapabilities::NESTED_DOCUMENTS));
-
-        let graph = DatabaseCategory::Graph.relevant_capabilities();
-        assert!(graph.contains(DriverCapabilities::GRAPH_TRAVERSAL));
-        assert!(!graph.contains(DriverCapabilities::KV_SCAN));
-        assert!(!graph.contains(DriverCapabilities::SCHEMAS));
     }
 
     #[test]
@@ -2856,7 +2848,6 @@ mod tests {
             DatabaseCategory::Relational,
             DatabaseCategory::Document,
             DatabaseCategory::KeyValue,
-            DatabaseCategory::Graph,
         ] {
             let relevant = category.relevant_capabilities();
             assert!(
@@ -3247,9 +3238,7 @@ mod tests {
         assert_eq!(DatabaseCategory::Relational.display_name(), "Relational");
         assert_eq!(DatabaseCategory::Document.display_name(), "Document");
         assert_eq!(DatabaseCategory::KeyValue.display_name(), "Key-Value");
-        assert_eq!(DatabaseCategory::Graph.display_name(), "Graph");
         assert_eq!(DatabaseCategory::TimeSeries.display_name(), "Time Series");
-        assert_eq!(DatabaseCategory::WideColumn.display_name(), "Wide Column");
         assert_eq!(
             DatabaseCategory::ObjectStorage.display_name(),
             "Object Storage"
@@ -3261,12 +3250,10 @@ mod tests {
         assert_eq!(DatabaseCategory::Relational.container_name(), "Tables");
         assert_eq!(DatabaseCategory::Document.container_name(), "Collections");
         assert_eq!(DatabaseCategory::KeyValue.container_name(), "Keys");
-        assert_eq!(DatabaseCategory::Graph.container_name(), "Nodes");
         assert_eq!(
             DatabaseCategory::TimeSeries.container_name(),
             "Measurements"
         );
-        assert_eq!(DatabaseCategory::WideColumn.container_name(), "Tables");
         assert_eq!(DatabaseCategory::ObjectStorage.container_name(), "Buckets");
     }
 
@@ -3275,9 +3262,7 @@ mod tests {
         assert_eq!(DatabaseCategory::Relational.record_name(), "Rows");
         assert_eq!(DatabaseCategory::Document.record_name(), "Documents");
         assert_eq!(DatabaseCategory::KeyValue.record_name(), "Values");
-        assert_eq!(DatabaseCategory::Graph.record_name(), "Nodes");
         assert_eq!(DatabaseCategory::TimeSeries.record_name(), "Points");
-        assert_eq!(DatabaseCategory::WideColumn.record_name(), "Rows");
         assert_eq!(DatabaseCategory::ObjectStorage.record_name(), "Objects");
     }
 

@@ -27,7 +27,7 @@ impl DataGridPanel {
             return;
         }
 
-        let available = super::super::data_view::DataViewMode::available_for(&self.source);
+        let available = self.data_view_modes(cx);
         if available.len() <= 1 {
             return;
         }
@@ -43,8 +43,20 @@ impl DataGridPanel {
     }
 
     /// Check if view mode toggle is available for the current source.
-    pub fn can_toggle_view(&self) -> bool {
-        super::super::data_view::DataViewMode::available_for(&self.source).len() > 1
+    pub fn can_toggle_view(&self, cx: &App) -> bool {
+        self.data_view_modes(cx).len() > 1
+    }
+
+    /// The data views this source offers: a table's from its facets (a
+    /// `jsonb` column adds the document tree), every other source's from its
+    /// kind.
+    pub(super) fn data_view_modes(&self, cx: &App) -> Vec<super::super::data_view::DataViewMode> {
+        use super::super::data_view::DataViewMode;
+
+        match &self.source {
+            DataSource::Table { .. } => DataViewMode::for_facets(&self.facets(cx)),
+            _ => DataViewMode::available_for(&self.source),
+        }
     }
 
     pub fn record_mode(&self) -> bool {
@@ -156,7 +168,7 @@ impl DataGridPanel {
         }
 
         // A time-series measurement also offers the chart above the grid.
-        if self.chart.time_series_collection
+        if self.chart.time_series_source
             && self.chart_available(cx)
             && !modes.contains(&ResultViewMode::Both)
             && let Some(pos) = modes.iter().position(|m| *m == ResultViewMode::Chart)
@@ -224,7 +236,7 @@ impl DataGridPanel {
         matches!(
             self.source,
             DataSource::QueryResult { .. } | DataSource::Table { .. }
-        ) || self.chart.time_series_collection
+        ) || self.chart.time_series_source
     }
 
     /// Whether the footer carries the view switch (Grid / JSON / Chart): a

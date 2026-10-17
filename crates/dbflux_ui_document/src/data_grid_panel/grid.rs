@@ -27,8 +27,14 @@ impl DataGridPanel {
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
         self.nearest_neighbors = None;
-        let category = Self::connection_category(&self.source, &self.app_state, cx);
-        self.view_config = Self::view_config_for(&self.source, category);
+        // A table keeps the view the user picked while its facets still offer
+        // it (a JSON table stays in Document across a reload).
+        let keeps_view = matches!(self.source, DataSource::Table { .. })
+            && self.data_view_modes(cx).contains(&self.view_config.mode);
+        if !keeps_view {
+            let source_facets = self.facets(cx);
+            self.view_config = Self::view_config_for(&self.source, &source_facets);
+        }
         self.chrome.derived_json = None;
         self.chrome.derived_text = None;
 

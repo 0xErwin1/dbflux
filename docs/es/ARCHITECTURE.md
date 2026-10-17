@@ -298,7 +298,7 @@ crates/
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -309,7 +309,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # Connection tree; walks the snapshot's DatabaseLayout
   dbflux_ui_windows/        # Settings window + connection manager window
     src/
       ssh_shared.rs         # Shared SSH auth UI components
@@ -1049,6 +1049,15 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` sigue siendo
   contraíble y redimensionable mediante ToggleSidebar (Ctrl+B), y gestiona la
   vista temporal por separado de la elección explícita de contraer.
+- El árbol de conexiones recorre una sola proyección: `SchemaSnapshot::database_layout`
+  (`crates/dbflux_core/src/schema/listing.rs`) indica si cada base de datos agrupa
+  tablas y vistas bajo schemas, lista sus objetos en una sola `ObjectFolder`
+  (colecciones o mediciones) o es un keyspace. El sidebar
+  (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
+  partir de esa descripción, y su menú contextual lee las facetas del objeto y el
+  mismo layout. El único chequeo de categoría que queda en el árbol es la lista
+  de buckets de una conexión de almacenamiento de objetos, que se obtiene por su
+  propio camino en lugar de leerse de un snapshot.
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
@@ -1062,8 +1071,8 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs`
   define:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries,
-    WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream,
+    ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl,
     OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql,
     Lua, Python, Bash (cada uno lleva su modo de editor, placeholder y prefijo
@@ -1105,12 +1114,20 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   - `CollectionPresentation` le indica a la UI cómo se abre una
     collection/container (por ejemplo data grid vs event stream).
   - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) nombra los
-    paradigmas que expone un objeto: `Tabular`, `Document`, `Vector`.
-    `CollectionPresentation` elige qué document se abre; los facets eligen los
-    modos de vista dentro del data document. `Connection::object_facets`
-    devuelve `[Tabular]` por defecto y los drivers lo sobrescriben (PostgreSQL
-    agrega un `Vector` por cada columna `vector(n)`); las collections derivan
-    los suyos de `default_collection_facets(category)`. El enum es exhaustivo,
+    paradigmas que expone un objeto: `Tabular`, `Document`, `Vector`,
+    `TimeSeries`. `CollectionPresentation` elige qué document se abre; los
+    facets eligen los modos de vista, los gates y el texto del filtro dentro
+    del data document. `Connection::object_facets` (tablas) y
+    `Connection::collection_facets` (collections) devuelven `[Tabular]` por
+    defecto y los drivers los sobrescriben: PostgreSQL agrega `Document` por una
+    columna `json`/`jsonb`, `TimeSeries` por una hypertable de TimescaleDB y un
+    `Vector` por cada columna `vector(n)`; MongoDB y DynamoDB declaran
+    `[Document, Tabular]`; InfluxDB declara `TimeSeries` sobre `time`. Solo el
+    adaptador RPC deriva facets de la categoría declarada
+    (`category_collection_facets`), porque el wire no los transporta.
+    `TimeSeries` abre el gráfico sobre su columna de tiempo junto a las filas;
+    `Document` en una tabla abre un árbol de documentos de solo lectura con los
+    valores JSON expandidos. El enum es exhaustivo,
     así que un facet nuevo no compila hasta que `DataViewMode::for_facet`
     (`crates/dbflux_ui_document/src/data_view.rs`) lo maneje. El SQL de
     vecinos más cercanos sigue siendo propiedad del driver vía
@@ -1120,11 +1137,12 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     única tabla de íconos, tonos y etiquetas de contenedor del árbol de schema
     por categoría; una `DatabaseCategory` nueva agrega un brazo ahí en lugar de
     un match en cada crate de UI.
-  - `DataStructure::ReservedWideColumn` solo reserva el índice 4 del wire
-    postcard, para que `TimeSeries` conserve el índice 5 ante peers del
-    protocolo RPC de drivers;
-    `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` fija los índices de las
-    variantes. No elimine ni reordene variantes de `DataStructure`.
+  - `DataStructure::ReservedGraph` y `ReservedWideColumn` solo reservan los
+    índices 3 y 4 del wire postcard, y `DatabaseCategory::ReservedGraph` y
+    `ReservedWideColumn` los índices 3 y 5, para que las variantes siguientes
+    conserven su índice ante peers del protocolo RPC de drivers;
+    `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` fija los índices de
+    ambos enums. No elimine ni reordene sus variantes.
   - `CollectionChildInfo` permite a los drivers publicar fuentes hijas bajo una
     collection/container sin heurísticas de UI.
   - `EventStreamTarget` le da al workspace/audit un identificador genérico para

@@ -45,6 +45,13 @@ Base de datos relacional open-source avanzada.
   la fila seleccionada, y muestra el producto interno en sí en lugar del
   producto negativo de pgvector. Las columnas
   `halfvec` y `sparsevec` no ofrecen la búsqueda.
+- Una tabla con una columna `json` o `jsonb` ofrece una vista Documento junto a
+  la grilla: cada fila se abre como un documento con sus valores JSON
+  expandidos. El árbol es de solo lectura; las ediciones pasan por la grilla.
+- Una hypertable de TimescaleDB se lee como serie temporal: sus detalles llevan
+  una pista de almacenamiento `Hypertable` que nombra la dimensión de tiempo, y
+  la tabla se abre con un gráfico sobre esa columna junto a las filas. En un
+  servidor sin TimescaleDB no cambia nada.
 - Muestra valores `tsvector` y `tsquery` de búsqueda de texto completo,
   incluyendo arrays unidimensionales, en la forma de texto canónica de
   PostgreSQL.

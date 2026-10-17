@@ -1285,6 +1285,14 @@ pub trait Connection: Send + Sync {
         vec![crate::ObjectFacet::Tabular]
     }
 
+    /// Paradigm facets of a collection.
+    ///
+    /// The default is tabular only. A driver whose collections hold documents
+    /// or time-indexed rows declares so here, per collection.
+    fn collection_facets(&self, _collection: &crate::CollectionRef) -> Vec<crate::ObjectFacet> {
+        vec![crate::ObjectFacet::Tabular]
+    }
+
     /// Fetch columns and indexes for a table.
     fn table_details(
         &self,
@@ -2247,6 +2255,14 @@ mod tests {
 
         assert_eq!(
             StubConnection.object_facets(&table),
+            vec![crate::ObjectFacet::Tabular]
+        );
+    }
+
+    #[test]
+    fn collection_facets_default_to_tabular() {
+        assert_eq!(
+            StubConnection.collection_facets(&crate::CollectionRef::new("app", "events")),
             vec![crate::ObjectFacet::Tabular]
         );
     }

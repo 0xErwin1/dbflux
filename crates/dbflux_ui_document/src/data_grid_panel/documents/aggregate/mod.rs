@@ -1118,6 +1118,14 @@ mod panel_tests {
     }
 
     impl dbflux_core::Connection for StubDocumentConnection {
+        /// Facets as a driver of the stub's category declares them.
+        fn collection_facets(
+            &self,
+            _collection: &dbflux_core::CollectionRef,
+        ) -> Vec<dbflux_core::ObjectFacet> {
+            dbflux_core::category_collection_facets(self.metadata().category)
+        }
+
         fn metadata(&self) -> &dbflux_core::DriverMetadata {
             &self.metadata
         }

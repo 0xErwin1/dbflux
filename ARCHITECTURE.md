@@ -271,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -282,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # Connection tree; walks the snapshot's DatabaseLayout
   dbflux_ui_windows/        # Settings window + connection manager window
     src/
       ssh_shared.rs         # Shared SSH auth UI components
@@ -702,13 +702,14 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` remains collapsible and resizable with ToggleSidebar (Ctrl+B), and manages transient reveal separately from the explicit collapse choice.
+- The connection tree walks one projection: `SchemaSnapshot::database_layout` (`crates/dbflux_core/src/schema/listing.rs`) says whether each database groups tables and views under schemas, lists its objects in one `ObjectFolder` (collections or measurements), or is a keyspace. The sidebar (`tree_builder/object_folder.rs`) builds each database's content from that description, and its context menu reads object facets and the same layout. The one category check left in the tree is the bucket list of an object-storage connection, which is fetched through its own path rather than read from a snapshot.
 - `dbflux_ui_base::object_tree` provides a generic lazy hierarchy with one coordinator per `AppStateEntity`. Core/app boundaries fence session and target-slot application; sidebar and wizard adapters retain compatible IDs while keeping interaction state local to each consumer. This does not cover every sidebar-specific family.
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure; `tree_manager.rs` handles in-memory management.
 
 ### Driver System
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (each carries editor mode, placeholder, comment prefix)
   - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
@@ -720,9 +721,9 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - **Driver/UI decoupling**: The UI and app orchestration layers must never branch on concrete driver IDs or embed driver-specific routing. The core exposes the seams, and drivers fill them.
   - `DriverMetadata` covers broad adaptation (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`).
   - `CollectionPresentation` tells the UI how a collection/container opens (for example data grid vs event stream).
-  - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) names the paradigms one object exposes: `Tabular`, `Document`, `Vector`. `CollectionPresentation` picks which document opens; facets pick the view modes inside the data document. `Connection::object_facets` defaults to `[Tabular]` and drivers override it (PostgreSQL adds one `Vector` per `vector(n)` column); collections derive theirs from `default_collection_facets(category)`. The enum is exhaustive, so a new facet does not compile until `DataViewMode::for_facet` (`crates/dbflux_ui_document/src/data_view.rs`) handles it. Nearest-neighbor SQL stays driver-owned through `QueryGenerator::generate_nearest_neighbors`, defaulted to unsupported.
+  - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) names the paradigms one object exposes: `Tabular`, `Document`, `Vector`, `TimeSeries`. `CollectionPresentation` picks which document opens; facets pick the view modes, the gates and the filter wording inside the data document. `Connection::object_facets` (tables) and `Connection::collection_facets` (collections) default to `[Tabular]` and drivers override them: PostgreSQL adds `Document` for a `json`/`jsonb` column, `TimeSeries` for a TimescaleDB hypertable and one `Vector` per `vector(n)` column; MongoDB and DynamoDB declare `[Document, Tabular]`; InfluxDB declares `TimeSeries` on `time`. Only the RPC adapter derives facets from the declared category (`category_collection_facets`), since the wire carries none. `TimeSeries` opens the chart over its time column next to the rows; `Document` on a table opens a read-only document tree with JSON values expanded. The enum is exhaustive, so a new facet does not compile until `DataViewMode::for_facet` (`crates/dbflux_ui_document/src/data_view.rs`) handles it. Nearest-neighbor SQL stays driver-owned through `QueryGenerator::generate_nearest_neighbors`, defaulted to unsupported.
   - `category_presentation` (`crates/dbflux_components/src/category.rs`) is the one table of per-category fallback icons, tones and schema-tree container labels; a new `DatabaseCategory` adds one arm there instead of a match in each UI crate.
-  - `DataStructure::ReservedWideColumn` only holds postcard wire index 4, so `TimeSeries` keeps index 5 for driver RPC peers; `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` pins the variant indices. Do not remove or reorder `DataStructure` variants.
+  - `DataStructure::ReservedGraph` and `ReservedWideColumn` only hold postcard wire indices 3 and 4, and `DatabaseCategory::ReservedGraph` and `ReservedWideColumn` hold indices 3 and 5, so the variants after them keep their indices for driver RPC peers; `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` pins the indices of both enums. Do not remove or reorder their variants.
   - `CollectionChildInfo` lets drivers publish child sources under a collection/container without UI heuristics.
   - `EventStreamTarget` gives workspace/audit a generic identifier for driver-backed event streams.
   - `SourceContextSpec` lets drivers declare extra query-context controls without hardcoding driver names in `dbflux_ui`.

@@ -271,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 엔티티 (dbflux_ui가 재노출)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -282,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 연결 트리; 스냅샷의 DatabaseLayout을 순회
   dbflux_ui_windows/        # 설정 창 + 연결 관리자 창
     src/
       ssh_shared.rs         # 공유 SSH 인증 UI 컴포넌트
@@ -685,12 +685,13 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - 컬렉션/컨테이너 아래의 드라이버 소유 하위 리소스는 일반 `CollectionChildInfo` 메타데이터를 통해 게시됩니다. 사이드바는 이름, 필드 타입, 드라이버 ID로부터 드라이버별 하위 항목을 추론해서는 안 됩니다.
 - 루틴(함수, 프로시저, 집계, 창 함수)은 드라이버가 `ROUTINES` 기능을 설정하고 `schema_routines` 접점을 채울 때 스키마별 "Routines" 폴더로 나타납니다. UI는 이 폴더를 일반적으로 렌더링하며 어떤 드라이버도 특별 취급하지 않습니다.
 - 사이드바 독: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs`는 ToggleSidebar 명령(Ctrl+B)이 있는 접을 수 있고 크기 조절 가능한 사이드바를 제공합니다.
+- 연결 트리는 하나의 투영만 순회합니다. `SchemaSnapshot::database_layout`(`crates/dbflux_core/src/schema/listing.rs`)은 각 데이터베이스가 테이블과 뷰를 스키마 아래에 묶는지, 객체를 하나의 `ObjectFolder`(컬렉션 또는 측정값)에 나열하는지, 키스페이스인지를 알려 줍니다. 사이드바(`tree_builder/object_folder.rs`)는 이 설명으로 각 데이터베이스의 내용을 만들고, 컨텍스트 메뉴는 객체의 패싯과 같은 레이아웃을 읽습니다. 트리에 남은 유일한 카테고리 검사는 오브젝트 스토리지 연결의 버킷 목록으로, 스냅샷에서 읽지 않고 별도 경로로 가져옵니다.
 - 연결 트리: `crates/dbflux_core/src/connection/tree.rs`는 폴더와 연결을 트리 구조로 모델링하고, `tree_manager.rs`가 인메모리 관리를 담당합니다.
 
 ### 드라이버 체계
 
 - **드라이버 기능**: `crates/dbflux_core/src/driver/capabilities.rs`는 다음을 정의합니다:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (각각 편집기 모드, 자리 표시자, 주석 접두어를 전달합니다)
   - `DriverCapabilities`: PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC 등의 기능을 위한 `u64` 비트플래그
   - `DriverMetadata`: 정적 드라이버 정보(id, name, category, query_language, capabilities, icon)
@@ -702,9 +703,9 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - **드라이버/UI 분리**: UI와 앱 오케스트레이션 계층은 구체적인 드라이버 ID로 분기하거나 드라이버별 라우팅을 내장해서는 안 됩니다. 코어가 접점을 노출하고 드라이버가 이를 채웁니다.
   - `DriverMetadata`는 폭넓은 적응(`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`)을 담당합니다.
   - `CollectionPresentation`은 컬렉션/컨테이너가 어떻게 열리는지(예: 데이터 그리드 vs 이벤트 스트림) UI에 알려줍니다.
-  - `ObjectFacet`(`crates/dbflux_core/src/schema/facet.rs`)은 하나의 개체가 노출하는 패러다임(`Tabular`, `Document`, `Vector`)을 나타냅니다. `CollectionPresentation`은 어떤 문서가 열릴지 고르고, facet은 데이터 문서 안의 뷰 모드를 고릅니다. `Connection::object_facets`의 기본값은 `[Tabular]`이며 드라이버가 재정의합니다(PostgreSQL은 `vector(n)` 열마다 `Vector`를 하나 추가합니다). 컬렉션은 `default_collection_facets(category)`에서 facet을 도출합니다. 이 열거형은 exhaustive이므로 새 facet은 `DataViewMode::for_facet`(`crates/dbflux_ui_document/src/data_view.rs`)가 처리할 때까지 컴파일되지 않습니다. 최근접 이웃 SQL은 `QueryGenerator::generate_nearest_neighbors`를 통해 드라이버가 소유하며, 기본값은 미지원입니다.
+  - `ObjectFacet`(`crates/dbflux_core/src/schema/facet.rs`)은 하나의 개체가 노출하는 패러다임(`Tabular`, `Document`, `Vector`, `TimeSeries`)을 나타냅니다. `CollectionPresentation`은 어떤 문서가 열릴지 고르고, facet은 데이터 문서 안의 뷰 모드, 게이트, 필터 문구를 고릅니다. `Connection::object_facets`(테이블)와 `Connection::collection_facets`(컬렉션)의 기본값은 `[Tabular]`이며 드라이버가 재정의합니다. PostgreSQL은 `json`/`jsonb` 열에 `Document`, TimescaleDB 하이퍼테이블에 `TimeSeries`, `vector(n)` 열마다 `Vector`를 추가합니다. MongoDB와 DynamoDB는 `[Document, Tabular]`를, InfluxDB는 `time` 위의 `TimeSeries`를 선언합니다. 와이어가 facet을 전달하지 않으므로 RPC 어댑터만 선언된 카테고리에서 facet을 도출합니다(`category_collection_facets`). `TimeSeries`는 행 옆에 시간 열 기준 차트를 열고, 테이블의 `Document`는 JSON 값이 펼쳐진 읽기 전용 문서 트리를 엽니다. 이 열거형은 exhaustive이므로 새 facet은 `DataViewMode::for_facet`(`crates/dbflux_ui_document/src/data_view.rs`)가 처리할 때까지 컴파일되지 않습니다. 최근접 이웃 SQL은 `QueryGenerator::generate_nearest_neighbors`를 통해 드라이버가 소유하며, 기본값은 미지원입니다.
   - `category_presentation`(`crates/dbflux_components/src/category.rs`)은 카테고리별 대체 아이콘, 톤, 스키마 트리 컨테이너 레이블을 담는 단일 테이블입니다. 새 `DatabaseCategory`는 UI 크레이트마다 match를 두는 대신 여기에 arm 하나를 추가합니다.
-  - `DataStructure::ReservedWideColumn`은 postcard 와이어 인덱스 4만 차지하여 드라이버 RPC 피어에 대해 `TimeSeries`가 인덱스 5를 유지하게 합니다. `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs`가 변형 인덱스를 고정합니다. `DataStructure` 변형을 제거하거나 순서를 바꾸지 마십시오.
+  - `DataStructure::ReservedGraph`와 `ReservedWideColumn`은 postcard 와이어 인덱스 3과 4를, `DatabaseCategory::ReservedGraph`와 `ReservedWideColumn`은 인덱스 3과 5를 차지하여 뒤따르는 변형이 드라이버 RPC 피어에 대해 인덱스를 유지하게 합니다. `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs`가 두 열거형의 인덱스를 고정합니다. 변형을 제거하거나 순서를 바꾸지 마십시오.
   - `CollectionChildInfo`는 드라이버가 UI 휴리스틱 없이 컬렉션/컨테이너 아래에 하위 소스를 게시할 수 있게 합니다.
   - `EventStreamTarget`는 워크스페이스/감사에 드라이버 지원 이벤트 스트림의 일반 식별자를 제공합니다.
   - `SourceContextSpec`는 드라이버가 `dbflux_ui`에 드라이버 이름을 하드코딩하지 않고 추가 쿼리 컨텍스트 컨트롤을 선언할 수 있게 합니다.

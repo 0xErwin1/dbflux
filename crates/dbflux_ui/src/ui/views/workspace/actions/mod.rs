@@ -729,8 +729,8 @@ mod tests {
         let pid = Uuid::new_v4();
         let mut items = Vec::new();
 
-        let structure = DataStructure::Graph(Default::default());
-        build_resource_items_from_schema(pid, "neo4j", &structure, &mut items);
+        let structure = DataStructure::ReservedGraph;
+        build_resource_items_from_schema(pid, "reserved", &structure, &mut items);
 
         assert!(items.is_empty());
     }

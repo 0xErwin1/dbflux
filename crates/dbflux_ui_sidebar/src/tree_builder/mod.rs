@@ -1,5 +1,10 @@
 use super::*;
 
+mod object_folder;
+
+use dbflux_core::DatabaseLayout;
+use object_folder::FolderSources;
+
 fn apply_expansion_overrides_to_items(
     items: Vec<TreeItem>,
     expansion_overrides: &HashMap<String, bool>,
@@ -272,19 +277,27 @@ impl Sidebar {
                 let mut db_children = connected
                     .database_schemas
                     .get(database)
-                    .map(|schema| {
+                    .map(|loaded| {
                         let metadata = connected.connection.metadata();
-                        if metadata.category == dbflux_core::DatabaseCategory::Document {
-                            Self::build_document_db_content(
+                        let layout = connected
+                            .schema
+                            .as_ref()
+                            .map_or(DatabaseLayout::Schemas, SchemaSnapshot::database_layout);
+
+                        if let DatabaseLayout::Folder(folder) = layout {
+                            let sources = FolderSources {
                                 profile_id,
-                                database,
-                                schema,
-                                &connected.table_details,
-                                &connected.collection_children,
-                                metadata.capabilities,
-                                metadata.category,
-                                Some(metric_cache),
+                                connected,
+                                capabilities: metadata.capabilities,
+                                connection_category: metadata.category,
+                                metric_cache: Some(metric_cache),
                                 metric_fetch_errors,
+                            };
+                            object_folder::folder_content(
+                                &sources,
+                                folder,
+                                database,
+                                &loaded.tables,
                             )
                         } else {
                             dbflux_ui_base::object_tree::project_database_with_metadata(
@@ -738,8 +751,7 @@ impl Sidebar {
 
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
-            let is_document_db = schema.is_document();
-            let is_time_series_db = schema.is_time_series();
+            let layout = schema.database_layout();
             let conn_metadata = connected.connection.metadata();
             let conn_capabilities = conn_metadata.capabilities;
             let navigator_view = connected.profile.navigator_view;
@@ -775,15 +787,14 @@ impl Sidebar {
                 // folder: the prefix hierarchy lives in the object browser
                 // document, never in the global tree.
                 profile_children.push(build_buckets_folder(profile_id, bucket_cache));
-            } else if schema.is_key_value() {
+            } else if layout == DatabaseLayout::Keyspaces {
                 let kv_items = build_kv_database_children(profile_id, connected, state);
                 profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
             } else if let Some(projected) =
                 dbflux_ui_base::object_tree::project_profile_tree(state, profile_id)
                     .filter(|root| !root.children.is_empty())
             {
-                let implicit_flat = !is_document_db
-                    && !is_time_series_db
+                let implicit_flat = layout == DatabaseLayout::Schemas
                     && schema.databases().is_empty()
                     && state
                         .get_database_list(profile_id)
@@ -812,18 +823,20 @@ impl Sidebar {
                         ));
                     }
                 } else {
-                    let named_items = build_named_db_children(
+                    let sources = FolderSources {
                         profile_id,
                         connected,
+                        capabilities: conn_capabilities,
+                        connection_category: conn_category,
+                        metric_cache: Some(&metric_cache),
+                        metric_fetch_errors,
+                    };
+                    let named_items = build_named_db_children(
+                        &sources,
                         state,
                         schema,
-                        conn_capabilities,
-                        conn_category,
-                        &metric_cache,
-                        metric_fetch_errors,
+                        layout,
                         supports_routines,
-                        is_document_db,
-                        is_time_series_db,
                         uses_lazy_loading,
                         &projected.children,
                     );
@@ -848,8 +861,7 @@ impl Sidebar {
                     }
                 }
             } else if state.get_database_list(profile_id).is_none()
-                && !is_document_db
-                && !is_time_series_db
+                && layout == DatabaseLayout::Schemas
                 && let Some(database_name) = connected.active_database.as_deref()
                 && let Some(projected) = dbflux_ui_base::object_tree::project_database_with_metadata(
                     state,
@@ -1313,51 +1325,6 @@ impl Sidebar {
         None
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_document_db_content(
-        profile_id: Uuid,
-        database_name: &str,
-        db_schema: &dbflux_core::DbSchemaInfo,
-        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
-        collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
-        capabilities: DriverCapabilities,
-        category: dbflux_core::DatabaseCategory,
-        metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
-        metric_fetch_errors: &HashMap<String, String>,
-    ) -> Vec<TreeItem> {
-        let mut content = Vec::new();
-
-        if let Some(folder) = build_collections_folder(
-            profile_id,
-            database_name,
-            category,
-            db_schema,
-            table_details,
-            collection_children_cache,
-        ) {
-            content.push(folder);
-        }
-
-        if capabilities.contains(DriverCapabilities::METRIC_CATALOG)
-            && let Some(folder) = build_metrics_folder(
-                profile_id,
-                database_name,
-                metric_catalog_cache,
-                metric_fetch_errors,
-            )
-        {
-            content.push(folder);
-        }
-
-        if let Some(folder) =
-            build_db_collection_indexes_folder(profile_id, database_name, &db_schema.tables)
-        {
-            content.push(folder);
-        }
-
-        content
-    }
-
     /// Build the namespace children for a `MetricsFolder` node.
     ///
     /// Peeks the `MetricCatalogCache`; if populated, emits one
@@ -1486,82 +1453,6 @@ impl Sidebar {
     pub(crate) fn error_retry_placeholder(retry_sentinel_id: &str, error_msg: &str) -> TreeItem {
         let label = crate::labels::error_retry_label(error_msg);
         TreeItem::new(retry_sentinel_id.to_string(), label)
-    }
-
-    /// Build sidebar children for a time-series database node (e.g. an InfluxDB bucket).
-    ///
-    /// Measurements are rendered as `Collection` nodes under a "Measurements (N)" folder so they
-    /// participate in the existing open/query/context-menu flows without requiring new node-kind
-    /// variants. The `DatabaseCategory::TimeSeries.container_name()` already returns "Measurements".
-    fn build_time_series_db_content(
-        profile_id: Uuid,
-        database_name: &str,
-        schema: &dbflux_core::SchemaSnapshot,
-    ) -> Vec<TreeItem> {
-        Self::build_measurement_items(
-            profile_id,
-            database_name,
-            schema
-                .measurements()
-                .iter()
-                .map(|measurement| measurement.name.as_str()),
-        )
-    }
-
-    /// Build the measurement folder from a lazily loaded bucket, whose
-    /// `DbSchemaInfo` carries the measurement names as `tables`.
-    fn build_lazy_time_series_db_content(
-        profile_id: Uuid,
-        database_name: &str,
-        db_schema: &dbflux_core::DbSchemaInfo,
-    ) -> Vec<TreeItem> {
-        Self::build_measurement_items(
-            profile_id,
-            database_name,
-            db_schema.tables.iter().map(|table| table.name.as_str()),
-        )
-    }
-
-    fn build_measurement_items<'a>(
-        profile_id: Uuid,
-        database_name: &str,
-        measurement_names: impl Iterator<Item = &'a str>,
-    ) -> Vec<TreeItem> {
-        let measurement_items: Vec<TreeItem> = measurement_names
-            .map(|name| {
-                TreeItem::new(
-                    SchemaNodeId::Collection {
-                        profile_id,
-                        database: database_name.to_string(),
-                        name: name.to_string(),
-                    }
-                    .to_string(),
-                    name.to_string(),
-                )
-            })
-            .collect();
-
-        if measurement_items.is_empty() {
-            return Vec::new();
-        }
-
-        let measurement_count = measurement_items.len();
-
-        vec![
-            TreeItem::new(
-                SchemaNodeId::CollectionsFolder {
-                    profile_id,
-                    database: database_name.to_string(),
-                }
-                .to_string(),
-                crate::labels::container_folder_label(
-                    dbflux_core::DatabaseCategory::TimeSeries,
-                    measurement_count,
-                ),
-            )
-            .expanded(true)
-            .children(measurement_items),
-        ]
     }
 
     fn build_collection_item(
@@ -2000,8 +1891,7 @@ pub(crate) fn keyspace_key_counts(state: &AppStateEntity) -> HashMap<String, u64
         .iter()
         .filter_map(|(profile_id, connected)| {
             let schema = connected.schema.as_ref()?;
-            schema
-                .is_key_value()
+            (schema.database_layout() == DatabaseLayout::Keyspaces)
                 .then(|| keyspace_key_count_entries(*profile_id, schema.keyspaces()))
         })
         .flatten()
@@ -2483,32 +2373,26 @@ fn hides_database(
 
 /// Build the per-database `TreeItem` nodes for a named-database connection.
 ///
-/// Returns one item per database, each carrying the correct children based on
-/// loading strategy and driver type. The three-way dispatch
-/// (document / time-series / relational) stays here per the design decision
-/// "Keep three-way schema dispatch inside build_named_db_children".
+/// Returns one item per database. Its children follow the snapshot's
+/// [`DatabaseLayout`]: schema groups through the shared object tree, or the
+/// object folder of a folder layout.
 ///
 /// The caller is responsible for deciding whether to wrap these in a
 /// `DatabasesFolder` or to flatten their children directly into the profile
 /// when `should_collapse_database_wrapper` returns true.
-#[allow(clippy::too_many_arguments)]
 fn build_named_db_children(
-    profile_id: Uuid,
-    connected: &dbflux_core::ConnectedProfile,
+    sources: &FolderSources<'_>,
     state: &AppStateEntity,
     schema: &dbflux_core::SchemaSnapshot,
-    conn_capabilities: DriverCapabilities,
-    conn_category: dbflux_core::DatabaseCategory,
-    metric_cache: &dbflux_app::MetricCatalogCache,
-    metric_fetch_errors: &HashMap<String, String>,
+    layout: DatabaseLayout,
     supports_routines: bool,
-    is_document_db: bool,
-    is_time_series_db: bool,
     uses_lazy_loading: bool,
     projected: &[dbflux_ui_base::object_tree::ObjectTreeNode],
 ) -> Vec<TreeItem> {
     use dbflux_ui_base::object_tree::ObjectTreeKey;
 
+    let profile_id = sources.profile_id;
+    let connected = sources.connected;
     let mut named_db_items: Vec<TreeItem> = Vec::new();
 
     for node in projected {
@@ -2525,7 +2409,17 @@ fn build_named_db_children(
         let is_pending = state.is_operation_pending(profile_id, Some(db_name));
         let is_active_db = connected.active_database.as_deref() == Some(db_name.as_str());
 
-        let db_children = if !is_document_db && !is_time_series_db {
+        let db_children = if let DatabaseLayout::Folder(folder) = layout {
+            object_folder::database_children(
+                sources,
+                folder,
+                schema,
+                db_name,
+                uses_lazy_loading,
+                is_pending,
+                is_current,
+            )
+        } else {
             dbflux_ui_base::object_tree::project_database_with_metadata(state, profile_id, db_name)
                 .map(|projection| {
                     build_projected_relational_children(
@@ -2537,22 +2431,6 @@ fn build_named_db_children(
                     )
                 })
                 .unwrap_or_default()
-        } else {
-            resolve_special_db_children(
-                profile_id,
-                connected,
-                schema,
-                conn_capabilities,
-                conn_category,
-                metric_cache,
-                metric_fetch_errors,
-                is_document_db,
-                is_time_series_db,
-                uses_lazy_loading,
-                is_pending,
-                db_name,
-                is_current,
-            )
         };
 
         named_db_items.push(build_named_db_item(
@@ -2570,136 +2448,11 @@ fn build_named_db_children(
     named_db_items
 }
 
-/// Keep non-relational collection and measurement presentation local to the sidebar.
-#[allow(clippy::too_many_arguments)]
-fn resolve_special_db_children(
-    profile_id: Uuid,
-    connected: &dbflux_core::ConnectedProfile,
-    schema: &dbflux_core::SchemaSnapshot,
-    conn_capabilities: DriverCapabilities,
-    conn_category: dbflux_core::DatabaseCategory,
-    metric_cache: &dbflux_app::MetricCatalogCache,
-    metric_fetch_errors: &HashMap<String, String>,
-    is_document_db: bool,
-    is_time_series_db: bool,
-    uses_lazy_loading: bool,
-    is_pending: bool,
-    db_name: &str,
-    is_current: bool,
-) -> Vec<TreeItem> {
-    if uses_lazy_loading {
-        if let Some(db_schema) = connected.database_schemas.get(db_name) {
-            if is_document_db {
-                Sidebar::build_document_db_content(
-                    profile_id,
-                    db_name,
-                    db_schema,
-                    &connected.table_details,
-                    &connected.collection_children,
-                    conn_capabilities,
-                    conn_category,
-                    Some(metric_cache),
-                    metric_fetch_errors,
-                )
-            } else if is_time_series_db {
-                Sidebar::build_lazy_time_series_db_content(profile_id, db_name, db_schema)
-            } else {
-                Vec::new()
-            }
-        } else if is_time_series_db && is_current {
-            // The connect-time snapshot already lists the current bucket's
-            // measurements, so it needs no lazy fetch before it can show them.
-            Sidebar::build_time_series_db_content(profile_id, db_name, schema)
-        } else if is_pending {
-            vec![TreeItem::new(
-                SchemaNodeId::Loading {
-                    profile_id,
-                    database: db_name.to_owned(),
-                }
-                .to_string(),
-                dbflux_i18n::t!("sidebar.tree.status.loading"),
-            )]
-        } else {
-            Vec::new()
-        }
-    } else if let Some(db_conn) = connected.database_connections.get(db_name) {
-        if let Some(ref db_schema) = db_conn.schema {
-            if is_time_series_db {
-                Sidebar::build_time_series_db_content(profile_id, db_name, db_schema)
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
-    } else if is_current {
-        if is_document_db {
-            let tables = schema
-                .collections()
-                .iter()
-                .filter(|collection| {
-                    collection.database.as_deref().is_none()
-                        || collection.database.as_deref() == Some(db_name)
-                })
-                .map(|collection| TableInfo {
-                    name: collection.name.clone(),
-                    schema: Some(db_name.to_owned()),
-                    columns: None,
-                    indexes: collection.indexes.clone().map(IndexData::Document),
-                    foreign_keys: None,
-                    constraints: None,
-                    sample_fields: collection.sample_fields.clone(),
-                    presentation: collection.presentation,
-                    child_items: collection.child_items.clone(),
-                    storage_hints: None,
-                    pseudo_columns: Box::default(),
-                })
-                .collect::<Vec<_>>();
-
-            let db_schema = dbflux_core::DbSchemaInfo {
-                name: db_name.to_owned(),
-                tables,
-                views: Vec::new(),
-                custom_types: None,
-            };
-
-            Sidebar::build_document_db_content(
-                profile_id,
-                db_name,
-                &db_schema,
-                &connected.table_details,
-                &connected.collection_children,
-                conn_capabilities,
-                conn_category,
-                Some(metric_cache),
-                metric_fetch_errors,
-            )
-        } else if is_time_series_db {
-            // Single-database loading: the connection-level schema already
-            // contains all measurements for this bucket.
-            Sidebar::build_time_series_db_content(profile_id, db_name, schema)
-        } else {
-            Vec::new()
-        }
-    } else if is_pending {
-        vec![TreeItem::new(
-            SchemaNodeId::Loading {
-                profile_id,
-                database: db_name.to_owned(),
-            }
-            .to_string(),
-            dbflux_i18n::t!("sidebar.tree.status.loading"),
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
 /// Assemble a single database `TreeItem` from its pre-resolved label parts
 /// and children.
 ///
 /// The label, expansion state, and node identity are all derived here so that
-/// `build_named_db_children` can stay focused on the three-way schema dispatch.
+/// `build_named_db_children` can stay focused on choosing each database's children.
 #[allow(clippy::too_many_arguments)]
 fn build_named_db_item(
     profile_id: Uuid,
@@ -2840,147 +2593,6 @@ fn build_bucket_children(
             )
         })
         .collect()
-}
-
-fn build_collections_folder(
-    profile_id: Uuid,
-    database_name: &str,
-    category: dbflux_core::DatabaseCategory,
-    db_schema: &dbflux_core::DbSchemaInfo,
-    table_details: &HashMap<(String, Option<String>, String), TableInfo>,
-    collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
-) -> Option<TreeItem> {
-    if db_schema.tables.is_empty() {
-        return None;
-    }
-
-    let collection_children: Vec<TreeItem> = db_schema
-        .tables
-        .iter()
-        .map(|coll| {
-            Sidebar::build_collection_item(
-                profile_id,
-                database_name,
-                coll,
-                table_details,
-                collection_children_cache,
-            )
-        })
-        .collect();
-
-    Some(
-        TreeItem::new(
-            SchemaNodeId::CollectionsFolder {
-                profile_id,
-                database: database_name.to_string(),
-            }
-            .to_string(),
-            crate::labels::container_folder_label(category, db_schema.tables.len()),
-        )
-        .expanded(category.default_expand_container())
-        .children(collection_children),
-    )
-}
-
-fn build_metrics_folder(
-    profile_id: Uuid,
-    database_name: &str,
-    metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
-    metric_fetch_errors: &HashMap<String, String>,
-) -> Option<TreeItem> {
-    let parent_id = SchemaNodeId::MetricsFolder {
-        profile_id,
-        database: database_name.to_string(),
-    }
-    .to_string();
-
-    let children = if let Some(err_msg) = metric_fetch_errors.get(&parent_id) {
-        let retry_id = format!("metrics-retry|{}|{}", profile_id, database_name);
-        vec![Sidebar::error_retry_placeholder(&retry_id, err_msg)]
-    } else {
-        Sidebar::build_metric_namespace_children(profile_id, database_name, metric_catalog_cache)
-    };
-
-    Some(
-        TreeItem::new(parent_id, crate::labels::metrics_folder_label())
-            .expanded(false)
-            .children(children),
-    )
-}
-
-fn build_db_collection_indexes_folder(
-    profile_id: Uuid,
-    database_name: &str,
-    tables: &[TableInfo],
-) -> Option<TreeItem> {
-    let all_index_items: Vec<TreeItem> = tables
-        .iter()
-        .filter_map(|coll| {
-            let doc_indexes = match coll.indexes.as_ref()? {
-                IndexData::Document(v) => v,
-                IndexData::Relational(v) => {
-                    return Some(
-                        v.iter()
-                            .map(|idx| {
-                                let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
-                                let pk_marker = if idx.is_primary { " PK" } else { "" };
-                                let cols = idx.columns.join(", ");
-                                let label = format!(
-                                    "{}.{} ({}){}{}",
-                                    coll.name, idx.name, cols, unique_marker, pk_marker
-                                );
-                                TreeItem::new(
-                                    SchemaNodeId::CollectionIndex {
-                                        profile_id,
-                                        collection: coll.name.to_string(),
-                                        name: idx.name.clone(),
-                                    }
-                                    .to_string(),
-                                    label,
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-                }
-            };
-
-            Some(
-                doc_indexes
-                    .iter()
-                    .map(|idx| {
-                        let label = format!("{}.{}", coll.name, format_collection_index_label(idx));
-                        TreeItem::new(
-                            SchemaNodeId::CollectionIndex {
-                                profile_id,
-                                collection: coll.name.to_string(),
-                                name: idx.name.clone(),
-                            }
-                            .to_string(),
-                            label,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .flatten()
-        .collect();
-
-    if all_index_items.is_empty() {
-        return None;
-    }
-
-    Some(
-        TreeItem::new(
-            SchemaNodeId::DatabaseIndexesFolder {
-                profile_id,
-                database: database_name.to_string(),
-            }
-            .to_string(),
-            crate::labels::indexes_folder_label(all_index_items.len()),
-        )
-        .expanded(false)
-        .children(all_index_items),
-    )
 }
 
 fn build_table_column_children(
@@ -3668,6 +3280,9 @@ fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
 }
 
 #[cfg(test)]
+pub(crate) mod tree_shape_tests;
+
+#[cfg(test)]
 mod tests {
     use super::Sidebar;
     use dbflux_core::{
@@ -3813,17 +3428,22 @@ mod tests {
             custom_types: None,
         };
         let capabilities = DriverCapabilities::METRIC_CATALOG;
-
-        let content = Sidebar::build_document_db_content(
+        let connected = make_connected_profile(profile_id, capabilities);
+        let metric_fetch_errors = HashMap::new();
+        let sources = super::FolderSources {
             profile_id,
-            "default",
-            &db_schema,
-            &Default::default(),
-            &Default::default(),
+            connected: &connected,
             capabilities,
-            dbflux_core::DatabaseCategory::Document,
-            None,
-            &Default::default(),
+            connection_category: dbflux_core::DatabaseCategory::Document,
+            metric_cache: None,
+            metric_fetch_errors: &metric_fetch_errors,
+        };
+
+        let content = super::object_folder::folder_content(
+            &sources,
+            dbflux_core::ObjectFolder::Collections,
+            "default",
+            &db_schema.tables,
         );
 
         let metrics_folder = content.iter().find(|item| {
@@ -3854,17 +3474,22 @@ mod tests {
             custom_types: None,
         };
         let capabilities = DriverCapabilities::empty();
-
-        let content = Sidebar::build_document_db_content(
+        let connected = make_connected_profile(profile_id, capabilities);
+        let metric_fetch_errors = HashMap::new();
+        let sources = super::FolderSources {
             profile_id,
-            "default",
-            &db_schema,
-            &Default::default(),
-            &Default::default(),
+            connected: &connected,
             capabilities,
-            dbflux_core::DatabaseCategory::Document,
-            None,
-            &Default::default(),
+            connection_category: dbflux_core::DatabaseCategory::Document,
+            metric_cache: None,
+            metric_fetch_errors: &metric_fetch_errors,
+        };
+
+        let content = super::object_folder::folder_content(
+            &sources,
+            dbflux_core::ObjectFolder::Collections,
+            "default",
+            &db_schema.tables,
         );
 
         let has_metrics_folder = content.iter().any(|item| {
@@ -4137,6 +3762,31 @@ mod tests {
         assert!(item.children.is_empty());
     }
 
+    fn time_series_folder_content(
+        profile_id: Uuid,
+        database: &str,
+        schema: &dbflux_core::SchemaSnapshot,
+    ) -> Vec<TreeItem> {
+        let connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+        let metric_fetch_errors = HashMap::new();
+        let sources = super::FolderSources {
+            profile_id,
+            connected: &connected,
+            capabilities: dbflux_core::DriverCapabilities::empty(),
+            connection_category: dbflux_core::DatabaseCategory::TimeSeries,
+            metric_cache: None,
+            metric_fetch_errors: &metric_fetch_errors,
+        };
+
+        super::object_folder::folder_content(
+            &sources,
+            dbflux_core::ObjectFolder::Measurements,
+            database,
+            &schema.folder_objects(database),
+        )
+    }
+
     #[test]
     fn time_series_db_content_produces_measurements_folder_with_collection_leaves() {
         use dbflux_core::{
@@ -4166,7 +3816,7 @@ mod tests {
             retention_policies: vec![],
         });
 
-        let result = Sidebar::build_time_series_db_content(profile_id, "monitoring", &schema);
+        let result = time_series_folder_content(profile_id, "monitoring", &schema);
 
         // Should produce exactly one "Measurements (N)" folder
         assert_eq!(result.len(), 1);
@@ -4208,7 +3858,7 @@ mod tests {
             retention_policies: vec![],
         });
 
-        let result = Sidebar::build_time_series_db_content(profile_id, "empty_bucket", &schema);
+        let result = time_series_folder_content(profile_id, "empty_bucket", &schema);
         assert!(result.is_empty());
     }
 
@@ -4255,21 +3905,24 @@ mod tests {
             },
         );
         let metric_cache = dbflux_app::MetricCatalogCache::new();
+        let metric_fetch_errors = HashMap::new();
+        let sources = super::FolderSources {
+            profile_id,
+            connected: &connected,
+            capabilities: DriverCapabilities::empty(),
+            connection_category: DatabaseCategory::TimeSeries,
+            metric_cache: Some(&metric_cache),
+            metric_fetch_errors: &metric_fetch_errors,
+        };
 
         let resolve = |db_name: &str, is_current: bool| {
-            super::resolve_special_db_children(
-                profile_id,
-                &connected,
+            super::object_folder::database_children(
+                &sources,
+                dbflux_core::ObjectFolder::Measurements,
                 &schema,
-                DriverCapabilities::empty(),
-                DatabaseCategory::TimeSeries,
-                &metric_cache,
-                &HashMap::new(),
-                false,
-                true,
-                true,
-                false,
                 db_name,
+                true,
+                false,
                 is_current,
             )
         };
