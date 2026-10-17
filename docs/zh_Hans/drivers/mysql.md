@@ -14,6 +14,7 @@
 - 在同一个 crate 中提供 MySQL 与 MariaDB 的关系型驱动程序实现。
 - 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 支持 SQL 执行、Schema 发现、索引、外键、CHECK 约束与唯一约束。
+- 以 MySQL 存储的精确小数展示 `DECIMAL` 取值。
 - 支持身份认证、SSH 隧道，以及 URI/手动两种连接模式。
 - TLS 支持五种原生 SSL 模式（`DISABLED`、`PREFERRED`、`REQUIRED`、`VERIFY_CA`、`VERIFY_IDENTITY`）：`VERIFY_CA` 会校验证书链但跳过主机名校验，`VERIFY_IDENTITY` 则两者都校验。自定义根 CA 会在校验模式下取代系统信任库；客户端证书 + 私钥可启用双向 TLS。使用 `rustls`/`aws-lc-rs` 后端。
 - 通过专用的取消路径（`KILL QUERY` 流程）支持查询取消。
@@ -53,6 +54,7 @@
 
 - 显式语句超时和有界实例指标/检查器请求会在执行前被拒绝；无界请求保持兼容。保留行数上限不限制字节数、服务端工作量、引擎内存分配或运行时间。未验证托管 MariaDB。
 - 仅支持 SQL 的驱动程序；不提供文档型或键值 API。
+- 由于没有十进制列类型，`DECIMAL` 列会被报告为 `ColumnKind::Float`：图表等使用列类型的功能会把它们当作浮点数处理，但值本身保持精确。
 
 - 实例指标每次调用只返回一个数据点（`SHOW GLOBAL STATUS` 的当前快照），而非历史时序。累计计数器（例如 `mysql.bytes_sent`）单调递增 —— 应将其理解为两次采样之间的增量，而不是绝对速率。
 
