@@ -4471,10 +4471,10 @@ async fn reference_display_columns(
         });
 
         let column = match cached {
-            Some(details) => details
-                .columns
-                .as_deref()
-                .and_then(super::fk_display::pick_display_column),
+            Some(details) => super::fk_display::pick_display_column(
+                details.columns.as_deref().unwrap_or(&[]),
+                details.foreign_keys.as_deref().unwrap_or(&[]),
+            ),
             None => {
                 let request = {
                     let connection = connection.clone();
@@ -4488,10 +4488,10 @@ async fn reference_display_columns(
 
                 match request.await {
                     Ok(details) => {
-                        let column = details
-                            .columns
-                            .as_deref()
-                            .and_then(super::fk_display::pick_display_column);
+                        let column = super::fk_display::pick_display_column(
+                            details.columns.as_deref().unwrap_or(&[]),
+                            details.foreign_keys.as_deref().unwrap_or(&[]),
+                        );
                         cx.update(|cx| {
                             app_state.update(cx, |state, _| {
                                 state.set_table_details(

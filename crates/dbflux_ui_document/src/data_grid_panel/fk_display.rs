@@ -22,7 +22,7 @@
 
 use super::*;
 use dbflux_components::components::data_table::model::{CellKind, CellValue};
-use dbflux_core::{ColumnInfo, ConnectedProfile, Connection, SchemaForeignKeyInfo};
+use dbflux_core::{ColumnInfo, ConnectedProfile, Connection, ForeignKeyInfo, SchemaForeignKeyInfo};
 
 /// (referenced schema, referenced table, raw id text) of one foreign-key
 /// cell.
@@ -146,9 +146,18 @@ pub(super) fn display_label(value: &Value) -> Option<String> {
     }
 }
 
-/// The column a referenced row is named by: its first textual
-/// non-primary-key column, else its first non-primary-key column.
-pub(super) fn pick_display_column(columns: &[ColumnInfo]) -> Option<String> {
+/// Lowercase markers a column name must not carry to be drawn as a label:
+/// a password hash or API token must never land in the grid.
+const SENSITIVE_COLUMN_NAME_MARKERS: [&str; 4] = ["password", "hash", "token", "secret"];
+
+/// The column a referenced row is named by: its first textual column that
+/// is neither the primary key, part of a foreign key of the referenced
+/// table, nor sensitive by name. `None` when there is none — no label is
+/// better than a wrong one.
+pub(super) fn pick_display_column(
+    columns: &[ColumnInfo],
+    foreign_keys: &[ForeignKeyInfo],
+) -> Option<String> {
     let is_textual = |column: &ColumnInfo| {
         let type_name = column.type_name.to_lowercase();
         type_name.contains("text") || type_name.contains("char")
@@ -156,9 +165,32 @@ pub(super) fn pick_display_column(columns: &[ColumnInfo]) -> Option<String> {
 
     columns
         .iter()
-        .find(|column| !column.is_primary_key && is_textual(column))
-        .or_else(|| columns.iter().find(|column| !column.is_primary_key))
+        .find(|column| {
+            !column.is_primary_key
+                && is_textual(column)
+                && !is_sensitive_name(&column.name)
+                && !participates_in_foreign_key(&column.name, foreign_keys)
+        })
         .map(|column| column.name.clone())
+}
+
+fn is_sensitive_name(name: &str) -> bool {
+    let name = name.to_lowercase();
+    SENSITIVE_COLUMN_NAME_MARKERS
+        .iter()
+        .any(|marker| name.contains(marker))
+}
+
+/// Whether `name` is a column of any foreign key of the table the columns
+/// belong to, on either side: a driver may record the constraint from
+/// either table, and a join column must not become a label in either case.
+fn participates_in_foreign_key(name: &str, foreign_keys: &[ForeignKeyInfo]) -> bool {
+    foreign_keys.iter().any(|fk| {
+        fk.columns
+            .iter()
+            .chain(&fk.referenced_columns)
+            .any(|column| column == name)
+    })
 }
 
 /// The model with every foreign-key cell whose id the cache resolved
@@ -296,9 +328,12 @@ fn cached_display_columns(
                 ))
             });
 
-        let column = info
-            .and_then(|details| details.columns.as_deref())
-            .and_then(pick_display_column);
+        let column = info.and_then(|details| {
+            pick_display_column(
+                details.columns.as_deref()?,
+                details.foreign_keys.as_deref().unwrap_or(&[]),
+            )
+        });
 
         if column.is_none() {
             unknown_tables.push(table_key.clone());
@@ -459,7 +494,10 @@ impl FkDisplayRound {
 
             let column = match details {
                 Ok(details) => {
-                    let column = details.columns.as_deref().and_then(pick_display_column);
+                    let column = pick_display_column(
+                        details.columns.as_deref().unwrap_or(&[]),
+                        details.foreign_keys.as_deref().unwrap_or(&[]),
+                    );
                     cx.update(|cx| {
                         self.app_state.update(cx, |state, _| {
                             state.set_table_details(
@@ -673,7 +711,7 @@ mod tests {
     use super::{
         FkTarget, QueryResult, TableModel, Value, pick_display_column, substitute_fk_references,
     };
-    use dbflux_core::{ColumnInfo, ColumnKind, ColumnMeta};
+    use dbflux_core::{ColumnInfo, ColumnKind, ColumnMeta, ForeignKeyInfo};
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -685,6 +723,18 @@ mod tests {
             is_primary_key,
             default_value: None,
             enum_values: None,
+        }
+    }
+
+    fn foreign_key(columns: &[&str], referenced_table: &str) -> ForeignKeyInfo {
+        ForeignKeyInfo {
+            name: format!("fk_{referenced_table}"),
+            columns: columns.iter().map(|column| column.to_string()).collect(),
+            referenced_table: referenced_table.to_string(),
+            referenced_schema: None,
+            referenced_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
         }
     }
 
@@ -707,24 +757,92 @@ mod tests {
             column("name", "text", false),
         ];
 
-        assert_eq!(pick_display_column(&columns).as_deref(), Some("email"));
+        assert_eq!(pick_display_column(&columns, &[]).as_deref(), Some("email"));
     }
 
     #[test]
-    fn display_column_falls_back_to_the_first_non_key_column() {
+    fn display_column_is_none_without_a_text_column() {
         let columns = [
             column("id", "int4", true),
             column("amount", "numeric", false),
         ];
 
-        assert_eq!(pick_display_column(&columns).as_deref(), Some("amount"));
+        assert_eq!(pick_display_column(&columns, &[]), None);
     }
 
     #[test]
     fn display_column_is_none_when_the_table_only_lists_keys() {
         let columns = [column("id", "int4", true)];
 
-        assert_eq!(pick_display_column(&columns), None);
+        assert_eq!(pick_display_column(&columns, &[]), None);
+    }
+
+    #[test]
+    fn display_column_is_none_for_a_join_table_of_surrogate_keys() {
+        let columns = [
+            column("id", "int4", true),
+            column("user_id", "int8", false),
+            column("product_id", "int8", false),
+        ];
+        let foreign_keys = [
+            foreign_key(&["user_id"], "users"),
+            foreign_key(&["product_id"], "products"),
+        ];
+
+        assert_eq!(pick_display_column(&columns, &foreign_keys), None);
+    }
+
+    #[test]
+    fn display_column_skips_a_textual_foreign_key_column() {
+        let columns = [
+            column("id", "int4", true),
+            column("country_code", "char(2)", false),
+            column("name", "varchar(100)", false),
+        ];
+        let foreign_keys = [foreign_key(&["country_code"], "countries")];
+
+        assert_eq!(
+            pick_display_column(&columns, &foreign_keys).as_deref(),
+            Some("name")
+        );
+    }
+
+    #[test]
+    fn display_column_skips_sensitive_column_names() {
+        let columns = [
+            column("id", "int4", true),
+            column("password_hash", "varchar(255)", false),
+            column("api_token", "varchar(64)", false),
+        ];
+
+        assert_eq!(pick_display_column(&columns, &[]), None);
+    }
+
+    #[test]
+    fn display_column_is_none_when_the_only_text_column_is_sensitive() {
+        let columns = [
+            column("id", "int4", true),
+            column("login_count", "int4", false),
+            column("password_hash", "text", false),
+        ];
+
+        assert_eq!(pick_display_column(&columns, &[]), None);
+    }
+
+    #[test]
+    fn display_column_skips_every_column_of_a_composite_foreign_key() {
+        let columns = [
+            column("id", "int4", true),
+            column("from_code", "char(3)", false),
+            column("to_code", "char(3)", false),
+            column("summary", "varchar(50)", false),
+        ];
+        let foreign_keys = [foreign_key(&["from_code", "to_code"], "orders")];
+
+        assert_eq!(
+            pick_display_column(&columns, &foreign_keys).as_deref(),
+            Some("summary")
+        );
     }
 
     #[test]
