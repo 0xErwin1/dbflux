@@ -21,9 +21,7 @@ Base de datos relacional open-source popular.
   consola llevan el límite de filas del editor.
 - Soporta ejecución de SQL, descubrimiento de schema, índices, foreign keys,
   constraints CHECK, y constraints UNIQUE.
-- Los valores `DECIMAL` se leen de forma exacta: el driver conserva como
-  `Value::Decimal` el texto que envía el servidor, así que no se redondean los
-  dígitos que un número de punto flotante no puede representar.
+- Muestra valores `DECIMAL` como el decimal exacto que guarda MySQL.
 - Soporta autenticación, túnel SSH, y modos de conexión URI/manual.
 - TLS con los cinco modos SSL nativos (`DISABLED`, `PREFERRED`, `REQUIRED`,
   `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifica la cadena del servidor
