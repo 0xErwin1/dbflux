@@ -165,18 +165,47 @@ agregando `-nightly+<short-sha>`.
 
 ## Identidad y Firma de Artefactos
 
-Tres cosas distintas llevan la señal de "quién construyó esto", y no se
-solapan:
+Distintas capas llevan la señal de "quién construyó esto":
 
 | Capa | Qué cubre | Secret | Si falta |
 |------|-----------|--------|----------|
 | Firma GPG separada (`.asc`) y `.sha256` | El archivo descargado | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | El build falla. Toda release va firmada. |
 | Attestation de procedencia del build | La ejecución del workflow y el commit que produjo el artefacto | ninguno (OIDC sin clave) | Siempre activa. |
 | Firma de código macOS en el `.app` | La identidad de la aplicación que miran el llavero y Gatekeeper | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | El bundle se firma ad-hoc con un warning. |
+| Authenticode de Windows (estables y RC) | `dbflux.exe` dentro del ZIP portable y del instalador, más el ejecutable de instalación | `SIGNPATH_API_TOKEN` | Los builds estables y RC de Windows fallan; nightly no solicita firma Authenticode. |
 
-Ni el ejecutable de Windows ni el instalador llevan firma Authenticode, así
-que SmartScreen avisa en la primera ejecución. Eso necesita un certificado de
-una CA y se sigue por separado.
+### Firma de código en Windows
+
+Los builds estables y RC de Windows usan [SignPath](https://docs.signpath.io/trusted-build-systems/github)
+con la organización `963ebe33-9db3-4a84-9eea-f726ca65dd9c`, el proyecto `dbflux`
+y la política `release-signing`. Guarda un token con permiso de envío como secret
+de Actions del repositorio, con el nombre `SIGNPATH_API_TOKEN`. La configuración
+de artefactos predeterminada debe aceptar un único archivo PE
+(`<pe-file><authenticode-sign /></pe-file>`); configura en el portal de SignPath
+las restricciones de producto y versión exigidas por SignPath Foundation.
+
+Hasta que SignPath Foundation importe el certificado de producción en
+`release-signing`, el `SIGNPATH_SIGNING_POLICY` del job vale `test-signing`, que
+firma con el certificado de prueba autofirmado del proyecto. Windows no confía en
+ese certificado, así que esos builds siguen mostrando el aviso de editor
+desconocido; el paso de verificación acepta el resultado no confiable solo para
+esa política y ese certificado. Cambia la variable a `release-signing` cuando el
+certificado de producción sea válido.
+
+El workflow envía dos solicitudes: primero `dbflux.exe` y después el ejecutable
+de instalación construido con esa aplicación firmada. Cada solicitud espera hasta
+una hora por aprobación manual en SignPath. Un token ausente, una solicitud
+rechazada, un timeout, una firma inválida o un timestamp ausente hacen fallar el
+build; no se publica una alternativa estable ni RC sin firma. Las firmas GPG y los
+checksums SHA256 cubren los paquetes finales firmados. La publicación selecciona
+solo los artefactos de plataforma y excluye los uploads intermedios sin firma.
+
+Nightly mantiene sus firmas GPG y checksums existentes sin Authenticode, porque
+se construye sin supervisión y no hay nadie disponible para aprobarlo.
+Este flujo no firma con Authenticode el desinstalador de Inno Setup. Una firma
+válida identifica al publicador, pero no garantiza que SmartScreen suprima todos
+los avisos de reputación. La firma de releases requiere el repositorio canónico y
+runners alojados por GitHub; no está disponible con `act`.
 
 ### Firma de código en macOS
 

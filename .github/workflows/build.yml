@@ -28,6 +28,9 @@ on:
         required: false
       MACOS_CERTIFICATE_PASSWORD:
         required: false
+      # Required at runtime only for stable and RC Windows releases.
+      SIGNPATH_API_TOKEN:
+        required: false
 
 env:
   FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
@@ -783,12 +786,45 @@ jobs:
   build-windows:
     name: Build Windows amd64
     runs-on: windows-latest
-    # A cold release build takes 40-60 minutes on the hosted runner.
-    timeout-minutes: 90
+    # A cold release build takes 40-60 minutes on the hosted runner, and each
+    # of the two SignPath requests may wait up to one hour for manual approval.
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
+    env:
+      # test-signing uses SignPath's self-signed test certificate. Switch to
+      # release-signing once SignPath Foundation imports the production
+      # certificate into that policy.
+      SIGNPATH_SIGNING_POLICY: test-signing
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Check Windows signing prerequisites
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          $isStable = $env:CHANNEL -eq 'stable' -and $env:RELEASE_VERSION -match '^[0-9]+\.[0-9]+\.[0-9]+$' -and $env:IS_PRERELEASE -ne 'true'
+          $isReleaseCandidate = $env:CHANNEL -eq 'rc' -and $env:RELEASE_VERSION -match '^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'
+          if (-not ($isStable -or $isReleaseCandidate)) {
+            throw 'SignPath release-signing is only available for stable and release-candidate versions.'
+          }
+          if ($env:ACT -eq 'true') {
+            throw 'Windows release signing requires a GitHub-hosted workflow; act cannot sign releases.'
+          }
+          if ($env:GITHUB_REPOSITORY -ne '0xErwin1/dbflux') {
+            throw 'Windows release signing is restricted to the canonical repository.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNPATH_API_TOKEN)) {
+            throw 'SIGNPATH_API_TOKEN is required for stable and release-candidate Windows builds.'
+          }
 
       - name: Resolve channel identity
         shell: pwsh
@@ -852,6 +888,48 @@ jobs:
         # step for the full rationale.
         run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
 
+      # The default SignPath configuration has a pe-file root, not a zip-file.
+      # Raw uploads use the file's name as the artifact name, regardless of name.
+      - name: Upload unsigned Windows executable
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        id: unsigned-executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          path: target/x86_64-pc-windows-msvc/release/dbflux.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows executable
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: '963ebe33-9db3-4a84-9eea-f726ca65dd9c'
+          project-slug: dbflux
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY }}
+          github-artifact-id: ${{ steps.unsigned-executable.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-executable
+          skip-decompress: true
+
+      - name: Verify signed Windows executable
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath signed-executable/dbflux.exe
+          $trusted = $signature.Status -eq 'Valid'
+          # The test certificate is self-signed, so Windows reports an untrusted
+          # root; accept that only for the test policy and its own certificate.
+          $testSigned = $env:SIGNPATH_SIGNING_POLICY -eq 'test-signing' -and
+            $signature.Status -in @('UnknownError', 'NotTrusted') -and
+            $signature.SignerCertificate.Subject -eq "CN=Test certificate for 'DBFlux [OSS]'"
+          if (-not ($trusted -or $testSigned) -or $null -eq $signature.TimeStamperCertificate) {
+            throw "Signed executable must have a valid, timestamped Authenticode signature: $($signature.Status) $($signature.StatusMessage)"
+          }
+          Copy-Item signed-executable/dbflux.exe target/x86_64-pc-windows-msvc/release/dbflux.exe -Force
+
       # The same committed icon the build script embeds into dbflux.exe, so the
       # executable, the portable zip and the installer shortcuts agree.
       - name: Select channel icon
@@ -887,6 +965,46 @@ jobs:
 
       - name: Move installer
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
+
+      - name: Upload unsigned Windows installer
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        id: unsigned-installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          path: dbflux-windows-amd64-setup.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows installer
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: '963ebe33-9db3-4a84-9eea-f726ca65dd9c'
+          project-slug: dbflux
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY }}
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-installer
+          skip-decompress: true
+
+      - name: Verify signed Windows installer
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath signed-installer/dbflux-windows-amd64-setup.exe
+          $trusted = $signature.Status -eq 'Valid'
+          # The test certificate is self-signed, so Windows reports an untrusted
+          # root; accept that only for the test policy and its own certificate.
+          $testSigned = $env:SIGNPATH_SIGNING_POLICY -eq 'test-signing' -and
+            $signature.Status -in @('UnknownError', 'NotTrusted') -and
+            $signature.SignerCertificate.Subject -eq "CN=Test certificate for 'DBFlux [OSS]'"
+          if (-not ($trusted -or $testSigned) -or $null -eq $signature.TimeStamperCertificate) {
+            throw "Signed installer must have a valid, timestamped Authenticode signature: $($signature.Status) $($signature.StatusMessage)"
+          }
+          Copy-Item signed-installer/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
 
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0

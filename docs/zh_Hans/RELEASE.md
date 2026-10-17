@@ -103,16 +103,39 @@ git push origin vX.Y.Z[-suffix.N]
 
 ## 制品身份与签名
 
-有三样彼此独立的东西承载"这是谁构建的"这一信号，它们互不重叠：
+不同层面承载"这是谁构建的"这一信号：
 
 | 层 | 覆盖内容 | Secret | 缺失时 |
 |----|----------|--------|--------|
 | GPG 分离签名（`.asc`）和 `.sha256` | 下载的文件本身 | `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE` | 构建失败。每个 release 都必须签名。 |
 | 构建来源证明（provenance attestation） | 产出该制品的 workflow 运行和 commit | 无（无密钥 OIDC） | 始终开启。 |
 | `.app` 上的 macOS 代码签名 | 钥匙串和 Gatekeeper 所看到的应用身份 | `MACOS_CERTIFICATE_P12`、`MACOS_CERTIFICATE_PASSWORD` | bundle 以 ad-hoc 方式签名并给出警告。 |
+| Windows Authenticode（稳定版和 RC） | 便携 ZIP 和安装程序中的 `dbflux.exe`，以及安装程序可执行文件 | `SIGNPATH_API_TOKEN` | 稳定版和 RC 的 Windows 构建失败；nightly 不请求 Authenticode 签名。 |
 
-Windows 可执行文件和安装程序都没有 Authenticode 签名，因此首次运行时
-SmartScreen 会发出警告。这需要来自 CA 的证书，另行跟踪。
+### Windows 代码签名
+
+稳定版和 RC 的 Windows 构建使用 [SignPath](https://docs.signpath.io/trusted-build-systems/github)，
+组织 ID 为 `963ebe33-9db3-4a84-9eea-f726ca65dd9c`，项目为 `dbflux`，策略为
+`release-signing`。将具有提交权限的 token 保存为仓库 Actions secret
+`SIGNPATH_API_TOKEN`。默认制品配置必须接受单个 PE 文件
+（`<pe-file><authenticode-sign /></pe-file>`）；在 SignPath 门户中配置
+SignPath Foundation 要求的产品和版本限制。
+
+在 SignPath Foundation 将生产证书导入 `release-signing` 之前，该 job 的
+`SIGNPATH_SIGNING_POLICY` 为 `test-signing`，使用项目的自签名测试证书签名。
+Windows 不信任该证书，因此这些构建仍会显示未知发布者警告；验证步骤仅对该策略
+和该证书接受不受信任的结果。生产证书生效后，将该变量改为 `release-signing`。
+
+workflow 提交两个请求：先签署 `dbflux.exe`，再签署包含该已签名应用的
+安装程序可执行文件。每个请求最多等待一小时，供人工在 SignPath 中批准。
+token 缺失、请求被拒绝、超时、签名无效或时间戳缺失都会导致构建失败；
+不会发布未签名的稳定版或 RC 替代制品。GPG 签名和 SHA256 校验和覆盖最终已签名
+的软件包。发布步骤仅选择平台制品，排除中间上传的未签名文件。
+
+nightly 保留现有 GPG 签名及校验和，不使用 Authenticode 签名，因为它在无人值守时构建，没有人可以批准。
+此流程不会对 Inno Setup 卸载程序进行 Authenticode 签名。有效签名可以识别
+发布者，但不保证 SmartScreen 不再显示任何信誉警告。发布签名要求使用
+官方仓库和 GitHub 托管 runner；不支持 `act`。
 
 ### macOS 代码签名
 

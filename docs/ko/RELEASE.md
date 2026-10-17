@@ -104,15 +104,39 @@ git push origin vX.Y.Z[-suffix.N]
 
 ## 아티팩트 식별과 서명
 
-"이것을 누가 빌드했는가" 신호를 담는 별개의 세 가지가 있으며, 서로 겹치지 않습니다:
+"이것을 누가 빌드했는가" 신호는 별개의 계층들이 담습니다:
 
 | 계층 | 다루는 것 | 시크릿 | 없을 때 |
 |-------|----------------|--------|--------------|
 | GPG 분리 서명(`.asc`)과 `.sha256` | 다운로드한 파일 | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | 빌드가 실패합니다. 모든 릴리스는 서명됩니다. |
 | 빌드 출처 증명(attestation) | 아티팩트를 만든 워크플로 실행과 커밋 | 없음 (키 없는 OIDC) | 항상 켜져 있습니다. |
 | `.app`의 macOS 코드 서명 | 키체인과 Gatekeeper가 보는 애플리케이션 식별 | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | 번들은 경고와 함께 애드혹 서명됩니다. |
+| Windows Authenticode (stable 및 RC) | 포터블 ZIP과 설치 관리자 안의 `dbflux.exe`, 그리고 설치 실행 파일 자체 | `SIGNPATH_API_TOKEN` | stable 및 RC Windows 빌드가 실패합니다. nightly는 Authenticode 서명을 요청하지 않습니다. |
 
-Windows 실행 파일도 설치 관리자도 Authenticode로 서명되지 않으므로, 첫 실행에서 SmartScreen이 경고합니다. 이는 CA의 인증서가 필요하며 별도로 추적됩니다.
+### Windows 코드 서명
+
+stable 및 RC Windows 빌드는 [SignPath](https://docs.signpath.io/trusted-build-systems/github)를
+조직 `963ebe33-9db3-4a84-9eea-f726ca65dd9c`, 프로젝트 `dbflux`, 정책 `release-signing`으로
+사용합니다. 제출자 토큰을 저장소 Actions 시크릿 `SIGNPATH_API_TOKEN`에 저장하세요. 기본
+아티팩트 구성은 단일 PE 파일(`<pe-file><authenticode-sign /></pe-file>`)을 받아야 하며,
+SignPath Foundation이 요구하는 제품 및 버전 제한은 SignPath 포털에서 구성합니다.
+
+SignPath Foundation이 프로덕션 인증서를 `release-signing`에 가져오기 전까지 job의
+`SIGNPATH_SIGNING_POLICY`는 `test-signing`이며, 프로젝트의 자체 서명 테스트 인증서로 서명합니다.
+Windows는 이 인증서를 신뢰하지 않으므로 해당 빌드는 여전히 알 수 없는 게시자 경고를 표시합니다.
+검증 단계는 그 정책과 그 인증서에 대해서만 신뢰되지 않은 결과를 허용합니다. 프로덕션 인증서가
+유효해지면 변수를 `release-signing`으로 바꾸세요.
+
+워크플로는 두 개의 요청을 제출합니다. 먼저 `dbflux.exe`, 그다음 서명된 애플리케이션으로 빌드한
+설치 실행 파일입니다. 각 요청은 SignPath의 수동 승인을 최대 한 시간까지 기다립니다. 토큰 누락,
+요청 거부, 시간 초과, 유효하지 않은 서명 또는 타임스탬프 누락은 빌드를 실패시키며, 서명되지 않은
+stable 또는 RC 대체본은 게시되지 않습니다. GPG 서명과 SHA256 체크섬은 최종 서명된 패키지를 다룹니다.
+게시는 플랫폼 아티팩트만 선택하며, 중간 단계의 서명되지 않은 업로드는 제외합니다.
+
+nightly는 무인으로 빌드되어 승인할 사람이 없으므로 Authenticode 서명 없이 기존 GPG 서명과 체크섬을 유지합니다. Inno Setup
+제거 프로그램은 이 흐름에서 Authenticode로 서명되지 않습니다. 유효한 서명은 게시자를 식별하지만
+SmartScreen이 모든 평판 경고를 표시하지 않는다는 보장은 아닙니다. 릴리스 서명에는 정식 저장소와
+GitHub 호스팅 러너가 필요하며, `act`에서는 사용할 수 없습니다.
 
 ### macOS 코드 서명
 

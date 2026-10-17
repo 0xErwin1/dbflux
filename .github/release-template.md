@@ -47,7 +47,9 @@ xattr -cr /Applications/DBFlux.app
 1. Download `dbflux-windows-amd64.zip`
 2. Extract and run `dbflux.exe`
 
-> Note: The executable is not signed. Windows SmartScreen may show a warning. Click "More info" → "Run anyway".
+> Note: Stable and release-candidate builds are Authenticode-signed. Nightly builds are not. Windows SmartScreen may still show a warning, more often for unsigned builds. Click "More info" → "Run anyway".
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). See the [code signing policy](https://github.com/__REPO__#code-signing-policy).
 
 ---
 

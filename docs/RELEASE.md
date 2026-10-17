@@ -103,18 +103,43 @@ The manifest version is `X.(Y+1).0-dev.0`, where `X.Y` is the minor currently be
 
 ## Artifact Identity and Signing
 
-Three separate things carry the "who built this" signal, and they do not
-overlap:
+Separate layers carry the "who built this" signal:
 
 | Layer | What it covers | Secret | When missing |
 |-------|----------------|--------|--------------|
 | GPG detached signature (`.asc`) and `.sha256` | The downloaded file | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | Build fails. Every release is signed. |
 | Build provenance attestation | The workflow run and commit that produced the artifact | none (keyless OIDC) | Always on. |
 | macOS code signature on the `.app` | The application identity the keychain and Gatekeeper look at | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | Bundle is signed ad-hoc with a warning. |
+| Windows Authenticode (stable and RC) | `dbflux.exe` in the portable ZIP and installer, plus the setup executable | `SIGNPATH_API_TOKEN` | Stable and RC Windows builds fail; nightly does not request Authenticode signing. |
 
-Neither the Windows executable nor the installer is Authenticode-signed, so
-SmartScreen warns on first run. That needs a certificate from a CA and is
-tracked separately.
+### Windows code signing
+
+Stable and RC Windows builds use [SignPath](https://docs.signpath.io/trusted-build-systems/github)
+with organization `963ebe33-9db3-4a84-9eea-f726ca65dd9c`, project `dbflux`,
+and policy `release-signing`. Store a submitter token as the repository Actions
+secret `SIGNPATH_API_TOKEN`. The default artifact configuration must accept a
+single PE file (`<pe-file><authenticode-sign /></pe-file>`); configure the product
+and version restrictions required by SignPath Foundation in the SignPath portal.
+
+Until SignPath Foundation imports the production certificate into `release-signing`,
+the job's `SIGNPATH_SIGNING_POLICY` is `test-signing`, which signs with the project's
+self-signed test certificate. Windows does not trust that certificate, so those
+builds still show the unknown-publisher warning; the verification step accepts the
+untrusted result only for that policy and that certificate. Set the variable to
+`release-signing` once the production certificate is valid.
+
+The workflow submits two requests: first `dbflux.exe`, then the setup executable
+built with that signed application. Each request waits up to one hour for manual
+approval in SignPath. A missing token, rejected request, timeout, invalid signature
+or missing timestamp fails the build; no unsigned stable or RC fallback is published.
+GPG signatures and SHA256 checksums cover the final signed packages. Publication
+selects only platform artifacts, excluding the intermediate unsigned uploads.
+
+Nightly keeps its existing GPG signatures and checksums without Authenticode
+signing, because it builds unattended and nobody is available to approve it. The Inno Setup uninstaller is not Authenticode-signed by
+this flow. A valid signature identifies the publisher but does not guarantee
+that SmartScreen will suppress every reputation warning. Release signing requires
+the canonical repository and GitHub-hosted runners; it is unavailable under `act`.
 
 ### macOS code signing
 
