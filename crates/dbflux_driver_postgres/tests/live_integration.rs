@@ -541,8 +541,8 @@ fn postgres_vector_column_finds_nearest_neighbors() -> Result<(), DbError> {
         let distance_index = result
             .columns
             .iter()
-            .position(|c| c.name == "distance")
-            .expect("the result carries a distance column");
+            .position(|c| c.name == "nearest_distance")
+            .expect("the result carries a nearest_distance column");
 
         let ids: Vec<Value> = result
             .rows
@@ -590,6 +590,11 @@ fn postgres_vector_column_finds_nearest_neighbors() -> Result<(), DbError> {
             scored.rows.len(),
             1,
             "the NULL vector row is not a neighbor"
+        );
+        let names: Vec<&str> = scored.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["id", "distance", "embedding", "nearest_distance"]
         );
 
         Ok(())

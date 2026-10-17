@@ -40,7 +40,7 @@ Base de datos relacional open-source avanzada.
   arrays unidimensionales verificados, como resultados textuales.
 - Encuentra las filas más cercanas a una fila seleccionada en una tabla con una
   columna `vector` de `pgvector`, por distancia L2, distancia coseno o producto
-  interno negativo, y muestra cada vecino con su `distance`. Las columnas
+  interno negativo, y muestra cada vecino con su `nearest_distance`. Las columnas
   `halfvec` y `sparsevec` no ofrecen la búsqueda.
 - Muestra valores `tsvector` y `tsquery` de búsqueda de texto completo,
   incluyendo arrays unidimensionales, en la forma de texto canónica de

@@ -130,6 +130,12 @@ impl DataGridPanel {
             return false;
         };
 
+        // The neighbors replace the rows on screen, which would drop every
+        // staged edit; the guard's warning says why nothing happened.
+        if self.reload_blocked_by_pending_edits(cx) {
+            return true;
+        }
+
         // The visual row goes through the edit buffer's order, so a sorted or
         // edited grid still reads the row under the cursor.
         let row = self.collect_row_values(visual_row, cx);

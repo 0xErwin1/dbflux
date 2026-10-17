@@ -113,7 +113,7 @@ fn neighbors(sql: &str) -> QueryResult {
             column_meta("id", false),
             column_meta("label", false),
             column_meta("embedding", false),
-            column_meta("distance", false),
+            column_meta("nearest_distance", false),
         ],
         vec![vec![
             Value::Int(1),
@@ -455,7 +455,7 @@ fn similar_rows_replace_the_page_with_the_neighbors_and_their_distance(cx: &mut 
 
     assert_eq!(
         column_names(&panel, window),
-        vec!["id", "label", "embedding", "distance"]
+        vec!["id", "label", "embedding", "nearest_distance"]
     );
 
     window.update(|_, app| {
@@ -626,5 +626,47 @@ fn a_new_distance_drops_the_search_it_replaces(cx: &mut TestAppContext) {
             search.map(|s| s.distance),
             Some(VectorDistance::InnerProduct)
         );
+    });
+}
+
+#[gpui::test]
+fn pending_edits_block_finding_similar_rows(cx: &mut TestAppContext) {
+    let (panel, calls, toasts, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        table_state.update(app, |state, _cx| {
+            state.stage_base_cell_value(
+                0,
+                1,
+                dbflux_components::components::data_table::model::CellValue::text("edited"),
+            );
+        });
+    });
+    let toasts_before = window.update(|_, app| toasts.read(app).latest_toast_id());
+
+    assert!(find_similar_rows(&panel, window), "the key is consumed");
+
+    {
+        let calls = calls.lock().unwrap();
+        assert!(calls.neighbor_requests.is_empty());
+        assert!(calls.executed.is_empty());
+    }
+    let toasts_after = window.update(|_, app| toasts.read(app).latest_toast_id());
+    assert!(
+        toasts_after.is_some() && toasts_after != toasts_before,
+        "the guard warns"
+    );
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert!(panel.has_pending_edits(app), "the edit is still staged");
+        assert!(panel.nearest_neighbor_search().is_none());
+        assert_eq!(panel.result.rows.len(), 2);
     });
 }

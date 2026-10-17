@@ -89,7 +89,7 @@ pub(crate) fn nearest_neighbors_sql(
     };
 
     let column = pg_quote_ident(&request.column);
-    // Ordering by the expression rather than the `distance` alias keeps the
+    // Ordering by the expression rather than its alias keeps the
     // query valid on a table that has its own `distance` column.
     let distance = format!(
         "{} {} {}::vector",
@@ -99,7 +99,7 @@ pub(crate) fn nearest_neighbors_sql(
     );
 
     let mut sql =
-        format!("SELECT *, {distance} AS distance FROM {table} WHERE {column} IS NOT NULL");
+        format!("SELECT *, {distance} AS nearest_distance FROM {table} WHERE {column} IS NOT NULL");
 
     // A key value that renders as NULL would make `NOT (key = NULL)` match
     // no row at all, so the anchor is kept rather than every row lost.
@@ -333,7 +333,7 @@ mod tests {
             assert_eq!(
                 generated.text,
                 format!(
-                    "SELECT *, \"embedding\" {operator} '[1,2,3]'::vector AS distance \
+                    "SELECT *, \"embedding\" {operator} '[1,2,3]'::vector AS nearest_distance \
                      FROM \"public\".\"items\" WHERE \"embedding\" IS NOT NULL \
                      ORDER BY \"embedding\" {operator} '[1,2,3]'::vector LIMIT 10"
                 )
@@ -354,7 +354,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "SELECT *, \"embedding\" <-> '[1,2,3]'::vector AS distance \
+            "SELECT *, \"embedding\" <-> '[1,2,3]'::vector AS nearest_distance \
              FROM \"public\".\"items\" WHERE \"embedding\" IS NOT NULL \
              AND NOT (\"id\" = 7 AND \"region\" = 'eu') \
              ORDER BY \"embedding\" <-> '[1,2,3]'::vector LIMIT 10"
@@ -375,7 +375,7 @@ mod tests {
 
         assert_eq!(
             nearest_neighbors_sql(&request).unwrap(),
-            "SELECT *, \"emb\"\"col\" <=> '[1,2]''; DROP TABLE x; --'::vector AS distance \
+            "SELECT *, \"emb\"\"col\" <=> '[1,2]''; DROP TABLE x; --'::vector AS nearest_distance \
              FROM \"odd\"\"table\" WHERE \"emb\"\"col\" IS NOT NULL AND NOT (\"k\"\"ey\" = 'a''b') \
              ORDER BY \"emb\"\"col\" <=> '[1,2]''; DROP TABLE x; --'::vector LIMIT 5"
         );
@@ -409,7 +409,7 @@ mod tests {
 
             assert_eq!(
                 sql,
-                "SELECT *, \"embedding\" <-> '[1,2,3]'::vector AS distance \
+                "SELECT *, \"embedding\" <-> '[1,2,3]'::vector AS nearest_distance \
                  FROM \"public\".\"items\" WHERE \"embedding\" IS NOT NULL \
                  ORDER BY \"embedding\" <-> '[1,2,3]'::vector LIMIT 10"
             );
