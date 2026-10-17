@@ -22,11 +22,23 @@
 
 use super::*;
 use dbflux_components::components::data_table::model::{CellKind, CellValue};
-use dbflux_core::{ColumnInfo, SchemaForeignKeyInfo};
+use dbflux_core::{ColumnInfo, ConnectedProfile, Connection, SchemaForeignKeyInfo};
 
 /// (referenced schema, referenced table, raw id text) of one foreign-key
 /// cell.
 type FkDisplayKey = (Option<String>, String, String);
+
+/// (referenced schema, referenced table) of a referenced table.
+type ReferencedTable = (Option<String>, String);
+
+/// The display column of each referenced table, named by its pk column
+/// key first and without one second. `None` marks a table whose column
+/// is not known yet, or has none to name rows by.
+type DisplayColumns = HashMap<ReferencedTable, Option<String>>;
+
+/// The round's lookups batched per (referenced schema, referenced table,
+/// pk column).
+type FkLookupGroups = HashMap<(Option<String>, String, String), Vec<FkLookup>>;
 
 /// A single-column foreign key of the browsed table, mapped onto the grid's
 /// columns.
@@ -189,6 +201,302 @@ fn substitute_fk_references(
     substituted
 }
 
+/// The page's unresolved lookups: one per distinct foreign-key id the
+/// cache does not hold, in row order. Ids the cache already resolved —
+/// including `None` misses — are not fetched again.
+fn fk_lookups_for_page(
+    model: &TableModel,
+    targets: &[FkTarget],
+    cache: &HashMap<FkDisplayKey, Option<String>>,
+) -> Vec<FkLookup> {
+    // One fetch per distinct unresolved id.
+    let mut seen: HashSet<FkDisplayKey> = HashSet::new();
+    let mut lookups: Vec<FkLookup> = Vec::new();
+
+    for row in &model.rows {
+        for target in targets {
+            let Some(cell) = row.cells.get(target.col) else {
+                continue;
+            };
+
+            let Some(value) = fk_cell_value(cell) else {
+                continue;
+            };
+
+            let key = (
+                target.schema.clone(),
+                target.table.clone(),
+                cell.edit_text(),
+            );
+            if cache.contains_key(&key) || !seen.insert(key.clone()) {
+                continue;
+            }
+
+            lookups.push(FkLookup {
+                key,
+                pk_column: target.pk_column.clone(),
+                value,
+            });
+        }
+    }
+
+    lookups
+}
+
+/// The lookups grouped per distinct referenced table and pk column — two
+/// foreign keys into the same table share the group. No chunking on top:
+/// a group is bounded by one page's distinct ids and the driver already
+/// splits the IN list.
+fn group_fk_lookups(lookups: Vec<FkLookup>) -> FkLookupGroups {
+    let mut groups = FkLookupGroups::default();
+
+    for lookup in lookups {
+        let group_key = (
+            lookup.key.0.clone(),
+            lookup.key.1.clone(),
+            lookup.pk_column.clone(),
+        );
+        groups.entry(group_key).or_default().push(lookup);
+    }
+
+    groups
+}
+
+/// The display column of each referenced table the connection's cached
+/// table details answer, plus the tables they do not — the ones the round
+/// fetches metadata for. The cache is keyed by the referenced schema
+/// first and without one second, the shape MySQL writes when it records
+/// the schema on the foreign key but not on the table.
+fn cached_display_columns(
+    connected: &ConnectedProfile,
+    resolved_database: &str,
+    targets: &[FkTarget],
+) -> (DisplayColumns, Vec<ReferencedTable>) {
+    let mut display_columns = DisplayColumns::default();
+    let mut unknown_tables: Vec<ReferencedTable> = Vec::new();
+
+    for target in targets {
+        let table_key = (target.schema.clone(), target.table.clone());
+        if display_columns.contains_key(&table_key) {
+            continue;
+        }
+
+        let info = connected
+            .table_details
+            .get(&(
+                resolved_database.to_string(),
+                target.schema.clone(),
+                target.table.clone(),
+            ))
+            .or_else(|| {
+                connected.table_details.get(&(
+                    resolved_database.to_string(),
+                    None,
+                    target.table.clone(),
+                ))
+            });
+
+        let column = info
+            .and_then(|details| details.columns.as_deref())
+            .and_then(pick_display_column);
+
+        if column.is_none() {
+            unknown_tables.push(table_key.clone());
+        }
+
+        display_columns.insert(table_key, column);
+    }
+
+    (display_columns, unknown_tables)
+}
+
+/// The label of every row a batch answered, keyed by its pk's text — the
+/// same text the cache keys lookups by. A requested id no row answered
+/// for stays a `None` miss, so it is not fetched again.
+fn labels_by_pk_text(
+    rows: &[HashMap<String, Value>],
+    pk_column: &str,
+    display_column: Option<&str>,
+) -> HashMap<String, Option<String>> {
+    let mut labels_by_pk: HashMap<String, Option<String>> = HashMap::new();
+
+    for row in rows {
+        let Some(pk) = row.get(pk_column).and_then(id_text) else {
+            continue;
+        };
+        let label = display_column
+            .and_then(|column| row.get(column))
+            .and_then(display_label);
+        labels_by_pk.insert(pk, label);
+    }
+
+    labels_by_pk
+}
+
+/// One round of foreign-key label resolution: everything its background
+/// fetches work on, gathered on the foreground before the page can
+/// change underneath them.
+struct FkDisplayRound {
+    /// The round's number, re-checked before every fetch so a late
+    /// landing never touches newer rows.
+    generation: u64,
+    profile_id: Uuid,
+    app_state: Entity<AppStateEntity>,
+    connection: Arc<dyn Connection>,
+    /// The database the table-details cache is keyed by.
+    resolved_database: String,
+    groups: FkLookupGroups,
+    /// Display column per referenced table; the metadata fetch fills the
+    /// entries the cache left open.
+    display_columns: DisplayColumns,
+    /// The referenced tables the cache could not answer; their metadata
+    /// is fetched before the group batches run.
+    unknown_tables: Vec<ReferencedTable>,
+}
+
+impl FkDisplayRound {
+    /// Fetches the round's unknown table metadata, then each group's rows,
+    /// and lands every label of the round in one model swap through
+    /// [`DataGridPanel::apply_fk_display_batch`].
+    async fn run(mut self, panel: WeakEntity<DataGridPanel>, cx: &mut AsyncApp) {
+        let executor = cx.background_executor().clone();
+
+        // A round a newer page already outran skips its metadata
+        // queries, not just its group fetches.
+        if !self.still_current(&panel, cx) {
+            return;
+        }
+
+        self.fetch_unknown_display_columns(&executor, cx).await;
+
+        // One batch per referenced table, in sequence: a page references
+        // a handful of tables, and the plain loop keeps the generation
+        // check a `break`. The round's labels accumulate here and swap
+        // into the model once at the end.
+        let mut resolved: Vec<(FkDisplayKey, Option<String>)> = Vec::new();
+
+        for ((schema, table, pk_column), lookups) in &self.groups {
+            if !self.still_current(&panel, cx) {
+                break;
+            }
+
+            let display_column = self
+                .display_columns
+                .get(&(schema.clone(), table.clone()))
+                .cloned()
+                .flatten();
+            let mut projection = vec![pk_column.clone()];
+            if let Some(column) = &display_column {
+                projection.push(column.clone());
+            }
+            let values: Vec<Value> = lookups.iter().map(|lookup| lookup.value.clone()).collect();
+
+            let connection = self.connection.clone();
+            let database = self.resolved_database.clone();
+            let schema_for_task = schema.clone();
+            let table_for_task = table.clone();
+            let pk_for_task = pk_column.clone();
+
+            let rows = executor
+                .spawn(async move {
+                    connection.fetch_rows_by_pks(
+                        &database,
+                        schema_for_task.as_deref().unwrap_or(""),
+                        &table_for_task,
+                        &pk_for_task,
+                        &values,
+                        Some(&projection),
+                    )
+                })
+                .await;
+
+            match rows {
+                Ok(rows) => {
+                    let labels = labels_by_pk_text(&rows, pk_column, display_column.as_deref());
+
+                    for lookup in lookups {
+                        let label = labels.get(&lookup.key.2).cloned().flatten();
+                        resolved.push((lookup.key.clone(), label));
+                    }
+                }
+                Err(error) => {
+                    // A failed batch is transient: the ids stay uncached
+                    // and the next page retries them.
+                    log::debug!(
+                        "fk display: could not fetch rows of {table} for {} ids: {error}",
+                        lookups.len()
+                    );
+                }
+            }
+        }
+
+        panel
+            .update(cx, |panel, cx| {
+                panel.apply_fk_display_batch(self.generation, resolved, cx);
+            })
+            .ok();
+    }
+
+    /// Fetches the metadata of the referenced tables the connection's
+    /// cache could not answer, records it in the app's table-details
+    /// cache and folds each table's display column into `display_columns`.
+    async fn fetch_unknown_display_columns(
+        &mut self,
+        executor: &BackgroundExecutor,
+        cx: &mut AsyncApp,
+    ) {
+        for (schema, table) in &self.unknown_tables {
+            let connection = self.connection.clone();
+            let database = self.resolved_database.clone();
+            let schema_for_task = schema.clone();
+            let table_for_task = table.clone();
+
+            let details = executor
+                .spawn(async move {
+                    connection.table_details(&database, schema_for_task.as_deref(), &table_for_task)
+                })
+                .await;
+
+            let column = match details {
+                Ok(details) => {
+                    let column = details.columns.as_deref().and_then(pick_display_column);
+                    cx.update(|cx| {
+                        self.app_state.update(cx, |state, _| {
+                            state.set_table_details(
+                                self.profile_id,
+                                self.resolved_database.clone(),
+                                schema.clone(),
+                                table.clone(),
+                                details,
+                            );
+                        });
+                    });
+                    column
+                }
+                Err(error) => {
+                    log::warn!(
+                        "fk display: no column metadata for referenced table {table}: {error}"
+                    );
+                    None
+                }
+            };
+
+            self.display_columns
+                .insert((schema.clone(), table.clone()), column);
+        }
+    }
+
+    /// Whether the round is still the panel's current one; a newer page
+    /// landing first means the fetches' results must not be applied.
+    fn still_current(&self, panel: &WeakEntity<DataGridPanel>, cx: &mut AsyncApp) -> bool {
+        panel
+            .update(cx, |panel, _| {
+                panel.fk_display.generation == self.generation
+            })
+            .unwrap_or(false)
+    }
+}
+
 impl DataGridPanel {
     /// Whether the grid resolves foreign-key cells into readable labels
     /// (`grid_fk_labels`). The row inspector resolves its references
@@ -252,46 +560,26 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let (connection, resolved_database) = {
+        let (connection, resolved_database, display_columns, unknown_tables) = {
             let Some(connected) = self.app_state.read(cx).connections().get(&profile_id) else {
                 return;
             };
 
-            let resolved = Self::table_details_database(connected, database);
-            (connected.connection_for_database(&resolved), resolved)
+            let resolved_database = Self::table_details_database(connected, database);
+            let connection = connected.connection_for_database(&resolved_database);
+            let (display_columns, unknown_tables) =
+                cached_display_columns(connected, &resolved_database, &targets);
+
+            (
+                connection,
+                resolved_database,
+                display_columns,
+                unknown_tables,
+            )
         };
 
         let model = table_state.read(cx).model_arc().clone();
-
-        // One fetch per distinct unresolved id.
-        let mut seen: HashSet<FkDisplayKey> = HashSet::new();
-        let mut lookups: Vec<FkLookup> = Vec::new();
-        for row in &model.rows {
-            for target in &targets {
-                let Some(cell) = row.cells.get(target.col) else {
-                    continue;
-                };
-
-                let Some(value) = fk_cell_value(cell) else {
-                    continue;
-                };
-
-                let key = (
-                    target.schema.clone(),
-                    target.table.clone(),
-                    cell.edit_text(),
-                );
-                if self.fk_display.cache.contains_key(&key) || !seen.insert(key.clone()) {
-                    continue;
-                }
-
-                lookups.push(FkLookup {
-                    key,
-                    pk_column: target.pk_column.clone(),
-                    value,
-                });
-            }
-        }
+        let lookups = fk_lookups_for_page(&model, &targets, &self.fk_display.cache);
 
         // Nothing left to fetch: the ids the cache already knows land on the
         // cells without a query, and this swap is the round's only one.
@@ -304,204 +592,19 @@ impl DataGridPanel {
             return;
         }
 
-        // One batch per distinct referenced table and pk column — two
-        // foreign keys into the same table share the group. No chunking on
-        // top: a group is bounded by one page's distinct ids and the driver
-        // already splits the IN list.
-        let mut groups: HashMap<(Option<String>, String, String), Vec<FkLookup>> = HashMap::new();
-        for lookup in lookups {
-            let group_key = (
-                lookup.key.0.clone(),
-                lookup.key.1.clone(),
-                lookup.pk_column.clone(),
-            );
-            groups.entry(group_key).or_default().push(lookup);
-        }
-
-        // The display column of each referenced table, from the cached table
-        // details — keyed by the referenced schema first and without one
-        // second, the shape MySQL writes when it records the schema on the
-        // foreign key but not on the table. Tables the cache cannot answer
-        // are fetched below.
-        let mut display_columns: HashMap<(Option<String>, String), Option<String>> = HashMap::new();
-        let mut unknown_tables: Vec<(Option<String>, String)> = Vec::new();
-        {
-            let Some(connected) = self.app_state.read(cx).connections().get(&profile_id) else {
-                return;
-            };
-
-            for target in &targets {
-                let table_key = (target.schema.clone(), target.table.clone());
-                if display_columns.contains_key(&table_key) {
-                    continue;
-                }
-
-                let info = connected
-                    .table_details
-                    .get(&(
-                        resolved_database.clone(),
-                        target.schema.clone(),
-                        target.table.clone(),
-                    ))
-                    .or_else(|| {
-                        connected.table_details.get(&(
-                            resolved_database.clone(),
-                            None,
-                            target.table.clone(),
-                        ))
-                    });
-
-                let column = info
-                    .and_then(|details| details.columns.as_deref())
-                    .and_then(pick_display_column);
-
-                if column.is_none() {
-                    unknown_tables.push(table_key.clone());
-                }
-
-                display_columns.insert(table_key, column);
-            }
-        }
-
-        let app_state = self.app_state.clone();
+        let round = FkDisplayRound {
+            generation,
+            profile_id,
+            app_state: self.app_state.clone(),
+            connection,
+            resolved_database,
+            groups: group_fk_lookups(lookups),
+            display_columns,
+            unknown_tables,
+        };
 
         self.fk_display.task = Some(cx.spawn(async move |this, cx| {
-            let executor = cx.background_executor().clone();
-
-            // A round a newer page already outran skips its metadata
-            // queries, not just its group fetches.
-            let still_current = this
-                .update(cx, |panel, _| panel.fk_display.generation == generation)
-                .unwrap_or(false);
-            if !still_current {
-                return;
-            }
-
-            for (schema, table) in &unknown_tables {
-                let connection = connection.clone();
-                let database = resolved_database.clone();
-                let schema_for_task = schema.clone();
-                let table_for_task = table.clone();
-
-                let details = executor
-                    .spawn(async move {
-                        connection.table_details(
-                            &database,
-                            schema_for_task.as_deref(),
-                            &table_for_task,
-                        )
-                    })
-                    .await;
-
-                let column = match details {
-                    Ok(details) => {
-                        let column = details.columns.as_deref().and_then(pick_display_column);
-                        cx.update(|cx| {
-                            app_state.update(cx, |state, _| {
-                                state.set_table_details(
-                                    profile_id,
-                                    resolved_database.clone(),
-                                    schema.clone(),
-                                    table.clone(),
-                                    details,
-                                );
-                            });
-                        });
-                        column
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "fk display: no column metadata for referenced table {table}: {error}"
-                        );
-                        None
-                    }
-                };
-
-                display_columns.insert((schema.clone(), table.clone()), column);
-            }
-
-            // One batch per referenced table, in sequence: a page references
-            // a handful of tables, and the plain loop keeps the generation
-            // check a `break`. The round's labels accumulate here and swap
-            // into the model once at the end.
-            let mut resolved: Vec<(FkDisplayKey, Option<String>)> = Vec::new();
-
-            for ((schema, table, pk_column), lookups) in &groups {
-                let still_current = this
-                    .update(cx, |panel, _| panel.fk_display.generation == generation)
-                    .unwrap_or(false);
-                if !still_current {
-                    break;
-                }
-
-                let display_column = display_columns
-                    .get(&(schema.clone(), table.clone()))
-                    .cloned()
-                    .flatten();
-                let mut projection = vec![pk_column.clone()];
-                if let Some(column) = &display_column {
-                    projection.push(column.clone());
-                }
-                let values: Vec<Value> =
-                    lookups.iter().map(|lookup| lookup.value.clone()).collect();
-
-                let connection = connection.clone();
-                let database = resolved_database.clone();
-                let schema_for_task = schema.clone();
-                let table_for_task = table.clone();
-                let pk_for_task = pk_column.clone();
-
-                let rows = executor
-                    .spawn(async move {
-                        connection.fetch_rows_by_pks(
-                            &database,
-                            schema_for_task.as_deref().unwrap_or(""),
-                            &table_for_task,
-                            &pk_for_task,
-                            &values,
-                            Some(&projection),
-                        )
-                    })
-                    .await;
-
-                match rows {
-                    Ok(rows) => {
-                        // The batch answers unordered, so every row is keyed
-                        // by its pk's text — the same text the cache keys
-                        // lookups by. A requested id no row answered for
-                        // stays a `None` miss, so it is not fetched again.
-                        let mut labels_by_pk: HashMap<String, Option<String>> = HashMap::new();
-                        for row in rows {
-                            let Some(pk) = row.get(pk_column).and_then(id_text) else {
-                                continue;
-                            };
-                            let label = display_column
-                                .as_deref()
-                                .and_then(|column| row.get(column))
-                                .and_then(display_label);
-                            labels_by_pk.insert(pk, label);
-                        }
-
-                        for lookup in lookups {
-                            let label = labels_by_pk.get(&lookup.key.2).cloned().flatten();
-                            resolved.push((lookup.key.clone(), label));
-                        }
-                    }
-                    Err(error) => {
-                        // A failed batch is transient: the ids stay uncached
-                        // and the next page retries them.
-                        log::debug!(
-                            "fk display: could not fetch rows of {table} for {} ids: {error}",
-                            lookups.len()
-                        );
-                    }
-                }
-            }
-
-            this.update(cx, |panel, cx| {
-                panel.apply_fk_display_batch(generation, resolved, cx);
-            })
-            .ok();
+            round.run(this, cx).await;
         }));
     }
 
