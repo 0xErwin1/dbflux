@@ -50,6 +50,10 @@ pub struct CellValue {
     /// Whether `display_text` is a legend the host shows in place of an
     /// empty value rather than the value itself.
     placeholder: bool,
+
+    /// The `(label, id_suffix)` pair a resolved foreign key draws on one
+    /// line; see [`Self::with_fk_label`]. `None` on every other cell.
+    fk_spans: Option<(Arc<str>, Arc<str>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,12 +274,33 @@ impl From<&Value> for CellValue {
 
 const MAX_DISPLAY_LEN: usize = 200;
 
+/// How many characters of a foreign-key id are drawn beside its label; a
+/// longer id (a uuid) shows this many and an ellipsis instead.
+const FK_ID_DISPLAY_LEN: usize = 8;
+
+/// How many characters of a foreign-key label are drawn. The ` · #…` id
+/// suffix beside it takes the rest of [`MAX_DISPLAY_LEN`], so a composed
+/// display never outgrows a plain text cell's.
+const FK_LABEL_DISPLAY_LEN: usize = MAX_DISPLAY_LEN - FK_ID_DISPLAY_LEN - 5;
+
+/// `text` cut at `limit` characters with an ellipsis, for display only.
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+
+    let mut cut: String = text.chars().take(limit).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
 impl CellValue {
     pub fn null() -> Self {
         Self {
             kind: CellKind::Null,
             display_text: "NULL".into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -284,6 +309,7 @@ impl CellValue {
             kind: CellKind::Bool(b),
             display_text: if b { "true" } else { "false" }.into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -292,6 +318,7 @@ impl CellValue {
             kind: CellKind::Int(i),
             display_text: i.to_string().into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -305,6 +332,7 @@ impl CellValue {
             kind: CellKind::Float(f),
             display_text: display.into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -326,6 +354,7 @@ impl CellValue {
             kind: CellKind::Text(s.into()),
             display_text,
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -334,6 +363,7 @@ impl CellValue {
             kind: CellKind::Bytes(len),
             display_text: format!("<{} bytes>", len).into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -344,6 +374,7 @@ impl CellValue {
             kind: CellKind::Unsupported(type_name.into()),
             display_text: label.into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -365,6 +396,7 @@ impl CellValue {
             kind: CellKind::Json(s.into()),
             display_text,
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -374,6 +406,7 @@ impl CellValue {
             kind: CellKind::Missing,
             display_text: "missing".into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -391,6 +424,7 @@ impl CellValue {
             kind: CellKind::Nested { is_array, count },
             display_text: display_text.into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -404,6 +438,7 @@ impl CellValue {
             kind: CellKind::Text("".into()),
             display_text: legend.into(),
             placeholder: true,
+            fk_spans: None,
         }
     }
 
@@ -411,6 +446,44 @@ impl CellValue {
     /// [`Self::placeholder`].
     pub fn is_placeholder(&self) -> bool {
         self.placeholder
+    }
+
+    /// Attaches a resolved foreign-key label to this cell, drawn as the
+    /// label with the raw id after it (`María López · #8`).
+    ///
+    /// The cell keeps the value it was built with: an int stays an `Int`,
+    /// so mutations carry the typed value and row identity survives a
+    /// reload. The label is display-only, normalized the way
+    /// [`Self::text`] draws text (whitespace flattened to one line) and
+    /// cut to [`FK_LABEL_DISPLAY_LEN`]. A label that is empty or the id
+    /// itself leaves the cell unchanged, so the id is never drawn twice.
+    pub fn with_fk_label(mut self, display_value: &str) -> Self {
+        let raw_id = self.edit_text();
+
+        let label: String = display_value
+            .chars()
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect();
+        let label = label.trim();
+
+        if label.is_empty() || label == raw_id {
+            return self;
+        }
+
+        let label = truncate_chars(label, FK_LABEL_DISPLAY_LEN);
+        let id_for_display = truncate_chars(&raw_id, FK_ID_DISPLAY_LEN);
+
+        self.display_text = format!("{label} · #{id_for_display}").into();
+        self.fk_spans = Some((label.into(), format!(" · #{id_for_display}").into()));
+        self.placeholder = false;
+        self
+    }
+
+    /// The `(label, id_suffix)` pair drawn for a resolved foreign-key
+    /// reference, the label in the cell's text color and the suffix muted;
+    /// see [`Self::with_fk_label`].
+    pub fn fk_spans(&self) -> Option<(Arc<str>, Arc<str>)> {
+        self.fk_spans.clone()
     }
 
     pub fn is_missing(&self) -> bool {
@@ -427,6 +500,7 @@ impl CellValue {
             kind: CellKind::AutoGenerated(expression.into()),
             display_text: expression.into(),
             placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -1624,8 +1698,8 @@ impl EditBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellValue, ColumnKind, ColumnSpec, EditBuffer, InsertAnchor, RowData, RowState, TableModel,
-        VisualRowSource,
+        CellValue, ColumnKind, ColumnSpec, EditBuffer, FK_LABEL_DISPLAY_LEN, IdentityValue,
+        InsertAnchor, RowData, RowState, TableModel, VisualRowSource,
     };
 
     #[test]
@@ -2339,6 +2413,96 @@ mod tests {
             super::super::clipboard::format_cell(&CellValue::placeholder("Pending")),
             ""
         );
+    }
+
+    #[test]
+    fn a_labeled_cell_cuts_a_long_id_to_its_leading_characters() {
+        let uuid = "44444444-0000-4000-8000-000000000001";
+        let cell = CellValue::text(uuid).with_fk_label("María López");
+
+        assert_eq!(cell.display_text().as_ref(), "María López · #44444444…");
+        assert_eq!(
+            cell.fk_spans()
+                .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
+            Some(("María López".to_string(), " · #44444444…".to_string()))
+        );
+        assert_eq!(cell.edit_text(), uuid, "editing carries the full id");
+    }
+
+    #[test]
+    fn a_labeled_cell_edits_and_copies_as_its_raw_id() {
+        let cell = CellValue::text("8").with_fk_label("María López");
+
+        assert_eq!(cell.edit_text(), "8");
+        assert_eq!(cell.to_value(), dbflux_core::Value::Text("8".to_string()));
+        assert_eq!(super::super::clipboard::format_cell(&cell), "8");
+    }
+
+    #[test]
+    fn a_labeled_cell_holds_the_same_value_as_the_cell_it_labels() {
+        let cell = CellValue::text("8").with_fk_label("María López");
+
+        assert!(cell.holds_same_value(&CellValue::text("8")));
+        assert!(CellValue::text("8").holds_same_value(&cell));
+        assert!(!cell.holds_same_value(&CellValue::text("María López")));
+    }
+
+    #[test]
+    fn a_labeled_cell_keeps_the_typed_value_of_the_cell_it_labels() {
+        let cell = CellValue::int(8).with_fk_label("Alice");
+
+        assert_eq!(cell.to_value(), dbflux_core::Value::Int(8));
+        assert_eq!(cell.edit_text(), "8");
+        assert_eq!(
+            IdentityValue::from_cell(&cell),
+            IdentityValue::from_cell(&CellValue::int(8)),
+            "the label must not change how a row is identified across reloads"
+        );
+        assert_eq!(cell.display_text().as_ref(), "Alice · #8");
+        assert_eq!(
+            cell.fk_spans()
+                .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
+            Some(("Alice".to_string(), " · #8".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_draws_its_label_on_one_line() {
+        let cell = CellValue::int(8).with_fk_label("María\nLópez");
+        assert_eq!(cell.display_text().as_ref(), "María López · #8");
+
+        let messy = CellValue::int(8).with_fk_label("María \n\t López");
+        let display = messy.display_text();
+        assert!(
+            !display.contains('\n'),
+            "a label with a newline stays on one line: {display}"
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_cuts_a_long_label() {
+        let long_label = "x".repeat(FK_LABEL_DISPLAY_LEN + 50);
+        let cell = CellValue::int(8).with_fk_label(&long_label);
+
+        let expected: String = "x".repeat(FK_LABEL_DISPLAY_LEN) + "\u{2026}";
+        assert_eq!(cell.display_text().as_ref(), format!("{expected} · #8"));
+        assert_eq!(
+            cell.fk_spans().map(|(label, _)| label.to_string()),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_without_a_distinct_label_is_left_unchanged() {
+        for cell in [
+            CellValue::int(8).with_fk_label(""),
+            CellValue::int(8).with_fk_label(" \n\t "),
+            CellValue::int(8).with_fk_label("8"),
+        ] {
+            assert!(cell.fk_spans().is_none());
+            assert_eq!(cell.display_text().as_ref(), "8");
+            assert_eq!(cell.to_value(), dbflux_core::Value::Int(8));
+        }
     }
 
     #[test]

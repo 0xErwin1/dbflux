@@ -1506,6 +1506,34 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Fetch multiple rows from a table by primary-key matches in one batch.
+    ///
+    /// Returns the rows whose `pk_column` value appears in `values`, with no
+    /// guarantee of ordering. `projection` limits the fetched columns to the
+    /// given list; `None` fetches full rows, matching `fetch_row_by_pk`.
+    ///
+    /// The default loops over `fetch_row_by_pk`, skipping misses (`Ok(None)`)
+    /// and propagating the first error, and ignores `projection`; drivers that
+    /// can batch or project natively override it. Non-relational drivers that
+    /// don't override `fetch_row_by_pk` keep returning `NotSupported`.
+    fn fetch_rows_by_pks(
+        &self,
+        database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[Value],
+        _projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, Value>>, DbError> {
+        let mut rows = Vec::with_capacity(values.len());
+        for value in values {
+            if let Some(row) = self.fetch_row_by_pk(database, schema, table, pk_column, value)? {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
     // =========================================================================
     // Browse Operations (semantic queries, no raw SQL/JSON from UI)
     // =========================================================================
@@ -2236,6 +2264,7 @@ pub trait ConnectionExt {
 mod tests {
     use super::*;
     use crate::{DbError, DbKind, DriverMetadata, QueryRequest, QueryResult, SchemaSnapshot};
+    use std::collections::HashMap;
 
     #[test]
     fn object_facets_default_to_tabular() {
@@ -2317,6 +2346,76 @@ mod tests {
         }
     }
 
+    /// Connection stub with scripted `fetch_row_by_pk` outcomes per integer
+    /// primary key, used to exercise the `fetch_rows_by_pks` default loop.
+    /// `rows` maps a pk to `Some(row)` (hit) or `None` (miss); a pk listed in
+    /// `fail_on` makes its lookup fail.
+    struct BatchPkStub {
+        rows: HashMap<i64, Option<HashMap<String, Value>>>,
+        fail_on: Vec<i64>,
+    }
+
+    impl Connection for BatchPkStub {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
+        fn metadata(&self) -> &DriverMetadata {
+            unimplemented!("BatchPkStub::metadata not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
+        fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
+            unimplemented!("BatchPkStub::dialect not needed for this test")
+        }
+
+        fn fetch_row_by_pk(
+            &self,
+            _database: &str,
+            _schema: &str,
+            _table: &str,
+            _pk_column: &str,
+            pk_value: &Value,
+        ) -> Result<Option<HashMap<String, Value>>, DbError> {
+            match pk_value {
+                Value::Int(id) if self.fail_on.contains(id) => Err(DbError::Timeout),
+                Value::Int(id) => Ok(self.rows.get(id).cloned().unwrap_or(None)),
+                _ => Ok(None),
+            }
+        }
+    }
+
     #[test]
     fn table_creation_metadata_default_returns_ok_none() {
         let conn = StubConnection;
@@ -2395,6 +2494,91 @@ mod tests {
         assert!(
             matches!(result, Err(DbError::NotSupported(_))),
             "default impl must return NotSupported, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fetch_rows_by_pks_default_collects_hits_and_skips_misses() {
+        let row = |id: i64, name: &str| {
+            HashMap::from([
+                ("id".to_string(), Value::Int(id)),
+                ("name".to_string(), Value::Text(name.to_string())),
+            ])
+        };
+        let conn = BatchPkStub {
+            rows: HashMap::from([
+                (1, Some(row(1, "alice"))),
+                (3, None), // explicit miss
+            ]),
+            fail_on: Vec::new(),
+        };
+
+        // pk 2 is absent from the map, exercising the implicit miss path too.
+        let result = conn.fetch_rows_by_pks(
+            "db",
+            "public",
+            "users",
+            "id",
+            &[Value::Int(1), Value::Int(2), Value::Int(3)],
+            None,
+        );
+
+        assert!(
+            matches!(&result, Ok(rows) if rows.len() == 1
+                && rows[0].get("id") == Some(&Value::Int(1))),
+            "default must collect hits and skip misses, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fetch_rows_by_pks_default_propagates_first_error() {
+        let conn = BatchPkStub {
+            rows: HashMap::new(),
+            fail_on: vec![2],
+        };
+
+        let result = conn.fetch_rows_by_pks(
+            "db",
+            "public",
+            "users",
+            "id",
+            &[Value::Int(1), Value::Int(2), Value::Int(3)],
+            None,
+        );
+
+        assert!(
+            matches!(result, Err(DbError::Timeout)),
+            "default must propagate the first fetch_row_by_pk error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fetch_rows_by_pks_default_ignores_projection() {
+        let row = HashMap::from([
+            ("id".to_string(), Value::Int(7)),
+            ("name".to_string(), Value::Text("bob".to_string())),
+        ]);
+        let conn = BatchPkStub {
+            rows: HashMap::from([(7, Some(row))]),
+            fail_on: Vec::new(),
+        };
+
+        let result = conn.fetch_rows_by_pks(
+            "db",
+            "public",
+            "users",
+            "id",
+            &[Value::Int(7)],
+            Some(&["id".to_string()]),
+        );
+
+        assert!(
+            matches!(&result, Ok(rows) if rows.len() == 1
+                && rows[0].contains_key("id") && rows[0].contains_key("name")),
+            "default delegates to fetch_row_by_pk and must not filter columns, got: {:?}",
             result
         );
     }

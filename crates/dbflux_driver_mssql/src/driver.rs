@@ -2860,6 +2860,41 @@ impl Connection for MssqlConnection {
         Ok(Some(map))
     }
 
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, Value>>, DbError> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let sql = rows_by_pks_sql(Some(database), schema, table, pk_column, chunk, projection);
+            let result = self.execute(&QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(col, val)| (col.name.clone(), val))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
+    }
+
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
         Some(dbflux_core::extract_referenced_tables(query))
     }
@@ -5117,6 +5152,35 @@ fn row_by_pk_sql(
     )
 }
 
+/// The statement that reads a batch of rows back by primary key.
+fn rows_by_pks_sql(
+    database: Option<&str>,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    values: &[Value],
+    projection: Option<&[String]>,
+) -> String {
+    let select_list = match projection {
+        Some(columns) if !columns.is_empty() => columns
+            .iter()
+            .map(|column| MSSQL_DIALECT.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => "*".to_string(),
+    };
+    let literals = values
+        .iter()
+        .map(|value| MSSQL_DIALECT.value_to_literal(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let table = qualified_table_in(database, Some(schema), table);
+    format!(
+        "SELECT {select_list} FROM {table} WHERE {} IN ({literals})",
+        MSSQL_DIALECT.quote_identifier(pk_column),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5169,6 +5233,27 @@ mod tests {
         assert_eq!(
             row_by_pk_sql(None, "dbo", "events", "id", &Value::Int(7)),
             "SELECT TOP 1 * FROM [dbo].[events] WHERE [id] = 7"
+        );
+    }
+
+    #[test]
+    fn rows_by_pks_sql_qualifies_projects_and_lists_keys() {
+        let values = vec![Value::Int(7), Value::Int(9)];
+        assert_eq!(
+            rows_by_pks_sql(
+                Some("reporting"),
+                "dbo",
+                "events",
+                "id",
+                &values,
+                Some(&["name".to_string(), "id".to_string()]),
+            ),
+            "SELECT [name], [id] FROM [reporting].[dbo].[events] WHERE [id] IN (7, 9)"
+        );
+
+        assert_eq!(
+            rows_by_pks_sql(None, "dbo", "events", "id", &values, None),
+            "SELECT * FROM [dbo].[events] WHERE [id] IN (7, 9)"
         );
     }
 

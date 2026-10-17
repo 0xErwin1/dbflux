@@ -1660,6 +1660,7 @@ document:
         nearest_distance: "Alterar a distância (atual: %{distance})"
         nearest_clear: "Voltar às linhas da tabela"
         nearest_column: "Mudar a coluna vetorial"
+        go_to_referenced_row: "Ir para a linha referenciada"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -3944,6 +3945,11 @@ settings:
       no_matches: "Nenhuma fonte corresponde"
     editor:
       group: "Editor"
+    data_grid:
+      group: "Grade de dados"
+    grid_fk_labels:
+      label: "Mostrar o valor do registro referenciado em células de chave estrangeira"
+      hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."

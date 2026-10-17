@@ -1660,6 +1660,7 @@ document:
         nearest_distance: "更改距离（当前：%{distance}）"
         nearest_clear: "返回表中的行"
         nearest_column: "更改向量列"
+        go_to_referenced_row: "转到引用行"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -3944,6 +3945,11 @@ settings:
       no_matches: "没有匹配的字体"
     editor:
       group: "编辑器"
+    data_grid:
+      group: "数据网格"
+    grid_fk_labels:
+      label: "在外键单元格中显示被引用行的标签"
+      hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"

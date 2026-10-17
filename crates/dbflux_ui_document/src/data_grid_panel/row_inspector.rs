@@ -20,11 +20,13 @@
 //! - **Fields** — every column of the row: its name and type on one line,
 //!   the value in a box under it.
 //! - **REFERENCES** — the rows this one points at through its single-column
-//!   foreign keys ("customers · id = 2129"), then the tables whose foreign
-//!   keys point at it with the number of rows that do ("order_items · 3
-//!   rows"). Those counts load in the background, one query per table,
-//!   once the cursor rests on the row for `INCOMING_REFERENCES_DEBOUNCE`
-//!   (see `IncomingReferencesLoader`).
+//!   foreign keys ("customers · María López · #8": the referenced row's
+//!   readable label, seeded from the grid's FK display cache and resolved
+//!   in the background, with the raw id until it lands), then the tables
+//!   whose foreign keys point at it with the number of rows that do
+//!   ("order_items · 3 rows"). Those counts load in the background, one
+//!   query per table, once the cursor rests on the row for
+//!   `INCOMING_REFERENCES_DEBOUNCE` (see `IncomingReferencesLoader`).
 
 use super::{DataGridEvent, DataGridPanel, DataSource, RowActionProvider};
 use dbflux_components::controls::Button;
@@ -36,6 +38,7 @@ use dbflux_core::Value;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Incoming-reference loading
@@ -122,6 +125,79 @@ pub(crate) async fn count_incoming_references<Count>(
                 })
             });
         }
+    }
+}
+
+/// Resolves the readable label behind each outgoing reference of row
+/// `generation` that carries none: `fetch` brings the referenced row keyed
+/// by its columns, `display_columns` names the column each target table is
+/// readable by. References to the same row share one fetch. Stops before
+/// the next fetch once another row opened; a row that does not answer, or
+/// a failed fetch, keeps the raw id — the label is decoration, so the
+/// failure is only logged.
+pub(crate) async fn resolve_outgoing_labels<Fetch>(
+    content: &Entity<RowInspectorContent>,
+    generation: u64,
+    references: &[FkReference],
+    display_columns: &HashMap<(Option<String>, String), Option<String>>,
+    fetch: Fetch,
+    cx: &mut AsyncApp,
+) where
+    Fetch: Fn(
+        &FkReference,
+        &BackgroundExecutor,
+    ) -> Task<Result<Option<HashMap<String, Value>>, String>>,
+{
+    let executor = cx.background_executor().clone();
+    let mut resolved: HashMap<(Option<String>, String, String), Option<String>> = HashMap::new();
+
+    for (index, reference) in references.iter().enumerate() {
+        if !matches!(reference.kind, ReferenceKind::Outgoing) || reference.display_label.is_some() {
+            continue;
+        }
+
+        let Some(id) = super::fk_display::id_text(&reference.value) else {
+            continue;
+        };
+        let key = (
+            reference.target_schema.clone(),
+            reference.target_table.clone(),
+            id,
+        );
+
+        if !resolved.contains_key(&key) {
+            let still_open = cx.update(|cx| content.read(cx).generation() == generation);
+            if !still_open {
+                return;
+            }
+
+            let fetched = fetch(reference, &executor).await;
+            let label = match fetched {
+                Ok(Some(row)) => display_columns
+                    .get(&(key.0.clone(), key.1.clone()))
+                    .cloned()
+                    .flatten()
+                    .and_then(|column| row.get(&column).cloned())
+                    .and_then(|value| super::fk_display::display_label(&value)),
+                Ok(None) => None,
+                Err(error) => {
+                    log::debug!(
+                        "row inspector: no label for a row of {} ({}): {error}",
+                        key.1,
+                        key.2
+                    );
+                    None
+                }
+            };
+            resolved.insert(key.clone(), label);
+        }
+
+        let label = resolved.get(&key).cloned().flatten();
+        cx.update(|cx| {
+            content.update(cx, |content, cx| {
+                content.resolve_label(generation, index, label, cx);
+            })
+        });
     }
 }
 
@@ -227,6 +303,10 @@ pub(crate) struct FkReference {
     pub target_pk: String,
     /// The key value that links the two rows.
     pub value: Value,
+    /// The readable label of the referenced row, for an outgoing
+    /// reference: seeded from the grid's FK display cache and resolved in
+    /// the background when missing. `None` keeps the raw id.
+    pub display_label: Option<String>,
     pub kind: ReferenceKind,
 }
 
@@ -239,16 +319,20 @@ impl FkReference {
         }
     }
 
-    /// The text at the right of the reference: the key an outgoing
-    /// reference matches ("id = 2129"), or how many rows an incoming one
-    /// has ("3 rows"); `None` while that count loads.
+    /// The text at the right of the reference: the row an outgoing
+    /// reference points at, by its label once resolved ("María López · #8")
+    /// and by its key until then ("id = 2129"), or how many rows an
+    /// incoming one has ("3 rows"); `None` while that count loads.
     pub(crate) fn detail(&self) -> Option<String> {
         match &self.kind {
-            ReferenceKind::Outgoing => Some(format!(
-                "{} = {}",
-                self.target_pk,
-                self.value.as_display_string_truncated(40)
-            )),
+            ReferenceKind::Outgoing => {
+                let id = truncate_chars(&self.value.as_display_string(), FK_ID_DISPLAY_CHARS);
+
+                Some(match &self.display_label {
+                    Some(label) => format!("{} · #{id}", truncate_chars(label, 40)),
+                    None => format!("{} = {id}", self.target_pk),
+                })
+            }
             ReferenceKind::Incoming {
                 count: LoadingState::Loaded(count),
             } => Some(crate::labels::row_count_label(*count as usize)),
@@ -258,6 +342,23 @@ impl FkReference {
             ReferenceKind::Incoming { .. } => None,
         }
     }
+}
+
+/// How many characters of a reference id are drawn beside its label; a
+/// longer id (a uuid) shows this many and an ellipsis instead, so it cannot
+/// overflow the rail. Mirrors the grid cell's cut in `data_table::model`.
+const FK_ID_DISPLAY_CHARS: usize = 8;
+
+/// `text` cut at `limit` characters with an ellipsis, so a long reference
+/// label keeps the REFERENCES rows compact.
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+
+    let mut cut: String = text.chars().take(limit).collect();
+    cut.push('\u{2026}');
+    cut
 }
 
 /// The incoming references of a row of `table` (in `schema`): one per
@@ -296,6 +397,7 @@ pub(crate) fn incoming_references(
                 target_table: fk.table_name.clone(),
                 target_pk: referenced_column.clone(),
                 value: value.clone(),
+                display_label: None,
                 kind: ReferenceKind::Incoming {
                     count: LoadingState::Loading,
                 },
@@ -324,7 +426,7 @@ fn render_section_label(
 /// One field (IslTable): the column name with its type at the right end,
 /// then the value in a box on the ground, in the data face; NULL in the null
 /// colour and italic, as in the grid.
-fn render_row_entry(
+pub(crate) fn render_row_entry(
     cell: &InspectorCell,
     null_color: Hsla,
     theme: &gpui_component::theme::Theme,
@@ -390,7 +492,7 @@ fn render_references_section(
     references_ready: bool,
     loading_label: &str,
     theme: &gpui_component::theme::Theme,
-    cx: &App,
+    cx: &Context<RowInspectorContent>,
 ) -> impl IntoElement {
     div()
         .flex()
@@ -419,21 +521,32 @@ fn render_references_section(
 }
 
 /// One reference row (IslTable): the link icon of an outgoing key or the
-/// table icon of an incoming one, the target table in mono, its key or row
-/// count at the right, and a chevron.
+/// table icon of an incoming one, the target table in mono, and its key or
+/// row count at the right. Only an outgoing key is clickable — it opens the
+/// row it points at; an incoming one is an informational row, with no
+/// pointer, hover or chevron.
 fn render_fk_reference_entry(
     index: usize,
     reference: &FkReference,
     theme: &gpui_component::theme::Theme,
-    cx: &App,
+    cx: &Context<RowInspectorContent>,
 ) -> impl IntoElement {
     let icon = match reference.kind {
         ReferenceKind::Outgoing => AppIcon::Cable,
         ReferenceKind::Incoming { .. } => AppIcon::Rows3,
     };
 
+    let navigable = matches!(reference.kind, ReferenceKind::Outgoing);
+
     div()
         .id(("row-inspector-reference", index))
+        .when(navigable, |row| {
+            row.cursor_pointer()
+                .hover(|row| row.opacity(0.9))
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.emit(RowInspectorContentEvent::NavigateReference { index });
+                }))
+        })
         .relative()
         .flex()
         .flex_shrink_0()
@@ -467,11 +580,13 @@ fn render_fk_reference_entry(
                     .child(detail),
             )
         })
-        .child(
-            Icon::new(AppIcon::ChevronRight)
-                .size(InspectorMetrics::REFERENCE_CHEVRON)
-                .color(theme.muted_foreground),
-        )
+        .when(navigable, |row| {
+            row.child(
+                Icon::new(AppIcon::ChevronRight)
+                    .size(InspectorMetrics::REFERENCE_CHEVRON)
+                    .color(theme.muted_foreground),
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +615,10 @@ pub(crate) enum RowInspectorContentEvent {
     Close,
     /// The pin button: stop or resume following the grid selection.
     TogglePin,
+    /// An outgoing REFERENCES entry: open the row it points at. Incoming
+    /// entries are informational and never emit, so every index the panel
+    /// emits resolves to a navigable reference.
+    NavigateReference { index: usize },
     /// Edit the inspected row.
     Edit,
     /// Duplicate the inspected row.
@@ -621,6 +740,43 @@ impl RowInspectorContent {
             };
             cx.notify();
         }
+    }
+
+    /// Record the readable label of the outgoing reference at `index` for
+    /// row `generation`. Ignored for another row, another kind or an index
+    /// the replaced list no longer has.
+    pub(crate) fn resolve_label(
+        &mut self,
+        generation: u64,
+        index: usize,
+        label: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.generation {
+            return;
+        }
+
+        let Some(reference) = self.references.get_mut(index) else {
+            return;
+        };
+
+        if matches!(reference.kind, ReferenceKind::Outgoing) {
+            reference.display_label = label;
+            cx.notify();
+        }
+    }
+
+    /// The FK reference at `index` of the list, for navigation.
+    pub(crate) fn reference(&self, index: usize) -> Option<&FkReference> {
+        self.references.get(index)
+    }
+
+    /// The first outgoing reference of the list, for the toolbar's
+    /// go-to-referenced-row action.
+    pub(crate) fn first_outgoing_reference(&self) -> Option<&FkReference> {
+        self.references
+            .iter()
+            .find(|reference| matches!(reference.kind, ReferenceKind::Outgoing))
     }
 
     /// Whether the references list has been populated (even if empty).
@@ -883,6 +1039,7 @@ impl DataGridPanel {
         self.inspector.row_inspector_content = None;
         self.inspector._row_inspector_subscription = None;
         self.inspector.incoming_references.cancel();
+        self.inspector.outgoing_labels = None;
         self.inspector.document_inspector_content = None;
         self.inspector._document_inspector_subscription = None;
         self.inspector.value_panel_open = false;
@@ -958,12 +1115,14 @@ mod tests {
     use super::{
         FkReference, INCOMING_REFERENCES_DEBOUNCE, IncomingReferencesLoader, InspectorCell,
         InspectorSnapshot, MAX_CONCURRENT_REFERENCE_COUNTS, ReferenceKind, RowInspectorContent,
-        column_type_label, count_incoming_references, incoming_references, row_json, row_key_label,
+        column_type_label, count_incoming_references, incoming_references, resolve_outgoing_labels,
+        row_json, row_key_label,
     };
     use dbflux_components::primitives::LoadingState;
     use dbflux_core::Value;
     use gpui::{AppContext as _, TestAppContext};
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -997,9 +1156,22 @@ mod tests {
             target_table: table.to_string(),
             target_pk: "id".to_string(),
             value: Value::Int(2),
+            display_label: None,
             kind: ReferenceKind::Incoming {
                 count: LoadingState::Loading,
             },
+        }
+    }
+
+    fn outgoing(table: &str, value: Value) -> FkReference {
+        FkReference {
+            column: "customer_id".to_string(),
+            target_schema: Some("public".to_string()),
+            target_table: table.to_string(),
+            target_pk: "id".to_string(),
+            value,
+            display_label: None,
+            kind: ReferenceKind::Outgoing,
         }
     }
 
@@ -1060,6 +1232,7 @@ mod tests {
             target_table: "users".to_string(),
             target_pk: "id".to_string(),
             value: Value::Int(1),
+            display_label: None,
             kind: ReferenceKind::Outgoing,
         };
 
@@ -1071,15 +1244,28 @@ mod tests {
 
     #[test]
     fn reference_detail_shows_the_key_or_the_row_count() {
-        let outgoing = FkReference {
-            column: "customer_id".to_string(),
-            target_schema: None,
-            target_table: "customers".to_string(),
-            target_pk: "id".to_string(),
-            value: Value::Int(2129),
-            kind: ReferenceKind::Outgoing,
-        };
+        let mut outgoing = outgoing("customers", Value::Int(2129));
         assert_eq!(outgoing.detail().as_deref(), Some("id = 2129"));
+
+        outgoing.display_label = Some("María López".to_string());
+        assert_eq!(outgoing.detail().as_deref(), Some("María López · #2129"));
+
+        outgoing.display_label = Some("A".repeat(60));
+        assert_eq!(
+            outgoing.detail(),
+            Some(format!("{}… · #2129", "A".repeat(40)))
+        );
+
+        outgoing.value = Value::Text("44444444-0000-4000-8000-000000000001".to_string());
+        outgoing.display_label = None;
+        assert_eq!(
+            outgoing.detail().as_deref(),
+            Some("id = 44444444…"),
+            "a long id is cut so it cannot overflow the rail"
+        );
+
+        outgoing.display_label = Some("Norte".to_string());
+        assert_eq!(outgoing.detail().as_deref(), Some("Norte · #44444444…"));
 
         let mut reference = incoming("order_items");
         assert_eq!(reference.detail(), None, "no count while it loads");
@@ -1195,6 +1381,7 @@ mod tests {
 
         cx.read(|cx| {
             assert!(!entity.read(cx).references_ready());
+            assert_eq!(entity.read(cx).references_len(), 0);
         });
 
         cx.update(|cx| {
@@ -1207,6 +1394,11 @@ mod tests {
             let content = entity.read(cx);
             assert!(content.references_ready());
             assert_eq!(content.references_len(), 1);
+            assert!(content.reference(0).is_some());
+            assert!(
+                content.first_outgoing_reference().is_none(),
+                "an incoming reference is not outgoing"
+            );
         });
     }
 
@@ -1261,6 +1453,233 @@ mod tests {
             let content = entity.read(cx);
             assert_eq!(content.references_len(), 1);
             assert_eq!(content.references[0].detail(), None);
+        });
+    }
+
+    #[gpui::test]
+    fn outgoing_labels_resolve_in_the_background_once_per_referenced_row(cx: &mut TestAppContext) {
+        let entity = cx.new(|cx| RowInspectorContent::new(make_snapshot(), cx));
+        let mut seeded = outgoing("invoices", Value::Int(8));
+        seeded.display_label = Some("INV-8".to_string());
+        let references = vec![
+            seeded,
+            outgoing("customers", Value::Int(8)),
+            outgoing("customers", Value::Int(8)),
+            outgoing("users", Value::Int(8)),
+        ];
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        cx.update(|cx| {
+            entity.update(cx, |content, cx| {
+                content.set_references(references.clone(), cx);
+            });
+        });
+        let generation = cx.read(|cx| entity.read(cx).generation());
+
+        let display_columns = HashMap::from([
+            (
+                (Some("public".to_string()), "customers".to_string()),
+                Some("name".to_string()),
+            ),
+            (
+                (Some("public".to_string()), "users".to_string()),
+                Some("email".to_string()),
+            ),
+        ]);
+
+        cx.spawn({
+            let entity = entity.clone();
+            let fetches = fetches.clone();
+            move |mut cx| async move {
+                resolve_outgoing_labels(
+                    &entity,
+                    generation,
+                    &references,
+                    &display_columns,
+                    |_reference, executor| {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        executor.spawn(async move {
+                            Ok(Some(HashMap::from([
+                                ("name".to_string(), Value::Text("María López".to_string())),
+                                (
+                                    "email".to_string(),
+                                    Value::Text("maria@example.com".to_string()),
+                                ),
+                            ])))
+                        })
+                    },
+                    &mut cx,
+                )
+                .await;
+            }
+        })
+        .detach();
+
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let content = entity.read(cx);
+            assert_eq!(
+                content.references[0].display_label.as_deref(),
+                Some("INV-8"),
+                "a seeded label is kept without a fetch"
+            );
+            assert_eq!(
+                content.references[1].display_label.as_deref(),
+                Some("María López"),
+                "customers rows are named by their name column"
+            );
+            assert_eq!(
+                content.references[2].display_label.as_deref(),
+                Some("María López"),
+                "two references to the same row share one fetch"
+            );
+            assert_eq!(
+                content.references[3].display_label.as_deref(),
+                Some("maria@example.com"),
+                "users rows are named by their email column"
+            );
+            assert_eq!(
+                content.references[1].detail().as_deref(),
+                Some("María López · #8")
+            );
+        });
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            2,
+            "one fetch per distinct unresolved row"
+        );
+    }
+
+    #[gpui::test]
+    fn a_row_that_does_not_answer_or_fails_keeps_the_raw_id(cx: &mut TestAppContext) {
+        let entity = cx.new(|cx| RowInspectorContent::new(make_snapshot(), cx));
+        let references = vec![
+            outgoing("customers", Value::Int(8)),
+            outgoing("invoices", Value::Int(4)),
+        ];
+
+        cx.update(|cx| {
+            entity.update(cx, |content, cx| {
+                content.set_references(references.clone(), cx);
+            });
+        });
+        let generation = cx.read(|cx| entity.read(cx).generation());
+
+        let display_columns = HashMap::from([(
+            (Some("public".to_string()), "customers".to_string()),
+            Some("name".to_string()),
+        )]);
+
+        cx.spawn({
+            let entity = entity.clone();
+            move |mut cx| async move {
+                resolve_outgoing_labels(
+                    &entity,
+                    generation,
+                    &references,
+                    &display_columns,
+                    |reference, executor| {
+                        let value = reference.value.clone();
+                        executor.spawn(async move {
+                            match value {
+                                Value::Int(8) => Ok(None),
+                                Value::Int(4) => Err("connection lost".to_string()),
+                                _ => Ok(None),
+                            }
+                        })
+                    },
+                    &mut cx,
+                )
+                .await;
+            }
+        })
+        .detach();
+
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let content = entity.read(cx);
+            assert_eq!(
+                content.references[0].detail().as_deref(),
+                Some("id = 8"),
+                "a deleted row keeps the raw id"
+            );
+            assert_eq!(
+                content.references[1].detail().as_deref(),
+                Some("id = 4"),
+                "a failed fetch keeps the raw id"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn label_updates_for_a_replaced_reference_list_are_dropped(cx: &mut TestAppContext) {
+        let entity = cx.new(|cx| RowInspectorContent::new(make_snapshot(), cx));
+        let references = vec![outgoing("customers", Value::Int(8))];
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        cx.update(|cx| {
+            entity.update(cx, |content, cx| {
+                content.set_references(references.clone(), cx);
+            });
+        });
+        let generation = cx.read(|cx| entity.read(cx).generation());
+
+        let display_columns = HashMap::from([(
+            (Some("public".to_string()), "customers".to_string()),
+            Some("name".to_string()),
+        )]);
+
+        cx.spawn({
+            let entity = entity.clone();
+            let fetches = fetches.clone();
+            move |mut cx| async move {
+                resolve_outgoing_labels(
+                    &entity,
+                    generation,
+                    &references,
+                    &display_columns,
+                    |_reference, executor| {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        let timer = executor.timer(Duration::from_secs(1));
+                        executor.spawn(async move {
+                            timer.await;
+                            Ok(Some(HashMap::from([(
+                                "name".to_string(),
+                                Value::Text("María López".to_string()),
+                            )])))
+                        })
+                    },
+                    &mut cx,
+                )
+                .await;
+            }
+        })
+        .detach();
+
+        cx.run_until_parked();
+        assert_eq!(fetches.load(Ordering::SeqCst), 1, "the fetch started");
+
+        // Another row opens before the fetch answers, replacing the list
+        // the fetch was started for.
+        cx.update(|cx| {
+            entity.update(cx, |content, cx| {
+                content.open(make_snapshot(), cx);
+                content.set_references(vec![outgoing("customers", Value::Int(9))], cx);
+            });
+        });
+
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let content = entity.read(cx);
+            assert_eq!(content.references[0].value, Value::Int(9));
+            assert!(
+                content.references[0].display_label.is_none(),
+                "the stale answer names a row of the replaced list, not this one"
+            );
         });
     }
 

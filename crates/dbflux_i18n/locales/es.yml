@@ -1660,6 +1660,7 @@ document:
         nearest_distance: "Cambiar la distancia (actual: %{distance})"
         nearest_clear: "Volver a las filas de la tabla"
         nearest_column: "Cambiar la columna vectorial"
+        go_to_referenced_row: "Ir al registro referenciado"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido
@@ -3944,6 +3945,11 @@ settings:
       no_matches: "Ninguna fuente coincide"
     editor:
       group: "Editor"
+    data_grid:
+      group: "Cuadrícula de datos"
+    grid_fk_labels:
+      label: "Mostrar el valor del registro referenciado en celdas de clave foránea"
+      hint: "Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

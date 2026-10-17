@@ -404,6 +404,18 @@ pub struct PaneHandle {
     /// Drops the document's pending edits for a quit the user confirmed
     /// without saving them, so the shutdown flush does not write them.
     pub discard_for_quit: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Positions a table document on one record from outside the document:
+    /// replaces its filter with an equality on `column = value` and reloads
+    /// (foreign-key navigation). `None` for documents that are not
+    /// table-backed.
+    pub apply_table_filter: Option<Box<dyn Fn(&str, &dbflux_core::Value, &mut Window, &mut App)>>,
+
+    /// Reports whether an applied query-builder spec owns the document's
+    /// query composition, so the equality [`PaneHandle::apply_table_filter`]
+    /// writes would be ignored. `None` for documents that are not
+    /// table-backed.
+    pub has_applied_builder_query: Option<Box<dyn Fn(&App) -> bool>>,
 }
 
 impl PaneHandle {
@@ -477,6 +489,8 @@ impl PaneHandle {
             quit_disposition: None,
             save_for_quit: None,
             discard_for_quit: None,
+            apply_table_filter: None,
+            has_applied_builder_query: None,
         }
     }
 
@@ -691,6 +705,30 @@ impl PaneHandle {
         if let Some(discard) = self.discard_for_quit.as_ref() {
             discard(cx);
         }
+    }
+
+    /// Positions the document's table on one record: replaces its filter with
+    /// an equality on `column = value` and reloads. A pane that does not
+    /// support it does nothing.
+    pub fn apply_table_filter(
+        &self,
+        column: &str,
+        value: &dbflux_core::Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(apply) = self.apply_table_filter.as_ref() {
+            apply(column, value, window, cx);
+        }
+    }
+
+    /// Whether an applied builder query owns the document's refresh, so the
+    /// equality `apply_table_filter` writes would be ignored. A pane without
+    /// the helper never reports one.
+    pub fn has_applied_builder_query(&self, cx: &App) -> bool {
+        self.has_applied_builder_query
+            .as_ref()
+            .is_some_and(|has| has(cx))
     }
 
     /// Returns the document's contributed status-bar segments.

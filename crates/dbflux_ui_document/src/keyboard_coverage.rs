@@ -153,6 +153,12 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsDeleteRow),
         ),
         ("row-inspector-pin", KeyboardPath::Menu("pin-row-inspector")),
+        // The REFERENCES entries of the row inspector: a Toolbar entry of
+        // the table menu.
+        (
+            "row-inspector-reference-*",
+            KeyboardPath::Menu("go-to-referenced-row"),
+        ),
         // The value panel's buttons are Toolbar entries of the table menu,
         // which `m` also opens from inside the panel.
         ("value-panel-format-*", KeyboardPath::Menu("value-format-*")),

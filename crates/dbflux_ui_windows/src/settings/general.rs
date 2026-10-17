@@ -49,6 +49,7 @@ impl GeneralSection {
             current.dangerous_requires_preview != saved.dangerous_requires_preview,
             current.vim_mode != saved.vim_mode,
             current.vim_leader != saved.vim_leader,
+            current.grid_fk_labels != saved.grid_fk_labels,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
@@ -120,6 +121,7 @@ impl GeneralSection {
             GeneralFormRow::GridFontSize,
             GeneralFormRow::VimMode,
             GeneralFormRow::VimLeader,
+            GeneralFormRow::GridFkLabels,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -259,6 +261,10 @@ impl GeneralSection {
             Some(GeneralFormRow::VimLeader) => {
                 self.dropdown_vim_leader
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridFkLabels) => {
+                self.gen_settings.grid_fk_labels = !self.gen_settings.grid_fk_labels;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -968,6 +974,24 @@ impl GeneralSection {
                 cx,
             ));
 
+        let data_grid = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.data_grid.group"),
+                Some(AppIcon::Table.into()),
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-fk-labels",
+                dbflux_i18n::t!("settings.general.grid_fk_labels.label"),
+                Some(dbflux_i18n::t!("settings.general.grid_fk_labels.hint")),
+                self.gen_settings.grid_fk_labels,
+                GeneralFormRow::GridFkLabels,
+                |this, value, _cx| this.gen_settings.grid_fk_labels = value,
+                cx,
+            ));
+
         let startup = div()
             .flex()
             .flex_col()
@@ -1203,6 +1227,7 @@ impl GeneralSection {
                 .flex_col()
                 .child(appearance)
                 .child(editor)
+                .child(data_grid)
                 .child(startup)
                 .child(refresh)
                 .child(safety)

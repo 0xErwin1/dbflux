@@ -472,6 +472,10 @@ impl DataGridPanel {
             }
         }
 
+        // The metadata this resolution needs may have landed after the page
+        // it should label.
+        self.resolve_fk_display_values(cx);
+
         cx.notify();
     }
 
@@ -811,7 +815,9 @@ impl DataGridPanel {
     /// Only fires when `fk_cache == Loading`. All other states (`Ready`,
     /// `Unavailable`) are treated as terminal and this method is a no-op.
     /// Must be called from a `DataSource::Table` context; non-Table sources
-    /// return immediately.
+    /// return immediately. A table without a database name (single-database
+    /// drivers such as SQLite, whose sidebar opens carry none) resolves the
+    /// database the way every other reader does instead of giving up.
     pub(crate) fn ensure_fk_cache_loaded(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.builder.fk_cache, FkLoadState::Loading) {
             return;
@@ -827,20 +833,16 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let Some(database) = database else {
-            self.mark_fk_unavailable(cx);
-            return;
-        };
+        let (conn, database) = {
+            let Some(connected) = self.app_state.read(cx).connections().get(&profile_id) else {
+                self.mark_fk_unavailable(cx);
+                return;
+            };
 
-        let Some(conn) = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .map(|c| c.connection.clone())
-        else {
-            self.mark_fk_unavailable(cx);
-            return;
+            (
+                connected.connection.clone(),
+                Self::table_details_database(connected, database.as_deref()),
+            )
         };
 
         let schema_for_task = schema;

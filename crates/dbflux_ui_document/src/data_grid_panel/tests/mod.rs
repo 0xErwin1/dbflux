@@ -28,6 +28,21 @@ fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEnti
     })
 }
 
+/// Turns `grid_fk_labels` on the way Settings > General does, for tests that
+/// exercise the grid's foreign-key label resolution.
+pub(super) fn enable_grid_fk_labels(
+    cx: &mut TestAppContext,
+    app_state: &gpui::Entity<AppStateEntity>,
+) {
+    cx.update(|cx| {
+        app_state.update(cx, |app, _| {
+            let mut settings = app.general_settings().clone();
+            settings.grid_fk_labels = true;
+            app.update_general_settings(settings);
+        });
+    });
+}
+
 fn zero_row_columns() -> Vec<ColumnMeta> {
     vec![
         ColumnMeta {
@@ -673,6 +688,7 @@ mod builder_mutations;
 mod close_completion;
 mod collection_views;
 mod facets;
+mod fk_navigation;
 mod reload_pending_edits;
 mod reload_state;
 mod sources_and_keys;
