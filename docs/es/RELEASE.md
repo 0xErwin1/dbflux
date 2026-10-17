@@ -617,7 +617,7 @@ cargo test --workspace
 
 `scripts/lint.py` solo cubre los crates propios bajo `crates/` y nunca analiza ni reformatea los crates de terceros bajo `vendor/`.
 
-Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI condiciona la publicación a esas mismas suites — `release.yml` invoca `tests.yml`, y el job `Create Release` espera por él — pero las suites ejercitan código fuente, no los artefactos compilados, y los builds nightly no están condicionados por pruebas (`nightly.yml` llama a `build.yml` directamente).
+Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI no ejecuta ninguna suite al publicar: `release.yml` compila y publica sin llamar a `tests.yml` ni a `style.yml`, y se apoya en los checks que ya corrieron en los pull requests y en `main`. Ningún canal de release está condicionado por pruebas, nightly incluido (`nightly.yml` llama a `build.yml` directamente).
 
 ## Relacionado
 
