@@ -4,6 +4,7 @@ pub(crate) mod dependents;
 pub(crate) mod drift_check;
 pub(crate) mod facet;
 pub(crate) mod fingerprint;
+pub(crate) mod listing;
 pub mod node_id;
 pub(crate) mod query_parser;
 pub(crate) mod schema_drift;
@@ -19,6 +20,7 @@ pub use facet::{
     category_collection_facets,
 };
 pub use fingerprint::SchemaFingerprint;
+pub use listing::{DatabaseLayout, ObjectFolder};
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};
 pub use schema_drift::{
