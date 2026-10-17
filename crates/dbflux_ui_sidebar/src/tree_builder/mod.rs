@@ -3668,6 +3668,9 @@ fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
 }
 
 #[cfg(test)]
+mod tree_shape_tests;
+
+#[cfg(test)]
 mod tests {
     use super::Sidebar;
     use dbflux_core::{
