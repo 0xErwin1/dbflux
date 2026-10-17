@@ -1055,7 +1055,9 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   (colecciones o mediciones) o es un keyspace. El sidebar
   (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
   partir de esa descripción, y su menú contextual lee las facetas del objeto y el
-  mismo layout; ninguno hace match sobre el paradigma.
+  mismo layout. El único chequeo de categoría que queda en el árbol es la lista
+  de buckets de una conexión de almacenamiento de objetos, que se obtiene por su
+  propio camino en lugar de leerse de un snapshot.
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
