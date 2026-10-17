@@ -89,7 +89,7 @@ y permanece en English por ahora.
 
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
-| **Show referenced-row labels in foreign-key cells** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+| **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
 
 ### Inicio y sesión
 

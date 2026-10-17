@@ -97,9 +97,9 @@ direcciones:
   informativas.
 
 Las celdas de clave foránea de la cuadrícula pueden mostrar el mismo valor del
-registro referenciado junto a su id: activa **Show referenced-row labels in
-foreign-key cells** en [Configuración](SETTINGS.md). El inspector de fila
-resuelve las referencias independientemente de ese ajuste.
+registro referenciado junto a su id: activa **Mostrar el valor del registro
+referenciado en celdas de clave foránea** en [Configuración](SETTINGS.md). El
+inspector de fila resuelve las referencias independientemente de ese ajuste.
 
 ## Filtrar resultados
 
