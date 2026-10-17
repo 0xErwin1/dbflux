@@ -564,6 +564,34 @@ fn postgres_vector_column_finds_nearest_neighbors() -> Result<(), DbError> {
             assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
         }
 
+        // A table with its own `distance` column must still order by the
+        // computed distance without an ambiguity error.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE scored (id INT PRIMARY KEY, distance REAL, embedding vector(3))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO scored VALUES (1, 9, '[1,0,0]'), (2, 8, '[2,0,0]'), (3, 7, NULL)",
+        ))?;
+        let generated = connection
+            .query_generator()
+            .expect("PostgreSQL has a query generator")
+            .generate_nearest_neighbors(&NearestNeighborRequest {
+                table: TableRef::with_schema("public", "scored"),
+                database: Some("postgres".to_string()),
+                column: "embedding".to_string(),
+                anchor: Value::Text("[1,0,0]".to_string()),
+                distance: VectorDistance::L2,
+                limit: 10,
+                exclude_primary_key: vec![("id".to_string(), Value::Int(1))],
+            })
+            .expect("nearest-neighbor SQL renders");
+        let scored = connection.execute(&QueryRequest::new(generated.text))?;
+        assert_eq!(
+            scored.rows.len(),
+            1,
+            "the NULL vector row is not a neighbor"
+        );
+
         Ok(())
     })
 }

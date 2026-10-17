@@ -57,7 +57,10 @@ impl QueryGenerator for StubGenerator {
 
         Ok(GeneratedQuery {
             language: QueryLanguage::Sql,
-            text: format!("NEAREST {} LIMIT {}", request.column, request.limit),
+            text: format!(
+                "NEAREST {} {:?} LIMIT {}",
+                request.column, request.distance, request.limit
+            ),
         })
     }
 }
@@ -102,7 +105,9 @@ fn table_page() -> QueryResult {
     )
 }
 
-fn neighbors() -> QueryResult {
+/// One neighbor whose label is the query that read it, so a test can tell
+/// which search a result came from.
+fn neighbors(sql: &str) -> QueryResult {
     QueryResult::table(
         vec![
             column_meta("id", false),
@@ -112,7 +117,7 @@ fn neighbors() -> QueryResult {
         ],
         vec![vec![
             Value::Int(1),
-            Value::Text("first".into()),
+            Value::Text(sql.into()),
             Value::Text("[1,0,0]".into()),
             Value::Float(1.5),
         ]],
@@ -197,7 +202,7 @@ impl Connection for StubVectorConnection {
             return Err(DbError::query_failed("operator does not exist"));
         }
 
-        Ok(neighbors())
+        Ok(neighbors(&request.sql))
     }
 
     fn browse_table(&self, _: &TableBrowseRequest) -> Result<QueryResult, DbError> {
@@ -444,7 +449,7 @@ fn similar_rows_replace_the_page_with_the_neighbors_and_their_distance(cx: &mut 
         );
         assert_eq!(
             calls.executed,
-            vec!["NEAREST embedding LIMIT 10".to_string()]
+            vec!["NEAREST embedding L2 LIMIT 10".to_string()]
         );
     }
 
@@ -548,5 +553,78 @@ fn a_failed_search_reports_the_error_and_keeps_the_page(cx: &mut TestAppContext)
         let panel = panel.read(app);
         assert_eq!(panel.result.rows.len(), 2);
         assert!(panel.nearest_neighbor_search().is_none());
+    });
+}
+
+fn first_label(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) -> Option<Value> {
+    window.update(|_, app| {
+        panel
+            .read(app)
+            .result
+            .rows
+            .first()
+            .and_then(|row| row.get(1).cloned())
+    })
+}
+
+#[gpui::test(iterations = 32)]
+fn a_refresh_drops_a_search_still_running(cx: &mut TestAppContext) {
+    let (panel, calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+
+    // The search and the refresh start before either answer lands.
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            assert!(panel.dispatch_command(Command::FindSimilarRows, window, cx));
+            panel.refresh(window, cx);
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(calls.lock().unwrap().executed.len(), 1, "the search ran");
+    assert_eq!(
+        column_names(&panel, window),
+        vec!["id", "label", "embedding"]
+    );
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert!(panel.nearest_neighbor_search().is_none());
+        assert_eq!(panel.result.rows.len(), 2);
+    });
+}
+
+#[gpui::test(iterations = 32)]
+fn a_new_distance_drops_the_search_it_replaces(cx: &mut TestAppContext) {
+    let (panel, _calls, _, window) = open_table(true, cx);
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.cycle_nearest_neighbor_distance(cx);
+            let search = panel.nearest_neighbors.clone().expect("a search is shown");
+            panel.run_nearest_neighbors(
+                super::NearestNeighborSearch {
+                    distance: VectorDistance::InnerProduct,
+                    ..search
+                },
+                cx,
+            );
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        first_label(&panel, window),
+        Some(Value::Text(
+            "NEAREST embedding InnerProduct LIMIT 10".into()
+        ))
+    );
+    window.update(|_, app| {
+        let search = panel.read(app).nearest_neighbor_search().cloned();
+        assert_eq!(
+            search.map(|s| s.distance),
+            Some(VectorDistance::InnerProduct)
+        );
     });
 }

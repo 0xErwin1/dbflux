@@ -280,7 +280,7 @@ impl DataGridPanel {
             }
         };
 
-        let (task_id, _cancel_token) = self.runner.start_primary_for_target(
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
             TaskKind::Query,
             generated.text.clone(),
             Some(TaskTarget {
@@ -291,6 +291,7 @@ impl DataGridPanel {
         );
 
         let query = QueryRequest::new(generated.text).with_database(database);
+        let connection_for_cleanup = connection.clone();
         let task = cx
             .background_executor()
             .spawn(async move { connection.execute(&query) });
@@ -300,6 +301,16 @@ impl DataGridPanel {
             let result = task.await;
 
             let failure = cx.update(|cx| {
+                // A refresh or another search started since: its answer is
+                // the one the grid shows.
+                if cancel_token.is_cancelled() {
+                    log::info!("Nearest-neighbor search was superseded, discarding result");
+                    if let Err(error) = connection_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", error);
+                    }
+                    return None;
+                }
+
                 entity.update(cx, |panel, cx| match result {
                     Ok(result) => {
                         panel.runner.complete_primary(task_id, cx);

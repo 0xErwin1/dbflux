@@ -11,8 +11,10 @@ use crate::{DatabaseCategory, TableRef, Value};
 
 /// One paradigm an object exposes. Every variant has a view in the UI; a new
 /// variant lands together with the driver that emits it and that view.
+///
+/// Deliberately exhaustive: it is never on a wire, and every match on it in
+/// the UI must stop compiling until a new variant has a view.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ObjectFacet {
     /// Rows and columns in the data grid.
     Tabular,

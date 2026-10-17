@@ -33,7 +33,6 @@ impl DataViewMode {
             ObjectFacet::Tabular => Some(DataViewMode::Table),
             ObjectFacet::Document => Some(DataViewMode::Document),
             ObjectFacet::Vector(_) => None,
-            _ => None,
         }
     }
 
