@@ -20,7 +20,6 @@ license: MIT
 - `Labels to apply` is part of the template: it is where the PR names the labels the change needs
 - Labels come from the taxonomy in `CONTRIBUTING.md` § Label Guide (`ui:bug`, `ui:feature`, `driver:bug`, `driver:postgres`, `platform:linux`, `kind:sql`, …); there is no `area:*` convention
 - Labels live on the upstream repository, so a contributor pushing from a fork cannot apply them: state them in the body and let a maintainer apply them during triage
-- Do not assume issue-first enforcement or approval labels unless the user explicitly asks for them
 - Use project guidance from `AGENTS.md`, `ARCHITECTURE.md`, and `CODE_STYLE.md`
 
 ## Critical Patterns
@@ -31,8 +30,8 @@ license: MIT
 - In `Validation`, include only commands or scenarios that were actually run
 - In `Where was this tested?`, mark only real environments; do not claim coverage that did not happen
 - Reference linked issues only when they actually exist; do not invent issue requirements
-- For a feature or behavior change, check that the linked issue carries the `status:approved` label before opening the PR; a bug fix does not need it
-- Keep each PR around 400 changed lines; split larger work into independent PRs that branch from `main` rather than stacks, since PRs are squash-merged. New or substantially rewritten code keeps functions under ~100 lines and files under ~1000 lines of production code, with tests in the module's `tests` submodule
+- For a feature or behavior change, check that the linked issue carries the `status:approved` label before opening the PR; a bug fix does not need it and a PR by the maintainer may skip the check
+- Keep each PR around 400 changed lines; split larger work into independent PRs that branch from `main` rather than stacks, since PRs are squash-merged. New or substantially rewritten code keeps functions under ~100 lines and files under ~1000 lines of production code, with tests in the module's `tests` submodule. A change that pushes a file past ~1000 lines of production code splits it into a module directory in the same PR, or opens an issue for the split alongside it; files already over the limit are exempt until refactored
 - Do not invent labels such as `area:*`; take them from the taxonomy in `CONTRIBUTING.md`
 - State the labels the change needs in `Labels to apply`, and do not silently drop the section when the author has no write access to apply them
 - Push with `git push -u origin <branch>` if the branch is not yet tracked

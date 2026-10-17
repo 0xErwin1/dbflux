@@ -37,7 +37,7 @@ Check the label with `gh issue view <N> --json labels`. A comment that sounds po
 - Fill every required field. `bug_report.yml` asks for the DBFlux version, operating system, OS detail, architecture, the affected driver, reproducible steps, expected and actual behavior, and logs; `feature_request.yml` asks for the problem, the proposed solution, alternatives considered, and the primary area.
 - Keep the form's shape when filing through `gh` (the CLI shows no form): keep the field labels as `### <label>` headings, and keep the `Labels I plan to apply` checklist in the body.
 - Keep the issue grounded in observed repo behavior, failing commands, or a concrete user/problem statement
-- Follow the Approval Gate above: a feature or behavior-change issue waits for `status:approved`; a bug fix does not
+- Follow the Approval Gate above: a feature or behavior-change issue waits for `status:approved`; a bug fix and an issue filed by the maintainer do not
 - Keep a feature proposal small enough to land in PRs of about 400 changed lines that each branch from `main`; if it cannot, say in the proposal how it splits (PRs are squash-merged, so avoid stacks)
 - Do not apply `status:*` labels yourself; maintainers set them during triage
 - Do not invent milestones, assignees, labels, or project board fields unless the user explicitly asks
