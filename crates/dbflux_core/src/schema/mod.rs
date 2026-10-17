@@ -16,8 +16,8 @@ pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
 pub use drift_check::{DriftOutcome, TableKey, check_drift_sync, check_schema_drift};
 pub use facet::{
-    NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, TimeSeriesFacet, VectorDistance, VectorFacet,
-    category_collection_facets,
+    NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, TimeSeriesFacet, VectorDistance,
+    VectorFacet, category_collection_facets,
 };
 pub use fingerprint::SchemaFingerprint;
 pub use listing::{DatabaseLayout, ObjectFolder};
