@@ -1048,7 +1048,6 @@ impl DataTableState {
         self.positional_rows
     }
 
-    /// Get the primary key column indices.
     /// Marks the first row as the reference row, or clears the mark.
     pub fn set_reference_row(&mut self, reference_row: bool) {
         self.reference_row = reference_row;
@@ -1058,6 +1057,7 @@ impl DataTableState {
         self.reference_row
     }
 
+    /// Get the primary key column indices.
     pub fn pk_columns(&self) -> &[usize] {
         &self.pk_columns
     }

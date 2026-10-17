@@ -655,6 +655,17 @@ fn a_refresh_drops_a_search_still_running(cx: &mut TestAppContext) {
         assert!(panel.nearest_neighbor_search().is_none());
         assert_eq!(panel.result.rows.len(), 2);
     });
+
+    // A later read of the table page must not bring the neighbor bar of the
+    // dropped search back while it loads.
+    window.update(|window, app| panel.update(app, |panel, cx| panel.refresh(window, cx)));
+    window.update(|_, app| {
+        assert!(
+            panel.read(app).neighbor_bar_search().is_none(),
+            "a dropped search shows no neighbor bar"
+        );
+    });
+    window.run_until_parked();
 }
 
 #[gpui::test(iterations = 32)]

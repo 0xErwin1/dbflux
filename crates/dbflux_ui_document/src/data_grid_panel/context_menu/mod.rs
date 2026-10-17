@@ -1643,6 +1643,7 @@ impl DataGridPanel {
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
+        let mut detail_rows = 0usize;
         let menu_items = if menu.is_column_header {
             self.render_column_header_menu_items(menu, backend, cx)
         } else {
@@ -1666,6 +1667,10 @@ impl DataGridPanel {
                 has_row_target,
                 cx,
             );
+            detail_rows = visible_items
+                .iter()
+                .filter(|item| item.detail.is_some())
+                .count();
             let mut menu_items: Vec<AnyElement> = Vec::new();
             let mut visual_index = 0usize;
 
@@ -1761,13 +1766,13 @@ impl DataGridPanel {
         };
 
         // Separators are shorter than rows, so this over-estimates a little;
-        // a menu placed a few pixels higher than necessary is harmless. The
-        // one taller row (Find similar rows, with its detail line) is counted
-        // whether or not it is shown, for the same reason.
-        let menu_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
-            * menu_items.len() as f32
-            + dbflux_components::fonts::ui_px(cx, MenuMetrics::DETAIL_ROW_HEIGHT)
-            - dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT)
+        // a menu placed a few pixels higher than necessary is harmless. Rows
+        // with a detail line are taller.
+        let row_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT);
+        let detail_extra =
+            dbflux_components::fonts::ui_px(cx, MenuMetrics::DETAIL_ROW_HEIGHT) - row_height;
+        let menu_height = row_height * menu_items.len() as f32
+            + detail_extra * detail_rows as f32
             + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 

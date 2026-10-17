@@ -37,7 +37,6 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let tint = ChromeColors::tint(theme);
-        let running = self.nearest.running.is_some() && self.runner.is_primary_active();
 
         let anchor_chip = div()
             .id("nearest-neighbors-anchor")
@@ -49,15 +48,12 @@ impl DataGridPanel {
             .font_family(dbflux_components::fonts::editor_family(cx))
             .child(Text::caption(search.anchor_label.clone()).color(tint));
 
+        // No spinner in the switch: an icon would widen the pressed segment
+        // and move the controls after it. The Refresh button shows the run.
         let distances = VectorDistance::ALL
             .into_iter()
             .map(|distance| {
-                let item = SegmentedItem::new(distance_segment(distance), distance_label(distance));
-                if running && distance == search.distance {
-                    item.icon(AppIcon::Loader)
-                } else {
-                    item
-                }
+                SegmentedItem::new(distance_segment(distance), distance_label(distance))
             })
             .collect();
 

@@ -108,6 +108,10 @@ impl DataGridPanel {
     /// a structured SELECT), the parameterized query takes precedence over the
     /// normal `TableBrowseRequest` path.
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A search still running is dropped by this read; its bar must not
+        // come back while the table page loads.
+        self.nearest.running = None;
+
         match &self.source {
             DataSource::Table {
                 profile_id,
