@@ -178,7 +178,10 @@ impl Workspace {
             | Command::ResizePanelNarrower
             | Command::ResizePanelWider
             | Command::ResizePanelShorter
-            | Command::ResizePanelTaller => Some(
+            | Command::ResizePanelTaller
+            // So do the pagination and expiry of a key-value browser.
+            | Command::LoadMore
+            | Command::EditExpiry => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),
@@ -199,7 +202,10 @@ impl Workspace {
             | Command::ResetBinding
             | Command::ResetAllBindings
             | Command::EditBindingContext
-            | Command::FilterByContext => Some(false),
+            | Command::FilterByContext
+            // Copy belongs to the SQL preview modal, which answers it as its
+            // own action.
+            | Command::CopyPreview => Some(false),
 
             _ => None,
         }

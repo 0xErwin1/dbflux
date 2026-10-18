@@ -563,41 +563,6 @@ impl GeneralSettings {
             },
         }
     }
-
-    /// Evaluate a detected dangerous query kind against the safety settings.
-    ///
-    /// Returns:
-    /// - `DangerousAction::Allow` — execute without confirmation
-    /// - `DangerousAction::Confirm(kind)` — show the confirmation modal
-    /// - `DangerousAction::Block(msg)` — block execution with a hard error
-    pub fn evaluate_dangerous(
-        &self,
-        kind: crate::DangerousQueryKind,
-        is_suppressed: bool,
-    ) -> DangerousAction {
-        use crate::DangerousQueryKind::*;
-
-        if !self.confirm_dangerous_queries {
-            return DangerousAction::Allow;
-        }
-
-        // No-where queries aren't dangerous when WHERE isn't required
-        if !self.dangerous_requires_where && matches!(kind, DeleteNoWhere | UpdateNoWhere) {
-            return DangerousAction::Allow;
-        }
-
-        // If preview is forced, ignore suppressions
-        if self.dangerous_requires_preview {
-            return DangerousAction::Confirm(kind);
-        }
-
-        // Otherwise, respect suppressions
-        if is_suppressed {
-            return DangerousAction::Allow;
-        }
-
-        DangerousAction::Confirm(kind)
-    }
 }
 
 #[derive(Debug, Clone)]
