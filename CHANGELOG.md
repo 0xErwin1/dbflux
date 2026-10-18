@@ -49,6 +49,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Reopen last connections works without restoring the session** — Settings → General → Reopen last connections only took effect when Restore session on startup was also on, and then only reconnected the connections the restored tabs used. DBFlux now records the connections open when you quit and reconnects them at the next launch whether or not the session is restored, together with the connections of any restored tabs. Connections that were deleted or are already connected are skipped. See Settings.
 * **`q` in the sidebar goes back a tab** — In the sidebar, `q` and `e` both moved to the next tab, so going back from Dashboards to Scripts took two presses of either. `q` now moves to the previous tab and `e` to the next, across Connections, Scripts and Dashboards, wrapping at either end. See Keyboard.
 * **No empty Source section in the chart Stats panel** — The Stats panel of a chart showed a Source section whose Measurement, Field, Host and Region always read "unavailable", since no driver provides those values. The section is gone, and the panel shows the series statistics and the time window only.
 * **Save File As and Open Script File work from the command palette** — Both palette entries did nothing and only wrote a warning to the log. They now run the same action as their key bindings.
