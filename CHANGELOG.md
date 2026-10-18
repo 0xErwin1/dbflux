@@ -49,6 +49,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A command no part of the window handles no longer stops DBFlux** — The workspace stopped the app if it received a command none of its handlers routed. Load more and Edit expiry of the key-value browser, and Copy of the SQL preview, were such commands. They now reach the open document or the preview, and any command left unhandled is logged and ignored.
 * **The DynamoDB cancellation error no longer mentions an internal planning phase** — Cancelling a DynamoDB query reported "Query cancellation is not supported for DynamoDB in Phase 4", leaking an internal planning term to the user. The message now reads "Query cancellation is not supported for DynamoDB". The limitation itself is unchanged: the driver still returns `NotSupported` for cancel requests. See the DynamoDB driver page.
 * **DECIMAL values from MySQL keep their exact digits** — A `DECIMAL` value read through the MySQL driver was decoded as a floating-point number, so anything past about 15 significant digits was rounded (`12345678901234567.89` showed as `12345678901234568`), and editing the row could write the rounded value back. DECIMAL values are now kept exact, as PostgreSQL `NUMERIC` values already were.
 * **A reloaded InfluxDB bucket keeps its measurements** — A database the sidebar reloaded after it was dropped from the cache showed a relational Tables folder for InfluxDB buckets and CloudWatch log groups. It now shows the same Measurements or Log Groups folder as when it first loaded.

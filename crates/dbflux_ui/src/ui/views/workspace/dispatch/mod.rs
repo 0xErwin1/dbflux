@@ -9,6 +9,8 @@ mod preflight;
 mod query;
 mod scripts;
 mod settings;
+#[cfg(test)]
+mod tests;
 
 use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
@@ -155,32 +157,50 @@ impl CommandDispatcher for Workspace {
             return self.handle_cancel(window, cx);
         }
 
-        if let Some(result) = self.dispatch_connections(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_settings(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_audit(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_scripts(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_charts_dashboards(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_query(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_documents(cmd, window, cx) {
-            return result;
-        }
-        if let Some(result) = self.dispatch_navigation(cmd, window, cx) {
+        if let Some(result) = self.dispatch_to_domain(cmd, window, cx) {
             return result;
         }
 
-        unreachable!("Command::{:?} not handled by any dispatch domain", cmd)
+        log::warn!("Command::{cmd:?} is not handled by any dispatch domain; ignoring it");
+        false
+    }
+}
+
+impl Workspace {
+    /// Hands `cmd` to the first dispatch domain that claims it. `None` means
+    /// no domain routes the command.
+    pub(super) fn dispatch_to_domain(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        if let Some(result) = self.dispatch_connections(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_settings(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_audit(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_scripts(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_charts_dashboards(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_query(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_documents(cmd, window, cx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dispatch_navigation(cmd, window, cx) {
+            return Some(result);
+        }
+
+        None
     }
 }
 
