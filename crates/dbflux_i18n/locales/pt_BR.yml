@@ -4178,6 +4178,7 @@ settings:
       menu_select: Selecionar no menu
       menu_back: Voltar no menu
       sidebar_next_tab: Próxima aba da barra lateral
+      sidebar_prev_tab: Aba anterior da barra lateral
       refresh_schema: Atualizar schema
       open_connection_manager: Abrir gerenciador de conexões
       export_connections: "Exportar conexões"
