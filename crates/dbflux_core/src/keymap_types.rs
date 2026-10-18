@@ -129,6 +129,7 @@ pub enum Command {
 
     // === Sidebar ===
     SidebarNextTab,
+    SidebarPrevTab,
     RefreshSchema,
     OpenConnectionManager,
     ExportConnections,
@@ -431,6 +432,7 @@ impl Command {
             Command::MenuBack => "Menu back",
 
             Command::SidebarNextTab => "Sidebar next tab",
+            Command::SidebarPrevTab => "Sidebar previous tab",
             Command::RefreshSchema => "Refresh schema",
             Command::OpenConnectionManager => "Open connection manager",
             Command::ExportConnections => "Export connections",
@@ -631,6 +633,7 @@ impl Command {
             Command::MenuBack => "menu_back",
 
             Command::SidebarNextTab => "sidebar_next_tab",
+            Command::SidebarPrevTab => "sidebar_prev_tab",
             Command::RefreshSchema => "refresh_schema",
             Command::OpenConnectionManager => "open_connection_manager",
             Command::ExportConnections => "export_connections",
@@ -847,6 +850,7 @@ impl Command {
             Command::MenuSelect,
             Command::MenuBack,
             Command::SidebarNextTab,
+            Command::SidebarPrevTab,
             Command::RefreshSchema,
             Command::OpenConnectionManager,
             Command::ExportConnections,
@@ -1039,6 +1043,7 @@ impl Command {
             | Command::MenuBack => "Results",
 
             Command::SidebarNextTab
+            | Command::SidebarPrevTab
             | Command::RefreshSchema
             | Command::OpenConnectionManager
             | Command::ExportConnections

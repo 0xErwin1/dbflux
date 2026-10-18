@@ -4171,6 +4171,7 @@ settings:
       menu_select: 菜单选择
       menu_back: 菜单返回
       sidebar_next_tab: 侧边栏下一个标签页
+      sidebar_prev_tab: 侧边栏上一个标签页
       refresh_schema: 刷新 Schema
       open_connection_manager: 打开连接管理器
       export_connections: 导出连接

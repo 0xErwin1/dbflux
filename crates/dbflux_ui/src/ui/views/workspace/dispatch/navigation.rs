@@ -354,6 +354,15 @@ impl Workspace {
                 }
             }
 
+            Command::SidebarPrevTab => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |s, cx| s.cycle_tab_back(cx));
+                    Some(true)
+                } else {
+                    Some(false)
+                }
+            }
+
             Command::FocusSearch => Some(if self.focus_target == FocusTarget::Sidebar {
                 self.sidebar.update(cx, |sidebar, cx| {
                     sidebar.focus_active_search(window, cx);
