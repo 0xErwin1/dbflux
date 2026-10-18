@@ -76,3 +76,54 @@ fn every_command_is_routed_by_a_dispatch_domain(cx: &mut TestAppContext) {
         "commands no dispatch domain routes: {unrouted:?}"
     );
 }
+
+fn route_create_folder_on_sidebar_tab(
+    workspace: &Entity<Workspace>,
+    tab: dbflux_ui_sidebar::SidebarTab,
+    window: &mut VisualTestContext,
+) -> Option<bool> {
+    let routed = window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.focus_target = crate::ui::views::workspace::FocusTarget::Sidebar;
+            workspace
+                .sidebar
+                .update(cx, |sidebar, cx| sidebar.set_active_tab(tab, cx));
+            workspace.route_command(Command::CreateFolder, window, cx)
+        })
+    });
+    window.run_until_parked();
+    routed
+}
+
+/// Dashboards have no folders, so Create Folder must leave the key for
+/// another handler instead of consuming it and doing nothing.
+#[gpui::test]
+fn create_folder_on_dashboards_tab_is_not_consumed(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let (workspace, window) = open_workspace(&app_state, cx);
+
+    let routed = route_create_folder_on_sidebar_tab(
+        &workspace,
+        dbflux_ui_sidebar::SidebarTab::Dashboards,
+        window,
+    );
+
+    assert_eq!(routed, Some(false));
+}
+
+#[gpui::test]
+fn create_folder_on_connections_tab_creates_a_folder(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let (workspace, window) = open_workspace(&app_state, cx);
+    let nodes_before = window.update(|_, cx| app_state.read(cx).connection_tree().nodes.len());
+
+    let routed = route_create_folder_on_sidebar_tab(
+        &workspace,
+        dbflux_ui_sidebar::SidebarTab::Connections,
+        window,
+    );
+
+    let nodes_after = window.update(|_, cx| app_state.read(cx).connection_tree().nodes.len());
+    assert_eq!(routed, Some(true));
+    assert_eq!(nodes_after, nodes_before + 1);
+}
