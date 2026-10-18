@@ -1656,7 +1656,7 @@ document:
         nearest_distance: "更改距离（当前：%{distance}）"
         nearest_clear: "返回表中的行"
         nearest_column: "更改向量列"
-        go_to_referenced_row: "转到引用行"
+        go_to_referenced_row: "转到被引用行"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
