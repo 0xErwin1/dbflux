@@ -287,6 +287,8 @@ impl Command {
             "run_query" => Some(Command::RunQuery),
             "run_query_in_new_tab" => Some(Command::RunQueryInNewTab),
             "save_query" => Some(Command::SaveQuery),
+            "save_file_as" => Some(Command::SaveFileAs),
+            "open_script_file" => Some(Command::OpenScriptFile),
             "toggle_comment" => Some(Command::ToggleComment),
             "open_history" => Some(Command::ToggleHistoryDropdown),
             "cancel_query" => Some(Command::CancelQuery),
@@ -1647,6 +1649,22 @@ impl ContextId {
 #[cfg(test)]
 mod tests {
     use super::{Command, ContextId};
+
+    #[test]
+    fn script_file_commands_resolve_from_their_palette_ids() {
+        for command in [Command::SaveFileAs, Command::OpenScriptFile] {
+            assert_eq!(Command::from_palette_id(command.id()), Some(command));
+        }
+    }
+
+    #[test]
+    fn every_palette_id_resolves_back_to_its_command() {
+        for command in Command::all_variants() {
+            if let Some(resolved) = Command::from_palette_id(command.id()) {
+                assert_eq!(resolved, command, "palette id {:?}", command.id());
+            }
+        }
+    }
 
     #[test]
     fn command_display_names_are_stable() {
