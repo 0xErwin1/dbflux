@@ -181,6 +181,8 @@ SSH 隧道有两种用法：
 
 **本地**隧道端口由 DBFlux 和操作系统自动分配，只有远程端口可以配置。
 
+SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linux 上，如果 DBFlux 不是从终端启动（而是从 Finder、程序坞或桌面启动项启动），它会在启动时读取登录 shell 的 `PATH`，因此能找到通过 Homebrew 安装或在 shell 配置中添加的工具。如果 shell 启动超过五秒，DBFlux 会保留启动时的 `PATH` 并记录一条警告。
+
 ---
 
 ## 取值来源：密钥管理器、参数存储与认证会话
