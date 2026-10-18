@@ -1443,7 +1443,6 @@ document:
       stats:
         rebuilding: 正在重建图表…
         no_stats: 此序列没有可用的统计信息。
-        unavailable: 不可用
         title: 统计
         window:
           title: 窗口
@@ -1451,12 +1450,6 @@ document:
           end: 结束
           span: 跨度
           points: 点数
-        source:
-          title: 来源
-          measurement: 测量
-          field: 字段
-          host: 主机
-          region: 区域
     context_menu:
       header: "%{column} · 第 %{row} 行"
       item:

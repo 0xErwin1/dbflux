@@ -1443,7 +1443,6 @@ document:
       stats:
         rebuilding: "Rebuilding chart…"
         no_stats: No stats available for this series.
-        unavailable: unavailable
         title: Stats
         window:
           title: Window
@@ -1451,12 +1450,6 @@ document:
           end: end
           span: span
           points: points
-        source:
-          title: Source
-          measurement: measurement
-          field: field
-          host: host
-          region: region
     context_menu:
       header: "%{column} · row %{row}"
       item:

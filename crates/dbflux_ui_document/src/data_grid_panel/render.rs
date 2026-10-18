@@ -3089,8 +3089,7 @@ impl DataGridPanel {
             )
     }
 
-    /// Stats tab body: focused-series descriptive statistics, window summary,
-    /// and a SOURCE placeholder section for future driver-provided metadata.
+    /// Stats tab body: focused-series descriptive statistics and window summary.
     fn render_rail_stats_tab(
         &mut self,
         theme: &gpui_component::theme::Theme,
@@ -3186,17 +3185,6 @@ impl DataGridPanel {
                 .child(SharedString::from(s))
                 .into_any_element()
         };
-        let unavail_val = || -> gpui::AnyElement {
-            div()
-                .text_size(px(11.0))
-                .text_color(theme.muted_foreground)
-                .italic()
-                .child(dbflux_i18n::t!(
-                    "document.data.chart_dock.stats.unavailable"
-                ))
-                .into_any_element()
-        };
-
         div()
             .id("rail-stats-scroll")
             .size_full()
@@ -3267,39 +3255,6 @@ impl DataGridPanel {
                     .child(Self::dock_kv_row(
                         &dbflux_i18n::t!("document.data.chart_dock.stats.window.points"),
                         str_val(format!("{}", points_count)),
-                        &chart_colors,
-                    )),
-                theme,
-            ))
-            // SOURCE section — placeholder until drivers populate QueryResult.metadata
-            // TODO(v0.7): wire driver-provided metadata via QueryResult.metadata
-            .child(Self::dock_section(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(Self::dock_header(
-                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.title"),
-                        &chart_colors,
-                    ))
-                    .child(Self::dock_kv_row(
-                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.measurement"),
-                        unavail_val(),
-                        &chart_colors,
-                    ))
-                    .child(Self::dock_kv_row(
-                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.field"),
-                        unavail_val(),
-                        &chart_colors,
-                    ))
-                    .child(Self::dock_kv_row(
-                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.host"),
-                        unavail_val(),
-                        &chart_colors,
-                    ))
-                    .child(Self::dock_kv_row(
-                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.region"),
-                        unavail_val(),
                         &chart_colors,
                     )),
                 theme,

@@ -1443,7 +1443,6 @@ document:
       stats:
         rebuilding: "Reconstruyendo el gráfico…"
         no_stats: No hay estadísticas disponibles para esta serie.
-        unavailable: no disponible
         title: Estadísticas
         window:
           title: Ventana
@@ -1451,12 +1450,6 @@ document:
           end: fin
           span: duración
           points: puntos
-        source:
-          title: Origen
-          measurement: medición
-          field: campo
-          host: host
-          region: región
     context_menu:
       header: "%{column} · fila %{row}"
       item:
