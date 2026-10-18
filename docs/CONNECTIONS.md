@@ -226,6 +226,13 @@ implementation is **AWS SSM Port Forwarding** (`aws` feature required).
 The **local** tunnel port is assigned automatically by DBFlux and the OS — only
 the remote port is configurable.
 
+SSM needs the AWS CLI and the Session Manager plugin on the `PATH`. On macOS
+and Linux, when DBFlux is started outside a terminal (from Finder, the Dock or
+a desktop entry), it reads the `PATH` from your login shell at startup, so tools
+installed with Homebrew or added in your shell configuration are found. If the
+shell takes longer than five seconds to start, DBFlux keeps the `PATH` it was
+launched with and logs a warning.
+
 ---
 
 ## Value sources: Secret Manager, Parameter Store, Auth Session

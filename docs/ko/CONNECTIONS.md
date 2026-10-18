@@ -220,6 +220,12 @@ URL, 리전을 입력하면 로그인을 진행한 뒤 계정과 역할을 나�
 **로컬** 터널 포트는 DBFlux와 OS가 자동으로 할당합니다 — 설정할 수 있는 것은
 원격 포트뿐입니다.
 
+SSM을 사용하려면 AWS CLI와 Session Manager 플러그인이 `PATH`에 있어야 합니다.
+macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)에서 실행하면
+시작할 때 로그인 셸의 `PATH`를 읽어 오므로, Homebrew로 설치했거나 셸 설정에서
+추가한 도구를 찾을 수 있습니다. 셸 시작에 5초 넘게 걸리면 DBFlux는 실행될 때의
+`PATH`를 그대로 사용하고 경고를 기록합니다.
+
 ---
 
 ## 값 소스: Secret Manager, Parameter Store, Auth Session
