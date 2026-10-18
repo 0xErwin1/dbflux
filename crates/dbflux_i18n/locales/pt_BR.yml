@@ -1570,7 +1570,6 @@ document:
       stats:
         rebuilding: "Reconstruindo o gráfico…"
         no_stats: Nenhuma estatística disponível para esta série.
-        unavailable: indisponível
         title: Estatísticas
         window:
           title: Janela
@@ -1578,12 +1577,6 @@ document:
           end: fim
           span: duração
           points: pontos
-        source:
-          title: Origem
-          measurement: measurement
-          field: field
-          host: host
-          region: região
     context_menu:
       header: "%{column} · linha %{row}"
       item:
