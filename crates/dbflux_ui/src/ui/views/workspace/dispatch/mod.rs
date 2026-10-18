@@ -16,6 +16,22 @@ use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.route_command(cmd, window, cx).unwrap_or_else(|| {
+            log::warn!("Command::{cmd:?} is not handled by any dispatch domain; ignoring it");
+            false
+        })
+    }
+}
+
+impl Workspace {
+    /// The whole dispatch path: `Some(handled)` when a branch or a domain
+    /// claims `cmd`, `None` when nothing routes it.
+    pub(super) fn route_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
         // Fallback for the active-query prompt when focus is not inside it,
         // like `route_confirm_modal_command` for the other confirmations; the
         // shell answers Escape and Enter itself while it has focus. Checked
@@ -28,7 +44,7 @@ impl CommandDispatcher for Workspace {
                 Command::Execute => modal.confirm(cx),
                 _ => modal.keep_waiting(cx),
             });
-            return true;
+            return Some(true);
         }
 
         // Quit is the application's own command: the workspace answers it no
@@ -40,13 +56,13 @@ impl CommandDispatcher for Workspace {
             if !self.modal_active_query.read(cx).is_visible() && self.request_quit(window, cx) {
                 cx.emit(QuitConfirmed);
             }
-            return true;
+            return Some(true);
         }
 
         // The open notifications popover owns the keyboard (its context has
         // no parent), so its commands never reach the panels behind it.
         if let Some(result) = self.dispatch_notifications(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
 
         // A visible workspace confirmation captures the keyboard
@@ -66,7 +82,7 @@ impl CommandDispatcher for Workspace {
                 cx,
             )
         {
-            return true;
+            return Some(true);
         }
 
         // The sidebar's inline delete confirmation, drawn by the workspace,
@@ -78,35 +94,35 @@ impl CommandDispatcher for Workspace {
                 Command::Execute => sidebar.confirm_modal_delete(cx),
                 _ => sidebar.cancel_modal_delete(cx),
             });
-            return true;
+            return Some(true);
         }
 
         if self.sidebar.read(cx).has_child_picker_open() {
             match cmd {
                 Command::SelectNext => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_next(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::SelectPrev => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_prev(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::SelectFirst => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_first(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::SelectLast => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_last(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::Execute => {
                     self.sidebar.update(cx, |s, cx| s.picker_execute(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::FocusSearch => {
                     self.sidebar
                         .update(cx, |s, cx| s.picker_focus_search(window, cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::Cancel => {
                     if self.sidebar.read(cx).child_picker_filter_is_focused() {
@@ -116,9 +132,9 @@ impl CommandDispatcher for Workspace {
                     } else {
                         self.sidebar.update(cx, |s, cx| s.close_child_picker(cx));
                     }
-                    return true;
+                    return Some(true);
                 }
-                _ => return false,
+                _ => return Some(false),
             }
         }
 
@@ -127,11 +143,11 @@ impl CommandDispatcher for Workspace {
         {
             if cmd == Command::Cancel {
                 self.set_focus(FocusTarget::Sidebar, window, cx);
-                return true;
+                return Some(true);
             }
 
             if sidebar_tree_command_is_blocked_by_search_focus(cmd) {
-                return false;
+                return Some(false);
             }
         }
 
@@ -149,20 +165,15 @@ impl CommandDispatcher for Workspace {
                 | Command::ColumnRight
                 | Command::Cancel
                 | Command::NewQueryTab => {}
-                _ => return true,
+                _ => return Some(true),
             }
         }
 
         if cmd == Command::Cancel {
-            return self.handle_cancel(window, cx);
+            return Some(self.handle_cancel(window, cx));
         }
 
-        if let Some(result) = self.dispatch_to_domain(cmd, window, cx) {
-            return result;
-        }
-
-        log::warn!("Command::{cmd:?} is not handled by any dispatch domain; ignoring it");
-        false
+        self.dispatch_to_domain(cmd, window, cx)
     }
 }
 
