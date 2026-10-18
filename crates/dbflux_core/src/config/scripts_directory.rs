@@ -305,7 +305,12 @@ impl ScriptsDirectory {
             DbError::IoError(std::io::Error::other("Could not find data directory"))
         })?;
 
-        let root = data_dir.join("dbflux").join("scripts");
+        Self::new_at(data_dir.join("dbflux").join("scripts"))
+    }
+
+    /// Opens the scripts directory with its managed root at `root`, creating
+    /// it when missing.
+    pub fn new_at(root: PathBuf) -> Result<Self, DbError> {
         fs::create_dir_all(&root).map_err(DbError::IoError)?;
 
         // External roots are stored canonical; the managed root must be too, or

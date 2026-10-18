@@ -3364,6 +3364,32 @@ mod tests {
     }
 
     #[test]
+    fn an_in_memory_runtime_keeps_scripts_inside_its_temporary_directory() {
+        let mut state = test_state_with_profiles(HashMap::new(), Vec::new());
+
+        let runtime_root = state
+            .storage_runtime()
+            .dbflux_db_path()
+            .parent()
+            .map(|root| std::fs::canonicalize(root).expect("canonical runtime root"))
+            .expect("runtime root");
+
+        let directory = state.scripts_directory_mut().expect("scripts directory");
+        assert!(
+            directory.root_path().starts_with(&runtime_root),
+            "scripts root {} is outside the test runtime {}",
+            directory.root_path().display(),
+            runtime_root.display()
+        );
+
+        let created = directory
+            .create_file(None, "probe", "sql")
+            .expect("create script");
+        assert!(created.starts_with(&runtime_root));
+        assert!(created.is_file());
+    }
+
+    #[test]
     fn build_builtin_drivers_registers_cloudwatch_driver() {
         let drivers = AppState::build_builtin_drivers();
 
