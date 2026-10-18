@@ -2526,6 +2526,12 @@ pub(crate) fn kind_from_decltype(decl: Option<&str>) -> ColumnKind {
         return ColumnKind::Float;
     }
 
+    // A time of day has no absolute instant, so the chart engine cannot plot
+    // it; the other drivers report it as Unknown too.
+    if decl.starts_with("TIME") && !decl.starts_with("TIMESTAMP") {
+        return ColumnKind::Unknown;
+    }
+
     if decl.contains("DATE") || decl.contains("TIME") || decl.contains("STAMP") {
         return ColumnKind::Timestamp;
     }
@@ -2961,8 +2967,27 @@ mod tests {
         assert_eq!(kind_from_decltype(Some("DATETIME")), ColumnKind::Timestamp);
         assert_eq!(kind_from_decltype(Some("TIMESTAMP")), ColumnKind::Timestamp);
         assert_eq!(kind_from_decltype(Some("DATE")), ColumnKind::Timestamp);
-        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Timestamp);
         assert_eq!(kind_from_decltype(Some("datetime")), ColumnKind::Timestamp);
+        assert_eq!(
+            kind_from_decltype(Some("TIMESTAMPTZ")),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            kind_from_decltype(Some("TIMESTAMP WITH TIME ZONE")),
+            ColumnKind::Timestamp
+        );
+    }
+
+    #[test]
+    fn kind_from_decltype_time_of_day_is_unknown() {
+        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("time")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("TIME(3)")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("TIMETZ")), ColumnKind::Unknown);
+        assert_eq!(
+            kind_from_decltype(Some("TIME WITH TIME ZONE")),
+            ColumnKind::Unknown
+        );
     }
 
     #[test]
