@@ -4171,6 +4171,7 @@ settings:
       menu_select: Menu select
       menu_back: Menu back
       sidebar_next_tab: Sidebar next tab
+      sidebar_prev_tab: Sidebar previous tab
       refresh_schema: Refresh schema
       open_connection_manager: Open connection manager
       export_connections: "Export connections"

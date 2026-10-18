@@ -49,6 +49,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **`q` in the sidebar goes back a tab** — In the sidebar, `q` and `e` both moved to the next tab, so going back from Dashboards to Scripts took two presses of either. `q` now moves to the previous tab and `e` to the next, across Connections, Scripts and Dashboards, wrapping at either end. See Keyboard.
 * **No empty Source section in the chart Stats panel** — The Stats panel of a chart showed a Source section whose Measurement, Field, Host and Region always read "unavailable", since no driver provides those values. The section is gone, and the panel shows the series statistics and the time window only.
 * **Save File As and Open Script File work from the command palette** — Both palette entries did nothing and only wrote a warning to the log. They now run the same action as their key bindings.
 * **Create Folder no longer swallows `Shift+N` on the Dashboards tab** — Dashboards have no folders, but pressing `Shift+N` on the sidebar's Dashboards tab did nothing and kept the key from reaching anything else. The key is now left unhandled there. The Connections and Scripts tabs still create a folder.

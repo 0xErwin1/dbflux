@@ -313,7 +313,7 @@ fn sidebar_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
     layer.bind(
         KeyChord::new("q", Modifiers::none()),
-        Command::SidebarNextTab,
+        Command::SidebarPrevTab,
     );
     layer.bind(
         KeyChord::new("e", Modifiers::none()),
