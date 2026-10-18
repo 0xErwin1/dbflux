@@ -8,6 +8,8 @@ use rusqlite::{Connection, params};
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
 
+const LAST_CONNECTED_PROFILES_KEY: &str = "last_connected_profiles";
+
 /// Repository for app runtime state (UI layout, collapse preferences).
 pub struct UiStateRepository {
     conn: OwnedConnection,
@@ -62,6 +64,40 @@ impl UiStateRepository {
 
         info!("Set runtime state: {}", key);
         Ok(())
+    }
+
+    /// Profiles that were connected when the app last started quitting.
+    ///
+    /// Returns an empty list when nothing was recorded yet. Ids that do not
+    /// parse are skipped rather than failing the whole read.
+    pub fn last_connected_profiles(&self) -> Result<Vec<uuid::Uuid>, StorageError> {
+        let Some(value_json) = self.get(LAST_CONNECTED_PROFILES_KEY)? else {
+            return Ok(Vec::new());
+        };
+
+        let ids: Vec<String> = serde_json::from_str(&value_json).map_err(|error| {
+            StorageError::Data(format!("invalid {LAST_CONNECTED_PROFILES_KEY}: {error}"))
+        })?;
+
+        Ok(ids
+            .iter()
+            .filter_map(|id| uuid::Uuid::parse_str(id).ok())
+            .collect())
+    }
+
+    /// Replaces the recorded set of profiles connected at quit.
+    pub fn set_last_connected_profiles(
+        &self,
+        profile_ids: &[uuid::Uuid],
+    ) -> Result<(), StorageError> {
+        let ids: Vec<String> = profile_ids.iter().map(uuid::Uuid::to_string).collect();
+        let value_json = serde_json::to_string(&ids).map_err(|error| {
+            StorageError::Data(format!(
+                "cannot encode {LAST_CONNECTED_PROFILES_KEY}: {error}"
+            ))
+        })?;
+
+        self.set(LAST_CONNECTED_PROFILES_KEY, &value_json)
     }
 
     /// Deletes a state key.
@@ -167,6 +203,34 @@ mod tests {
 
         repo.delete("ui_layout").expect("should delete");
         assert!(repo.get("ui_layout").expect("should get").is_none());
+    }
+
+    #[test]
+    fn last_connected_profiles_round_trip() {
+        let runtime = crate::bootstrap::StorageRuntime::in_memory().expect("runtime");
+        let repo = runtime.ui_state();
+
+        assert!(
+            repo.last_connected_profiles()
+                .expect("should read")
+                .is_empty()
+        );
+
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+        repo.set_last_connected_profiles(&[first, second])
+            .expect("should save");
+
+        let saved = repo.last_connected_profiles().expect("should read");
+        assert_eq!(saved, vec![first, second]);
+
+        repo.set_last_connected_profiles(&[])
+            .expect("should save empty");
+        assert!(
+            repo.last_connected_profiles()
+                .expect("should read")
+                .is_empty()
+        );
     }
 
     #[test]
