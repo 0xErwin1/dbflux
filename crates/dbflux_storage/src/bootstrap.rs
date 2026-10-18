@@ -255,6 +255,13 @@ impl StorageRuntime {
         }
     }
 
+    /// The temporary directory an in-memory runtime owns and removes on drop,
+    /// or `None` for a runtime backed by a real path. Callers keep their own
+    /// test files under it so a test never writes to the user's data directory.
+    pub fn temp_root(&self) -> Option<&Path> {
+        self.owned_temp_dir.as_ref().map(|dir| dir.path.as_path())
+    }
+
     /// Returns the path to the unified database.
     pub fn dbflux_db_path(&self) -> &Path {
         &self.dbflux_db_path
