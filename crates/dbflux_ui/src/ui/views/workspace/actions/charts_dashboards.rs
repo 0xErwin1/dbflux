@@ -923,43 +923,6 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    /// Reconnects to profiles referenced by restored session documents.
-    pub(in crate::ui::views::workspace) fn reopen_last_connections(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        let profile_ids: std::collections::HashSet<uuid::Uuid> = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .filter_map(|doc| doc.meta_snapshot(cx).connection_id)
-            .collect();
-
-        if profile_ids.is_empty() {
-            return;
-        }
-
-        let already_connected = self
-            .app_state
-            .read(cx)
-            .connections()
-            .keys()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        let sidebar = self.sidebar.clone();
-
-        for profile_id in profile_ids {
-            if already_connected.contains(&profile_id) {
-                continue;
-            }
-
-            sidebar.update(cx, |sidebar, cx| {
-                sidebar.connect_to_profile(profile_id, cx);
-            });
-        }
-    }
-
     // --- Phase P stubs: dashboard and saved-chart workspace actions ---
     // Full implementations arrive in Phase P; these stubs wire the Phase N
     // sidebar-event routing so the crate compiles before modals exist.

@@ -123,6 +123,7 @@ mod dump_analysis;
 mod metrics;
 mod migrate;
 mod query;
+mod reopen;
 mod schema_diff;
 mod scripts;
 mod settings;

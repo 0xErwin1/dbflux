@@ -1867,8 +1867,41 @@ impl AppState {
 
     // --- Shutdown ---
 
+    /// Starts the shutdown once. The first call also records which profiles
+    /// are connected, before the shutdown sequence disconnects them, so the
+    /// next launch can reopen them.
     pub fn begin_shutdown(&self) -> bool {
-        self.facade.begin_shutdown()
+        let initiated = self.facade.begin_shutdown();
+
+        if initiated {
+            self.remember_connected_profiles();
+        }
+
+        initiated
+    }
+
+    fn remember_connected_profiles(&self) {
+        let mut profile_ids: Vec<Uuid> = self.connections().keys().copied().collect();
+        profile_ids.sort();
+
+        if let Err(error) = self
+            .storage_runtime
+            .ui_state()
+            .set_last_connected_profiles(&profile_ids)
+        {
+            log::warn!("Failed to record the connected profiles at quit: {error}");
+        }
+    }
+
+    /// Profiles that were connected when the app last started quitting.
+    pub fn last_connected_profiles(&self) -> Vec<Uuid> {
+        match self.storage_runtime.ui_state().last_connected_profiles() {
+            Ok(profile_ids) => profile_ids,
+            Err(error) => {
+                log::warn!("Failed to read the profiles connected at last quit: {error}");
+                Vec::new()
+            }
+        }
     }
 
     pub fn is_shutting_down(&self) -> bool {

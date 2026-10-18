@@ -1630,10 +1630,10 @@ impl Workspace {
 
             if settings.restore_session_on_startup {
                 workspace.restore_session(window, cx);
+            }
 
-                if settings.reopen_last_connections {
-                    workspace.reopen_last_connections(cx);
-                }
+            if settings.reopen_last_connections {
+                workspace.reopen_last_connections(cx);
             }
 
             let has_tabs = !workspace.tab_manager.read(cx).is_empty();

@@ -56,7 +56,7 @@ converted crate by crate and stays in English for now.
 | Setting | Default | What it does |
 |---------|---------|--------------|
 | **Restore session on startup** | On | Reopen the tabs you had open last time. |
-| **Reopen last connections** | Off | Reconnect to the connections that were active. |
+| **Reopen last connections** | Off | Reconnect at startup to the connections that were open when you last quit, and to the ones your restored tabs use. Works whether or not the session is restored. |
 | **Default focus** | Sidebar | Where focus lands on launch (Sidebar or the last tab). |
 | **Max history entries** | 1000 | Query-history cap (minimum 10). |
 | **Auto-save interval (ms)** | 2000 | How often open editors auto-save (minimum 500). A script backed by a file is written to that file; unsaved untitled content is kept in the sessions folder. |
