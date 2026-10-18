@@ -3632,6 +3632,7 @@ settings:
       menu_select: 메뉴 선택
       menu_back: 메뉴 뒤로
       sidebar_next_tab: 사이드바 다음 탭
+      sidebar_prev_tab: 사이드바 이전 탭
       refresh_schema: 스키마 새로고침
       open_connection_manager: 연결 관리자 열기
       export_connections: "연결 내보내기"

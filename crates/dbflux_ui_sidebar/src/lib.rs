@@ -55,6 +55,24 @@ pub enum SidebarTab {
     Dashboards,
 }
 
+impl SidebarTab {
+    pub fn next(self) -> Self {
+        match self {
+            SidebarTab::Connections => SidebarTab::Scripts,
+            SidebarTab::Scripts => SidebarTab::Dashboards,
+            SidebarTab::Dashboards => SidebarTab::Connections,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        match self {
+            SidebarTab::Connections => SidebarTab::Dashboards,
+            SidebarTab::Scripts => SidebarTab::Connections,
+            SidebarTab::Dashboards => SidebarTab::Scripts,
+        }
+    }
+}
+
 pub enum SidebarEvent {
     GenerateSql(String),
     RequestFocus,
@@ -1498,12 +1516,11 @@ impl Sidebar {
     }
 
     pub fn cycle_tab(&mut self, cx: &mut Context<Self>) {
-        let next = match self.active_tab {
-            SidebarTab::Connections => SidebarTab::Scripts,
-            SidebarTab::Scripts => SidebarTab::Dashboards,
-            SidebarTab::Dashboards => SidebarTab::Connections,
-        };
-        self.set_active_tab(next, cx);
+        self.set_active_tab(self.active_tab.next(), cx);
+    }
+
+    pub fn cycle_tab_back(&mut self, cx: &mut Context<Self>) {
+        self.set_active_tab(self.active_tab.previous(), cx);
     }
 
     fn build_initial_scripts_tree(state: &AppState) -> Vec<TreeItem> {
@@ -2060,14 +2077,28 @@ impl Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::Sidebar;
     use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use super::{Sidebar, SidebarTab};
     use crate::operations::{connect_prepare_error_toast, format_connect_prepare_error};
     use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
     use dbflux_core::PrepareConnectError;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
     use gpui_component::tree::TreeItem;
     use uuid::Uuid;
+
+    #[test]
+    fn sidebar_tab_next_cycles_forward_and_wraps() {
+        assert_eq!(SidebarTab::Connections.next(), SidebarTab::Scripts);
+        assert_eq!(SidebarTab::Scripts.next(), SidebarTab::Dashboards);
+        assert_eq!(SidebarTab::Dashboards.next(), SidebarTab::Connections);
+    }
+
+    #[test]
+    fn sidebar_tab_previous_cycles_backward_and_wraps() {
+        assert_eq!(SidebarTab::Connections.previous(), SidebarTab::Dashboards);
+        assert_eq!(SidebarTab::Dashboards.previous(), SidebarTab::Scripts);
+        assert_eq!(SidebarTab::Scripts.previous(), SidebarTab::Connections);
+    }
 
     fn test_uuid() -> Uuid {
         Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()

@@ -63,7 +63,7 @@ The shell's clickable items all have a key, and none of them joins the `Tab` cyc
 
 | Keys | Action |
 |------|--------|
-| `q` / `e` | Switch sidebar tab (Connections / Scripts) |
+| `q` / `e` | Previous / next sidebar tab (Connections / Scripts / Dashboards) |
 | `/` | Focus search |
 | `j` / `k` (or `Down` / `Up`) | Select next / previous |
 | `h` / `l` | Collapse / expand node (`l` on a disconnected connection connects it) |

@@ -3632,6 +3632,7 @@ settings:
       menu_select: "Menú: seleccionar"
       menu_back: "Menú: atrás"
       sidebar_next_tab: "Barra lateral: siguiente pestaña"
+      sidebar_prev_tab: "Barra lateral: pestaña anterior"
       refresh_schema: Actualizar schema
       open_connection_manager: Abrir gestor de conexiones
       export_connections: "Exportar conexiones"
