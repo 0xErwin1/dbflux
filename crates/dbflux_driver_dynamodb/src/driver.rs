@@ -711,7 +711,7 @@ impl Connection for DynamoConnection {
 
     fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
         Err(DbError::NotSupported(
-            "Query cancellation is not supported for DynamoDB in Phase 4".to_string(),
+            "Query cancellation is not supported for DynamoDB".to_string(),
         ))
     }
 
@@ -4614,6 +4614,45 @@ mod tests {
                 .expect("the DynamoDB version probe is a constant"),
             "DescribeTable"
         );
+    }
+
+    /// `cancel` is text-only and ignores the handle; the SDK client points at a
+    /// closed local port, so the call sends nothing.
+    #[test]
+    fn cancel_reports_the_user_facing_limitation() {
+        use super::{
+            BehaviorVersion, Client, Credentials, DynamoConfigBuilder, DynamoConnection, Region,
+        };
+        use dbflux_core::Connection as _;
+
+        let config = DynamoConfigBuilder::new()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new(
+                "test",
+                "test",
+                None,
+                None,
+                "dynamodb-test",
+            ))
+            .endpoint_url("http://127.0.0.1:1")
+            .build();
+        let connection = DynamoConnection {
+            client: Client::from_conf(config),
+            default_region: "us-east-1".to_string(),
+            default_table: None,
+        };
+
+        let error = connection
+            .cancel(&dbflux_core::QueryHandle::new())
+            .expect_err("DynamoDB cancellations stay unsupported");
+
+        match error {
+            DbError::NotSupported(message) => {
+                assert_eq!(message, "Query cancellation is not supported for DynamoDB");
+            }
+            other => panic!("expected NotSupported, got {other:?}"),
+        }
     }
 
     #[test]
