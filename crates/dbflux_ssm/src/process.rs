@@ -3,6 +3,7 @@
 /// Spawns the AWS CLI as a child process with the SSM port-forwarding
 /// document and waits for the tunnel to become ready by probing the
 /// local port. The child is killed on drop (RAII).
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
@@ -82,9 +83,9 @@ impl SsmTunnel {
         }
 
         let mut child = cmd.spawn().map_err(|err| {
-            DbError::connection_failed(format!(
-                "Failed to start SSM session: {}. Is the AWS CLI installed and the Session Manager plugin available?",
-                err,
+            DbError::connection_failed(spawn_failure_message(
+                &err,
+                std::env::var_os("PATH").as_deref(),
             ))
         })?;
 
@@ -157,6 +158,30 @@ fn find_available_port() -> Result<u16, DbError> {
 
     drop(listener);
     Ok(port)
+}
+
+/// Describes why `aws ssm start-session` could not be started.
+///
+/// A missing binary names the `PATH` that was searched, because a desktop
+/// launch can inherit a much shorter `PATH` than the user's terminal.
+fn spawn_failure_message(error: &std::io::Error, path: Option<&OsStr>) -> String {
+    if error.kind() != std::io::ErrorKind::NotFound {
+        return format!(
+            "Failed to start SSM session: {error}. Is the AWS CLI installed and the \
+             Session Manager plugin available?"
+        );
+    }
+
+    let searched = path.map_or_else(
+        || "PATH is not set".to_string(),
+        |path| path.to_string_lossy().into_owned(),
+    );
+
+    format!(
+        "Failed to start SSM session: the AWS CLI (`aws`) was not found in PATH \
+         ({searched}). Install the AWS CLI and the Session Manager plugin, and make \
+         sure their directories are in PATH."
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +330,47 @@ mod tests {
         assert!(
             err_msg.contains("readiness timeout"),
             "Error should mention timeout"
+        );
+    }
+
+    #[test]
+    fn spawn_failure_message_names_the_searched_path_when_aws_is_missing() {
+        let error = std::io::Error::from(std::io::ErrorKind::NotFound);
+
+        let message = spawn_failure_message(&error, Some(OsStr::new("/usr/bin:/bin")));
+
+        assert_eq!(
+            message,
+            "Failed to start SSM session: the AWS CLI (`aws`) was not found in PATH \
+             (/usr/bin:/bin). Install the AWS CLI and the Session Manager plugin, and make \
+             sure their directories are in PATH."
+        );
+    }
+
+    #[test]
+    fn spawn_failure_message_reports_an_unset_path() {
+        let error = std::io::Error::from(std::io::ErrorKind::NotFound);
+
+        let message = spawn_failure_message(&error, None);
+
+        assert!(
+            message.contains("was not found in PATH (PATH is not set)"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn spawn_failure_message_keeps_the_os_error_for_other_failures() {
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+
+        let message = spawn_failure_message(&error, Some(OsStr::new("/usr/bin")));
+
+        assert_eq!(
+            message,
+            format!(
+                "Failed to start SSM session: {error}. Is the AWS CLI installed and the \
+                 Session Manager plugin available?"
+            )
         );
     }
 

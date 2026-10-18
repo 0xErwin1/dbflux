@@ -270,6 +270,13 @@ feature `aws`).
 El puerto **local** del túnel lo asigna automáticamente DBFlux y el sistema
 operativo — solo el puerto remoto es configurable.
 
+SSM necesita el AWS CLI y el plugin de Session Manager en el `PATH`. En macOS y
+Linux, cuando DBFlux se abre fuera de una terminal (desde Finder, el Dock o una
+entrada de escritorio), lee el `PATH` de tu shell de login al arrancar, así que
+encuentra las herramientas instaladas con Homebrew o agregadas en la
+configuración del shell. Si el shell tarda más de cinco segundos en iniciar,
+DBFlux conserva el `PATH` con el que se abrió y registra una advertencia.
+
 ---
 
 ## Fuentes de valores: Secret Manager, Parameter Store, Auth Session
