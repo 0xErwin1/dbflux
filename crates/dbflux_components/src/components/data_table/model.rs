@@ -566,10 +566,25 @@ impl CellValue {
             (_, CellKind::Text(text) | CellKind::Json(text)) => self.is_written_as(text),
 
             // The display text of every other kind is built from its whole
-            // value, so within one kind it tells two values apart.
+            // value, so within one kind it tells two values apart — except a
+            // resolved foreign-key label, which rewrites the display of a
+            // scalar without changing its value. When either side carries
+            // one, scalars compare by what the editor spells out; other
+            // kinds keep the display text, because `edit_text` is empty for
+            // them and would collapse different values into one.
             (own, theirs) => {
-                std::mem::discriminant(own) == std::mem::discriminant(theirs)
-                    && self.display_text == other.display_text
+                let same_kind = std::mem::discriminant(own) == std::mem::discriminant(theirs);
+                let labeled_scalar = matches!(
+                    own,
+                    CellKind::Bool(_) | CellKind::Int(_) | CellKind::Float(_)
+                ) && (self.fk_spans.is_some() || other.fk_spans.is_some());
+
+                same_kind
+                    && if labeled_scalar {
+                        self.edit_text() == other.edit_text()
+                    } else {
+                        self.display_text == other.display_text
+                    }
             }
         }
     }
@@ -2445,6 +2460,37 @@ mod tests {
         assert!(cell.holds_same_value(&CellValue::text("8")));
         assert!(CellValue::text("8").holds_same_value(&cell));
         assert!(!cell.holds_same_value(&CellValue::text("María López")));
+    }
+
+    /// A label rewrites what a scalar cell draws, not the scalar it holds:
+    /// committing the raw id back must clear the staged edit instead of
+    /// keeping it as a change. Bytes keep the display-text comparison —
+    /// `edit_text` is empty for every binary value, so it cannot tell two
+    /// lengths apart.
+    #[test]
+    fn a_labeled_scalar_holds_the_same_value_as_the_unlabeled_one() {
+        let labeled_int = CellValue::int(8).with_fk_label("Alice");
+        assert!(labeled_int.holds_same_value(&CellValue::int(8)));
+        assert!(CellValue::int(8).holds_same_value(&labeled_int));
+        assert!(!labeled_int.holds_same_value(&CellValue::int(9)));
+        assert!(
+            !labeled_int.holds_same_value(&CellValue::float(8.0)),
+            "an int and a float are different values even when spelled alike"
+        );
+
+        let labeled_float = CellValue::float(1.5).with_fk_label("Alice");
+        assert!(labeled_float.holds_same_value(&CellValue::float(1.5)));
+        assert!(!labeled_float.holds_same_value(&CellValue::float(2.5)));
+
+        let labeled_bool = CellValue::bool(true).with_fk_label("Alice");
+        assert!(labeled_bool.holds_same_value(&CellValue::bool(true)));
+        assert!(!labeled_bool.holds_same_value(&CellValue::bool(false)));
+
+        let labeled_bytes = CellValue::bytes(16).with_fk_label("Alice");
+        assert!(
+            !labeled_bytes.holds_same_value(&CellValue::bytes(32)),
+            "a labeled binary cell stays a different value from another length"
+        );
     }
 
     #[test]
