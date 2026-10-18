@@ -2,6 +2,8 @@
 #![recursion_limit = "256"]
 
 mod cli;
+#[cfg(unix)]
+mod shell_path;
 
 use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
@@ -356,6 +358,11 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
               assumption, not a mutex guarantee"
 )]
 fn run_gui() {
+    // Runs first: it sets PATH, which is only sound before any other thread
+    // exists, and the tracing bridge below may start one.
+    #[cfg(unix)]
+    let shell_path_import = shell_path::import_login_shell_path();
+
     let fmt_writer = if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
         FmtWriter::NonBlockingFile(path)
     } else {
@@ -377,6 +384,9 @@ fn run_gui() {
             eprintln!("Failed to initialize tracing: {err}");
         }
     }
+
+    #[cfg(unix)]
+    shell_path_import.log();
 
     let auth_token = match init_process_auth_tokens() {
         Ok(token) => token,

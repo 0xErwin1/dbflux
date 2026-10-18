@@ -328,16 +328,18 @@ impl Workspace {
 
             Command::CreateFolder => {
                 if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| match s.active_tab() {
+                    // Dashboards have no folders, so the key is left for another handler.
+                    Some(self.sidebar.update(cx, |s, cx| match s.active_tab() {
                         dbflux_ui_sidebar::SidebarTab::Connections => {
                             s.create_root_folder(cx);
+                            true
                         }
                         dbflux_ui_sidebar::SidebarTab::Scripts => {
                             s.create_script_folder(cx);
+                            true
                         }
-                        dbflux_ui_sidebar::SidebarTab::Dashboards => {}
-                    });
-                    Some(true)
+                        dbflux_ui_sidebar::SidebarTab::Dashboards => false,
+                    }))
                 } else {
                     Some(false)
                 }
