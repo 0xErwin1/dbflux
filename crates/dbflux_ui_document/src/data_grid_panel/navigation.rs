@@ -976,7 +976,8 @@ impl DataGridPanel {
 
     /// The referenced-row target for a cell whose column is a single-column
     /// foreign key and whose value is not null; `None` for every other cell.
-    /// `row` indexes the panel's current result rows.
+    /// `row` is a visual row of the table, so pending inserts shift the base
+    /// row it resolves to.
     pub(super) fn fk_target_for_cell(
         &self,
         row: usize,
@@ -997,11 +998,7 @@ impl DataGridPanel {
         let key_column = foreign_key.referenced_columns.first()?.clone();
 
         let key_value = self
-            .result
-            .rows
-            .get(row)?
-            .get(col)
-            .cloned()
+            .resolve_cell_value(row, col, cx)
             .filter(|value| !value.is_null())?;
 
         self.reference_target(&row_inspector::FkReference {

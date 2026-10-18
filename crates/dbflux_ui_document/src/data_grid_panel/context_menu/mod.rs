@@ -3423,7 +3423,12 @@ impl DataGridPanel {
     // === Filter / Order from context menu ===
 
     /// Resolves the original `Value` for a cell from the result set.
-    fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
+    pub(super) fn resolve_cell_value(
+        &self,
+        visual_row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<Value> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
         let table_state = self.grid_table.table_state.as_ref()?;

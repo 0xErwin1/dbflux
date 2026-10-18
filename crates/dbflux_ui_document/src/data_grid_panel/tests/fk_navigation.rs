@@ -372,6 +372,122 @@ fn fk_target_for_cell_resolves_a_single_column_fk_cell(cx: &mut TestAppContext) 
     });
 }
 
+/// "Go to referenced row" addresses the row the cursor sees, not the base
+/// row at the same index: a pending insert above the cursor shifts every
+/// base row down, and the cursor can sit on the insert itself.
+#[gpui::test]
+fn fk_target_for_cell_resolves_through_the_visual_row_order(cx: &mut TestAppContext) {
+    use dbflux_components::components::data_table::model::CellValue;
+
+    let (app_state, profile_id) = register_stub_connection(cx, Arc::new(StubConnection));
+
+    cx.update(|cx| {
+        app_state.update(cx, |app, _| {
+            let connected = app
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the stub connection is registered");
+            connected.table_details.insert(
+                (
+                    "app".to_string(),
+                    Some("public".to_string()),
+                    "orders".to_string(),
+                ),
+                orders_with_customer_fk(),
+            );
+        });
+    });
+
+    let panel_holder = Rc::new(RefCell::new(None));
+    let panel_handle = panel_holder.clone();
+
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let panel = cx.new(|cx| {
+            let source = DataSource::Table {
+                profile_id,
+                database: Some("app".to_string()),
+                table: TableRef::with_schema("public", "orders"),
+                pagination: Pagination::default(),
+                order_by: Vec::new(),
+                total_rows: Some(3),
+            };
+
+            DataGridPanel::new_internal(
+                source,
+                app_state.clone(),
+                vec!["id".to_string()],
+                window,
+                cx,
+            )
+        });
+        panel_handle.replace(Some(panel.clone()));
+        Root::new(panel, window, cx)
+    });
+    window.run_until_parked();
+
+    let panel = panel_holder
+        .borrow()
+        .clone()
+        .expect("the window builder stores the grid");
+
+    // Three base rows with distinct customer ids, so a lookup that reads the
+    // wrong one is caught by the value it returns.
+    let three_customers = QueryResult::table(
+        vec![key_column("id", true), key_column("customer_id", false)],
+        vec![
+            vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(101)],
+            vec![dbflux_core::Value::Int(2), dbflux_core::Value::Int(202)],
+            vec![dbflux_core::Value::Int(3), dbflux_core::Value::Int(303)],
+        ],
+        None,
+        Duration::ZERO,
+    );
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.set_result(three_customers, cx);
+        });
+    });
+
+    // An insert after base row 0 takes visual row 1, pushing base row 1 to
+    // visual row 2 and base row 2 to visual row 3.
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the result builds a table");
+        table_state.update(app, |state, cx| {
+            state
+                .edit_buffer_mut()
+                .add_pending_insert_after(0, vec![CellValue::int(4), CellValue::int(404)]);
+            cx.notify();
+        });
+    });
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            let key_value = |row| {
+                panel
+                    .fk_target_for_cell(row, 1, cx)
+                    .expect("the customer_id cell resolves")
+                    .key_value
+            };
+
+            // Base row 0 is untouched by the insert.
+            assert_eq!(key_value(0), dbflux_core::Value::Int(101));
+
+            // The cursor on the insert uses the insert's own value.
+            assert_eq!(key_value(1), dbflux_core::Value::Int(404));
+
+            // The cursor below the insert reads base row 1, not the base row
+            // that sits at its index in the result set.
+            assert_eq!(key_value(2), dbflux_core::Value::Int(202));
+        });
+    });
+}
+
 // =========================================================================
 // Reference navigation through the inspector rail
 // =========================================================================
