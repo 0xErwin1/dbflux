@@ -297,10 +297,24 @@ impl Harness<'_> {
     }
 }
 
+#[test]
+fn every_palette_id_resolves_to_a_command() {
+    let unmapped: Vec<&str> = Workspace::palette_commands_for_test()
+        .into_iter()
+        .map(|command| command.id)
+        .filter(|id| Command::from_palette_id(id).is_none())
+        .collect();
+
+    assert!(unmapped.is_empty(), "unmapped palette ids: {unmapped:?}");
+}
+
 fn shell_coverage() -> Coverage {
     let palette = Workspace::palette_commands_for_test()
         .into_iter()
-        .filter_map(|command| Command::from_palette_id(command.id));
+        .map(|command| {
+            Command::from_palette_id(command.id)
+                .unwrap_or_else(|| panic!("palette id {:?} has no Command", command.id))
+        });
 
     Coverage::new(SHELL)
         .with_surface(SIDEBAR_HEADER)
