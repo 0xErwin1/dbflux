@@ -175,7 +175,13 @@ impl AppState {
         ssh_tunnels: Vec<SshTunnelProfile>,
     ) -> Result<Self, dbflux_storage::error::StorageError> {
         let mut scripts_directory_diagnostics = Vec::new();
-        let scripts_directory = match ScriptsDirectory::new() {
+        // An in-memory runtime keeps its scripts inside its own temporary
+        // directory, so tests never create files in the user's scripts folder.
+        let opened_scripts_directory = match storage_runtime.temp_root() {
+            Some(temp_root) => ScriptsDirectory::new_at(temp_root.join("scripts")),
+            None => ScriptsDirectory::new(),
+        };
+        let scripts_directory = match opened_scripts_directory {
             Ok(mut directory) => {
                 directory
                     .register_external_roots(Self::load_external_script_roots(&storage_runtime));
