@@ -2495,7 +2495,7 @@ impl Connection for PostgresConnection {
                     columns
                         .iter()
                         .zip(row)
-                        .map(|(col, val)| (col.name.clone(), val))
+                        .map(|(column, value)| (column.name.clone(), value))
                         .collect(),
                 );
             }
