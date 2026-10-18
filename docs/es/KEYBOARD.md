@@ -65,7 +65,7 @@ Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y na
 
 | Teclas                                        | Acción                                                 |
 | --------------------------------------------- | ------------------------------------------------------ |
-| `q` / `e`                                     | Cambiar de pestaña del sidebar (Connections / Scripts) |
+| `q` / `e`                                     | Pestaña anterior / siguiente del sidebar (Connections / Scripts / Dashboards) |
 | `/`                                           | Enfocar búsqueda                                       |
 | `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior                       |
 | `h` / `l`                                     | Colapsar / expandir nodo (`l` en una conexión desconectada la conecta) |

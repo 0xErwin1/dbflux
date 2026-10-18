@@ -4010,18 +4010,12 @@ mod tests {
             "document.data.chart_dock.configure.reset",
             "document.data.chart_dock.stats.rebuilding",
             "document.data.chart_dock.stats.no_stats",
-            "document.data.chart_dock.stats.unavailable",
             "document.data.chart_dock.stats.title",
             "document.data.chart_dock.stats.window.title",
             "document.data.chart_dock.stats.window.start",
             "document.data.chart_dock.stats.window.end",
             "document.data.chart_dock.stats.window.span",
             "document.data.chart_dock.stats.window.points",
-            "document.data.chart_dock.stats.source.title",
-            "document.data.chart_dock.stats.source.measurement",
-            "document.data.chart_dock.stats.source.field",
-            "document.data.chart_dock.stats.source.host",
-            "document.data.chart_dock.stats.source.region",
         ];
 
         for key in keys {

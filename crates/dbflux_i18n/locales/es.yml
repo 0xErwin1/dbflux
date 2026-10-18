@@ -1570,7 +1570,6 @@ document:
       stats:
         rebuilding: "Reconstruyendo el gráfico…"
         no_stats: No hay estadísticas disponibles para esta serie.
-        unavailable: no disponible
         title: Estadísticas
         window:
           title: Ventana
@@ -1578,12 +1577,6 @@ document:
           end: fin
           span: duración
           points: puntos
-        source:
-          title: Origen
-          measurement: medición
-          field: campo
-          host: host
-          region: región
     context_menu:
       header: "%{column} · fila %{row}"
       item:
@@ -4178,6 +4171,7 @@ settings:
       menu_select: "Menú: seleccionar"
       menu_back: "Menú: atrás"
       sidebar_next_tab: "Barra lateral: siguiente pestaña"
+      sidebar_prev_tab: "Barra lateral: pestaña anterior"
       refresh_schema: Actualizar schema
       open_connection_manager: Abrir gestor de conexiones
       export_connections: "Exportar conexiones"

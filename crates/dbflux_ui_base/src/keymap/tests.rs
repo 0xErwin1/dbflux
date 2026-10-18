@@ -2741,3 +2741,17 @@ fn run_command_for_returns_the_bound_action(cx: &mut gpui::TestAppContext) {
         "the rebound chord comes from the user's binding"
     );
 }
+
+#[test]
+fn test_sidebar_tab_switch_bindings() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Sidebar, &KeyChord::new("q", Modifiers::none())),
+        Some(Command::SidebarPrevTab)
+    );
+    assert_eq!(
+        keymap.resolve(ContextId::Sidebar, &KeyChord::new("e", Modifiers::none())),
+        Some(Command::SidebarNextTab)
+    );
+}

@@ -1570,7 +1570,6 @@ document:
       stats:
         rebuilding: 正在重建图表…
         no_stats: 此序列没有可用的统计信息。
-        unavailable: 不可用
         title: 统计
         window:
           title: 窗口
@@ -1578,12 +1577,6 @@ document:
           end: 结束
           span: 跨度
           points: 点数
-        source:
-          title: 来源
-          measurement: 测量
-          field: 字段
-          host: 主机
-          region: 区域
     context_menu:
       header: "%{column} · 第 %{row} 行"
       item:
@@ -4178,6 +4171,7 @@ settings:
       menu_select: 菜单选择
       menu_back: 菜单返回
       sidebar_next_tab: 侧边栏下一个标签页
+      sidebar_prev_tab: 侧边栏上一个标签页
       refresh_schema: 刷新 Schema
       open_connection_manager: 打开连接管理器
       export_connections: 导出连接
