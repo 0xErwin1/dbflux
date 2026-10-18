@@ -1235,6 +1235,39 @@ impl dbflux_core::Connection for FkResolveConnection {
         Ok(())
     }
 
+    /// Answers every reload with the same orders page — one row referencing
+    /// an existing customer and one a missing one — so the user refresh and
+    /// page turns can be driven without a dialect.
+    fn browse_table(
+        &self,
+        _request: &dbflux_core::TableBrowseRequest,
+    ) -> Result<QueryResult, dbflux_core::DbError> {
+        let column = |name: &str, is_primary_key: bool| ColumnMeta {
+            name: name.to_string(),
+            type_name: "int4".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key,
+        };
+
+        Ok(QueryResult::table(
+            vec![column("id", true), column("customer_id", false)],
+            vec![
+                vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(8)],
+                vec![dbflux_core::Value::Int(2), dbflux_core::Value::Int(9)],
+            ],
+            None,
+            Duration::ZERO,
+        ))
+    }
+
+    fn count_table(
+        &self,
+        _request: &dbflux_core::TableCountRequest,
+    ) -> Result<u64, dbflux_core::DbError> {
+        Ok(2)
+    }
+
     fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
         Ok(dbflux_core::SchemaSnapshot::default())
     }
@@ -1552,6 +1585,96 @@ fn fk_display_missing_row_keeps_the_plain_cell_and_is_not_refetched(cx: &mut Tes
         fetches.load(Ordering::SeqCst),
         1,
         "a missing row is cached and not fetched again"
+    );
+}
+
+/// A user refresh (refresh key, toolbar button, command palette) drops the
+/// cached labels — a rename in another tab left them stale, and a cached
+/// miss would hide a row inserted since — while a page turn keeps them.
+#[gpui::test]
+fn user_refresh_refetches_fk_labels_and_a_page_turn_keeps_the_cache(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = std::sync::Arc::new(FkResolveConnection {
+        fetches: fetches.clone(),
+        found: true,
+    });
+    let (app_state, profile_id) = register_stub_connection(cx, connection);
+    cache_customers_details(cx, &app_state, profile_id);
+    enable_grid_fk_labels(cx, &app_state);
+
+    let (panel, window) = panel_with_fk_page(
+        cx,
+        app_state,
+        profile_id,
+        vec![("id", true), ("customer_id", false)],
+        vec![
+            vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(8)],
+            vec![dbflux_core::Value::Int(2), dbflux_core::Value::Int(9)],
+        ],
+        vec![dbflux_core::SchemaForeignKeyInfo {
+            name: "orders_customer_fk".to_string(),
+            table_name: "orders".to_string(),
+            columns: vec!["customer_id".to_string()],
+            referenced_schema: Some("public".to_string()),
+            referenced_table: "customers".to_string(),
+            referenced_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        }],
+    );
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        2,
+        "each distinct id is fetched once"
+    );
+    let (label, _) = fk_cell(&panel, window, 0);
+    assert_eq!(label.as_deref(), Some("María López"));
+    let (missing, _) = fk_cell(&panel, window, 1);
+    assert_eq!(missing, None, "the id no row answered stays plain");
+
+    // A page turn reloads the rows and resolves both ids from the cache.
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.go_to_next_page(window, cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        2,
+        "the turned page adds no fetch"
+    );
+    let (label, _) = fk_cell(&panel, window, 0);
+    assert_eq!(
+        label.as_deref(),
+        Some("María López"),
+        "the cached label still applies to the turned page"
+    );
+
+    // The user's refresh clears the cache: the labeled id and the miss are
+    // both read from the source again.
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.request_refresh(window, cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        4,
+        "the refresh re-reads the label and retries the miss"
+    );
+    let (label, _) = fk_cell(&panel, window, 0);
+    assert_eq!(
+        label.as_deref(),
+        Some("María López"),
+        "the fresh round labels the cell again"
     );
 }
 

@@ -91,6 +91,13 @@ impl FkDisplayLoader {
             .cloned()
             .flatten()
     }
+
+    /// Drops every cached label and miss, so the next round re-reads the
+    /// referenced rows from the source. A user refresh calls this; page
+    /// turns keep the cache.
+    pub(super) fn clear(&mut self) {
+        self.cache.clear();
+    }
 }
 
 /// The text an id value keys a lookup by: the one the grid's cell edits

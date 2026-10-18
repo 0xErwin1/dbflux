@@ -67,6 +67,11 @@ impl DataGridPanel {
             return;
         }
 
+        // Cached labels name the rows read before this refresh — a rename in
+        // another tab left them stale, and a cached miss would hide a row
+        // inserted since. Page turns and other internal reloads keep the
+        // cache: their rows name the same referenced rows.
+        self.fk_display.clear();
         self.refresh(window, cx);
     }
 
