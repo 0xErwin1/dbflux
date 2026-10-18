@@ -127,6 +127,7 @@ mod migrate;
 mod parquet;
 mod query;
 mod quit;
+mod reopen;
 mod schema_diff;
 mod scripts;
 mod settings;
