@@ -49,6 +49,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Create Folder no longer swallows `Shift+N` on the Dashboards tab** — Dashboards have no folders, but pressing `Shift+N` on the sidebar's Dashboards tab did nothing and kept the key from reaching anything else. The key is now left unhandled there. The Connections and Scripts tabs still create a folder.
 * **A command no part of the window handles no longer stops DBFlux** — The workspace stopped the app if it received a command none of its handlers routed. Load more and Edit expiry of the key-value browser, and Copy of the SQL preview, were such commands. They now reach the open document or the preview, and any command left unhandled is logged and ignored.
 * **The test suite no longer writes to your scripts folder** — Running the DBFlux tests created a new query file in `~/.local/share/dbflux/scripts` (or the platform's data directory) on every run, because the test app state opened the real scripts folder. Tests now keep their scripts in the temporary directory they already use for their database, which is removed when they finish.
 * **SQLite `TIME` columns are no longer offered as a chart time axis** — A SQLite column declared `TIME` was treated as a timestamp, so the chart view picked a time of day as its time axis. It is now left out of chart auto-detection, as on PostgreSQL, MySQL and SQL Server. `DATE`, `DATETIME` and `TIMESTAMP` columns are unchanged.
