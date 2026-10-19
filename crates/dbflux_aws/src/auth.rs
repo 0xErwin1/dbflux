@@ -14,6 +14,9 @@ use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use sha1::{Digest, Sha1};
 
+use aws_config::Region;
+use aws_config::default_provider::region::DefaultRegionChain;
+use aws_config::meta::region::{ProvideRegion, RegionProviderChain};
 use aws_sdk_sts::config::ProvideCredentials;
 
 use crate::edit::{AwsEditFileKind, AwsEditSnapshot};
@@ -923,23 +926,55 @@ fn effective_aws_profile_name(profile: &AuthProfile) -> Option<&str> {
     None
 }
 
-fn profile_name_and_region(profile: &AuthProfile) -> (Option<&str>, &str) {
-    let profile_name = effective_aws_profile_name(profile);
-    let region = profile
+/// Region used only when neither the auth profile nor the SDK default chain
+/// (`AWS_REGION`, the AWS profile's `region` in `~/.aws/config`) names one.
+const FALLBACK_REGION: &str = "us-east-1";
+
+fn configured_region(profile: &AuthProfile) -> Option<&str> {
+    profile
         .fields
         .get("region")
-        .map(String::as_str)
-        .unwrap_or("us-east-1");
+        .map(|region| region.trim())
+        .filter(|region| !region.is_empty())
+}
 
-    (profile_name, region)
+fn profile_name_and_region(profile: &AuthProfile) -> (Option<&str>, Option<&str>) {
+    (
+        effective_aws_profile_name(profile),
+        configured_region(profile),
+    )
+}
+
+fn region_provider(
+    configured: Option<&str>,
+    default_chain: impl ProvideRegion + 'static,
+) -> RegionProviderChain {
+    RegionProviderChain::first_try(configured.map(|region| Region::new(region.to_owned())))
+        .or_else(default_chain)
+        .or_else(Region::from_static(FALLBACK_REGION))
+}
+
+/// Region for an SDK config: the auth profile's region when set, otherwise
+/// whatever the SDK default chain resolves for `profile_name`.
+fn sdk_region_provider(
+    configured: Option<&str>,
+    profile_name: Option<&str>,
+) -> RegionProviderChain {
+    let mut default_chain = DefaultRegionChain::builder();
+
+    if let Some(name) = profile_name {
+        default_chain = default_chain.profile_name(name);
+    }
+
+    region_provider(configured, default_chain.build())
 }
 
 fn build_aws_value_providers_blocking(
     profile: &AuthProfile,
 ) -> Result<(AwsSecretsManagerProvider, AwsSsmParameterProvider), DbError> {
     let (profile_name, region) = profile_name_and_region(profile);
+    let region = sdk_region_provider(region, profile_name);
     let profile_name = profile_name.map(ToOwned::to_owned);
-    let region = region.to_string();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -953,8 +988,7 @@ fn build_aws_value_providers_blocking(
         })?;
 
     runtime.block_on(async move {
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(region));
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region);
 
         if let Some(name) = profile_name {
             loader = loader.profile_name(name);
@@ -1988,18 +2022,14 @@ pub(crate) fn validate_sso_session(sso_start_url: &str) -> Result<AuthSessionSta
 /// (e.g. the GPUI background executor).
 async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCredentials, DbError> {
     let profile_name = effective_aws_profile_name(profile).map(ToOwned::to_owned);
-    let region = profile
-        .fields
-        .get("region")
-        .cloned()
-        .unwrap_or_else(|| "us-east-1".to_string());
+    let region = configured_region(profile).map(ToOwned::to_owned);
 
     log::debug!(
         "Resolving AWS credentials for auth profile '{}' (provider={}, aws_profile={}, region={})",
         profile.name,
         profile.provider_id,
         profile_name.as_deref().unwrap_or("<default>"),
-        region
+        region.as_deref().unwrap_or("<sdk default>")
     );
 
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
@@ -2029,7 +2059,7 @@ async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCreden
 /// Creates its own single-threaded Tokio runtime internally.
 fn resolve_aws_credentials_blocking(
     profile_name: Option<String>,
-    region: String,
+    region: Option<String>,
 ) -> Result<ResolvedCredentials, DbError> {
     let aws_profile_label = profile_name
         .as_deref()
@@ -2052,14 +2082,19 @@ fn resolve_aws_credentials_blocking(
         })?;
 
     runtime.block_on(async move {
-        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(region.clone()));
+        let region_provider = sdk_region_provider(region.as_deref(), profile_name.as_deref());
+        let mut config_loader =
+            aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region_provider);
 
         if let Some(name) = profile_name {
             config_loader = config_loader.profile_name(name);
         }
 
         let sdk_config = config_loader.load().await;
+        let region = sdk_config
+            .region()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| FALLBACK_REGION.to_string());
 
         let creds = sdk_config
             .credentials_provider()
@@ -2538,7 +2573,51 @@ mod tests {
         let (profile_name, region) = profile_name_and_region(&profile);
 
         assert_eq!(profile_name, Some("team-sso"));
-        assert_eq!(region, "us-east-1");
+        assert_eq!(region, Some("us-east-1"));
+    }
+
+    #[test]
+    fn configured_region_ignores_missing_and_blank_values() {
+        let mut fields = std::collections::HashMap::new();
+        let profile = AuthProfile::new("p", "aws-shared-credentials", fields.clone());
+        assert_eq!(configured_region(&profile), None);
+
+        fields.insert("region".to_string(), "  ".to_string());
+        let profile = AuthProfile::new("p", "aws-shared-credentials", fields.clone());
+        assert_eq!(configured_region(&profile), None);
+
+        fields.insert("region".to_string(), " eu-west-1 ".to_string());
+        let profile = AuthProfile::new("p", "aws-shared-credentials", fields);
+        assert_eq!(configured_region(&profile), Some("eu-west-1"));
+    }
+
+    fn resolve_region(provider: RegionProviderChain) -> Option<String> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime should build")
+            .block_on(provider.region())
+            .map(|region| region.to_string())
+    }
+
+    #[test]
+    fn configured_region_wins_over_the_sdk_default_chain() {
+        let provider = region_provider(Some("ap-south-1"), Region::from_static("eu-west-1"));
+
+        assert_eq!(resolve_region(provider).as_deref(), Some("ap-south-1"));
+    }
+
+    #[test]
+    fn missing_region_defers_to_the_sdk_default_chain() {
+        let provider = region_provider(None, Region::from_static("eu-west-1"));
+
+        assert_eq!(resolve_region(provider).as_deref(), Some("eu-west-1"));
+    }
+
+    #[test]
+    fn us_east_1_is_used_only_when_no_source_names_a_region() {
+        let provider = region_provider(None, None::<Region>);
+
+        assert_eq!(resolve_region(provider).as_deref(), Some("us-east-1"));
     }
 
     #[test]
