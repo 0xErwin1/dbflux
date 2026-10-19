@@ -24,7 +24,7 @@ Base de datos relacional open-source avanzada.
   constraints UNIQUE, y tipos personalizados.
 - Expone routines almacenadas (funciones, procedures, agregados, funciones
   window) en el árbol de schema con un visor de definición de solo lectura.
-- Soporta autenticación, SSL, túnel SSH, y modos de conexión URI/manual.
+- Soporta autenticación, SSL, túnel SSH, y modos de conexión URI/manual. Como en libpq, `verify-ca` valida solo la cadena de certificados y `verify-full` además comprueba el nombre del host.
 - Soporta cancelación de queries a través de los cancel tokens de PostgreSQL.
 - Incluye generación de SQL/código específica de PostgreSQL para CRUD, índices,
   reindex, foreign keys, y operaciones de tipos.
