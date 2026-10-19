@@ -70,6 +70,8 @@ The `client-id` value must match a trusted client entry you created in the DBFlu
 
 **Note**: If you built DBFlux without the `mcp` feature (`--no-default-features`), the MCP server will not be available.
 
+The server loads inline connection hooks and reusable hook bindings from the shared database. It runs PreConnect and PostConnect around connection setup, and PreDisconnect and PostDisconnect when an open connection is disconnected. Hook outcomes are recorded in the audit log. The standalone MCP server does not include the Lua hook executor; an enabled Lua hook returns an error identifying its phase and hook instead of being skipped.
+
 ## 3. Governance Model (Core Concepts)
 
 Every AI request is enforced through all of these layers in order:

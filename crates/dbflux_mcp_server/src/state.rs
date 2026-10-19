@@ -384,7 +384,26 @@ fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, Str
         let access_kind = load_access_kind(&repo, &dto, &profile_id)?;
         let mcp_governance = load_profile_governance(&repo, &profile_id)?;
 
-        profiles.push(ConnectionProfile {
+        let inline_hook_dtos = repo
+            .hooks()
+            .get_for_profile(&profile_id)
+            .map_err(|e| format!("Failed to load inline hooks for '{}': {}", profile_id, e))?;
+        let hooks = if inline_hook_dtos.is_empty() {
+            None
+        } else {
+            Some(load_inline_hooks(&repo, &inline_hook_dtos, &profile_id)?)
+        };
+        let hook_binding_dtos = repo
+            .hook_bindings()
+            .get_for_profile(&profile_id)
+            .map_err(|e| format!("Failed to load hook bindings for '{}': {}", profile_id, e))?;
+        let hook_bindings = if hook_binding_dtos.is_empty() {
+            None
+        } else {
+            Some(load_hook_bindings(&hook_binding_dtos, &profile_id)?)
+        };
+
+        let mut profile = ConnectionProfile {
             id,
             name: dto.name,
             kind: dto.kind.as_deref().and_then(str_to_db_kind),
@@ -393,8 +412,8 @@ fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, Str
             save_password: dto.save_password,
             settings_overrides: None,
             connection_settings,
-            hooks: None,
-            hook_bindings: None,
+            hooks,
+            hook_bindings,
             proxy_profile_id: dto
                 .proxy_profile_id
                 .as_deref()
@@ -410,10 +429,361 @@ fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, Str
             environment: None,
             navigator_view: dbflux_core::NavigatorView::Advanced,
             show_all_databases: true,
-        });
+        };
+
+        if let Some(bindings) = profile.hook_bindings.as_ref() {
+            let definitions = load_bound_hook_definitions(runtime, &profile, bindings)?;
+            profile.hooks = Some(dbflux_core::ConnectionHooks::resolve_from_bindings(
+                &profile,
+                &definitions,
+            ));
+            profile.hook_bindings = None;
+        }
+
+        profiles.push(profile);
     }
 
     Ok(profiles)
+}
+
+fn load_inline_hooks(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    dtos: &[dbflux_storage::repositories::connection_profile_hooks::ConnectionProfileHookDto],
+    profile_id: &str,
+) -> Result<dbflux_core::ConnectionHooks, String> {
+    use dbflux_core::{HookKind, ScriptLanguage};
+
+    let mut hooks = dbflux_core::ConnectionHooks::default();
+    let hook_args = repo.hook_args();
+    let hook_envs = repo.hook_envs();
+
+    for dto in dtos {
+        let phase = parse_hook_phase(&dto.phase).ok_or_else(|| {
+            format!(
+                "Connection profile '{}' has hook '{}' with unknown phase '{}'",
+                profile_id, dto.id, dto.phase
+            )
+        })?;
+        let kind = match dto.hook_kind.as_str() {
+            "command" => {
+                let command = dto.command.clone().ok_or_else(|| {
+                    format!(
+                        "Connection profile '{}' command hook '{}' has no command",
+                        profile_id, dto.id
+                    )
+                })?;
+                let args = hook_args
+                    .get_for_hook(&dto.id)
+                    .map_err(|error| {
+                        format!(
+                            "Failed to load arguments for connection profile '{}' hook '{}': {}",
+                            profile_id, dto.id, error
+                        )
+                    })?
+                    .into_iter()
+                    .map(|argument| argument.value)
+                    .collect();
+                HookKind::Command { command, args }
+            }
+            "script" => {
+                let language = match dto.script_language.as_deref() {
+                    Some("bash" | "sh") => ScriptLanguage::Bash,
+                    Some("python") => ScriptLanguage::Python,
+                    Some(language) => {
+                        return Err(format!(
+                            "Connection profile '{}' hook '{}' has unsupported script language '{}'",
+                            profile_id, dto.id, language
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "Connection profile '{}' script hook '{}' has no language",
+                            profile_id, dto.id
+                        ));
+                    }
+                };
+                HookKind::Script {
+                    language,
+                    source: load_script_source(
+                        dto.script_source_type.as_deref(),
+                        dto.script_content.as_deref(),
+                        dto.script_path.as_deref(),
+                        profile_id,
+                        &dto.id,
+                    )?,
+                    interpreter: dto.script_interpreter.clone(),
+                }
+            }
+            "lua" => HookKind::Lua {
+                source: load_script_source(
+                    dto.lua_source_type.as_deref(),
+                    dto.lua_content.as_deref(),
+                    dto.lua_path.as_deref(),
+                    profile_id,
+                    &dto.id,
+                )?,
+                capabilities: dbflux_core::LuaCapabilities {
+                    logging: dto.lua_log,
+                    env_read: dto.lua_env_read,
+                    connection_metadata: dto.lua_conn_metadata,
+                    process_run: dto.lua_process_run,
+                },
+            },
+            kind => {
+                return Err(format!(
+                    "Connection profile '{}' hook '{}' has unknown kind '{}'",
+                    profile_id, dto.id, kind
+                ));
+            }
+        };
+        let env = hook_envs
+            .get_for_hook(&dto.id)
+            .map_err(|error| {
+                format!(
+                    "Failed to load environment for connection profile '{}' hook '{}': {}",
+                    profile_id, dto.id, error
+                )
+            })?
+            .into_iter()
+            .map(|entry| (entry.key, entry.value))
+            .collect();
+        let hook = connection_hook_from_fields(
+            dto.enabled,
+            kind,
+            dto.cwd.as_deref(),
+            env,
+            dto.inherit_env,
+            dto.env_denylist.clone(),
+            dto.timeout_ms,
+            &dto.execution_mode,
+            dto.ready_signal.clone(),
+            &dto.on_failure,
+            profile_id,
+            &dto.id,
+        )?;
+        hooks.phase_hooks_mut(phase).push(hook);
+    }
+
+    Ok(hooks)
+}
+
+fn load_hook_bindings(
+    dtos: &[dbflux_storage::repositories::connection_profile_hook_bindings::ConnectionProfileHookBindingDto],
+    profile_id: &str,
+) -> Result<dbflux_core::ConnectionHookBindings, String> {
+    let mut result = dbflux_core::ConnectionHookBindings::default();
+    for phase in [
+        "pre_connect",
+        "post_connect",
+        "pre_disconnect",
+        "post_disconnect",
+    ] {
+        let mut bindings = dtos
+            .iter()
+            .filter(|binding| binding.phase == phase)
+            .collect::<Vec<_>>();
+        bindings.sort_by_key(|binding| binding.order_index);
+        let hook_ids = bindings
+            .into_iter()
+            .map(|binding| binding.hook_id.clone())
+            .collect();
+        match phase {
+            "pre_connect" => result.pre_connect = hook_ids,
+            "post_connect" => result.post_connect = hook_ids,
+            "pre_disconnect" => result.pre_disconnect = hook_ids,
+            "post_disconnect" => result.post_disconnect = hook_ids,
+            _ => unreachable!("only supported phases are iterated"),
+        }
+    }
+
+    if let Some(binding) = dtos
+        .iter()
+        .find(|binding| parse_hook_phase(&binding.phase).is_none())
+    {
+        return Err(format!(
+            "Connection profile '{}' has hook binding '{}' with unknown phase '{}'",
+            profile_id, binding.id, binding.phase
+        ));
+    }
+
+    Ok(result)
+}
+
+fn load_bound_hook_definitions(
+    runtime: &StorageRuntime,
+    profile: &ConnectionProfile,
+    bindings: &dbflux_core::ConnectionHookBindings,
+) -> Result<HashMap<String, dbflux_core::ConnectionHook>, String> {
+    let definitions_repo = runtime.hook_definitions();
+    let mut definitions = HashMap::new();
+
+    for phase in [
+        dbflux_core::HookPhase::PreConnect,
+        dbflux_core::HookPhase::PostConnect,
+        dbflux_core::HookPhase::PreDisconnect,
+        dbflux_core::HookPhase::PostDisconnect,
+    ] {
+        for hook_id in bindings.phase_bindings(phase) {
+            if definitions.contains_key(hook_id) {
+                continue;
+            }
+
+            let dto = definitions_repo
+                .get(hook_id)
+                .map_err(|error| {
+                    format!(
+                        "Failed to load {} hook '{}' bound to connection profile '{}': {}",
+                        phase.label(),
+                        hook_id,
+                        profile.name,
+                        error
+                    )
+                })?
+                .ok_or_else(|| {
+                    format!(
+                        "Connection profile '{}' references missing {} hook '{}'",
+                        profile.name,
+                        phase.label().to_ascii_lowercase(),
+                        hook_id
+                    )
+                })?;
+
+            let kind = match dto.kind_json.as_deref() {
+                Some(kind_json) => serde_json::from_str(kind_json).map_err(|error| {
+                    format!(
+                        "Global hook '{}' bound to connection profile '{}' has invalid kind data: {}",
+                        dto.name, profile.name, error
+                    )
+                })?,
+                None => {
+                    let command = dto.script_ref.clone().ok_or_else(|| {
+                        format!(
+                            "Global hook '{}' bound to connection profile '{}' has no executable definition",
+                            dto.name, profile.name
+                        )
+                    })?;
+                    dbflux_core::HookKind::Command {
+                        command,
+                        args: Vec::new(),
+                    }
+                }
+            };
+            let env = definitions_repo.get_env(hook_id).map_err(|error| {
+                format!(
+                    "Failed to load environment for global hook '{}' bound to connection profile '{}': {}",
+                    dto.name, profile.name, error
+                )
+            })?;
+            let hook = connection_hook_from_fields(
+                dto.enabled,
+                kind,
+                dto.cwd.as_deref(),
+                env,
+                dto.inherit_env,
+                dto.env_denylist,
+                dto.timeout_ms,
+                &dto.execution_mode,
+                dto.ready_signal,
+                &dto.on_failure,
+                &profile.id.to_string(),
+                hook_id,
+            )?;
+            definitions.insert(hook_id.clone(), hook);
+        }
+    }
+
+    Ok(definitions)
+}
+
+fn load_script_source(
+    source_type: Option<&str>,
+    content: Option<&str>,
+    path: Option<&str>,
+    profile_id: &str,
+    hook_id: &str,
+) -> Result<dbflux_core::ScriptSource, String> {
+    match source_type.unwrap_or("inline") {
+        "inline" => Ok(dbflux_core::ScriptSource::Inline {
+            content: content.unwrap_or_default().to_string(),
+        }),
+        "file" => path
+            .map(|path| dbflux_core::ScriptSource::File { path: path.into() })
+            .ok_or_else(|| {
+                format!(
+                    "Connection profile '{}' file hook '{}' has no script path",
+                    profile_id, hook_id
+                )
+            }),
+        source_type => Err(format!(
+            "Connection profile '{}' hook '{}' has unknown script source type '{}'",
+            profile_id, hook_id, source_type
+        )),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "maps each persisted field while retaining profile and hook context for validation errors"
+)]
+fn connection_hook_from_fields(
+    enabled: bool,
+    kind: dbflux_core::HookKind,
+    cwd: Option<&str>,
+    env: HashMap<String, String>,
+    inherit_env: bool,
+    env_denylist: Vec<String>,
+    timeout_ms: Option<i64>,
+    execution_mode: &str,
+    ready_signal: Option<String>,
+    on_failure: &str,
+    profile_id: &str,
+    hook_id: &str,
+) -> Result<dbflux_core::ConnectionHook, String> {
+    let timeout_ms = timeout_ms
+        .map(|timeout| {
+            u64::try_from(timeout).map_err(|_| {
+                format!(
+                    "Connection profile '{}' hook '{}' has invalid negative timeout '{}'",
+                    profile_id, hook_id, timeout
+                )
+            })
+        })
+        .transpose()?;
+    let execution_mode = if execution_mode.eq_ignore_ascii_case("detached") {
+        dbflux_core::HookExecutionMode::Detached
+    } else {
+        dbflux_core::HookExecutionMode::Blocking
+    };
+    let on_failure = if on_failure.eq_ignore_ascii_case("disconnect") {
+        dbflux_core::HookFailureMode::Disconnect
+    } else if on_failure.eq_ignore_ascii_case("ignore") {
+        dbflux_core::HookFailureMode::Ignore
+    } else {
+        dbflux_core::HookFailureMode::Warn
+    };
+
+    Ok(dbflux_core::ConnectionHook {
+        enabled,
+        kind,
+        cwd: cwd.map(Into::into),
+        env,
+        inherit_env,
+        env_denylist,
+        timeout_ms,
+        execution_mode,
+        ready_signal,
+        on_failure,
+    })
+}
+
+fn parse_hook_phase(value: &str) -> Option<dbflux_core::HookPhase> {
+    match value {
+        "pre_connect" => Some(dbflux_core::HookPhase::PreConnect),
+        "post_connect" => Some(dbflux_core::HookPhase::PostConnect),
+        "pre_disconnect" => Some(dbflux_core::HookPhase::PreDisconnect),
+        "post_disconnect" => Some(dbflux_core::HookPhase::PostDisconnect),
+        _ => None,
+    }
 }
 
 fn load_connection_settings(
@@ -1059,6 +1429,10 @@ mod tests {
 
     use dbflux_core::auth::{AuthProfile, AuthSessionState, UrlCallback};
     use dbflux_core::secrecy::ExposeSecret;
+    use dbflux_storage::repositories::connection_profile_hook_bindings::ConnectionProfileHookBindingDto;
+    use dbflux_storage::repositories::connection_profile_hooks::ConnectionProfileHookDto;
+    use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
+    use dbflux_storage::repositories::hook_definitions::HookDefinitionDto;
     use dbflux_storage::repositories::services::ServiceDto;
     use dbflux_test_support::{
         FakeAuthProviderRpcConfig, FakeAuthProviderRpcServer, FakeAuthRpcResult,
@@ -1179,6 +1553,140 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let runtime = StorageRuntime::for_path(temp_dir.path().join("dbflux.db")).expect("runtime");
         (temp_dir, runtime)
+    }
+
+    fn insert_profile(runtime: &StorageRuntime, name: &str) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        let mut dto = ConnectionProfileDto::new(id, name.to_string());
+        dto.driver_id = Some("postgres".to_string());
+        dto.kind = Some("Postgres".to_string());
+        runtime
+            .connection_profiles()
+            .insert(&dto)
+            .expect("insert test profile");
+        id
+    }
+
+    #[test]
+    fn load_profiles_keeps_inline_hooks_and_resolves_global_hook_bindings() {
+        let (_temp_dir, runtime) = temp_runtime();
+        let inline_profile_id = insert_profile(&runtime, "inline");
+        let bound_profile_id = insert_profile(&runtime, "bound");
+
+        let profiles_repo = runtime.connection_profiles();
+        let inline_hook = ConnectionProfileHookDto::new_command(
+            inline_profile_id.to_string(),
+            "pre_connect".to_string(),
+            0,
+            "refresh-token".to_string(),
+        );
+        profiles_repo
+            .hooks()
+            .insert(&inline_hook)
+            .expect("insert inline hook");
+        profiles_repo
+            .hook_args()
+            .insert_batch(&inline_hook.id, &["--renew".to_string()])
+            .expect("insert inline hook args");
+        profiles_repo
+            .hook_envs()
+            .insert_batch(
+                &inline_hook.id,
+                &HashMap::from([("TOKEN_SOURCE".to_string(), "keyring".to_string())]),
+            )
+            .expect("insert inline hook environment");
+
+        let global_hook_id = uuid::Uuid::new_v4().to_string();
+        let global_hook = dbflux_core::ConnectionHook {
+            enabled: true,
+            kind: dbflux_core::HookKind::Command {
+                command: "vpn-connect".to_string(),
+                args: vec!["--profile".to_string(), "work".to_string()],
+            },
+            cwd: None,
+            env: HashMap::from([("VPN_MODE".to_string(), "work".to_string())]),
+            inherit_env: true,
+            env_denylist: vec!["DBFLUX_PASSWORD".to_string()],
+            timeout_ms: Some(5_000),
+            execution_mode: dbflux_core::HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: dbflux_core::HookFailureMode::Disconnect,
+        };
+        let mut definition = HookDefinitionDto::new(
+            uuid::Uuid::parse_str(&global_hook_id).expect("global hook id"),
+            "Connect VPN".to_string(),
+            "Blocking".to_string(),
+        );
+        definition.kind_json = Some(serde_json::to_string(&global_hook.kind).expect("hook JSON"));
+        definition.env_denylist = global_hook.env_denylist.clone();
+        definition.timeout_ms = global_hook.timeout_ms.map(|value| value as i64);
+        definition.on_failure = "Disconnect".to_string();
+        runtime
+            .hook_definitions()
+            .insert(&definition)
+            .expect("insert global hook");
+        runtime
+            .hook_definitions()
+            .set_env(&global_hook_id, &global_hook.env)
+            .expect("insert global hook environment");
+        profiles_repo
+            .hook_bindings()
+            .insert(&ConnectionProfileHookBindingDto::new(
+                bound_profile_id.to_string(),
+                global_hook_id,
+                "post_connect".to_string(),
+                0,
+            ))
+            .expect("insert hook binding");
+
+        let profiles = load_profiles(&runtime).expect("load profiles");
+        let inline_profile = profiles
+            .iter()
+            .find(|profile| profile.id == inline_profile_id)
+            .expect("inline profile loaded");
+        let inline_hook = inline_profile
+            .hooks
+            .as_ref()
+            .expect("inline hooks loaded")
+            .pre_connect
+            .first()
+            .expect("inline pre-connect hook loaded");
+        match &inline_hook.kind {
+            dbflux_core::HookKind::Command { command, args } => {
+                assert_eq!(command, "refresh-token");
+                assert_eq!(args, &["--renew"]);
+            }
+            other => panic!("expected command hook, got {other:?}"),
+        }
+        assert_eq!(
+            inline_hook.env.get("TOKEN_SOURCE").map(String::as_str),
+            Some("keyring")
+        );
+
+        let bound_profile = profiles
+            .iter()
+            .find(|profile| profile.id == bound_profile_id)
+            .expect("bound profile loaded");
+        let bound_hook = bound_profile
+            .hooks
+            .as_ref()
+            .expect("resolved global hook loaded")
+            .post_connect
+            .first()
+            .expect("post-connect binding resolved");
+        match &bound_hook.kind {
+            dbflux_core::HookKind::Command { command, args } => {
+                assert_eq!(command, "vpn-connect");
+                assert_eq!(args, &["--profile", "work"]);
+            }
+            other => panic!("expected command hook, got {other:?}"),
+        }
+        assert_eq!(
+            bound_hook.env.get("VPN_MODE").map(String::as_str),
+            Some("work")
+        );
+        assert_eq!(bound_hook.timeout_ms, Some(5_000));
+        assert_eq!(bound_hook.env_denylist, ["DBFLUX_PASSWORD"]);
     }
 
     fn insert_auth_provider_service(runtime: &StorageRuntime, socket_id: &str) {

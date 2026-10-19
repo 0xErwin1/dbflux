@@ -70,6 +70,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 **注意**：如果你在构建 DBFlux 时未启用 `mcp` feature（`--no-default-features`），MCP 服务器将不可用。
 
+服务器会从共享数据库加载内联连接钩子和可复用钩子绑定。建立连接时会运行 PreConnect 和 PostConnect，断开已打开的连接时会运行 PreDisconnect 和 PostDisconnect。钩子执行结果会记录到审计日志。独立 MCP 服务器不包含 Lua 钩子执行器；启用的 Lua 钩子会返回标明阶段和钩子的错误，不会被跳过。
+
 ## 3. 治理模型（核心概念）
 
 每一个 AI 请求都会按顺序经过以下全部层面：

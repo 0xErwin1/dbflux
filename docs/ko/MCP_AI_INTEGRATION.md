@@ -70,6 +70,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 
 **참고**: `mcp` 기능 없이(`--no-default-features`) DBFlux를 빌드했다면 MCP 서버를 사용할 수 없습니다.
 
+서버는 공유 데이터베이스에서 인라인 연결 훅과 재사용 가능한 훅 바인딩을 불러옵니다. 연결을 설정할 때 PreConnect와 PostConnect를 실행하고, 열린 연결을 끊을 때 PreDisconnect와 PostDisconnect를 실행합니다. 훅 결과는 감사 로그에 기록됩니다. 독립형 MCP 서버에는 Lua 훅 실행기가 포함되어 있지 않습니다. 활성화된 Lua 훅은 건너뛰지 않고 단계와 훅을 식별하는 오류를 반환합니다.
+
 ## 3. 거버넌스 모델 (핵심 개념)
 
 모든 AI 요청은 다음 계층 전부를 순서대로 거치며 강제됩니다:
