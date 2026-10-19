@@ -1369,6 +1369,54 @@ pub(super) fn cache_customers_details(
     cache_referenced_table_details(cx, app_state, profile_id, "customers");
 }
 
+/// A referenced table whose `id` / `product_id` columns leave no column to
+/// name rows by — the shape of a join table of surrogate keys.
+fn join_table_info(table: &str) -> dbflux_core::TableInfo {
+    let column = |name: &str, is_primary_key: bool| dbflux_core::ColumnInfo {
+        name: name.to_string(),
+        type_name: "int8".to_string(),
+        nullable: false,
+        is_primary_key,
+        default_value: None,
+        enum_values: None,
+    };
+
+    dbflux_core::TableInfo {
+        name: table.to_string(),
+        schema: Some("public".to_string()),
+        columns: Some(vec![column("id", true), column("product_id", false)]),
+        indexes: None,
+        foreign_keys: None,
+        constraints: None,
+        sample_fields: None,
+        presentation: Default::default(),
+        child_items: None,
+        storage_hints: None,
+        pseudo_columns: Box::default(),
+    }
+}
+
+/// Caches a referenced table whose column list settles on no display
+/// column.
+fn cache_no_display_table_details(
+    cx: &mut TestAppContext,
+    app_state: &gpui::Entity<AppStateEntity>,
+    profile_id: Uuid,
+    table: &str,
+) {
+    cx.update(|cx| {
+        app_state.update(cx, |app, _| {
+            app.set_table_details(
+                profile_id,
+                "app".to_string(),
+                Some("public".to_string()),
+                table.to_string(),
+                join_table_info(table),
+            );
+        });
+    });
+}
+
 /// A grid over a page of `public.orders` with the given columns, rows and
 /// foreign keys, built the way a landed page leaves the panel.
 fn panel_with_fk_page<'a>(
@@ -1689,8 +1737,11 @@ struct RecordedBatchCall {
 /// from a fixed id → label table, so the batch path can be driven without a
 /// live database. `fetch_row_by_pk` stays unsupported on purpose: any per-id
 /// fallback in the UI fails these tests loudly instead of passing.
+/// `table_details` counts its calls and answers a join-table shape — no
+/// display column.
 struct FkBatchConnection {
     calls: std::sync::Arc<std::sync::Mutex<Vec<RecordedBatchCall>>>,
+    metadata_fetches: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl dbflux_core::Connection for FkBatchConnection {
@@ -1762,6 +1813,18 @@ impl dbflux_core::Connection for FkBatchConnection {
         Ok(dbflux_core::SchemaSnapshot::default())
     }
 
+    fn table_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<dbflux_core::TableInfo, dbflux_core::DbError> {
+        self.metadata_fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        Ok(join_table_info(table))
+    }
+
     fn fetch_rows_by_pks(
         &self,
         _database: &str,
@@ -1821,6 +1884,7 @@ fn fk_display_batches_one_fetch_per_referenced_table_and_caches_misses(cx: &mut 
     let calls: std::sync::Arc<std::sync::Mutex<Vec<RecordedBatchCall>>> = Default::default();
     let connection = std::sync::Arc::new(FkBatchConnection {
         calls: calls.clone(),
+        metadata_fetches: Default::default(),
     });
     let (app_state, profile_id) = register_stub_connection(cx, connection);
     cache_customers_details(cx, &app_state, profile_id);
@@ -1941,6 +2005,7 @@ fn fk_display_batches_one_fetch_per_distinct_referenced_table(cx: &mut TestAppCo
     let calls: std::sync::Arc<std::sync::Mutex<Vec<RecordedBatchCall>>> = Default::default();
     let connection = std::sync::Arc::new(FkBatchConnection {
         calls: calls.clone(),
+        metadata_fetches: Default::default(),
     });
     let (app_state, profile_id) = register_stub_connection(cx, connection);
     cache_customers_details(cx, &app_state, profile_id);
@@ -2027,6 +2092,267 @@ fn fk_display_batches_one_fetch_per_distinct_referenced_table(cx: &mut TestAppCo
     let (vendor, vendor_edit) = fk_cell_at(&panel, window, 1, 2);
     assert_eq!(vendor, None, "the vendors miss keeps its raw id");
     assert_eq!(vendor_edit, "6");
+}
+
+/// The page's foreign keys, all pointing at `order_items`, a referenced
+/// table whose column list settles on no display column.
+fn order_item_fk() -> dbflux_core::SchemaForeignKeyInfo {
+    dbflux_core::SchemaForeignKeyInfo {
+        name: "orders_order_item_fk".to_string(),
+        table_name: "orders".to_string(),
+        columns: vec!["order_item_id".to_string()],
+        referenced_schema: Some("public".to_string()),
+        referenced_table: "order_items".to_string(),
+        referenced_columns: vec!["id".to_string()],
+        on_delete: None,
+        on_update: None,
+    }
+}
+
+/// A referenced table whose cached details settle on no display column —
+/// a join table of surrogate keys — is never asked for metadata again, and
+/// no row batch runs for its ids: they land as cached misses, new ids of a
+/// later page included.
+#[gpui::test]
+fn fk_display_skips_fetches_for_a_cached_table_without_a_display_column(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let calls: std::sync::Arc<std::sync::Mutex<Vec<RecordedBatchCall>>> = Default::default();
+    let metadata_fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = std::sync::Arc::new(FkBatchConnection {
+        calls: calls.clone(),
+        metadata_fetches: metadata_fetches.clone(),
+    });
+    let (app_state, profile_id) = register_stub_connection(cx, connection);
+    cache_no_display_table_details(cx, &app_state, profile_id, "order_items");
+    enable_grid_fk_labels(cx, &app_state);
+
+    let (panel, window) = panel_with_fk_page(
+        cx,
+        app_state,
+        profile_id,
+        vec![("id", true), ("order_item_id", false)],
+        vec![
+            vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(5)],
+            vec![dbflux_core::Value::Int(2), dbflux_core::Value::Int(6)],
+        ],
+        vec![order_item_fk()],
+    );
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        metadata_fetches.load(Ordering::SeqCst),
+        0,
+        "cached details that settle on no display column are not re-fetched"
+    );
+    assert_eq!(
+        calls.lock().expect("the stub records its calls").len(),
+        0,
+        "a group without a display column rides no row batch"
+    );
+    let (label, edit_text) = fk_cell(&panel, window, 0);
+    assert_eq!(label, None, "the cell keeps its plain id");
+    assert_eq!(edit_text, "5");
+
+    // A later page with ids the cache has not seen.
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            let column = |name: &str, is_primary_key: bool| ColumnMeta {
+                name: name.to_string(),
+                type_name: "int4".to_string(),
+                kind: ColumnKind::Integer,
+                nullable: false,
+                is_primary_key,
+            };
+            panel.result = QueryResult::table(
+                vec![column("id", true), column("order_item_id", false)],
+                vec![vec![dbflux_core::Value::Int(3), dbflux_core::Value::Int(7)]],
+                None,
+                Duration::ZERO,
+            );
+            panel.rebuild_table(None, cx);
+            panel.resolve_fk_display_values(cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        metadata_fetches.load(Ordering::SeqCst),
+        0,
+        "new ids do not send the settled table back to metadata"
+    );
+    assert_eq!(
+        calls.lock().expect("the stub records its calls").len(),
+        0,
+        "new ids of a group without a display column ride no batch either"
+    );
+    let (label, edit_text) = fk_cell(&panel, window, 0);
+    assert_eq!(label, None, "the new id keeps its plain cell");
+    assert_eq!(edit_text, "7", "the raw id stays readable");
+}
+
+/// A referenced table that is not in the details cache is asked for its
+/// metadata exactly once: the fetched join-table shape settles on no
+/// display column, so no row batch runs and the round's ids land as
+/// cached misses.
+#[gpui::test]
+fn fk_display_fetches_metadata_once_for_an_uncached_table_without_a_display_column(
+    cx: &mut TestAppContext,
+) {
+    use std::sync::atomic::Ordering;
+
+    let calls: std::sync::Arc<std::sync::Mutex<Vec<RecordedBatchCall>>> = Default::default();
+    let metadata_fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = std::sync::Arc::new(FkBatchConnection {
+        calls: calls.clone(),
+        metadata_fetches: metadata_fetches.clone(),
+    });
+    let (app_state, profile_id) = register_stub_connection(cx, connection);
+    enable_grid_fk_labels(cx, &app_state);
+
+    let (panel, window) = panel_with_fk_page(
+        cx,
+        app_state,
+        profile_id,
+        vec![("id", true), ("order_item_id", false)],
+        vec![
+            vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(5)],
+            vec![dbflux_core::Value::Int(2), dbflux_core::Value::Int(6)],
+        ],
+        vec![order_item_fk()],
+    );
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        metadata_fetches.load(Ordering::SeqCst),
+        1,
+        "an uncached referenced table is asked for its metadata once"
+    );
+    assert_eq!(
+        calls.lock().expect("the stub records its calls").len(),
+        0,
+        "the fetched shape has no display column, so no row batch runs"
+    );
+    let (label, edit_text) = fk_cell(&panel, window, 0);
+    assert_eq!(label, None, "the cell keeps its plain id");
+    assert_eq!(edit_text, "5");
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        metadata_fetches.load(Ordering::SeqCst),
+        1,
+        "the landed metadata settles the table: later rounds do not refetch it"
+    );
+    assert_eq!(
+        calls.lock().expect("the stub records its calls").len(),
+        0,
+        "the ids stay cached misses"
+    );
+}
+
+/// A group whose referenced table has a display column still rides its
+/// batch while a sibling group without one is skipped: the round answers
+/// the labels it can and caches the rest as misses.
+#[gpui::test]
+fn fk_display_batches_groups_with_a_display_column_and_skips_the_rest(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let calls: std::sync::Arc<std::sync::Mutex<Vec<RecordedBatchCall>>> = Default::default();
+    let metadata_fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = std::sync::Arc::new(FkBatchConnection {
+        calls: calls.clone(),
+        metadata_fetches: metadata_fetches.clone(),
+    });
+    let (app_state, profile_id) = register_stub_connection(cx, connection);
+    cache_customers_details(cx, &app_state, profile_id);
+    cache_no_display_table_details(cx, &app_state, profile_id, "order_items");
+    enable_grid_fk_labels(cx, &app_state);
+
+    let (panel, window) = panel_with_fk_page(
+        cx,
+        app_state,
+        profile_id,
+        vec![
+            ("id", true),
+            ("customer_id", false),
+            ("order_item_id", false),
+        ],
+        vec![
+            vec![
+                dbflux_core::Value::Int(1),
+                dbflux_core::Value::Int(8),
+                dbflux_core::Value::Int(5),
+            ],
+            vec![
+                dbflux_core::Value::Int(2),
+                dbflux_core::Value::Int(9),
+                dbflux_core::Value::Int(6),
+            ],
+        ],
+        vec![
+            dbflux_core::SchemaForeignKeyInfo {
+                name: "orders_customer_fk".to_string(),
+                table_name: "orders".to_string(),
+                columns: vec!["customer_id".to_string()],
+                referenced_schema: Some("public".to_string()),
+                referenced_table: "customers".to_string(),
+                referenced_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            },
+            order_item_fk(),
+        ],
+    );
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| panel.resolve_fk_display_values(cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        metadata_fetches.load(Ordering::SeqCst),
+        0,
+        "both referenced tables are settled by the cache"
+    );
+    let recorded = calls.lock().expect("the stub records its calls");
+    assert_eq!(
+        recorded.len(),
+        1,
+        "only the group with a display column rides a batch"
+    );
+    let call = recorded.first().expect("the batch call exists");
+    assert_eq!(call.table, "customers");
+    assert_eq!(
+        call.values,
+        vec![dbflux_core::Value::Int(8), dbflux_core::Value::Int(9)]
+    );
+    assert_eq!(
+        call.projection,
+        vec!["id".to_string(), "name".to_string()],
+        "the batch projects the pk and the display column only"
+    );
+    drop(recorded);
+
+    let (customer, _) = fk_cell(&panel, window, 0);
+    assert_eq!(customer.as_deref(), Some("María López"));
+    let (item, item_edit) = fk_cell_at(&panel, window, 0, 2);
+    assert_eq!(
+        item, None,
+        "the group without a display column keeps its plain id"
+    );
+    assert_eq!(item_edit, "5");
 }
 
 /// A grid over `orders` opened the way the sidebar opens SQLite tables —

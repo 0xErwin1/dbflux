@@ -10,6 +10,10 @@
 //! swap, which draws the referenced row's display column beside the id
 //! while editing, copying and mutations keep carrying the typed id.
 //!
+//! A referenced table with no display column — a join table of surrogate
+//! keys — can answer no label for any id, so its ids are cached as misses
+//! without a metadata refetch or a row batch.
+//!
 //! The whole pass is gated on the `grid_fk_labels` setting (off by default):
 //! with it off the grid shows raw ids and starts no resolution fetches. The
 //! row inspector resolves its references regardless of the setting.
@@ -32,8 +36,9 @@ type FkDisplayKey = (Option<String>, String, String);
 type ReferencedTable = (Option<String>, String);
 
 /// The display column of each referenced table, named by its pk column
-/// key first and without one second. `None` marks a table whose column
-/// is not known yet, or has none to name rows by.
+/// key first and without one second. `None` marks a table that has no
+/// column to name rows by — a settled answer, whether it came from the
+/// cache or from the fetched metadata.
 type DisplayColumns = HashMap<ReferencedTable, Option<String>>;
 
 /// The round's lookups batched per (referenced schema, referenced table,
@@ -305,7 +310,8 @@ fn group_fk_lookups(lookups: Vec<FkLookup>) -> FkLookupGroups {
 }
 
 /// The display column of each referenced table the connection's cached
-/// table details answer, plus the tables they do not — the ones the round
+/// details settle — including `None` for the ones they settle as having
+/// none — plus the tables no cached details settle, the ones the round
 /// fetches metadata for. The cache is keyed by the referenced schema
 /// first and without one second, the shape MySQL writes when it records
 /// the schema on the foreign key but not on the table.
@@ -338,18 +344,26 @@ fn cached_display_columns(
                 ))
             });
 
-        let column = info.and_then(|details| {
-            pick_display_column(
-                details.columns.as_deref()?,
-                details.foreign_keys.as_deref().unwrap_or(&[]),
-            )
+        // Details that carry a column list settle the table for good:
+        // a `None` among them means the table has no display column,
+        // which no metadata fetch would change. Only a table without
+        // cached details — or a details entry without a column list —
+        // is worth fetching metadata for.
+        let settled = info.and_then(|details| {
+            details.columns.as_deref().map(|columns| {
+                pick_display_column(columns, details.foreign_keys.as_deref().unwrap_or(&[]))
+            })
         });
 
-        if column.is_none() {
-            unknown_tables.push(table_key.clone());
+        match settled {
+            Some(column) => {
+                display_columns.insert(table_key, column);
+            }
+            None => {
+                display_columns.insert(table_key.clone(), None);
+                unknown_tables.push(table_key);
+            }
         }
-
-        display_columns.insert(table_key, column);
     }
 
     (display_columns, unknown_tables)
@@ -394,7 +408,7 @@ struct FkDisplayRound {
     /// Display column per referenced table; the metadata fetch fills the
     /// entries the cache left open.
     display_columns: DisplayColumns,
-    /// The referenced tables the cache could not answer; their metadata
+    /// The referenced tables no cached details settled; their metadata
     /// is fetched before the group batches run.
     unknown_tables: Vec<ReferencedTable>,
 }
@@ -425,15 +439,22 @@ impl FkDisplayRound {
                 break;
             }
 
-            let display_column = self
+            let Some(display_column) = self
                 .display_columns
                 .get(&(schema.clone(), table.clone()))
                 .cloned()
-                .flatten();
-            let mut projection = vec![pk_column.clone()];
-            if let Some(column) = &display_column {
-                projection.push(column.clone());
-            }
+                .flatten()
+            else {
+                // No display column means no row can answer a label:
+                // cache every id of the group as a miss and spare the
+                // database a batch that projects nothing but the pk.
+                for lookup in lookups {
+                    resolved.push((lookup.key.clone(), None));
+                }
+                continue;
+            };
+
+            let projection = vec![pk_column.clone(), display_column.clone()];
             let values: Vec<Value> = lookups.iter().map(|lookup| lookup.value.clone()).collect();
 
             let connection = self.connection.clone();
@@ -457,7 +478,7 @@ impl FkDisplayRound {
 
             match rows {
                 Ok(rows) => {
-                    let labels = labels_by_pk_text(&rows, pk_column, display_column.as_deref());
+                    let labels = labels_by_pk_text(&rows, pk_column, Some(display_column.as_str()));
 
                     for lookup in lookups {
                         let label = labels.get(&lookup.key.2).cloned().flatten();
