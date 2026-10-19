@@ -73,7 +73,6 @@ pub(crate) enum RedshiftSslMode {
     VerifyFull,
 }
 
-/// Which parts of the server certificate a TLS connection validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TlsVerification {
     pub chain: bool,
