@@ -225,14 +225,17 @@ guardado, ejecuta **Open chart…** desde el command palette (`OpenSavedChart`),
 que lista los gráficos guardados del perfil actual en un overlay de búsqueda
 difusa.
 
-### Colecciones de series temporales
+### Tablas y colecciones de series temporales
 
-Abrir una colección en una conexión cuya categoría es
-`DatabaseCategory::TimeSeries` (un measurement de InfluxDB, por ejemplo) le da a
-su data grid las vistas Data, Chart y JSON que tienen los resultados de query,
+Abrir una tabla o colección que su driver declara como serie temporal
+(`ObjectFacet::TimeSeries`: un measurement de InfluxDB, o una hypertable de
+TimescaleDB en PostgreSQL) le da a su data grid las vistas Data, Chart y JSON que tienen los resultados de query,
 más **Both**, que dibuja el chart sobre la cuadrícula. La primera página se abre
 en Both cuando `detect_chart_columns` devuelve `Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
 X, la primera columna numérica en Y y la primera columna `Text` como grupo).
+La columna de tiempo que nombra el driver, como la dimensión de tiempo de una
+hypertable, va en X cuando el resultado la tiene; si no, va la primera columna
+de timestamp.
 Un grupo dibuja una línea por cada valor distinto de su columna, etiquetada con
 ese valor, así que un tag como `host` le da a cada host su propia línea. Lo
 mismo aplica cuando el grupo se elige en la barra de ejes. El grupo por defecto
@@ -243,6 +246,11 @@ Data muestra las filas en la grilla en lugar del árbol de documentos que usan
 las demás colecciones. Un refresco, sea manual, automático o un cambio de
 página, conserva la vista que eligió el usuario, y vuelve a Data solo cuando la
 página nueva ya no se puede graficar.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/hypertable-dark.webp">
+  <img src="../images/charts/hypertable-light.webp" alt="La hypertable server_metrics abierta en la vista Both: un gráfico de líneas de cpu_percent en el tiempo, con una línea por host, sobre la cuadrícula de filas">
+</picture>
 
 La barra de herramientas y la barra de estado nombran el browse con la query que
 ejecuta el driver, tomada de `QueryGenerator::collection_browse_query`, así que

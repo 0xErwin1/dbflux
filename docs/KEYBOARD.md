@@ -394,6 +394,7 @@ A read-only delete does not change the clipboard.
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
+| `t` | Show the next data view (Table, Tree, JSON) of a table or collection that offers more than one |
 | `Shift+t` | Show the next view of the result (Data or Grid, JSON, Chart and the other views it offers), wrapping; the keyboard stays in the results |
 | `v` | Toggle the value panel for the selected cell |
 | `Ctrl+Space` | Toggle the row inspector for the selected row |

@@ -132,9 +132,14 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 
 图表可以按连接配置保存。要重新打开已保存的图表，请从命令面板执行 **打开图表…**（`OpenSavedChart`），它会以支持模糊搜索的浮层列出当前连接配置下已保存的图表。
 
-### 时间序列集合
+### 时间序列表和集合
 
-在类别为 `DatabaseCategory::TimeSeries` 的连接（例如 InfluxDB 的 measurement）上打开集合时，其数据网格会提供与查询结果相同的 Data、Chart 和 JSON 视图，另加 **Both**，即在网格上方绘制图表。当 `detect_chart_columns` 返回 `Ok` 时，第一页以 Both 形式打开，坐标轴由 `default_bindings_for_time_series` 预设（X 轴为时间，Y 轴为第一个数值列，分组为第一个 `Text` 列）。分组会为其列的每个不同值绘制一条线，并以该值作为标签，因此像 `host` 这样的标签会让每台主机拥有自己的线。在坐标轴栏中选择分组时同样如此。只有当该列在结果中的不同值不超过 12 个（`DEFAULT_GROUP_MAX_VALUES`）时才会应用默认分组，否则图表以不分组状态打开。在坐标轴栏中手动选择的分组没有此限制。Data 视图以网格显示各行，而不是其他集合使用的文档树。刷新（无论是手动、自动还是翻页）会保留用户选择的视图，只有当新的一页无法再绘制图表时才回退到 Data。
+打开驱动声明为时间序列的表或集合（`ObjectFacet::TimeSeries`：InfluxDB 的 measurement，或 PostgreSQL 上的 TimescaleDB hypertable）时，其数据网格会提供与查询结果相同的 Data、Chart 和 JSON 视图，另加 **Both**，即在网格上方绘制图表。当 `detect_chart_columns` 返回 `Ok` 时，第一页以 Both 形式打开，坐标轴由 `default_bindings_for_time_series` 预设（X 轴为时间，Y 轴为第一个数值列，分组为第一个 `Text` 列）。驱动指定的时间列（例如 hypertable 的时间维度）出现在结果中时放在 X 轴上，否则使用第一个时间戳列。分组会为其列的每个不同值绘制一条线，并以该值作为标签，因此像 `host` 这样的标签会让每台主机拥有自己的线。在坐标轴栏中选择分组时同样如此。只有当该列在结果中的不同值不超过 12 个（`DEFAULT_GROUP_MAX_VALUES`）时才会应用默认分组，否则图表以不分组状态打开。在坐标轴栏中手动选择的分组没有此限制。Data 视图以网格显示各行，而不是其他集合使用的文档树。刷新（无论是手动、自动还是翻页）会保留用户选择的视图，只有当新的一页无法再绘制图表时才回退到 Data。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/hypertable-dark.webp">
+  <img src="../images/charts/hypertable-light.webp" alt="以 Both 视图打开的 server_metrics hypertable：行网格上方是 cpu_percent 随时间变化的折线图，每台主机一条线">
+</picture>
 
 工具栏和状态栏使用驱动程序实际运行的查询来命名这次浏览，该查询取自 `QueryGenerator::collection_browse_query`，因此标签以连接自身的查询语言书写。未实现该方法的驱动程序保留通用标签。
 

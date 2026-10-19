@@ -1,13 +1,22 @@
 # Working with Results
 
-Results render in result tabs inside the document. The view mode is chosen
-automatically from the database category:
+Results render in result tabs inside the document. Each table or collection
+opens in the view its driver declares for that object, and offers the other
+views it declares:
 
-- **Table view** for relational databases.
-- **Table view** for document collections (for example MongoDB, DynamoDB), with
-  **Tree** and **JSON** views of the same page (see
+- **Table view** for relational tables and query results.
+- **Tree view** for document collections (for example MongoDB, DynamoDB), with
+  **Table** and **JSON** views of the same page (see
   [Document collections](DOCUMENTS.md)).
+- **Table view** with a **Tree** view of the same rows for a table with JSON
+  columns (see [JSON columns in a table](DOCUMENTS.md#json-columns-in-a-table)).
+- **Chart above the grid** for a time series, such as an InfluxDB measurement or
+  a TimescaleDB hypertable, when its rows can be charted (see
+  [Time-series tables and collections](CHARTS.md#time-series-tables-and-collections)).
 - **Key-value view** for Redis (see [Key-Value Browser](KEY_VALUE.md)).
+
+A table with a vector column also lists the rows most
+[similar](#similar-rows) to the one selected.
 
 Event-stream-style containers open as event streams when the driver declares that
 presentation.
@@ -103,6 +112,35 @@ builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autoco
   <source media="(prefers-color-scheme: dark)" srcset="images/results/filtering-dark.webp">
   <img src="images/results/filtering-light.webp" alt="The customers table filtered by a WHERE condition typed in the filter bar">
 </picture>
+
+## Similar rows
+
+On a table with a vector column (today a PostgreSQL table with a pgvector
+`vector` column), press `Shift+s` or choose **Find similar rows** in the row
+menu to list the rows nearest to the selected row. The menu entry names the
+column it reads and how many rows it lists, or why it cannot run: the row has no
+value in that column, or the grid holds unsaved changes, which must be saved or
+reverted first.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/results/similar-rows-dark.webp">
+  <img src="images/results/similar-rows-light.webp" alt="The products table after Find similar rows: the selected row pinned on top as the anchor, its ten nearest rows ordered by L2 distance, and the bar with the vector column, the distance and K">
+</picture>
+
+The grid then shows the selected row pinned on top, marked `anchor`, and its 10
+nearest rows below it, closest first. The first column holds the distance, under
+a header that names it. A bar replaces the filter row:
+
+- The column picker chooses the vector column. With the cursor on a vector
+  column, the search starts on that column; otherwise on the table's first one.
+- **L2**, **Cosine** and **Inner product** switch the distance. Inner product
+  shows the product itself, highest first.
+- **K** sets how many rows to list, from 1 to 1000.
+- **Back to table**, or `Esc`, returns to the table page with its filter.
+
+The selected row is left out of its neighbors by its primary key, rows without a
+vector are not listed, and similar rows are read-only. A distance that is not a
+number shows a dash. `halfvec` and `sparsevec` columns do not offer the search.
 
 ## Editing and CRUD
 
