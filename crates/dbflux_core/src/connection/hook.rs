@@ -390,16 +390,16 @@ impl ConnectionHooks {
     /// Resolves hook bindings from a profile against a global definitions map.
     ///
     /// If the profile has `hook_bindings`, each binding ID is looked up in
-    /// `definitions` and placed into the corresponding phase. Missing IDs are
-    /// silently skipped (logged as warnings). If the profile has no bindings,
-    /// falls back to `profile.hooks` (inline hooks) or an empty default.
+    /// `definitions` and appended to the corresponding phase after any inline
+    /// hooks. Missing IDs are silently skipped (logged as warnings). Profiles
+    /// without bindings retain their inline hooks or use an empty default.
     pub fn resolve_from_bindings(
         profile: &ConnectionProfile,
         definitions: &HashMap<String, ConnectionHook>,
     ) -> Self {
-        if let Some(bindings) = &profile.hook_bindings {
-            let mut hooks = Self::default();
+        let mut hooks = profile.hooks.clone().unwrap_or_default();
 
+        if let Some(bindings) = &profile.hook_bindings {
             for phase in [
                 HookPhase::PreConnect,
                 HookPhase::PostConnect,
@@ -419,11 +419,9 @@ impl ConnectionHooks {
                     }
                 }
             }
-
-            return hooks;
         }
 
-        profile.hooks.clone().unwrap_or_default()
+        hooks
     }
 }
 

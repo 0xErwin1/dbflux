@@ -64,55 +64,173 @@ fn supervise_detached_hook_processes(receiver: DetachedProcessReceiver) -> Resul
         .name("dbflux-mcp-hook-supervisor".to_string())
         .spawn(move || {
             for handle in receiver {
-                let _ = std::thread::Builder::new()
-                    .name("dbflux-mcp-hook-process".to_string())
-                    .spawn(move || supervise_detached_hook_process(handle));
+                supervise_detached_hook_process_in_thread(handle);
             }
         })
         .map(|_| ())
         .map_err(|error| format!("Unable to start MCP hook process supervisor: {error}"))
 }
 
-fn supervise_detached_hook_process(mut handle: DetachedProcessHandle) {
-    let stdout_reader = handle.child.stdout.take().map(|mut stdout| {
-        std::thread::spawn(move || {
-            let _ = std::io::copy(&mut stdout, &mut std::io::sink());
-        })
+fn supervise_detached_hook_process_in_thread(handle: DetachedProcessHandle) {
+    let handle = Arc::new(std::sync::Mutex::new(Some(handle)));
+    let worker_handle = Arc::clone(&handle);
+    let spawn_result = std::thread::Builder::new()
+        .name("dbflux-mcp-hook-process".to_string())
+        .spawn(move || {
+            if let Some(handle) = take_detached_process_handle(&worker_handle) {
+                supervise_detached_hook_process(handle)
+                    .log_err_with("Unable to supervise detached MCP hook process");
+            }
+        });
+
+    if let Err(error) = spawn_result {
+        log::error!("Unable to start detached MCP hook process supervisor: {error}");
+        if let Some(mut handle) = take_detached_process_handle(&handle) {
+            if let Err(kill_error) = handle.child.kill() {
+                log::error!("Unable to kill unsupervised detached MCP hook: {kill_error}");
+            }
+            if let Err(wait_error) = handle.child.wait() {
+                log::error!("Unable to wait for unsupervised detached MCP hook: {wait_error}");
+            }
+        }
+    }
+}
+
+fn take_detached_process_handle(
+    handle: &std::sync::Mutex<Option<DetachedProcessHandle>>,
+) -> Option<DetachedProcessHandle> {
+    match handle.lock() {
+        Ok(mut handle) => handle.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    }
+}
+
+fn spawn_detached_output_reader<R>(
+    mut reader: R,
+    stream: &'static str,
+) -> std::io::Result<std::thread::JoinHandle<std::io::Result<u64>>>
+where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(format!("dbflux-mcp-hook-{stream}"))
+        .spawn(move || std::io::copy(&mut reader, &mut std::io::sink()))
+}
+
+fn join_detached_output_reader(
+    reader: std::thread::JoinHandle<std::io::Result<u64>>,
+    stream: &str,
+) -> Result<(), String> {
+    reader
+        .join()
+        .map_err(|_| format!("MCP detached hook {stream} reader panicked"))?
+        .map(|_| ())
+        .map_err(|error| format!("Failed to read MCP detached hook {stream}: {error}"))
+}
+
+fn kill_and_wait_detached_child(child: &mut std::process::Child) -> Result<(), String> {
+    let kill_result = child.kill().or_else(|error| {
+        if error.kind() == std::io::ErrorKind::InvalidInput {
+            Ok(())
+        } else {
+            Err(error)
+        }
     });
-    let stderr_reader = handle.child.stderr.take().map(|mut stderr| {
-        std::thread::spawn(move || {
-            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
-        })
-    });
+    let wait_result = child.wait();
+    kill_result.map_err(|error| format!("Failed to kill MCP detached hook: {error}"))?;
+    wait_result
+        .map(|_| ())
+        .map_err(|error| format!("Failed to wait for MCP detached hook: {error}"))
+}
+
+fn supervise_detached_hook_process(mut handle: DetachedProcessHandle) -> Result<(), String> {
+    let stdout_reader = match handle.child.stdout.take() {
+        Some(stdout) => match spawn_detached_output_reader(stdout, "stdout") {
+            Ok(reader) => Some(reader),
+            Err(error) => {
+                let cleanup = kill_and_wait_detached_child(&mut handle.child);
+                return Err(match cleanup {
+                    Ok(()) => format!("Unable to start detached hook stdout reader: {error}"),
+                    Err(cleanup_error) => format!(
+                        "Unable to start detached hook stdout reader: {error}; {cleanup_error}"
+                    ),
+                });
+            }
+        },
+        None => None,
+    };
+    let stderr_reader = match handle.child.stderr.take() {
+        Some(stderr) => match spawn_detached_output_reader(stderr, "stderr") {
+            Ok(reader) => Some(reader),
+            Err(error) => {
+                let cleanup = kill_and_wait_detached_child(&mut handle.child);
+                if let Some(reader) = stdout_reader {
+                    join_detached_output_reader(reader, "stdout")?;
+                }
+                return Err(match cleanup {
+                    Ok(()) => format!("Unable to start detached hook stderr reader: {error}"),
+                    Err(cleanup_error) => format!(
+                        "Unable to start detached hook stderr reader: {error}; {cleanup_error}"
+                    ),
+                });
+            }
+        },
+        None => None,
+    };
     let started = Instant::now();
+    let mut errors = Vec::new();
 
     loop {
         match handle.child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => {
+                if !status.success() {
+                    errors.push(format!(
+                        "Detached MCP hook '{}' exited with status {status}",
+                        handle.description
+                    ));
+                }
+                break;
+            }
             Ok(None) => {
                 if handle
                     .timeout
                     .is_some_and(|timeout| started.elapsed() >= timeout)
                 {
-                    let _ = handle.child.kill();
-                    let _ = handle.child.wait();
+                    if let Err(error) = kill_and_wait_detached_child(&mut handle.child) {
+                        errors.push(error);
+                    }
+                    log::warn!(
+                        "Detached MCP hook '{}' exceeded its timeout and was stopped",
+                        handle.description
+                    );
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => {
-                let _ = handle.child.kill();
-                let _ = handle.child.wait();
+            Err(error) => {
+                errors.push(format!("Failed to wait for detached MCP hook: {error}"));
+                if let Err(cleanup_error) = kill_and_wait_detached_child(&mut handle.child) {
+                    errors.push(cleanup_error);
+                }
                 break;
             }
         }
     }
 
-    if let Some(reader) = stdout_reader {
-        let _ = reader.join();
+    if let Some(reader) = stdout_reader
+        && let Err(error) = join_detached_output_reader(reader, "stdout")
+    {
+        errors.push(error);
     }
-    if let Some(reader) = stderr_reader {
-        let _ = reader.join();
+    if let Some(reader) = stderr_reader
+        && let Err(error) = join_detached_output_reader(reader, "stderr")
+    {
+        errors.push(error);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
 }
 
@@ -121,14 +239,29 @@ async fn run_connection_hook_phase(
     profile: &dbflux_core::ConnectionProfile,
     phase: HookPhase,
 ) -> Result<(), String> {
-    let hooks = profile
+    let configured_hooks = profile
         .hooks
         .as_ref()
-        .map(|hooks| hooks.phase_hooks(phase).to_vec())
+        .map(|hooks| hooks.phase_hooks(phase))
         .unwrap_or_default();
-    if hooks.is_empty() {
+    if configured_hooks.is_empty() {
         return Ok(());
     }
+
+    if let Some((index, _)) = configured_hooks
+        .iter()
+        .enumerate()
+        .find(|(_, hook)| hook.enabled && matches!(&hook.kind, HookKind::Lua { .. }))
+    {
+        record_hook_execution_failure(state, profile, phase, index).await;
+        return Err(format!(
+            "{} hook #{} cannot run in the MCP server because Lua hooks require the 'lua' feature",
+            phase.label(),
+            index + 1
+        ));
+    }
+
+    let hooks = configured_hooks.to_vec();
 
     let mut context = HookContext::from_profile(profile);
     context.phase = Some(phase);
@@ -150,19 +283,18 @@ async fn run_connection_hook_phase(
     };
     record_hook_executions(state, profile, phase, executions).await;
 
-    if let Some((index, hook)) = executions.iter().enumerate().find(|(_, execution)| {
-        execution.hook.enabled && matches!(&execution.hook.kind, HookKind::Lua { .. })
-    }) {
-        return Err(format!(
-            "{} hook #{} ('{}') cannot run in the MCP server because Lua hooks require the 'lua' feature",
-            phase.label(),
-            index + 1,
-            hook.hook.summary()
-        ));
-    }
-
     match outcome {
-        HookPhaseOutcome::Aborted { error, .. } => Err(error),
+        HookPhaseOutcome::Aborted { executions, .. } => {
+            let executed_index = executions.len().saturating_sub(1);
+            let hook_index = configured_hooks
+                .iter()
+                .enumerate()
+                .filter(|(_, hook)| hook.enabled)
+                .nth(executed_index)
+                .map(|(index, _)| index + 1)
+                .unwrap_or(executions.len());
+            Err(format!("{} hook #{} failed", phase.label(), hook_index))
+        }
         HookPhaseOutcome::CompletedWithWarnings { warnings, .. } => {
             for _ in warnings {
                 log::warn!(
@@ -174,6 +306,58 @@ async fn run_connection_hook_phase(
             Ok(())
         }
         HookPhaseOutcome::Success { .. } => Ok(()),
+    }
+}
+
+async fn record_hook_execution_failure(
+    state: &ServerState,
+    profile: &dbflux_core::ConnectionProfile,
+    phase: HookPhase,
+    hook_index: usize,
+) {
+    use dbflux_core::observability::types::{
+        EventCategory, EventOutcome, EventRecord, EventSeverity,
+    };
+    use dbflux_core::observability::{EventOrigin, actions};
+
+    let audit_service = {
+        let runtime = state.runtime.read().await;
+        runtime.audit_service().clone()
+    };
+    let phase_name = phase.label().to_ascii_lowercase();
+    let event = EventRecord::new(
+        chrono::Utc::now().timestamp_millis(),
+        EventSeverity::Error,
+        EventCategory::Hook,
+        EventOutcome::Failure,
+    )
+    .with_typed_action(actions::HOOK_EXECUTE_FAILED)
+    .with_origin(EventOrigin::mcp())
+    .with_actor_id(&state.client_id)
+    .with_connection_context(
+        profile.id.to_string(),
+        profile.config.database().unwrap_or_default(),
+        profile.driver_id(),
+    )
+    .with_object_ref(
+        "connection_hook",
+        format!("{phase_name}:{}", hook_index + 1),
+    )
+    .with_summary(format!(
+        "Connection hook failed during {} for profile '{}'",
+        phase_name, profile.name
+    ))
+    .with_details_json(
+        serde_json::json!({
+            "phase": phase_name,
+            "hook_index": hook_index + 1,
+        })
+        .to_string(),
+    )
+    .with_error("hook_execution_failed", "Connection hook failed");
+
+    if let Err(error) = audit_service.record(event) {
+        log::warn!("Unable to record MCP connection hook audit event: {error}");
     }
 }
 
@@ -349,13 +533,21 @@ impl McpConnectionFactory {
             .parse::<uuid::Uuid>()
             .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
 
-        let mut profile = {
+        let (mut profile, profile_load_error) = {
             let profile_manager = self.state.profile_manager.read().await;
-            profile_manager
+            let profile = profile_manager
                 .find_by_id(profile_uuid)
                 .cloned()
-                .ok_or_else(|| error_messages::connection_not_found(connection_id))?
+                .ok_or_else(|| error_messages::connection_not_found(connection_id))?;
+            let load_error = profile_manager
+                .profile_load_error(profile_uuid)
+                .map(str::to_string);
+            (profile, load_error)
         };
+
+        if let Some(error) = profile_load_error {
+            return Err(error);
+        }
 
         if let Some(driver_defaults) = self.state.driver_settings.get(&profile.driver_id()) {
             let mut merged_settings = driver_defaults.clone();
@@ -1283,7 +1475,13 @@ mod tests {
         driver: Arc<dyn DbDriver>,
         profile: ConnectionProfile,
     ) -> ServerState {
-        test_state_with_driver_and_store(driver_id, driver, profile, Box::new(NoopSecretStore))
+        test_state_with_profiles_and_errors(
+            driver_id,
+            driver,
+            vec![profile],
+            HashMap::new(),
+            Box::new(NoopSecretStore),
+        )
     }
 
     fn test_state_with_driver_and_store(
@@ -1292,12 +1490,28 @@ mod tests {
         profile: ConnectionProfile,
         secret_store: Box<dyn dbflux_core::SecretStore>,
     ) -> ServerState {
+        test_state_with_profiles_and_errors(
+            driver_id,
+            driver,
+            vec![profile],
+            HashMap::new(),
+            secret_store,
+        )
+    }
+
+    fn test_state_with_profiles_and_errors(
+        driver_id: &str,
+        driver: Arc<dyn DbDriver>,
+        profiles: Vec<ConnectionProfile>,
+        profile_load_errors: HashMap<uuid::Uuid, String>,
+        secret_store: Box<dyn dbflux_core::SecretStore>,
+    ) -> ServerState {
         let audit_path = dbflux_audit::temp_sqlite_path("server_test_audit.sqlite");
         let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
             .expect("failed to create test audit service");
 
-        let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();
-        profile_manager.add(profile);
+        let profile_manager =
+            dbflux_core::ProfileManager::with_profiles_and_errors(profiles, profile_load_errors);
 
         ServerState {
             client_id: "test-client".to_string(),
@@ -1389,6 +1603,9 @@ mod tests {
                 .open(std::env::var("DBFLUX_MCP_HOOK_TEST_TRACE").expect("hook trace path"))
                 .expect("reopen hook event trace");
             writeln!(trace, "complete").expect("record hook completion");
+        }
+        if let Ok(secret) = std::env::var("DBFLUX_MCP_HOOK_TEST_SECRET") {
+            eprintln!("{secret}");
         }
         if std::env::var_os("DBFLUX_MCP_HOOK_TEST_FAIL").is_some() {
             std::process::exit(1);
@@ -1482,9 +1699,12 @@ mod tests {
         let driver = RecordingDriver::new(FakeDriver::new(DbKind::Postgres));
         let driver_handle = Arc::new(driver.clone()) as Arc<dyn DbDriver>;
         let mut hooks = ConnectionHooks::default();
-        hooks
-            .pre_connect
-            .push(process_hook(&trace, "pre_connect", true));
+        let mut failing_hook = process_hook(&trace, "pre_connect", true);
+        failing_hook.env.insert(
+            "DBFLUX_MCP_HOOK_TEST_SECRET".to_string(),
+            "private-hook-output".to_string(),
+        );
+        hooks.pre_connect.push(failing_hook);
         let profile = pipeline_profile_with_hooks(hooks);
         let connection_id = profile.id.to_string();
         let state = test_state_with_driver("postgres", driver_handle, profile);
@@ -1494,7 +1714,9 @@ mod tests {
             .err()
             .expect("failed PreConnect hook must abort connection");
 
-        assert!(error.to_ascii_lowercase().contains("pre-connect"));
+        assert!(error.contains("Pre-connect hook #1 failed"));
+        assert!(!error.contains("private-hook-output"));
+        assert!(!error.contains("mcp_hook_child"));
         assert!(driver.invocations().is_empty());
         assert!(
             state
@@ -1513,26 +1735,114 @@ mod tests {
         let driver = RecordingDriver::new(FakeDriver::new(DbKind::Postgres));
         let driver_handle = Arc::new(driver.clone()) as Arc<dyn DbDriver>;
         let mut hooks = ConnectionHooks::default();
-        let mut hook = process_hook(&trace, "pre_connect", false);
-        hook.kind = HookKind::Lua {
-            source: dbflux_core::ScriptSource::Inline {
-                content: String::new(),
+        let mut disabled = process_hook(&trace, "pre_connect", false);
+        disabled.enabled = false;
+        hooks.pre_connect.push(disabled);
+        hooks.pre_connect.push(dbflux_core::ConnectionHook {
+            enabled: true,
+            kind: HookKind::Lua {
+                source: dbflux_core::ScriptSource::Inline {
+                    content: String::new(),
+                },
+                capabilities: dbflux_core::LuaCapabilities::default(),
             },
-            capabilities: dbflux_core::LuaCapabilities::default(),
-        };
-        hooks.pre_connect.push(hook);
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: false,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: dbflux_core::HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Disconnect,
+        });
+        hooks
+            .pre_connect
+            .push(process_hook(&trace, "pre_connect", false));
         let profile = pipeline_profile_with_hooks(hooks);
         let connection_id = profile.id.to_string();
         let state = test_state_with_driver("postgres", driver_handle, profile);
 
-        let error = DbFluxServer::get_or_connect(state, &connection_id)
+        let error = DbFluxServer::get_or_connect(state.clone(), &connection_id)
             .await
             .err()
             .expect("unsupported Lua hook must abort connection");
 
-        assert!(error.to_ascii_lowercase().contains("pre-connect"));
-        assert!(error.to_ascii_lowercase().contains("lua"));
+        assert!(error.contains("Pre-connect hook #2"));
+        assert!(error.contains("Lua hooks require"));
         assert!(driver.invocations().is_empty());
+        assert!(
+            !trace.exists(),
+            "later hooks must not run after Lua rejection"
+        );
+
+        let runtime = state.runtime.read().await;
+        let filter = dbflux_audit::query::AuditQueryFilter {
+            category: Some("hook".to_string()),
+            object_type: Some("connection_hook".to_string()),
+            ..Default::default()
+        };
+        let audit_events = runtime
+            .audit_service()
+            .query_extended(&filter)
+            .expect("Lua rejection audit event");
+        assert_eq!(audit_events.len(), 1);
+        assert_eq!(audit_events[0].object_id.as_deref(), Some("pre-connect:2"));
+        assert_eq!(
+            audit_events[0].action.as_deref(),
+            Some("hook_execute_failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_hook_load_error_only_blocks_that_profile_before_pre_connect() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let trace = temp_dir.path().join("hook-events.log");
+        let driver =
+            RecordingDriver::new(FakeDriver::new(DbKind::Postgres)).with_event_trace(trace.clone());
+        let driver_handle = Arc::new(driver.clone()) as Arc<dyn DbDriver>;
+        let mut unavailable = ConnectionProfile::new("invalid-hooks", DbConfig::default_postgres());
+        let mut hooks = ConnectionHooks::default();
+        hooks
+            .pre_connect
+            .push(process_hook(&trace, "pre_connect", false));
+        unavailable.hooks = Some(hooks);
+        let unavailable_id = unavailable.id;
+        let available = ConnectionProfile::new("valid-profile", DbConfig::default_postgres());
+        let available_id = available.id;
+        let state = test_state_with_profiles_and_errors(
+            "postgres",
+            driver_handle,
+            vec![unavailable, available],
+            HashMap::from([(
+                unavailable_id,
+                "invalid persisted hook configuration".to_string(),
+            )]),
+            Box::new(NoopSecretStore),
+        );
+
+        let error = McpConnectionFactory::new(state.clone())
+            .connect(&unavailable_id.to_string(), None)
+            .await
+            .err()
+            .expect("invalid profile must remain unavailable");
+        assert_eq!(error, "invalid persisted hook configuration");
+        assert!(driver.invocations().is_empty());
+        assert!(
+            !trace.exists(),
+            "PreConnect must not run for invalid profile"
+        );
+
+        McpConnectionFactory::new(state)
+            .connect(&available_id.to_string(), None)
+            .await
+            .expect("unrelated valid profile should remain connectable");
+        assert_eq!(
+            std::fs::read_to_string(trace)
+                .expect("driver trace")
+                .lines()
+                .collect::<Vec<_>>(),
+            ["driver"]
+        );
     }
 
     #[tokio::test]
@@ -1631,7 +1941,7 @@ mod tests {
             .await
             .expect_err("PreDisconnect failure should be reported after teardown");
 
-        assert!(error.contains("Pre-disconnect hook failed"));
+        assert!(error.contains("Pre-disconnect hook #1 failed"));
         assert!(
             state
                 .connection_cache
