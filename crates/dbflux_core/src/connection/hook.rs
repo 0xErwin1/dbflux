@@ -390,14 +390,18 @@ impl ConnectionHooks {
     /// Resolves hook bindings from a profile against a global definitions map.
     ///
     /// If the profile has `hook_bindings`, each binding ID is looked up in
-    /// `definitions` and appended to the corresponding phase after any inline
-    /// hooks. Missing IDs are silently skipped (logged as warnings). Profiles
-    /// without bindings retain their inline hooks or use an empty default.
+    /// `definitions` and placed into the corresponding phase. Missing IDs are
+    /// silently skipped (logged as warnings). Profiles without bindings retain
+    /// their inline hooks or use an empty default.
     pub fn resolve_from_bindings(
         profile: &ConnectionProfile,
         definitions: &HashMap<String, ConnectionHook>,
     ) -> Self {
-        let mut hooks = profile.hooks.clone().unwrap_or_default();
+        let mut hooks = if profile.hook_bindings.is_some() {
+            Self::default()
+        } else {
+            profile.hooks.clone().unwrap_or_default()
+        };
 
         if let Some(bindings) = &profile.hook_bindings {
             for phase in [
@@ -614,6 +618,12 @@ impl DetachedProcessHandle {
     /// the handle across the move.
     pub fn take_containment(&mut self) -> Option<ProcessContainment> {
         self.containment.take()
+    }
+
+    /// Terminates the detached hook and its entire process tree.
+    pub fn terminate(&mut self) -> Result<(), String> {
+        let containment = self.containment.take();
+        terminate_child(&mut self.child, containment.as_ref()).map_err(|error| format!("{error:?}"))
     }
 }
 
@@ -1290,6 +1300,7 @@ impl ConnectionHook {
 
         let mut command = Command::new(&resolved.program);
         command.args(&resolved.args);
+        command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 

@@ -85,13 +85,10 @@ fn supervise_detached_hook_process_in_thread(handle: DetachedProcessHandle) {
 
     if let Err(error) = spawn_result {
         log::error!("Unable to start detached MCP hook process supervisor: {error}");
-        if let Some(mut handle) = take_detached_process_handle(&handle) {
-            if let Err(kill_error) = handle.child.kill() {
-                log::error!("Unable to kill unsupervised detached MCP hook: {kill_error}");
-            }
-            if let Err(wait_error) = handle.child.wait() {
-                log::error!("Unable to wait for unsupervised detached MCP hook: {wait_error}");
-            }
+        if let Some(mut handle) = take_detached_process_handle(&handle)
+            && let Err(cleanup_error) = handle.terminate()
+        {
+            log::error!("Unable to clean up unsupervised detached MCP hook: {cleanup_error}");
         }
     }
 }
@@ -128,27 +125,12 @@ fn join_detached_output_reader(
         .map_err(|error| format!("Failed to read MCP detached hook {stream}: {error}"))
 }
 
-fn kill_and_wait_detached_child(child: &mut std::process::Child) -> Result<(), String> {
-    let kill_result = child.kill().or_else(|error| {
-        if error.kind() == std::io::ErrorKind::InvalidInput {
-            Ok(())
-        } else {
-            Err(error)
-        }
-    });
-    let wait_result = child.wait();
-    kill_result.map_err(|error| format!("Failed to kill MCP detached hook: {error}"))?;
-    wait_result
-        .map(|_| ())
-        .map_err(|error| format!("Failed to wait for MCP detached hook: {error}"))
-}
-
 fn supervise_detached_hook_process(mut handle: DetachedProcessHandle) -> Result<(), String> {
     let stdout_reader = match handle.child.stdout.take() {
         Some(stdout) => match spawn_detached_output_reader(stdout, "stdout") {
             Ok(reader) => Some(reader),
             Err(error) => {
-                let cleanup = kill_and_wait_detached_child(&mut handle.child);
+                let cleanup = handle.terminate();
                 return Err(match cleanup {
                     Ok(()) => format!("Unable to start detached hook stdout reader: {error}"),
                     Err(cleanup_error) => format!(
@@ -163,7 +145,7 @@ fn supervise_detached_hook_process(mut handle: DetachedProcessHandle) -> Result<
         Some(stderr) => match spawn_detached_output_reader(stderr, "stderr") {
             Ok(reader) => Some(reader),
             Err(error) => {
-                let cleanup = kill_and_wait_detached_child(&mut handle.child);
+                let cleanup = handle.terminate();
                 if let Some(reader) = stdout_reader {
                     join_detached_output_reader(reader, "stdout")?;
                 }
@@ -196,7 +178,7 @@ fn supervise_detached_hook_process(mut handle: DetachedProcessHandle) -> Result<
                     .timeout
                     .is_some_and(|timeout| started.elapsed() >= timeout)
                 {
-                    if let Err(error) = kill_and_wait_detached_child(&mut handle.child) {
+                    if let Err(error) = handle.terminate() {
                         errors.push(error);
                     }
                     log::warn!(
@@ -209,7 +191,7 @@ fn supervise_detached_hook_process(mut handle: DetachedProcessHandle) -> Result<
             }
             Err(error) => {
                 errors.push(format!("Failed to wait for detached MCP hook: {error}"));
-                if let Err(cleanup_error) = kill_and_wait_detached_child(&mut handle.child) {
+                if let Err(cleanup_error) = handle.terminate() {
                     errors.push(cleanup_error);
                 }
                 break;
@@ -262,6 +244,12 @@ async fn run_connection_hook_phase(
     }
 
     let hooks = configured_hooks.to_vec();
+    let configured_indices: Vec<usize> = configured_hooks
+        .iter()
+        .enumerate()
+        .filter(|(_, hook)| hook.enabled)
+        .map(|(index, _)| index)
+        .collect();
 
     let mut context = HookContext::from_profile(profile);
     context.phase = Some(phase);
@@ -281,18 +269,16 @@ async fn run_connection_hook_phase(
         | HookPhaseOutcome::Aborted { executions, .. }
         | HookPhaseOutcome::CompletedWithWarnings { executions, .. } => executions,
     };
-    record_hook_executions(state, profile, phase, executions).await;
+    record_hook_executions(state, profile, phase, executions, &configured_indices).await;
 
     match outcome {
         HookPhaseOutcome::Aborted { executions, .. } => {
             let executed_index = executions.len().saturating_sub(1);
-            let hook_index = configured_hooks
-                .iter()
-                .enumerate()
-                .filter(|(_, hook)| hook.enabled)
-                .nth(executed_index)
-                .map(|(index, _)| index + 1)
-                .unwrap_or(executions.len());
+            let hook_index = configured_indices
+                .get(executed_index)
+                .copied()
+                .unwrap_or(executed_index)
+                + 1;
             Err(format!("{} hook #{} failed", phase.label(), hook_index))
         }
         HookPhaseOutcome::CompletedWithWarnings { warnings, .. } => {
@@ -366,6 +352,7 @@ async fn record_hook_executions(
     profile: &dbflux_core::ConnectionProfile,
     phase: HookPhase,
     executions: &[HookExecution],
+    configured_indices: &[usize],
 ) {
     use dbflux_core::observability::types::{
         EventCategory, EventOutcome, EventRecord, EventSeverity,
@@ -378,7 +365,11 @@ async fn record_hook_executions(
     };
     let database = profile.config.database().unwrap_or_default();
 
-    for (index, execution) in executions.iter().enumerate() {
+    for (position, execution) in executions.iter().enumerate() {
+        let index = configured_indices
+            .get(position)
+            .copied()
+            .unwrap_or(position);
         let succeeded = execution.result.as_ref().is_ok_and(HookResult::is_success);
         let phase_name = phase.label().to_ascii_lowercase();
         let event = EventRecord::new(
@@ -1699,6 +1690,9 @@ mod tests {
         let driver = RecordingDriver::new(FakeDriver::new(DbKind::Postgres));
         let driver_handle = Arc::new(driver.clone()) as Arc<dyn DbDriver>;
         let mut hooks = ConnectionHooks::default();
+        let mut disabled_hook = process_hook(&trace, "pre_connect", false);
+        disabled_hook.enabled = false;
+        hooks.pre_connect.push(disabled_hook);
         let mut failing_hook = process_hook(&trace, "pre_connect", true);
         failing_hook.env.insert(
             "DBFLUX_MCP_HOOK_TEST_SECRET".to_string(),
@@ -1714,7 +1708,7 @@ mod tests {
             .err()
             .expect("failed PreConnect hook must abort connection");
 
-        assert!(error.contains("Pre-connect hook #1 failed"));
+        assert!(error.contains("Pre-connect hook #2 failed"));
         assert!(!error.contains("private-hook-output"));
         assert!(!error.contains("mcp_hook_child"));
         assert!(driver.invocations().is_empty());
@@ -1726,6 +1720,21 @@ mod tests {
                 .get(&connection_id)
                 .is_none()
         );
+
+        let runtime = state.runtime.read().await;
+        let filter = dbflux_audit::query::AuditQueryFilter {
+            category: Some("hook".to_string()),
+            object_type: Some("connection_hook".to_string()),
+            ..Default::default()
+        };
+        let audit_events = runtime
+            .audit_service()
+            .query_extended(&filter)
+            .expect("failed PreConnect audit event");
+        assert!(audit_events.iter().any(|event| {
+            event.object_id.as_deref() == Some("pre-connect:2")
+                && event.action.as_deref() == Some("hook_execute_failed")
+        }));
     }
 
     #[tokio::test]
