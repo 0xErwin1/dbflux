@@ -465,21 +465,10 @@ fn load_profiles(
         {
             match load_bound_hook_definitions(runtime, &profile, &bindings) {
                 Ok(definitions) => {
-                    let inline_hooks = profile.hooks.take().unwrap_or_default();
-                    let bound_hooks =
-                        dbflux_core::ConnectionHooks::resolve_from_bindings(&profile, &definitions);
-                    let mut merged_hooks = inline_hooks;
-                    for phase in [
-                        dbflux_core::HookPhase::PreConnect,
-                        dbflux_core::HookPhase::PostConnect,
-                        dbflux_core::HookPhase::PreDisconnect,
-                        dbflux_core::HookPhase::PostDisconnect,
-                    ] {
-                        merged_hooks
-                            .phase_hooks_mut(phase)
-                            .extend(bound_hooks.phase_hooks(phase).iter().cloned());
-                    }
-                    profile.hooks = Some(merged_hooks);
+                    profile.hooks = Some(dbflux_core::ConnectionHooks::resolve_from_bindings(
+                        &profile,
+                        &definitions,
+                    ));
                 }
                 Err(error) => hook_load_error = Some(error),
             }
@@ -1772,13 +1761,9 @@ mod tests {
             .find(|profile| profile.id == mixed_profile_id)
             .expect("mixed profile loaded");
         let mixed_hooks = mixed_profile.hooks.as_ref().expect("mixed hooks loaded");
-        assert_eq!(mixed_hooks.pre_connect.len(), 2);
+        assert_eq!(mixed_hooks.pre_connect.len(), 1);
         assert!(matches!(
             &mixed_hooks.pre_connect[0].kind,
-            dbflux_core::HookKind::Command { command, .. } if command == "inline-refresh"
-        ));
-        assert!(matches!(
-            &mixed_hooks.pre_connect[1].kind,
             dbflux_core::HookKind::Command { command, .. } if command == "vpn-connect"
         ));
     }
