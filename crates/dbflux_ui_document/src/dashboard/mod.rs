@@ -719,8 +719,27 @@ impl DashboardDocument {
 
     pub fn set_refresh_policy(&mut self, _policy: RefreshPolicy, _cx: &mut Context<Self>) {}
 
-    pub fn set_active_tab(&mut self, active: bool) {
+    pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
         self.is_active_tab = active;
+        self.sync_panels_active_tab(cx);
+    }
+
+    /// Instance-metric charts and inspectors run refresh timers of their own,
+    /// so a hidden dashboard must hide them too.
+    fn sync_panels_active_tab(&self, cx: &mut Context<Self>) {
+        let active = self.is_active_tab;
+
+        for slot in &self.panel_slots {
+            match slot {
+                DashboardPanelSlot::Loaded { panel, .. } => {
+                    panel.update(cx, |panel, _| panel.set_active_tab(active));
+                }
+                DashboardPanelSlot::Inspector { entity, .. } => {
+                    entity.update(cx, |inspector, _| inspector.set_active_tab(active));
+                }
+                DashboardPanelSlot::Orphan { .. } | DashboardPanelSlot::Divider { .. } => {}
+            }
+        }
     }
 
     fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
@@ -2048,6 +2067,10 @@ impl DashboardDocument {
             appended += 1;
         }
 
+        if appended > 0 {
+            self.sync_panels_active_tab(cx);
+        }
+
         appended
     }
 
@@ -2883,6 +2906,64 @@ mod tests {
             let dashboard = make_empty_dashboard(app_state, window, cx);
             gpui_component::Root::new(dashboard, window, cx)
         });
+    }
+
+    #[gpui::test]
+    fn hiding_the_dashboard_hides_its_embedded_panels(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let dashboard_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let inspector_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let dashboard_ref = dashboard_holder.clone();
+        let inspector_ref = inspector_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let inspector = cx.new(|cx| {
+                InspectorPanel::new(
+                    Uuid::new_v4(),
+                    "sessions".to_string(),
+                    app_state.clone(),
+                    cx,
+                )
+            });
+            inspector_ref.replace(Some(inspector.clone()));
+
+            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", None, window, cx));
+            let dashboard = cx.new(|cx| {
+                DashboardDocument::new(
+                    Uuid::nil(),
+                    "Ops".to_string(),
+                    vec![DashboardPanelSlot::Inspector {
+                        entity: inspector,
+                        grid_pos: PanelGridPos {
+                            grid_row: 0,
+                            grid_column: 0,
+                            grid_width: 6,
+                            grid_height: 4,
+                        },
+                        title_override: None,
+                    }],
+                    shared_time_range,
+                    None,
+                    SavedChartRefreshPolicy::Off,
+                    false,
+                    app_state,
+                    cx,
+                )
+            });
+            dashboard_ref.replace(Some(dashboard.clone()));
+            gpui_component::Root::new(dashboard, window, cx)
+        });
+
+        let dashboard = dashboard_holder.borrow().clone().expect("dashboard");
+        let inspector = inspector_holder.borrow().clone().expect("inspector");
+
+        window.update(|_, cx| dashboard.update(cx, |doc, cx| doc.set_active_tab(false, cx)));
+        window.update(|_, cx| assert!(!inspector.read(cx).is_active_tab()));
+
+        window.update(|_, cx| dashboard.update(cx, |doc, cx| doc.set_active_tab(true, cx)));
+        window.update(|_, cx| assert!(inspector.read(cx).is_active_tab()));
     }
 
     /// Q.9 — `start_dashboard_name_edit` sets `editing_dashboard_name = true`

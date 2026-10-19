@@ -195,6 +195,11 @@ impl InspectorPanel {
         self.is_active_tab = active;
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_active_tab(&self) -> bool {
+        self.is_active_tab
+    }
+
     fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
         let settings = self.app_state.read(cx).general_settings();
 
