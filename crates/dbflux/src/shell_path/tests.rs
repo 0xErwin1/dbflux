@@ -1,16 +1,28 @@
 use super::*;
 use std::ffi::OsStr;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Writes an executable stand-in for a login shell. It receives the same
 /// `-l -i -c <command>` arguments as a real shell and runs `body` with `sh`.
+///
+/// A child process writes the script: if this process held the write
+/// descriptor, a test forking on another thread could inherit it until its
+/// `exec`, and running the script would then fail with `ETXTBSY`.
 fn fake_shell(directory: &Path, body: &str) -> PathBuf {
     let path = directory.join("fake-shell");
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write fake shell");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake shell");
+    let status = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "printf '%s\\n' \"$2\" > \"$1\" && chmod 755 \"$1\"",
+            "sh",
+        ])
+        .arg(&path)
+        .arg(format!("#!/bin/sh\n{body}"))
+        .status()
+        .expect("run sh to write the fake shell");
+    assert!(status.success(), "writing the fake shell failed: {status}");
     path
 }
 
