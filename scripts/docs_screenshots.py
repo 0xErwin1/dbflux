@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate the DBFlux documentation screenshots.
 
-The script starts demo databases in Docker, runs DBFlux on a headless X server
+The script starts demo databases in Docker, or as local processes with
+`--services native`, runs DBFlux on a headless X server
 (Xvfb with Mesa's software Vulkan driver), drives it through the UI automation
 MCP server (`gpui-mcp`) and writes one WebP per shot and theme to
 `<out>/<page>/<name>-<theme>.webp`.
@@ -33,13 +34,14 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import sqlite3
 import struct
 import subprocess
 import sys
 import time
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +105,9 @@ class DemoService:
     ready_command: tuple[str, ...]
     seed_command: tuple[str, ...]
     environment: dict[str, str] = field(default_factory=dict)
+    # PostgreSQL databases created next to the main one, each seeded from its
+    # own file: (database, seed file).
+    extra_databases: tuple[tuple[str, str], ...] = ()
 
     @property
     def container(self) -> str:
@@ -115,11 +120,17 @@ class DemoService:
 DEMO_SERVICES = (
     DemoService(
         name="postgres",
-        image="postgres:16-alpine",
+        # Ships pgvector and preloads timescaledb.
+        image="timescale/timescaledb-ha:pg16",
         host_port=55432,
         container_port=5432,
         seed_file="postgres.sql",
-        environment={"POSTGRES_HOST_AUTH_METHOD": "trust", "POSTGRES_DB": "shop"},
+        environment={
+            "POSTGRES_HOST_AUTH_METHOD": "trust",
+            "POSTGRES_DB": "shop",
+            "TIMESCALEDB_TELEMETRY": "off",
+        },
+        extra_databases=(("metrics", "postgres_metrics.sql"),),
         # The image's init phase runs a server that only listens on the Unix
         # socket, so a TCP probe succeeds only once the real server is up.
         ready_command=("pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "shop"),
@@ -157,6 +168,24 @@ def run_command(
         return subprocess.run(command, check=check, text=True, capture_output=True, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired as error:
         raise ScreenshotError(f"{' '.join(command[:3])} did not finish within {timeout:.0f} s") from error
+
+
+def service_ports(overrides: list[str] | None) -> dict[str, int]:
+    """The host port of every demo service, with `--port NAME=PORT` overrides applied."""
+
+    ports = {service.name: service.host_port for service in DEMO_SERVICES}
+
+    for override in overrides or []:
+        name, separator, value = override.partition("=")
+
+        if not separator or name not in ports or not value.isdigit() or not 0 < int(value) < 65536:
+            raise ScreenshotError(
+                f"invalid --port {override!r}: expected NAME=PORT with NAME one of {', '.join(ports)}"
+            )
+
+        ports[name] = int(value)
+
+    return ports
 
 
 def remove_demo_containers() -> None:
@@ -204,28 +233,212 @@ def seed_demo_service(service: DemoService) -> None:
     run_command(["docker", "cp", str(SEED_DIR / service.seed_file), f"{service.container}:{container_path}"])
 
     result = run_command(["docker", "exec", service.container, *service.seed_command, container_path], check=False)
+    check_seed_result(service, service.seed_file, result)
 
+    for database, seed_file in service.extra_databases:
+        psql = ["docker", "exec", service.container, "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres"]
+        created = run_command([*psql, "-d", "postgres", "-c", f"CREATE DATABASE {database}"], check=False)
+        check_seed_result(service, seed_file, created)
+
+        container_path = f"/tmp/{seed_file}"
+        run_command(["docker", "cp", str(SEED_DIR / seed_file), f"{service.container}:{container_path}"])
+        check_seed_result(service, seed_file, run_command([*psql, "-d", database, "-f", container_path], check=False))
+
+
+def check_seed_result(service: DemoService, seed_file: str, result: subprocess.CompletedProcess) -> None:
     # redis-cli reports a failed command on stdout and still exits with 0.
     output_lines = result.stdout.splitlines()
     failed = result.returncode != 0 or any(line.startswith(("ERR", "(error)")) for line in output_lines)
 
     if failed:
         raise ScreenshotError(
-            f"seeding {service.name} from seed/{service.seed_file} failed:\n"
+            f"seeding {service.name} from seed/{seed_file} failed:\n"
             f"{result.stdout.strip()}\n{result.stderr.strip()}"
         )
 
 
-def start_demo_databases() -> None:
+def start_demo_databases(services: tuple[DemoService, ...]) -> None:
     remove_demo_containers()
 
-    for service in DEMO_SERVICES:
+    for service in services:
         start_demo_service(service)
 
-    for service in DEMO_SERVICES:
+    for service in services:
         log(f"seeding {service.name}")
         wait_for_demo_service(service)
         seed_demo_service(service)
+
+
+# ---------------------------------------------------------------------------
+# Native demo databases
+# ---------------------------------------------------------------------------
+
+NATIVE_TOOLS = (
+    ("initdb", "install PostgreSQL 16 or later with the timescaledb and pgvector extensions"),
+    ("postgres", "install PostgreSQL 16 or later with the timescaledb and pgvector extensions"),
+    ("pg_isready", "install the PostgreSQL client tools"),
+    ("psql", "install the PostgreSQL client tools"),
+    ("mongod", "install the MongoDB server (nixpkgs: mongodb-ce, unfree)"),
+    ("mongosh", "install the MongoDB shell (nixpkgs: mongosh)"),
+    ("redis-server", "install Redis (nixpkgs: redis)"),
+    ("redis-cli", "install Redis (nixpkgs: redis)"),
+)
+
+
+def port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+
+    return False
+
+
+def native_server_command(service: DemoService, data_dir: Path) -> list[str]:
+    port = str(service.host_port)
+
+    if service.name == "postgres":
+        return [
+            "postgres",
+            "-D",
+            str(data_dir),
+            "-c",
+            "listen_addresses=127.0.0.1",
+            "-c",
+            f"port={port}",
+            "-c",
+            f"unix_socket_directories={data_dir}",
+            "-c",
+            "shared_preload_libraries=timescaledb",
+            "-c",
+            "timescaledb.telemetry_level=off",
+        ]
+
+    if service.name == "mongodb":
+        return ["mongod", "--dbpath", str(data_dir), "--bind_ip", "127.0.0.1", "--port", port]
+
+    if service.name == "redis":
+        return ["redis-server", "--bind", "127.0.0.1", "--port", port, "--dir", str(data_dir), "--save", ""]
+
+    raise ScreenshotError(f"no native command for the {service.name} service")
+
+
+def native_client_command(service: DemoService, *arguments: str) -> list[str]:
+    port = str(service.host_port)
+
+    if service.name == "postgres":
+        return ["psql", "-h", "127.0.0.1", "-p", port, "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-q", *arguments]
+
+    if service.name == "mongodb":
+        return ["mongosh", "--host", "127.0.0.1", "--port", port, "--quiet", *arguments]
+
+    return ["redis-cli", "-h", "127.0.0.1", "-p", port, *arguments]
+
+
+def native_ready_command(service: DemoService) -> list[str]:
+    if service.name == "postgres":
+        return ["pg_isready", "-h", "127.0.0.1", "-p", str(service.host_port), "-U", "postgres"]
+
+    if service.name == "mongodb":
+        return native_client_command(service, "--eval", "db.runCommand({ ping: 1 }).ok")
+
+    return native_client_command(service, "ping")
+
+
+def start_native_service(service: DemoService, root: Path) -> subprocess.Popen:
+    data_dir = root / service.name
+    data_dir.mkdir(parents=True, mode=0o700)
+
+    # Another server on the port would answer the readiness probe and receive
+    # the seed data, so the port must be free before the server starts.
+    if port_in_use(service.host_port):
+        raise ScreenshotError(
+            f"127.0.0.1:{service.host_port} is already in use, so the {service.name} demo server cannot "
+            f"listen there; pass --port {service.name}=<free port>"
+        )
+
+    if service.name == "postgres":
+        result = run_command(
+            ["initdb", "-D", str(data_dir), "-U", "postgres", "--auth=trust", "-E", "UTF8", "--no-locale"],
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise ScreenshotError(f"initdb failed:\n{result.stdout.strip()}\n{result.stderr.strip()}")
+
+    with (root / f"{service.name}.log").open("w") as log_file:
+        return subprocess.Popen(
+            native_server_command(service, data_dir),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+
+def wait_for_native_service(service: DemoService, process: subprocess.Popen, root: Path) -> None:
+    deadline = time.monotonic() + SERVICE_READY_TIMEOUT_SECONDS
+
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise ScreenshotError(
+                f"the {service.name} server exited with status {process.returncode}. Last log lines:\n"
+                + tail(root / f"{service.name}.log")
+            )
+
+        if run_command(native_ready_command(service), check=False).returncode == 0:
+            return
+
+        time.sleep(1)
+
+    raise ScreenshotError(f"the {service.name} server did not become ready within {SERVICE_READY_TIMEOUT_SECONDS} s")
+
+
+def seed_native_service(service: DemoService) -> None:
+    seed_path = SEED_DIR / service.seed_file
+
+    if service.name == "postgres":
+        databases = (("shop", service.seed_file), *service.extra_databases)
+
+        for database, seed_file in databases:
+            created = native_client_command(service, "-d", "postgres", "-c", f"CREATE DATABASE {database}")
+            check_seed_result(service, seed_file, run_command(created, check=False))
+            seeded = native_client_command(service, "-d", database, "-f", str(SEED_DIR / seed_file))
+            check_seed_result(service, seed_file, run_command(seeded, check=False))
+
+        return
+
+    if service.name == "mongodb":
+        result = run_command(native_client_command(service, "shop", str(seed_path)), check=False)
+    else:
+        with seed_path.open() as seed:
+            result = run_command(native_client_command(service), check=False, stdin=seed)
+
+    check_seed_result(service, service.seed_file, result)
+
+
+def start_native_databases(services: tuple[DemoService, ...], root: Path, cleanup: ExitStack | None) -> None:
+    """Starts every service as a local process with its data under `root`.
+
+    With `cleanup` the processes are stopped when it closes; without it they
+    keep running.
+    """
+
+    processes = []
+
+    for service in services:
+        process = start_native_service(service, root)
+        processes.append(process)
+
+        if cleanup is not None:
+            cleanup.callback(stop_process, process)
+
+    for service, process in zip(services, processes):
+        log(f"seeding {service.name}")
+        wait_for_native_service(service, process, root)
+        seed_native_service(service)
 
 
 def create_sqlite_database(path: Path) -> None:
@@ -536,6 +749,7 @@ class Environment:
     mcp_command: list[str]
     vulkan_icd: Path
     work_dir: Path
+    services: tuple[DemoService, ...] = DEMO_SERVICES
     display: str = ""
 
     def process_environment(self) -> dict[str, str]:
@@ -559,7 +773,7 @@ class Environment:
         return environment
 
     def placeholders(self) -> dict[str, str]:
-        values = {f"{service.name}_port": str(service.host_port) for service in DEMO_SERVICES}
+        values = {f"{service.name}_port": str(service.host_port) for service in self.services}
         values["sqlite_path"] = str(self.work_dir / "inventory.db")
 
         return values
@@ -1147,13 +1361,24 @@ def run(arguments: argparse.Namespace) -> int:
     environment = check_prerequisites(arguments)
 
     with ExitStack() as cleanup:
-        if not arguments.keep_running:
+        native = arguments.services == "native"
+
+        if not arguments.keep_running and not native:
             cleanup.callback(remove_demo_containers)
 
         reset_work_dir(environment.work_dir)
 
-        log("starting the demo databases")
-        start_demo_databases()
+        log(f"starting the demo databases ({arguments.services})")
+
+        if native:
+            start_native_databases(
+                environment.services,
+                environment.work_dir / "services",
+                None if arguments.keep_running else cleanup,
+            )
+        else:
+            start_demo_databases(environment.services)
+
         create_sqlite_database(environment.work_dir / "inventory.db")
 
         xvfb, environment.display = start_xvfb(environment.work_dir / "logs" / "xvfb.log")
@@ -1185,8 +1410,9 @@ def run(arguments: argparse.Namespace) -> int:
             log(f"wrote {path} ({path.stat().st_size // 1024} KiB)")
 
         if arguments.keep_running:
+            databases = "demo database processes" if native else f"containers {CONTAINER_PREFIX}*"
             log(
-                f"left running: containers {CONTAINER_PREFIX}*, Xvfb on {environment.display} "
+                f"left running: {databases}, Xvfb on {environment.display} "
                 f"(pid {xvfb.pid}), work directory {environment.work_dir}"
             )
 
@@ -1208,9 +1434,12 @@ def select_shots(filters: list[str] | None) -> list[shot_list.Shot]:
 
 def check_prerequisites(arguments: argparse.Namespace) -> Environment:
     problems = []
+    ports = service_ports(arguments.port)
+    native = arguments.services == "native"
+    service_tools = NATIVE_TOOLS if native else (("docker", "install Docker and start its daemon"),)
 
     for tool, hint in (
-        ("docker", "install Docker and start its daemon"),
+        *service_tools,
         ("Xvfb", "run inside `nix develop`, or install the Xvfb X server"),
         ("xdotool", "run inside `nix develop`, or install xdotool"),
         ("cwebp", "run inside `nix develop`, or install the cwebp tool of libwebp"),
@@ -1218,7 +1447,7 @@ def check_prerequisites(arguments: argparse.Namespace) -> Environment:
         if shutil.which(tool) is None:
             problems.append(f"`{tool}` was not found on PATH: {hint}")
 
-    if shutil.which("docker") and run_command(["docker", "info"], check=False).returncode != 0:
+    if not native and shutil.which("docker") and run_command(["docker", "info"], check=False).returncode != 0:
         problems.append("the Docker daemon is not reachable (`docker info` failed)")
 
     vulkan_icd = arguments.vulkan_icd or os.environ.get("DBFLUX_DOCS_VULKAN_ICD")
@@ -1248,6 +1477,7 @@ def check_prerequisites(arguments: argparse.Namespace) -> Environment:
         mcp_command=[*launcher, str(arguments.gpui_mcp.resolve())],
         vulkan_icd=Path(vulkan_icd).resolve(),
         work_dir=arguments.work_dir.absolute(),
+        services=tuple(replace(service, host_port=ports[service.name]) for service in DEMO_SERVICES),
     )
 
 
@@ -1325,7 +1555,20 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--keep-running",
         action="store_true",
-        help="leave the containers, Xvfb and a failed shot's DBFlux running for inspection",
+        help="leave the demo databases, Xvfb and a failed shot's DBFlux running for inspection",
+    )
+    parser.add_argument(
+        "--services",
+        choices=("docker", "native"),
+        default="docker",
+        help="run the demo databases in Docker containers, or as local processes with their data "
+        "under the work directory (default: docker)",
+    )
+    parser.add_argument(
+        "--port",
+        action="append",
+        metavar="NAME=PORT",
+        help="listen port of a demo service (postgres, mongodb, redis); repeat the option for several",
     )
     parser.add_argument(
         "--dbflux",
