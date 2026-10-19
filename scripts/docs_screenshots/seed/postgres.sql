@@ -1,6 +1,12 @@
 -- Synthetic demo data for the documentation screenshots.
 -- Every value is derived from fixed lists and arithmetic on row numbers, so
 -- two runs produce the same rows and the same images.
+--
+-- The server must provide pgvector. The TimescaleDB hypertable lives in the
+-- metrics database (postgres_metrics.sql), so the extension's schemas stay out
+-- of this one.
+
+CREATE EXTENSION vector;
 
 CREATE TABLE customers (
     id          integer PRIMARY KEY,
@@ -16,7 +22,9 @@ CREATE TABLE products (
     name      text NOT NULL,
     category  text NOT NULL,
     price     numeric(10, 2) NOT NULL,
-    stock     integer NOT NULL
+    stock     integer NOT NULL,
+    attributes  jsonb,
+    embedding   vector(4)
 );
 
 CREATE TABLE orders (
@@ -114,6 +122,40 @@ FROM (
     GROUP BY order_id
 ) AS items
 WHERE items.order_id = o.id;
+
+-- Products of one category get nearby embeddings, so the nearest neighbors
+-- of a product are mostly products of the same category.
+UPDATE products AS p
+SET
+    attributes = jsonb_build_object(
+        'brand', (ARRAY['Acme', 'Northwind', 'Contoso', 'Fabrikam', 'Globex', 'Initech'])[1 + (p.id * 5) % 6],
+        'color', (ARRAY['black', 'white', 'graphite', 'silver'])[1 + p.id % 4],
+        'waterproof', p.id % 3 = 0,
+        'sizes', CASE WHEN p.id % 2 = 0 THEN jsonb_build_array('S', 'M', 'L') ELSE jsonb_build_array('standard') END,
+        'rating', jsonb_build_object(
+            'average', round((3.6 + (p.id * 7) % 14 / 10.0)::numeric, 1),
+            'reviews', 12 + (p.id * 37) % 480
+        )
+    ),
+    embedding = (
+        '[' || round((base.x + (p.id % 5) * 0.02)::numeric, 3)
+        || ',' || round((base.y + (p.id % 3) * 0.03)::numeric, 3)
+        || ',' || round((base.z + (p.id % 4) * 0.02)::numeric, 3)
+        || ',' || round((base.w + (p.id % 2) * 0.04)::numeric, 3) || ']'
+    )::vector
+FROM (VALUES
+    ('Peripherals', 0.90, 0.10, 0.10, 0.20),
+    ('Displays',    0.20, 0.90, 0.10, 0.10),
+    ('Audio',       0.10, 0.20, 0.90, 0.10),
+    ('Video',       0.20, 0.60, 0.70, 0.10),
+    ('Accessories', 0.50, 0.40, 0.10, 0.60),
+    ('Storage',     0.10, 0.10, 0.20, 0.90),
+    ('Furniture',   0.60, 0.10, 0.10, 0.80),
+    ('Cables',      0.40, 0.50, 0.20, 0.70),
+    ('Networking',  0.10, 0.30, 0.40, 0.80),
+    ('Power',       0.30, 0.20, 0.50, 0.80)
+) AS base (category, x, y, z, w)
+WHERE base.category = p.category;
 
 CREATE VIEW monthly_revenue AS
 SELECT

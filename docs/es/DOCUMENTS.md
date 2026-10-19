@@ -83,3 +83,18 @@ página.
   vez, como `db.orders.find({"status": "paid"})`, contra la base de datos de la
   colección e imprime los documentos como un objeto JSON por línea. Un comando
   que escribe refresca los documentos en pantalla. Ver [Consola](CONSOLE.md).
+
+## Columnas JSON en una tabla
+
+Una tabla relacional también puede contener documentos. En PostgreSQL, una
+tabla con una columna `json` o `jsonb` se abre en la cuadrícula como siempre y
+agrega una vista de **Árbol** de las mismas filas: cambia con el botón Tabla /
+Árbol al final de la fila de filtro, o pulsa `t` en la cuadrícula. Cada fila se
+convierte en un documento, con los valores JSON expandidos en campos anidados.
+El árbol es de solo lectura; las ediciones se hacen en la cuadrícula. La vista
+que eliges se mantiene en la pestaña entre páginas y refrescos.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/json-columns-dark.webp">
+  <img src="../images/documents/json-columns-light.webp" alt="La tabla products de PostgreSQL en la vista Árbol, con la primera fila expandida y su columna jsonb attributes mostrada como campos anidados">
+</picture>

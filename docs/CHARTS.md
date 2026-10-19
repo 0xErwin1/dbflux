@@ -214,15 +214,17 @@ Charts can be saved per connection profile. To reopen a saved chart, run **Open
 Chart...** from the command palette (`OpenSavedChart`), which lists the saved
 charts for the current profile in a fuzzy overlay.
 
-### Time-series collections
+### Time-series tables and collections
 
-Opening a collection on a connection whose category is
-`DatabaseCategory::TimeSeries` (an InfluxDB measurement, for example) gives its
-data grid the Data, Chart and JSON views that query results have, plus **Both**,
-which draws the chart above the grid. The first page opens in Both when
+Opening a table or collection whose driver declares it a time series
+(`ObjectFacet::TimeSeries`: an InfluxDB measurement, or a TimescaleDB hypertable
+on PostgreSQL) gives its data grid the Data, Chart and JSON views that query
+results have, plus **Both**, which draws the chart above the grid. The first page opens in Both when
 `detect_chart_columns` returns `Ok`, with the axes seeded
 by `default_bindings_for_time_series` (time on X, the first numeric column on Y,
-the first `Text` column as the group). A group draws one line per distinct
+the first `Text` column as the group). The time column the driver names, such as
+a hypertable's time dimension, goes on X when the result has it; otherwise the
+first timestamp column does. A group draws one line per distinct
 value of its column, labelled by that value, so a tag such as `host` gives each
 host its own line. The default group applies only when that column holds at
 most 12 distinct values in the result (`DEFAULT_GROUP_MAX_VALUES`). Otherwise
@@ -231,6 +233,11 @@ Data shows the rows in the grid rather
 than the document tree other collections use. A refresh, whether manual,
 automatic or a page change, keeps the view the user picked, and falls back to
 Data only when the new page is no longer chartable.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/charts/hypertable-dark.webp">
+  <img src="images/charts/hypertable-light.webp" alt="The server_metrics hypertable opened in the Both view: a line chart of cpu_percent over time with one line per host above the grid of rows">
+</picture>
 
 The toolbar and the status bar name the browse by the query the driver runs,
 taken from `QueryGenerator::collection_browse_query`, so the label is written in
