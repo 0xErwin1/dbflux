@@ -926,8 +926,6 @@ fn effective_aws_profile_name(profile: &AuthProfile) -> Option<&str> {
     None
 }
 
-/// Region used only when neither the auth profile nor the SDK default chain
-/// (`AWS_REGION`, the AWS profile's `region` in `~/.aws/config`) names one.
 const FALLBACK_REGION: &str = "us-east-1";
 
 fn configured_region(profile: &AuthProfile) -> Option<&str> {
@@ -954,8 +952,6 @@ fn region_provider(
         .or_else(Region::from_static(FALLBACK_REGION))
 }
 
-/// Region for an SDK config: the auth profile's region when set, otherwise
-/// whatever the SDK default chain resolves for `profile_name`.
 fn sdk_region_provider(
     configured: Option<&str>,
     profile_name: Option<&str>,
