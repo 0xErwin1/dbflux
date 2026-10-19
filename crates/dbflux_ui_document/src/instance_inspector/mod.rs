@@ -63,6 +63,7 @@ pub struct InspectorPanel {
 
     refresh_policy: RefreshPolicy,
     _timer: Option<Task<()>>,
+    is_active_tab: bool,
 
     runner: DocumentTaskRunner,
     app_state: Entity<AppStateEntity>,
@@ -127,6 +128,7 @@ impl InspectorPanel {
             last_error: None,
             refresh_policy: RefreshPolicy::Manual,
             _timer: None,
+            is_active_tab: true,
             runner,
             app_state,
             pending_result: None,
@@ -189,7 +191,24 @@ impl InspectorPanel {
         self.update_timer(cx);
     }
 
-    pub fn set_active_tab(&mut self, _active: bool) {}
+    pub fn set_active_tab(&mut self, active: bool) {
+        self.is_active_tab = active;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_active_tab(&self) -> bool {
+        self.is_active_tab
+    }
+
+    fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
+        let settings = self.app_state.read(cx).general_settings();
+
+        if settings.auto_refresh_pause_on_error && self.state == DocumentState::Error {
+            return false;
+        }
+
+        !settings.auto_refresh_only_if_visible || self.is_active_tab
+    }
 
     /// Moves the keyboard to the table, or to the panel while the result has
     /// not arrived.
@@ -388,6 +407,9 @@ impl InspectorPanel {
                             .connections()
                             .contains_key(&panel.profile_id)
                         {
+                            return;
+                        }
+                        if !panel.auto_refresh_tick_allowed(cx) {
                             return;
                         }
                         panel.request_reexec(cx);
@@ -1044,5 +1066,55 @@ mod tests {
                 "apply_result must populate pending_grid_result when data_grid is None"
             );
         });
+    }
+
+    #[gpui::test]
+    fn inspector_auto_refresh_honors_visibility_and_pause_on_error(cx: &mut gpui::TestAppContext) {
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+        let inspector = cx.update(|cx| {
+            cx.new(|cx| {
+                InspectorPanel::new(
+                    Uuid::new_v4(),
+                    "sessions".to_string(),
+                    app_state.clone(),
+                    cx,
+                )
+            })
+        });
+        let set_settings =
+            |only_if_visible: bool, pause_on_error: bool, cx: &mut gpui::TestAppContext| {
+                app_state.update(cx, |state, _| {
+                    let mut settings = state.general_settings().clone();
+                    settings.auto_refresh_only_if_visible = only_if_visible;
+                    settings.auto_refresh_pause_on_error = pause_on_error;
+                    state.update_general_settings(settings);
+                });
+            };
+        let tick_allowed = |cx: &mut gpui::TestAppContext| {
+            cx.update(|cx| inspector.read(cx).auto_refresh_tick_allowed(cx))
+        };
+
+        set_settings(true, true, cx);
+        assert!(tick_allowed(cx));
+
+        inspector.update(cx, |panel, _| panel.set_active_tab(false));
+        assert!(!tick_allowed(cx));
+
+        inspector.update(cx, |panel, _| {
+            panel.set_active_tab(true);
+            panel.state = DocumentState::Error;
+        });
+        assert!(!tick_allowed(cx));
+
+        set_settings(false, false, cx);
+        inspector.update(cx, |panel, _| panel.set_active_tab(false));
+        assert!(tick_allowed(cx));
     }
 }
