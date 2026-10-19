@@ -270,6 +270,7 @@ pub struct DashboardDocument {
     // backgrounded and panels must re-execute on next focus.
     is_backgrounded: bool,
     pending_refresh_on_focus: bool,
+    is_active_tab: bool,
 
     // Focus
     focus_handle: FocusHandle,
@@ -566,6 +567,7 @@ impl DashboardDocument {
             inflight_reexec_count: 0,
             pending_reexec: VecDeque::new(),
             is_backgrounded: false,
+            is_active_tab: true,
             pending_refresh_on_focus: false,
             focus_handle: cx.focus_handle(),
             focused_panel_index: initial_focused,
@@ -717,7 +719,14 @@ impl DashboardDocument {
 
     pub fn set_refresh_policy(&mut self, _policy: RefreshPolicy, _cx: &mut Context<Self>) {}
 
-    pub fn set_active_tab(&mut self, _active: bool) {}
+    pub fn set_active_tab(&mut self, active: bool) {
+        self.is_active_tab = active;
+    }
+
+    fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
+        let settings = self.app_state.read(cx).general_settings();
+        !settings.auto_refresh_only_if_visible || self.is_active_tab
+    }
 
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
         None
@@ -1250,6 +1259,9 @@ impl DashboardDocument {
                                 .connections()
                                 .contains_key(&profile_id)
                         {
+                            return;
+                        }
+                        if !doc.auto_refresh_tick_allowed(cx) {
                             return;
                         }
                         doc.refresh_all_loaded_panels(cx);
